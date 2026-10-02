@@ -8,10 +8,18 @@
  * Material: the map's 64 px terrain grid is the only surface grid. Its code maps to one of the six
  * baked step materials; remote steps arrive with the material as the sound `variant`.
  */
+import {
+  SOUND,
+  STEP_MATERIALS as WIRE_STEP_MATERIALS,
+  TERRAIN_INDOOR,
+  isIndoorByte,
+  surfaceOf,
+  type StepMaterial as WireStepMaterial,
+} from "@extract/shared";
 import { STEP_MATERIALS, type SfxId, type StepMaterial } from "./recipes";
 
-/** Mirrors packages/shared SOUND.STEP_EVERY_PX (kept local until the v2 shared dist lands). */
-export const STEP_EVERY_PX = 120;
+/** The server's footstep cadence (shared sound contract), so self and remote steps match. */
+export const STEP_EVERY_PX = SOUND.STEP_EVERY_PX;
 /** A single-frame jump this large is a teleport/reconcile snap, not walking: no step burst. */
 export const TELEPORT_PX = 400;
 /** After standing still this long, the next movement plays its first step after half a stride. */
@@ -56,38 +64,47 @@ export class Stride {
 }
 
 /**
- * Map terrain codes (map.md `TERRAIN`) → baked step material. The INDOOR bit (0x80) is masked off.
- * FOREST is grass with litter; BRIDGE is planks; GRAVEL crunches like dirt; SHALLOW is a ford.
+ * Shared surface materials → the six baked step sounds. The shared table has two more materials
+ * than the bank: forest floor is grass with litter, gravel crunches like dirt.
  */
-export const TERRAIN_STEP_MATERIAL: Readonly<Record<number, StepMaterial>> = {
-  0: "grass", // GRASS
-  1: "grass", // FOREST
-  2: "dirt", // DIRT
-  3: "asphalt", // ASPHALT
-  4: "concrete", // CONCRETE
-  5: "wood", // WOOD
-  6: "water", // WATER
-  7: "wood", // BRIDGE
-  8: "dirt", // GRAVEL
-  9: "water", // SHALLOW
+const BAKED_OF_WIRE: Readonly<Record<WireStepMaterial, StepMaterial>> = {
+  grass: "grass",
+  dirt: "dirt",
+  asphalt: "asphalt",
+  wood: "wood",
+  concrete: "concrete",
+  water: "water",
+  forest: "grass",
+  gravel: "dirt",
 };
-export const INDOOR_BIT = 0x80;
 
+export function bakedMaterial(m: WireStepMaterial): StepMaterial {
+  return BAKED_OF_WIRE[m] ?? "dirt";
+}
+
+export const INDOOR_BIT = TERRAIN_INDOOR;
+
+/** Terrain byte (MapData.terrain, INDOOR bit ignored) → baked step material, via shared surfaceOf. */
 export function materialOfTerrain(terrain: number): StepMaterial {
-  return TERRAIN_STEP_MATERIAL[terrain & ~INDOOR_BIT & 0xff] ?? "grass";
+  return bakedMaterial(surfaceOf(terrain).material);
 }
 
 export function isIndoorTerrain(terrain: number): boolean {
-  return (terrain & INDOOR_BIT) !== 0;
+  return isIndoorByte(terrain);
 }
 
 /**
- * Material from a wire `variant`. Accepts a material name, or an index into STEP_MATERIALS.
- * Unknown values fall back to dirt (neutral, never silent).
+ * Material from a wire `variant`: the server sends the index into the shared STEP_MATERIALS
+ * (surfaceOf().variant). A material name is accepted too. Unknown values fall back to dirt
+ * (neutral, never silent).
  */
 export function materialFromVariant(v: number | string | undefined): StepMaterial {
-  if (typeof v === "string") return (STEP_MATERIALS as readonly string[]).includes(v) ? (v as StepMaterial) : "dirt";
-  if (typeof v === "number" && Number.isInteger(v) && v >= 0 && v < STEP_MATERIALS.length) return STEP_MATERIALS[v]!;
+  if (typeof v === "string") {
+    if ((STEP_MATERIALS as readonly string[]).includes(v)) return v as StepMaterial;
+    if ((WIRE_STEP_MATERIALS as readonly string[]).includes(v)) return bakedMaterial(v as WireStepMaterial);
+    return "dirt";
+  }
+  if (typeof v === "number" && Number.isInteger(v) && v >= 0 && v < WIRE_STEP_MATERIALS.length) return bakedMaterial(WIRE_STEP_MATERIALS[v]!);
   return "dirt";
 }
 
@@ -95,15 +112,10 @@ export function stepSoundId(m: StepMaterial): SfxId {
   return `step_${m}` as SfxId;
 }
 
-/** Hearing-range multiplier per material (immersion memo); harder/wetter surfaces carry further. */
-export const STEP_RANGE_MULT: Readonly<Record<StepMaterial, number>> = {
-  grass: 0.85,
-  dirt: 1,
-  asphalt: 1.1,
-  wood: 1.25,
-  concrete: 1.1,
-  water: 1.3,
-};
+/** Hearing-range multiplier of a step on this terrain byte (shared surface table). */
+export function stepRangeMultOfTerrain(terrain: number): number {
+  return surfaceOf(terrain).stepRangeMult;
+}
 
 /** Your own steps sit 8 dB under remote ones (-22 vs -14): you know where you are. */
 export const SELF_STEP_DB = -8;

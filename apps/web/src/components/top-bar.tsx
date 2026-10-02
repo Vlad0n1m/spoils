@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { AudioSettingsButton } from "./audio-settings";
 import { AuthButton } from "./auth-button";
 
 function navLinkClass(active: boolean) {
@@ -23,6 +24,10 @@ export function TopBar() {
           <Link href="/play" className={navLinkClass(path === "/play" || path.startsWith("/play/"))}>
             Play
           </Link>
+          <Link href="/economy" className={navLinkClass(path === "/economy")}>
+            Economy
+          </Link>
+          <AudioSettingsButton direction="down" align="right" />
           <AuthButton />
         </nav>
       </div>

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { FREE_KIT, MATCH, ROOMS, type JoinTicket } from "@extract/shared";
+import { MATCH, ROOMS, type JoinTicket } from "@extract/shared";
 import { useSession } from "@/lib/session-context";
 import { guestPlayUiEnabled } from "@/lib/client-env";
 import { parseJsonResponse } from "@/lib/parse-json-response";
@@ -14,11 +14,14 @@ import { PlayerInstructions } from "./play-instructions";
 import { PlayLeaderboard } from "./play-leaderboard";
 import { GuestPlayDialog } from "./guest-play-dialog";
 import { Reveal } from "./reveal";
+import { RaidLoadoutSummary } from "./lobby/raid-loadout-summary";
 
 interface JoinResponse {
   ticket?: JoinTicket;
   roomName?: string;
   error?: string;
+  /** Human-readable reason (loadout errors, gear still in a raid). */
+  message?: string;
 }
 
 /** Raid card spans the left 7 columns, rules the right 5; recent raids sit under the raid card. */
@@ -50,7 +53,7 @@ export function PlayClient() {
         await refresh();
         throw new Error("Your session expired — sign in again.");
       }
-      if (!res.ok || !data.ticket) throw new Error(data.error ?? "join_failed");
+      if (!res.ok || !data.ticket) throw new Error(data.message ?? data.error ?? "join_failed");
       // The API names the queue; fall back to the shared contract if an older API omits it.
       const roomName = data.roomName || ROOMS.MATCHMAKING;
       setStage({ kind: "matchmaking", ticket: data.ticket, roomName, searchId: Date.now() });
@@ -72,7 +75,12 @@ export function PlayClient() {
         key={stage.searchId}
         ticket={stage.ticket}
         roomName={stage.roomName}
-        onCancel={() => setStage({ kind: "lobby" })}
+        onCancel={() => {
+          // Search abandoned: return the locked loadout to the stash right away (the API also
+          // expires stale locks after 10 min). A launched raid is refused by the API (in_raid).
+          if (!user.isGuest) void fetch("/api/loadout/unlock", { method: "POST", credentials: "include" }).catch(() => {});
+          setStage({ kind: "lobby" });
+        }}
         onRetry={() => {
           // Fresh ticket + remount (new searchId); a failed join lands back in the lobby with the error.
           setStage({ kind: "lobby" });
@@ -153,12 +161,8 @@ function RaidCard({
       <h1 className="toon-text mt-2 break-words text-4xl tracking-wide text-white md:text-5xl">{nickname}</h1>
 
       <div className="mt-6">
-        <h2 className="text-sm uppercase tracking-[0.18em] text-white/55">You drop with the free kit</h2>
-        <ul className="mt-3 flex flex-wrap gap-3">
-          <KitTile icon="/sprites/pistol.png" label="Pistol" note="Free — never lost" />
-          <KitTile icon="/sprites/ammo.png" label={`${FREE_KIT.AMMO_LIGHT} light ammo`} note="Auto-pickup more" />
-          <KitTile icon="/sprites/bandage.png" label={`${FREE_KIT.BANDAGES} bandage`} note="+25 HP" />
-        </ul>
+        {/* Free kit for guests / empty loadouts, otherwise the saved loadout (Loadout tab). */}
+        <RaidLoadoutSummary isGuest={isGuest} />
       </div>
 
       <ul className="mt-6 flex flex-wrap gap-2 text-xs tracking-wide text-white/80">
@@ -181,7 +185,7 @@ function RaidCard({
           disabled={joining}
           className="toon-btn min-h-16 px-10 text-2xl tracking-wide md:text-3xl"
         >
-          <span className="optical-center">{joining ? "Joining…" : "Play raid (demo)"}</span>
+          <span className="optical-center">{joining ? "Joining…" : "Play raid"}</span>
         </button>
         {isGuest && (
           <p className="font-body max-w-[34ch] text-sm leading-relaxed text-white/60">
@@ -194,21 +198,6 @@ function RaidCard({
         )}
       </div>
     </Reveal>
-  );
-}
-
-function KitTile({ icon, label, note }: { icon: string; label: string; note: string }) {
-  return (
-    <li className="flex items-center gap-3 rounded-2xl border-[3px] border-black bg-white/[0.06] py-2 pl-2 pr-4 shadow-[0_3px_0_#000]">
-      <span className="grid h-12 w-12 place-items-center rounded-xl border-2 border-black bg-zinc-300/80">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={icon} alt="" className="h-10 w-10 object-contain" draggable={false} />
-      </span>
-      <span>
-        <span className="block text-sm tracking-wide text-white">{label}</span>
-        <span className="font-body mt-0.5 block text-xs text-white/60">{note}</span>
-      </span>
-    </li>
   );
 }
 

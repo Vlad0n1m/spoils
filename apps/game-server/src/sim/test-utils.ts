@@ -2,38 +2,61 @@
 
 import {
   Extract,
+  ITEM_FLAG,
+  LEGACY_WORLD,
+  MAP_GEN_VERSION,
   SERVER_TICK_MS,
-  WORLD,
-  WEAPONS,
+  SOLID,
+  itemDef,
   mulberry32,
+  type ContainerSpot,
   type InputSample,
   type MapData,
+  type MapRect,
   type Player,
   type Rarity,
+  type SelfState,
+  type SlotKey,
   type WeaponId,
 } from "@extract/shared";
+import { placeItem, syncPublic } from "./bag.js";
+import { cloneItem, makeItem, type ItemInit } from "./items.js";
 import { Match, type MatchOptions } from "./match.js";
-import type { MatchEvent, RosterEntry } from "./types.js";
+import type { MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
 
-/** Empty arena: border walls, one crate wall for bullet tests, nothing else. */
-export function testMap(seed = 0x7e57): MapData {
-  const W = WORLD.WIDTH;
-  const H = WORLD.HEIGHT;
-  const B = WORLD.BORDER;
+export interface TestMapOpts {
+  walls?: Array<{ x: number; y: number; w: number; h: number }>;
+  bushes?: Array<{ x: number; y: number; r: number }>;
+  containers?: ContainerSpot[];
+}
+
+/** Empty 4800 px arena: border walls, one crate wall for bullet tests (x 3000..3064, y 3000..3400). */
+export function testMap(o: TestMapOpts = {}): MapData {
+  const W = LEGACY_WORLD.WIDTH;
+  const H = LEGACY_WORLD.HEIGHT;
+  const B = LEGACY_WORLD.BORDER;
+  const cell = 64;
+  const cols = Math.ceil(W / cell), rows = Math.ceil(H / cell);
+  const rect = (x: number, y: number, w: number, h: number, k: MapRect["k"]): MapRect => ({ x, y, w, h, f: SOLID.ALL, k });
   return {
-    seed, width: W, height: H,
-    walls: [
-      { x: 0, y: 0, w: W, h: B },
-      { x: 0, y: H - B, w: W, h: B },
-      { x: 0, y: 0, w: B, h: H },
-      { x: W - B, y: 0, w: B, h: H },
+    id: "steppe", genVersion: MAP_GEN_VERSION, seed: 0x7e57, width: W, height: H,
+    terrain: new Uint8Array(cols * rows), terrainCols: cols, terrainRows: rows, terrainCell: cell,
+    zones: [], roads: [], river: [],
+    rects: [
+      rect(0, 0, W, B, "border"), rect(0, H - B, W, B, "border"), rect(0, 0, B, H, "border"), rect(W - B, 0, B, H, "border"),
+      rect(3000, 3000, 64, 400, "crate"),
+      ...(o.walls ?? []).map((w) => rect(w.x, w.y, w.w, w.h, "wall")),
     ],
-    // A wall well away from the test area (x 1000..2000, y 1000..2000).
-    crates: [{ x: 3000, y: 3000, w: 64, h: 400 }],
-    rocks: [], trees: [], bushes: [], dirt: [], buildings: [],
-    chestSpots: [], extractSpots: [],
-    spawnSpots: Array.from({ length: 8 }, (_, i) => ({ x: 1000 + i * 150, y: 1000 })),
+    circles: [],
+    bushes: o.bushes ?? [],
+    decals: [],
+    buildings: [],
+    containers: o.containers ?? [],
     lootSpots: [],
+    spawns: Array.from({ length: 8 }, (_, i) => ({ x: 1000 + i * 150, y: 1000, side: 0 as const })),
+    extracts: [],
+    bosses: [],
+    ambient: [],
   };
 }
 
@@ -54,6 +77,9 @@ export function testMatch(n = 2, opts: Partial<MatchOptions> = {}): Match {
     newUid: counterUid,
     now: () => 1_700_000_000_000,
     emptyWorld: true,
+    strictLedger: true,
+    envSeed: 1,
+    weatherOverride: "clear",
     ...opts,
   });
 }
@@ -63,10 +89,18 @@ export function ids(m: Match): string[] {
   return m.allRuntimes().map((r) => r.id);
 }
 
+export function rtOf(m: Match, id: string): PlayerRuntime {
+  const rt = m.runtime(id);
+  if (!rt) throw new Error(`no player ${id}`);
+  return rt;
+}
+
 export function pl(m: Match, id: string): Player {
-  const p = m.player(id);
-  if (!p) throw new Error(`no player ${id}`);
-  return p;
+  return rtOf(m, id).pub;
+}
+
+export function selfOf(m: Match, id: string): SelfState {
+  return rtOf(m, id).self;
 }
 
 export function place(m: Match, id: string, x: number, y: number): void {
@@ -75,17 +109,33 @@ export function place(m: Match, id: string, x: number, y: number): void {
   p.y = y;
 }
 
-export function giveWeapon(m: Match, id: string, slot: 0 | 1, weapon: WeaponId, rarity: Rarity = 0, mag?: number): string {
-  const p = pl(m, id);
-  const uid = m.newUid();
-  m.ledger.set(uid, { uid, kind: "weapon", type: weapon, rarity });
-  const s = p.slots[slot]!;
-  s.uid = uid;
-  s.weapon = weapon;
-  s.rarity = rarity;
-  s.mag = mag ?? WEAPONS[weapon].magSize;
-  s.free = false;
-  return uid;
+/**
+ * Put an item into a slot (replacing what is there). Uniques get a fresh uid registered in the
+ * ledger as a loadout item. Returns the uid ("" for stacks).
+ */
+export function giveItem(m: Match, id: string, def: string, key: SlotKey, init: ItemInit = {}): string {
+  const rt = rtOf(m, id);
+  const it = makeItem(def, init);
+  if (it.uid === "" && itemDef(def)?.unique && !(it.flags & ITEM_FLAG.FREE)) it.uid = m.newUid();
+  if (it.uid) m.ledger.register(it, "loadout");
+  rt.self.slots.set(key, cloneItem(it));
+  syncPublic(rt);
+  return it.uid;
+}
+
+export function giveWeapon(m: Match, id: string, key: "w1" | "w2", weapon: WeaponId, rarity: Rarity = 0, mag?: number): string {
+  return giveItem(m, id, weapon, key, mag === undefined ? { rarity } : { rarity, mag });
+}
+
+/** Auto-place a stack (ammo / meds / junk). Returns the units placed. */
+export function giveStack(m: Match, id: string, def: string, qty: number): number {
+  return placeItem(rtOf(m, id), makeItem(def, { qty }), qty).placed;
+}
+
+/** Remove every stack of `def` the player carries. */
+export function clearDef(m: Match, id: string, def: string): void {
+  const s = selfOf(m, id).slots;
+  for (const [k, it] of [...s.entries()]) if (it.def === def) s.delete(k);
 }
 
 export function addExtract(m: Match, x: number, y: number, openAt = 0, closeAt = 0, r = 110): Extract {
@@ -130,3 +180,8 @@ export function run(
   }
   return out;
 }
+
+export type Timed = MatchEvent & { at: number };
+export const shotsBy = (events: Timed[], m: Match, id: string) =>
+  events.filter((e): e is Extract2<Timed, { type: "shot" }> => e.type === "shot" && e.src === rtOf(m, id).rosterIndex);
+type Extract2<T, U> = T extends U ? T : never;

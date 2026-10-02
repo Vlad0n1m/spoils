@@ -18,7 +18,7 @@ function withSecret<T>(secret: string | undefined, fn: () => T): T {
   }
 }
 
-const ticket = (over: Partial<{ userId: string; nickname: string; issuedAt: number }> = {}) =>
+const ticket = (over: Partial<{ userId: string; nickname: string; issuedAt: number; loadoutId: string }> = {}) =>
   signJoinTicket({ userId: "user-1", nickname: "Neo", issuedAt: NOW, ...over }, SECRET);
 
 test("a valid ticket verifies (object or JSON string)", () => {
@@ -26,6 +26,28 @@ test("a valid ticket verifies (object or JSON string)", () => {
     const t = ticket();
     assert.deepEqual(verifyJoinTicket(t, NOW + 1000), t);
     assert.deepEqual(verifyJoinTicket(JSON.stringify(t), NOW), t);
+  });
+});
+
+test("the loadoutId is covered by the signature; \"\" = free kit; malformed ids are rejected", () => {
+  withSecret(SECRET, () => {
+    const free = ticket();
+    assert.equal(free.loadoutId, "");
+    assert.equal(verifyJoinTicket(free, NOW)?.loadoutId, "");
+    const locked = ticket({ loadoutId: "0b9d2c1e-7f43-4a51-9c3e-2f1d8a6b5c40" });
+    assert.equal(verifyJoinTicket(locked, NOW)?.loadoutId, locked.loadoutId);
+    // Swapping in another loadout (or dropping it) breaks the signature.
+    assert.equal(verifyJoinTicket({ ...locked, loadoutId: "other" }, NOW), null);
+    assert.equal(verifyJoinTicket({ ...locked, loadoutId: "" }, NOW), null);
+    const { loadoutId: _drop, ...noField } = locked;
+    assert.equal(verifyJoinTicket(noField, NOW), null);
+    // A ticket signed without the field verifies as the free kit (payload has an empty loadoutId).
+    const { loadoutId: _d2, ...freeNoField } = free;
+    assert.equal(verifyJoinTicket(freeNoField, NOW)?.loadoutId, "");
+    // A "." would make the signed payload ambiguous; non-strings are malformed.
+    assert.equal(verifyJoinTicket(ticket({ loadoutId: "a.b" }), NOW), null);
+    assert.equal(verifyJoinTicket({ ...free, loadoutId: 7 }, NOW), null);
+    assert.equal(verifyJoinTicket(ticket({ loadoutId: "x".repeat(65) }), NOW), null);
   });
 });
 

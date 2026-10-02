@@ -1,9 +1,22 @@
+import { randomInt, randomUUID } from "node:crypto";
 import { Room, matchMaker, type Client } from "@colyseus/core";
 import { ArraySchema, Schema, type } from "@colyseus/schema";
-import { MATCH, MM_BATTLE_READY, ROOMS, type BattleReadyMsg, type JoinTicket } from "@extract/shared";
+import {
+  MATCH,
+  MM_BATTLE_READY,
+  ROOMS,
+  type BattleReadyMsg,
+  type JoinTicket,
+  type RaidMode,
+  type RaidStartRequest,
+  type RaidStartResponse,
+} from "@extract/shared";
 import { CLOSE } from "./close-codes.js";
+import type { RaidLaunchOptions } from "./inventory-handlers.js";
 import { LAUNCH_KEY, authenticate, releasePendingSeatsOf } from "./room-auth.js";
+import { startRaid } from "../net/web-api.js";
 import type { RosterEntry } from "../sim/types.js";
+import { MATCH_PLAYERS, matchMap } from "../sim/match.js";
 import { botNames } from "../sim/names.js";
 
 export class MmPlayer extends Schema {
@@ -19,7 +32,7 @@ export class MmState extends Schema {
   @type("number") startedAt = 0;
   /** Server wall-clock ms when the match launches with bots if the queue is not full. */
   @type("number") deadlineAt = 0;
-  @type("uint8") maxPlayers = MATCH.MAX_PLAYERS;
+  @type("uint8") maxPlayers = MATCH_PLAYERS;
   @type([MmPlayer]) players = new ArraySchema<MmPlayer>();
   @type("string") battleRoomId = "";
 }
@@ -28,11 +41,13 @@ export class MmState extends Schema {
 const CLOSE_AFTER_LAUNCH_MS = 2_000;
 
 /**
- * Single demo queue "mm": launches a battle when MATCH.MAX_PLAYERS humans are in, or
+ * Single demo queue "mm": launches a battle when MATCH_PLAYERS humans are in, or
  * MATCH.MATCHMAKING_TIMEOUT_MS after the first join with bots filling the rest.
+ * Each seat's loadoutId (from the signed ticket) stays server-side and goes into the roster
+ * (WP-B: raids/start in launch()).
  */
 export class MatchmakingRoom extends Room<MmState, unknown, unknown, JoinTicket> {
-  override maxClients = MATCH.MAX_PLAYERS * 2;
+  override maxClients = MATCH_PLAYERS * 2;
   private deadline?: NodeJS.Timeout;
   private launching = false;
   /** userId → client currently holding that seat (a second tab replaces the first). */
@@ -85,7 +100,7 @@ export class MatchmakingRoom extends Room<MmState, unknown, unknown, JoinTicket>
       this.state.deadlineAt = this.state.startedAt + MATCH.MATCHMAKING_TIMEOUT_MS;
       this.deadline = setTimeout(() => void this.launch(), MATCH.MATCHMAKING_TIMEOUT_MS);
     }
-    if (this.state.players.length >= MATCH.MAX_PLAYERS) void this.launch();
+    if (this.state.players.length >= MATCH_PLAYERS) void this.launch();
   }
 
   override onLeave(client: Client) {
@@ -116,18 +131,29 @@ export class MatchmakingRoom extends Room<MmState, unknown, unknown, JoinTicket>
     await this.lock();
 
     const humans: RosterEntry[] = this.state.players
-      .slice(0, MATCH.MAX_PLAYERS)
-      .map((p) => ({ userId: p.userId, nickname: p.nickname, isBot: false }));
-    const bots: RosterEntry[] = botNames(MATCH.MAX_PLAYERS - humans.length).map((nickname) => ({
-      userId: null,
-      nickname,
-      isBot: true,
-    }));
+      .slice(0, MATCH_PLAYERS)
+      .map((p) => ({
+        userId: p.userId,
+        nickname: p.nickname,
+        isBot: false,
+        loadoutId: (this.seats.get(p.userId)?.auth as JoinTicket | undefined)?.loadoutId ?? "",
+      }));
+
+    const plan = await planLaunch(humans);
+    for (const userId of plan.rejected) {
+      this.seats.get(userId)?.leave(CLOSE.LOADOUT_REJECTED, "loadout_rejected");
+    }
+    if (!plan.roster.some((r) => !r.isBot)) {
+      // Every loadout was refused: nobody is left to play.
+      this.clock.setTimeout(() => void this.disconnect(), CLOSE_AFTER_LAUNCH_MS);
+      return;
+    }
 
     try {
       const battle = await matchMaker.createRoom(ROOMS.BATTLE, {
-        roster: [...humans, ...bots],
+        roster: plan.roster,
         launchKey: LAUNCH_KEY,
+        ...plan.options,
       });
       this.state.battleRoomId = battle.roomId;
       this.state.status = "started";
@@ -138,4 +164,85 @@ export class MatchmakingRoom extends Room<MmState, unknown, unknown, JoinTicket>
     }
     this.clock.setTimeout(() => void this.disconnect(), CLOSE_AFTER_LAUNCH_MS);
   }
+}
+
+// ---------------------------------------------------------------- launch path (inventory lane)
+
+/** ECONOMY_MODE=demo forces demo raids; anything else tries live (demo stays the fallback). */
+export function economyMode(): RaidMode {
+  return process.env.ECONOMY_MODE === "demo" ? "demo" : "live";
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface LaunchPlan {
+  /** Humans that keep their seat, then bots up to MATCH_PLAYERS. */
+  roster: RosterEntry[];
+  /** userIds whose loadout raids/start refused: kicked with CLOSE_CODES.LOADOUT_REJECTED. */
+  rejected: string[];
+  /** Spread into the battle's create options (sanitized again by raidOptions in onCreate). */
+  options: RaidLaunchOptions;
+}
+
+export interface LaunchDeps {
+  mode?: RaidMode;
+  startRaid?: (req: RaidStartRequest) => Promise<RaidStartResponse | null>;
+  matchId?: string;
+  matchSeed?: number;
+}
+
+/**
+ * Live mode: POST /api/raids/start (retried inside startRaid) so the web locks the loadouts into
+ * this match (locked → in_raid) and releases lost-pool items into containers; players then spawn
+ * with their accepted snapshot. Demo mode (ECONOMY_MODE=demo, or raids/start unreachable /
+ * refused): free kits, the server mints container uniques itself and reports them as `minted`.
+ * A loadout id that cannot be a DB id never reaches the API (it would fail the whole request).
+ */
+export async function planLaunch(humans: RosterEntry[], deps: LaunchDeps = {}): Promise<LaunchPlan> {
+  const matchId = deps.matchId ?? randomUUID();
+  const matchSeed = deps.matchSeed ?? randomInt(0, 2 ** 32);
+  let mode = deps.mode ?? economyMode();
+  const rejected = new Set<string>();
+  for (const h of humans) if (h.loadoutId && !UUID_RE.test(h.loadoutId)) rejected.add(h.userId!);
+
+  let res: RaidStartResponse | null = null;
+  if (mode === "live") {
+    const map = matchMap(matchSeed);
+    const req: RaidStartRequest = {
+      matchId,
+      mode: "live",
+      mapId: map.id,
+      matchSeed,
+      players: humans.filter((h) => !rejected.has(h.userId!)).map((h) => ({ userId: h.userId!, loadoutId: h.loadoutId ?? "" })),
+      containers: map.containers.map((c, idx) => ({ idx, kind: c.kind, tier: c.tier })),
+      bossSlots: 0,
+    };
+    res = await (deps.startRaid ?? startRaid)(req);
+    if (!res) {
+      console.error(`[mm] raids/start ${matchId} unavailable: launching in demo mode`);
+      mode = "demo";
+    }
+  }
+  if (res) for (const r of res.rejected) rejected.add(r.userId);
+  // Demo fallback: locked loadouts stay in the stash side (the web expires the lock); free kits.
+  const kept = humans
+    .filter((h) => !rejected.has(h.userId!))
+    .map((h) => (res && res.accepted.some((a) => a.userId === h.userId) ? h : { ...h, loadoutId: "" }));
+  const bots: RosterEntry[] = botNames(Math.max(0, MATCH_PLAYERS - kept.length)).map((nickname) => ({
+    userId: null,
+    nickname,
+    isBot: true,
+  }));
+  return {
+    roster: [...kept, ...bots],
+    rejected: [...rejected],
+    options: {
+      matchId,
+      mapSeed: matchSeed,
+      mode,
+      loadouts: res?.accepted.filter((a) => kept.some((h) => h.userId === a.userId)) ?? [],
+      containerLoot: res?.containerLoot ?? {},
+      autosellMult: res?.autosellMult ?? 1,
+    },
+  };
 }

@@ -10,7 +10,7 @@ import type { HudSnapshot } from "./types";
 function snap(clockMs: number, extra: Partial<HudSnapshot> = {}): HudSnapshot {
   return {
     phase: "open", clockMs, durationMs: 600_000, extractOpenAtMs: 0, self: null, aliveCount: 1, totalPlayers: 1,
-    nearestExtract: null, interactHint: null, killFeed: [], pingMs: null, ...extra,
+    nearestExtract: null, extracts: [], interactHint: null, killFeed: [], pingMs: null, ...extra,
   };
 }
 

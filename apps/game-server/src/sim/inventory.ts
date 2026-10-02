@@ -1,115 +1,103 @@
 /**
- * Items: creation (with economy uids), ground items, chests, pickups and death drops.
- * Every valuable item (non-free weapon, armor) is registered in Match.ledger on creation so the
- * conservation invariant (each uid ends in exactly one place) can be checked.
+ * Loose ground items (critique "Ground items"): GroundItem {id, def, x, y, qty, rarity} in state,
+ * the full item (uid, mag, dur, flags, dog tag fields) in a server runtime map. Pickups query a
+ * UniformGrid instead of scanning every item (autoPickup over all items was 50% of a tick on the
+ * big map). Ammo and meds are picked up by walking over them; everything else needs F.
  */
 
 import {
-  AMMO,
-  ARMOR,
-  BREAK_CHANCE_ON_DEATH,
-  CHEST_TABLES,
   GroundItem,
-  HEAL,
+  ITEM_FLAG,
   PLAYER,
-  WEAPONS,
+  SOLID,
+  UniformGrid,
   WORLD,
   armorIsUpgrade,
+  bpLevelOf,
   circleIsFree,
   hasLineOfSight,
-  pickWeighted,
-  type AmmoType,
-  type Chest,
-  type HealKind,
-  type ItemRef,
-  type Player,
-  type Rarity,
-  type WeaponId,
-  type WeaponSlot,
+  itemDef,
+  type ItemLike,
 } from "@extract/shared";
+import { placeItem, syncPublic } from "./bag.js";
+import { cloneItem, isTrackedUnique, toPlain } from "./items.js";
 import type { Match } from "./match.js";
-import type { LootDrop, PlayerRuntime } from "./types.js";
+import type { PlayerRuntime } from "./types.js";
 
-/** How many bandages / medkits one loot roll or floor spot gives. */
-const MED_QTY: Record<HealKind, number> = { bandage: 2, medkit: 1 };
-
-export function weaponRef(uid: string, weapon: string, rarity: number): ItemRef {
-  return { uid, kind: "weapon", type: weapon, rarity };
+export interface GroundRt {
+  /** Numeric grid id. */
+  n: number;
+  schema: GroundItem;
+  item: ItemLike;
 }
 
-/**
- * Armor has no rarity of its own; level 1..3 maps to rarity 0..2 so "rare+" checks work.
- * `dur` is the remaining durability at the moment the ref is taken, so wear persists in the economy.
- */
-export function armorRef(uid: string, level: number, dur: number): ItemRef {
-  return { uid, kind: "armor", type: "armor", rarity: Math.max(0, level - 1), level, dur: Math.max(0, dur) };
-}
+/** Ground bookkeeping owned by the Match (one per match). */
+export class GroundStore {
+  readonly byId = new Map<string, GroundRt>();
+  private readonly byN = new Map<number, GroundRt>();
+  readonly grid: UniformGrid;
+  private seq = 0;
+  private readonly scratch: number[] = [];
 
-/** ItemRef of a valuable LootDrop (weapon / armor), null for ammo and meds. */
-export function dropRef(d: LootDrop): ItemRef | null {
-  if (d.kind === "weapon") return weaponRef(d.uid, d.weapon, d.rarity);
-  if (d.kind === "armor") return armorRef(d.uid, d.level, d.dur);
-  return null;
-}
+  constructor(width: number, height: number) {
+    this.grid = new UniformGrid(width, height, 256);
+  }
 
-export function newWeaponDrop(m: Match, weapon: WeaponId, rarity: Rarity): LootDrop {
-  const uid = m.newUid();
-  m.ledger.set(uid, weaponRef(uid, weapon, rarity));
-  return { kind: "weapon", weapon, rarity, mag: WEAPONS[weapon].magSize, uid };
-}
+  add(m: Match, item: ItemLike, x: number, y: number): GroundItem {
+    const n = this.seq++;
+    const g = new GroundItem();
+    g.id = `g${n.toString(36)}`;
+    g.def = item.def;
+    g.x = x;
+    g.y = y;
+    g.qty = item.qty;
+    g.rarity = item.rarity;
+    const rt: GroundRt = { n, schema: g, item: toPlain(item) };
+    this.byId.set(g.id, rt);
+    this.byN.set(n, rt);
+    this.grid.set(n, x, y);
+    m.state.items.set(g.id, g);
+    return g;
+  }
 
-export function newArmorDrop(m: Match, level: 1 | 2 | 3): LootDrop {
-  const uid = m.newUid();
-  const dur = ARMOR[level].durability;
-  m.ledger.set(uid, armorRef(uid, level, dur));
-  return { kind: "armor", level, dur, uid };
-}
+  remove(m: Match, id: string): void {
+    const rt = this.byId.get(id);
+    if (!rt) return;
+    this.byId.delete(id);
+    this.byN.delete(rt.n);
+    this.grid.delete(rt.n);
+    m.state.items.delete(id);
+  }
 
-/** Roll a chest's contents once at match setup so it can be audited before anyone opens it. */
-export function rollChest(m: Match, rarity: Rarity): LootDrop[] {
-  const table = CHEST_TABLES[rarity];
-  const out: LootDrop[] = [];
-  for (let i = 0; i < table.rolls; i++) {
-    const roll = pickWeighted(m.rng, table.loot);
-    switch (roll.kind) {
-      case "weapon":
-        out.push(newWeaponDrop(m, roll.weapon, roll.rarity));
-        break;
-      case "armor":
-        out.push(newArmorDrop(m, roll.level));
-        break;
-      case "ammo":
-        out.push({ kind: "ammo", ammo: roll.ammo, qty: AMMO[roll.ammo].pickup });
-        break;
-      default:
-        out.push({ kind: roll.kind, qty: MED_QTY[roll.kind] });
+  setQty(rt: GroundRt, qty: number): void {
+    rt.item.qty = qty;
+    if (rt.schema.qty !== qty) rt.schema.qty = qty;
+  }
+
+  /** Items whose centre is within `r` of (x, y). */
+  near(x: number, y: number, r: number): GroundRt[] {
+    const out: GroundRt[] = [];
+    const r2 = r * r;
+    for (const n of this.grid.queryCircle(x, y, r, this.scratch)) {
+      const g = this.byN.get(n);
+      if (g && (g.schema.x - x) ** 2 + (g.schema.y - y) ** 2 <= r2) out.push(g);
     }
+    return out;
   }
-  return out;
+
+  all(): IterableIterator<GroundRt> {
+    return this.byId.values();
+  }
 }
 
-const FLOOR_LOOT = [
-  { kind: "ammo" as const, ammo: "light" as AmmoType, weight: 36 },
-  { kind: "ammo" as const, ammo: "shell" as AmmoType, weight: 18 },
-  { kind: "ammo" as const, ammo: "heavy" as AmmoType, weight: 8 },
-  { kind: "bandage" as const, weight: 22 },
-  { kind: "medkit" as const, weight: 6 },
-];
-
-/** Floor loot: mostly ammo and meds, ~10% a common weapon. */
-export function rollFloorLoot(m: Match): LootDrop {
-  if (m.rng() < 0.1) {
-    return newWeaponDrop(m, m.rng() < 0.55 ? "rifle" : "shotgun", 0);
-  }
-  const roll = pickWeighted(m.rng, FLOOR_LOOT);
-  if (roll.kind === "ammo") return { kind: "ammo", ammo: roll.ammo, qty: AMMO[roll.ammo].pickup };
-  return { kind: roll.kind, qty: MED_QTY[roll.kind] };
+export function spawnGroundItem(m: Match, item: ItemLike, x: number, y: number): GroundItem {
+  return m.ground.add(m, item, x, y);
 }
 
 /**
  * Position for the n-th item scattered around (x, y): a golden-angle spiral, skipping spots inside
- * solids so dropped loot never ends up unreachable inside a crate or wall, and spots behind a wall
- * so loot from a chest or body indoors never lands on the outside of the building (or vice versa).
+ * solids so loot never ends up unreachable inside a crate or wall, and spots behind a wall so loot
+ * from a container or body indoors never lands outside the building (or vice versa).
  */
 export function dropSpot(m: Match, x: number, y: number, n: number): { x: number; y: number } {
   const B = WORLD.BORDER + 16;
@@ -120,283 +108,108 @@ export function dropSpot(m: Match, x: number, y: number, n: number): { x: number
     const px = x + Math.cos(a) * r;
     const py = y + Math.sin(a) * r;
     if (px < B || py < B || px > m.map.width - B || py > m.map.height - B) continue;
-    if (circleIsFree(m.idx, px, py, 12) && hasLineOfSight(m.idx, x, y, px, py)) return { x: px, y: py };
+    if (circleIsFree(m.idx, px, py, 12) && hasLineOfSight(m.idx, x, y, px, py, SOLID.MOVE)) return { x: px, y: py };
   }
   return { x, y };
 }
 
-export function spawnGroundItem(m: Match, drop: LootDrop, x: number, y: number): GroundItem {
-  const g = new GroundItem();
-  g.id = m.newEntityId("g");
-  g.kind = drop.kind;
-  g.x = x;
-  g.y = y;
-  switch (drop.kind) {
-    case "weapon":
-      g.weapon = drop.weapon;
-      g.rarity = drop.rarity;
-      g.mag = drop.mag;
-      g.uid = drop.uid;
-      g.qty = 1;
-      break;
-    case "armor":
-      g.armor = drop.level;
-      g.armorDur = drop.dur;
-      g.uid = drop.uid;
-      g.qty = 1;
-      break;
-    case "ammo":
-      g.ammoType = drop.ammo;
-      g.qty = drop.qty;
-      break;
-    default:
-      g.qty = drop.qty;
-  }
-  m.state.items.set(g.id, g);
-  return g;
-}
-
-export function openChest(m: Match, rt: PlayerRuntime, chest: Chest): void {
-  if (chest.opened) return;
-  chest.opened = true;
-  const contents = m.chestContents.get(chest.id) ?? [];
-  m.chestContents.delete(chest.id);
-  contents.forEach((drop, i) => {
-    const p = dropSpot(m, chest.x, chest.y, i);
-    spawnGroundItem(m, drop, p.x, p.y);
-  });
-  m.emit({ type: "chest", msg: { id: chest.id, by: rt.id } });
-}
-
-export function ammoOf(p: Player, type: AmmoType): number {
-  return type === "light" ? p.ammoLight : type === "shell" ? p.ammoShell : p.ammoHeavy;
-}
-
-export function setAmmo(p: Player, type: AmmoType, value: number): void {
-  if (type === "light") p.ammoLight = value;
-  else if (type === "shell") p.ammoShell = value;
-  else p.ammoHeavy = value;
+function autoPicked(def: string): boolean {
+  const c = itemDef(def)?.cat;
+  return c === "ammo" || c === "med";
 }
 
 /**
- * Ammo and meds are picked up by walking over them, up to the carry cap; whatever does not fit
- * stays on the ground with the reduced quantity.
+ * Ammo and meds are picked up by walking over them, through the slot engine (merge into stacks,
+ * then empty slots); whatever does not fit stays on the ground with the reduced quantity.
  */
-export function autoPickup(m: Match, p: Player): void {
-  const r2 = PLAYER.AUTO_PICKUP_RADIUS * PLAYER.AUTO_PICKUP_RADIUS;
-  for (const item of [...m.state.items.values()]) {
-    if (item.kind !== "ammo" && item.kind !== "bandage" && item.kind !== "medkit") continue;
-    const dx = item.x - p.x;
-    const dy = item.y - p.y;
-    if (dx * dx + dy * dy > r2) continue;
-    let room: number;
-    if (item.kind === "ammo") {
-      const type = item.ammoType as AmmoType;
-      if (!(type in AMMO)) continue;
-      room = AMMO[type].maxCarry - ammoOf(p, type);
-      const take = Math.min(room, item.qty);
-      if (take <= 0) continue;
-      setAmmo(p, type, ammoOf(p, type) + take);
-      item.qty -= take;
-    } else if (item.kind === "bandage") {
-      const take = Math.min(HEAL.bandage.MAX_CARRY - p.bandages, item.qty);
-      if (take <= 0) continue;
-      p.bandages += take;
-      item.qty -= take;
-    } else {
-      const take = Math.min(HEAL.medkit.MAX_CARRY - p.medkits, item.qty);
-      if (take <= 0) continue;
-      p.medkits += take;
-      item.qty -= take;
+export function autoPickup(m: Match, rt: PlayerRuntime): void {
+  const p = rt.pub;
+  for (const g of m.ground.near(p.x, p.y, PLAYER.AUTO_PICKUP_RADIUS)) {
+    if (!autoPicked(g.item.def)) continue;
+    const { placed } = placeItem(rt, g.item, g.item.qty);
+    if (placed <= 0) continue;
+    if (placed >= g.item.qty) m.ground.remove(m, g.schema.id);
+    else m.ground.setQty(g, g.item.qty - placed);
+  }
+}
+
+/** Nearest ground item within reach and line of sight (F), or null. */
+export function nearestGroundItem(m: Match, rt: PlayerRuntime): GroundRt | null {
+  const p = rt.pub;
+  let best: GroundRt | null = null;
+  let bestD = Infinity;
+  for (const g of m.ground.near(p.x, p.y, PLAYER.INTERACT_RADIUS)) {
+    const d = (g.schema.x - p.x) ** 2 + (g.schema.y - p.y) ** 2;
+    if (d >= bestD || !hasLineOfSight(m.idx, p.x, p.y, g.schema.x, g.schema.y, SOLID.MOVE)) continue;
+    best = g;
+    bestD = d;
+  }
+  return best;
+}
+
+/**
+ * F on a loose item. Weapons go to an empty weapon slot or replace the FREE pistol; with both
+ * slots holding real weapons the new one goes into the active hand and the old one into storage
+ * (or onto the ground when storage is full). Armor / backpacks are equipped when better (the old
+ * one goes to storage or the ground), otherwise stored. Everything else is auto-placed.
+ */
+export function pickupGround(m: Match, rt: PlayerRuntime, g: GroundRt): boolean {
+  const it = g.item;
+  const d = itemDef(it.def);
+  if (!d) return false;
+  const s = rt.self.slots;
+  const at = { x: g.schema.x, y: g.schema.y };
+
+  /** Put `old` into storage; the ground at the pickup spot when it does not fit. */
+  const stash = (old: ItemLike) => {
+    if (placeItem(rt, old).placed < old.qty) spawnGroundItem(m, old, at.x, at.y);
+  };
+
+  if (d.cat === "weapon" && s.get("w1") && s.get("w2")) {
+    const free = (["w1", "w2"] as const).find((k) => s.get(k)!.flags & ITEM_FLAG.FREE);
+    if (!free) {
+      const key = rt.self.active;
+      const old = toPlain(s.get(key)!);
+      m.ground.remove(m, g.schema.id);
+      s.set(key, cloneItem(it));
+      if (rt.reloadKey === key) rt.self.reloadUntil = 0;
+      stash(old);
+      syncPublic(rt);
+      return true;
     }
-    if (item.qty <= 0) m.state.items.delete(item.id);
   }
-}
-
-function clearSlot(slot: WeaponSlot): void {
-  slot.uid = "";
-  slot.weapon = "";
-  slot.rarity = 0;
-  slot.mag = 0;
-  slot.free = false;
-}
-
-/**
- * Weapon goes into an empty slot, else replaces the active slot. The replaced weapon drops where
- * the new one was lying (a swap); a free-kit pistol is worth nothing and simply disappears.
- */
-export function pickupWeapon(m: Match, rt: PlayerRuntime, p: Player, item: GroundItem): boolean {
-  if (!(item.weapon in WEAPONS) || !item.uid) return false;
-  let idx = p.slots.findIndex((s) => !s.weapon);
-  if (idx < 0) {
-    idx = p.active;
-    const old = p.slots[idx]!;
-    if (!old.free && old.uid) {
-      spawnGroundItem(
-        m,
-        { kind: "weapon", weapon: old.weapon as WeaponId, rarity: old.rarity as Rarity, mag: old.mag, uid: old.uid },
-        item.x,
-        item.y,
-      );
+  if (d.cat === "armor" && s.get("armor")) {
+    const worn = s.get("armor")!;
+    const wornLevel = itemDef(worn.def)?.armorLevel ?? 0;
+    if (armorIsUpgrade({ armor: wornLevel, armorDur: worn.dur }, d.armorLevel ?? 0, it.dur)) {
+      const old = toPlain(worn);
+      m.ground.remove(m, g.schema.id);
+      s.set("armor", cloneItem(it));
+      stash(old);
+      syncPublic(rt);
+      return true;
     }
-    if (p.reloadUntil > 0 && rt.reloadSlot === idx) p.reloadUntil = 0;
   }
-  const slot = p.slots[idx]!;
-  slot.uid = item.uid;
-  slot.weapon = item.weapon;
-  slot.rarity = item.rarity;
-  slot.mag = Math.min(item.mag, WEAPONS[item.weapon as WeaponId].magSize);
-  slot.free = false;
-  m.state.items.delete(item.id);
-  return true;
-}
-
-/** The rule lives in the shared contract so the HUD hint and the bots agree with the server. */
-export { armorIsUpgrade } from "@extract/shared";
-
-export function pickupArmor(m: Match, p: Player, item: GroundItem): boolean {
-  if (item.armor < 1 || item.armor > 3 || !item.uid) return false;
-  if (!armorIsUpgrade(p, item.armor, item.armorDur)) return false;
-  if (p.armor > 0 && p.armorUid) {
-    spawnGroundItem(
-      m,
-      { kind: "armor", level: p.armor as 1 | 2 | 3, dur: p.armorDur, uid: p.armorUid },
-      item.x,
-      item.y,
-    );
-  }
-  p.armor = item.armor;
-  p.armorDur = item.armorDur;
-  p.armorUid = item.uid;
-  m.state.items.delete(item.id);
-  return true;
-}
-
-/**
- * F: nearest unopened chest in reach, else the nearest weapon / armor (armor only if it is an
- * upgrade). Only targets in line of sight count, so nothing is looted through a wall.
- */
-export function interact(m: Match, rt: PlayerRuntime, p: Player): boolean {
-  const reach2 = PLAYER.INTERACT_RADIUS * PLAYER.INTERACT_RADIUS;
-  const d2 = (x: number, y: number) => (x - p.x) ** 2 + (y - p.y) ** 2;
-
-  let chest: Chest | null = null;
-  let best = reach2;
-  for (const c of m.state.chests.values()) {
-    if (c.opened) continue;
-    const d = d2(c.x, c.y);
-    if (d > best || !hasLineOfSight(m.idx, p.x, p.y, c.x, c.y)) continue;
-    best = d;
-    chest = c;
-  }
-  if (chest) {
-    openChest(m, rt, chest);
+  if (d.cat === "backpack" && s.get("bp") && (d.bpLevel ?? 0) > bpLevelOf(s)) {
+    // Bigger pack: the bag contents belong to the player and keep their b-slots.
+    const old = toPlain(s.get("bp")!);
+    m.ground.remove(m, g.schema.id);
+    s.set("bp", cloneItem(it));
+    stash(old);
+    syncPublic(rt);
     return true;
   }
-
-  let item: GroundItem | null = null;
-  best = reach2;
-  for (const g of m.state.items.values()) {
-    if (g.kind === "armor") {
-      if (!armorIsUpgrade(p, g.armor, g.armorDur)) continue;
-    } else if (g.kind !== "weapon") {
-      continue;
-    }
-    const d = d2(g.x, g.y);
-    if (d > best || !hasLineOfSight(m.idx, p.x, p.y, g.x, g.y)) continue;
-    best = d;
-    item = g;
-  }
-  if (!item) return false;
-  return item.kind === "weapon" ? pickupWeapon(m, rt, p, item) : pickupArmor(m, p, item);
+  const { placed } = placeItem(rt, it, it.qty);
+  if (placed <= 0) return false;
+  if (placed >= it.qty) m.ground.remove(m, g.schema.id);
+  else m.ground.setQty(g, it.qty - placed);
+  syncPublic(rt);
+  return true;
 }
 
-/**
- * Valuable items still on the map: on the ground (dropped by the dead, swapped out, never picked
- * up) or inside unopened chests. Settlement reports them as `leftOnMap`.
- */
-export function leftOnMapRefs(m: Match): ItemRef[] {
-  const out: ItemRef[] = [];
-  for (const g of m.state.items.values()) {
-    if (!g.uid) continue;
-    if (g.kind === "weapon") out.push(weaponRef(g.uid, g.weapon, g.rarity));
-    else if (g.kind === "armor") out.push(armorRef(g.uid, g.armor, g.armorDur));
-  }
-  for (const contents of m.chestContents.values()) {
-    for (const d of contents) {
-      const ref = dropRef(d);
-      if (ref) out.push(ref);
-    }
-  }
+/** Tracked uniques lying on the ground (MatchEndReport.leftOnMap). */
+export function groundUniques(m: Match): ItemLike[] {
+  const out: ItemLike[] = [];
+  for (const g of m.ground.all()) if (isTrackedUnique(g.item)) out.push(g.item);
   return out;
-}
-
-/** Valuable items the player carries right now (non-free weapons and armor). */
-export function carriedRefs(p: Player): ItemRef[] {
-  const out: ItemRef[] = [];
-  for (const s of p.slots) {
-    if (s.weapon && !s.free && s.uid) out.push(weaponRef(s.uid, s.weapon, s.rarity));
-  }
-  if (p.armor > 0 && p.armorUid) out.push(armorRef(p.armorUid, p.armor, p.armorDur));
-  return out;
-}
-
-/**
- * Death: every valuable item independently breaks (lost for good) or drops near the body for
- * others; ammo and meds always drop. The free pistol stays with the corpse — it is worth nothing.
- */
-export function dropOnDeath(m: Match, rt: PlayerRuntime, p: Player): void {
-  let n = 0;
-  const at = () => dropSpot(m, p.x, p.y, n++);
-
-  for (const s of p.slots) {
-    if (!s.weapon || s.free || !s.uid) continue;
-    const ref = weaponRef(s.uid, s.weapon, s.rarity);
-    if (m.rng() < BREAK_CHANCE_ON_DEATH) {
-      rt.lost.push(ref);
-    } else {
-      const pos = at();
-      spawnGroundItem(
-        m,
-        { kind: "weapon", weapon: s.weapon as WeaponId, rarity: s.rarity as Rarity, mag: s.mag, uid: s.uid },
-        pos.x,
-        pos.y,
-      );
-      rt.dropped.push(ref);
-    }
-    clearSlot(s);
-  }
-
-  if (p.armor > 0 && p.armorUid) {
-    const ref = armorRef(p.armorUid, p.armor, p.armorDur);
-    if (m.rng() < BREAK_CHANCE_ON_DEATH) {
-      rt.lost.push(ref);
-    } else {
-      const pos = at();
-      spawnGroundItem(m, { kind: "armor", level: p.armor as 1 | 2 | 3, dur: p.armorDur, uid: p.armorUid }, pos.x, pos.y);
-      rt.dropped.push(ref);
-    }
-  }
-  p.armor = 0;
-  p.armorDur = 0;
-  p.armorUid = "";
-
-  for (const type of ["light", "shell", "heavy"] as const) {
-    const qty = ammoOf(p, type);
-    if (qty > 0) {
-      const pos = at();
-      spawnGroundItem(m, { kind: "ammo", ammo: type, qty }, pos.x, pos.y);
-      setAmmo(p, type, 0);
-    }
-  }
-  if (p.bandages > 0) {
-    const pos = at();
-    spawnGroundItem(m, { kind: "bandage", qty: p.bandages }, pos.x, pos.y);
-    p.bandages = 0;
-  }
-  if (p.medkits > 0) {
-    const pos = at();
-    spawnGroundItem(m, { kind: "medkit", qty: p.medkits }, pos.x, pos.y);
-    p.medkits = 0;
-  }
 }

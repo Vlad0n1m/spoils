@@ -15,8 +15,10 @@ import {
   isIndoorTerrain,
   materialFromVariant,
   materialOfTerrain,
+  stepRangeMultOfTerrain,
   stepSoundId,
 } from "./footsteps";
+import { surfaceOf } from "@extract/shared";
 import { SFX, STEP_MATERIALS, isSfxId } from "./recipes";
 
 /** Simulate moving at `speed` px/s for `seconds` at 60 fps; returns step timestamps (ms). */
@@ -111,6 +113,23 @@ describe("material selection", () => {
     assert.equal(materialFromVariant(1.5), "dirt");
     assert.equal(materialFromVariant("lava"), "dirt");
     assert.equal(materialFromVariant(undefined), "dirt");
+  });
+
+  it("decodes the shared wire materials beyond the six baked ones", () => {
+    // Shared STEP_MATERIALS: … water(5), forest(6), gravel(7).
+    assert.equal(materialFromVariant(6), "grass");
+    assert.equal(materialFromVariant(7), "dirt");
+    assert.equal(materialFromVariant("forest"), "grass");
+    assert.equal(materialFromVariant("gravel"), "dirt");
+    assert.equal(materialOfTerrain(8), "dirt"); // GRAVEL
+    assert.equal(materialOfTerrain(1), "grass"); // FOREST
+  });
+
+  it("agrees with the shared surface table for the server's step variant", () => {
+    for (let t = 0; t < 10; t++) {
+      assert.equal(materialFromVariant(surfaceOf(t).variant), materialOfTerrain(t), `terrain ${t}`);
+      assert.equal(stepRangeMultOfTerrain(t | INDOOR_BIT), surfaceOf(t).stepRangeMult);
+    }
   });
 
   it("has a step sound for every material", () => {

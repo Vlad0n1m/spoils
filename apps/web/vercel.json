@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/watch-deposits",
       "schedule": "*/1 * * * *"
+    },
+    {
+      "path": "/api/cron/void-raids",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

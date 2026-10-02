@@ -16,6 +16,8 @@ export interface AudioSettings {
   muted: boolean;
   /** "Visualize sound effects" ring (mobility memo); stored here so the audio popover has one key. */
   visualize: boolean;
+  /** Photosensitivity: cap the lightning flash at a faint tint (weather-fx FLASH_REDUCED_MAX). */
+  reduceFlashes: boolean;
 }
 
 export const STORAGE_KEY = "extract.audio.v1";
@@ -27,6 +29,7 @@ export const DEFAULT_SETTINGS: Readonly<AudioSettings> = Object.freeze({
   ui: 0.8,
   muted: false,
   visualize: true,
+  reduceFlashes: false,
 });
 
 const unit = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback);
@@ -43,6 +46,7 @@ export function sanitizeSettings(raw: unknown): AudioSettings {
     ui: unit(o.ui, d.ui),
     muted: bool(o.muted, d.muted),
     visualize: bool(o.visualize, d.visualize),
+    reduceFlashes: bool(o.reduceFlashes, d.reduceFlashes),
   };
 }
 

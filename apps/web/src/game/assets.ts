@@ -30,9 +30,48 @@ export const SPRITE_NAMES = [
   "rock",
   "grass_tile",
   "dirt_plain",
+  // v2 map (WP-M3): ground tiles and props baked into the chunked world.
+  "forest_tile",
+  "asphalt_tile",
+  "concrete_tile",
+  "wood_floor_tile",
+  "car_wreck",
+  "shipping_container",
+  "barrel",
+  "sandbags",
+  "fence",
+  "watchtower",
+  "log_pile",
+  "puddle",
 ] as const;
 
 export type SpriteName = (typeof SPRITE_NAMES)[number];
+
+/** Seamless ground tiles: sampled with repeat (TilingSprite, canvas patterns). */
+const TILE_SPRITES: ReadonlySet<SpriteName> = new Set<SpriteName>([
+  "grass_tile",
+  "dirt_plain",
+  "forest_tile",
+  "asphalt_tile",
+  "concrete_tile",
+  "wood_floor_tile",
+]);
+
+/**
+ * Opaque content box of a sprite inside its texture, in texture px (measured from the PNG alpha,
+ * threshold 40). Props are sized so this box — not the transparent padding — covers the collision
+ * shape; otherwise a bullet would visibly stop in mid-air next to a car.
+ */
+export const SPRITE_CONTENT: Partial<Record<SpriteName, { x: number; y: number; w: number; h: number }>> = {
+  car_wreck: { x: 0, y: 67, w: 320, h: 185 },
+  shipping_container: { x: 0, y: 58, w: 320, h: 203 },
+  sandbags: { x: 0, y: 59, w: 224, h: 105 },
+  fence: { x: 0, y: 90, w: 256, h: 76 },
+  watchtower: { x: 32, y: 0, w: 223, h: 288 },
+  log_pile: { x: 14, y: 0, w: 196, h: 224 },
+  puddle: { x: 17, y: 0, w: 158, h: 192 },
+  barrel: { x: 2, y: 0, w: 124, h: 128 },
+};
 export type Textures = Record<SpriteName, Texture>;
 
 async function loadOne(name: SpriteName): Promise<Texture> {
@@ -45,7 +84,7 @@ async function loadOne(name: SpriteName): Promise<Texture> {
     console.warn(`[game] sprite ${name} failed to load`);
     return Texture.EMPTY;
   }
-  const tiles = name === "grass_tile" || name === "dirt_plain";
+  const tiles = TILE_SPRITES.has(name);
   return new Texture({
     source: new ImageSource({
       resource: img,
@@ -64,6 +103,19 @@ export async function loadTextures(): Promise<Textures> {
     out[n] = list[i]!;
   });
   return out;
+}
+
+/**
+ * The decoded image behind a loaded texture, for canvas drawing (ground bake, minimap); null when
+ * the sprite failed to load (Texture.EMPTY) or the source is not an image.
+ */
+export function textureImage(t: Texture | undefined): CanvasImageSource | null {
+  if (!t || t === Texture.EMPTY) return null;
+  const res = t.source?.resource as unknown;
+  if (typeof HTMLImageElement !== "undefined" && res instanceof HTMLImageElement) return res;
+  if (typeof ImageBitmap !== "undefined" && res instanceof ImageBitmap) return res;
+  if (typeof HTMLCanvasElement !== "undefined" && res instanceof HTMLCanvasElement) return res;
+  return null;
 }
 
 export function destroyTextures(t: Textures): void {

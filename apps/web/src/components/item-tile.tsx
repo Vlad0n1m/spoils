@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import type { ItemRef } from "@extract/shared";
+import type { SettledItem } from "@extract/shared";
 import { describeItem, rarityHex, rarityName } from "@/lib/items-ui";
 
 /** Sprite in a rarity-colored frame. Used by the outcome overlay and the lobby board. */
@@ -11,7 +11,7 @@ export function ItemTile({
   dim = false,
   showName = true,
 }: {
-  item: ItemRef;
+  item: SettledItem;
   size?: "sm" | "md";
   /** Greyed out (e.g. broken items). */
   dim?: boolean;
