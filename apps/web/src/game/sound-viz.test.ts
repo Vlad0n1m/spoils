@@ -21,6 +21,7 @@ import {
   RING,
   SoundIndicators,
   bandOfDistance,
+  chevronAlpha,
   chevronPulse,
   indicatorStyle,
   placeSounds,
@@ -172,6 +173,17 @@ describe("fade and cap", () => {
     const muffled = indicatorStyle(ind.push(input(SoundKind.step, 2, 0, true), 0), 100, 0)!;
     assert.ok(farM.alpha < nearM.alpha && farM.width < nearM.width);
     assert.ok(near(muffled.alpha, nearM.alpha * RING.OCCLUDED_ALPHA));
+    // Icons say WHAT was heard: floored so a far, muffled shot is still legible.
+    const farMuffled = indicatorStyle(ind.push(input(SoundKind.shot, 3, 2, true), 0), 100, 0)!;
+    assert.ok(farMuffled.iconAlpha >= RING.ICON_MIN_ALPHA * 0.9 && farMuffled.iconAlpha > farMuffled.alpha * 2);
+    assert.ok(nearM.iconAlpha <= 1 && nearM.iconAlpha >= nearM.alpha);
+  });
+
+  it("the behind-you chevron pulses only right after a trigger", () => {
+    assert.equal(chevronAlpha(0), 1);
+    assert.ok(chevronAlpha(RING.CHEVRON_PERIOD_MS / 2) < 0.6);
+    assert.equal(chevronAlpha(RING.CHEVRON_PULSE_MS), 1);
+    assert.equal(chevronAlpha(5_000), 1);
   });
 
   it("caps markers, evicting the least important first", () => {

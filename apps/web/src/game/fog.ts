@@ -45,12 +45,16 @@ export const FOG = {
   CONE_TEX_R: 256,
   /** Awareness disc texture radius in texels (covers AWARE_R + AWARE_FADE). */
   AWARE_TEX_R: 64,
-  /** Darkness: day / night alpha over unseen ground, and the fog-weather mist colour. */
+  /**
+   * Darkness over unseen ground ("memory"): day / night alpha and the fog-weather mist colour.
+   * The night tint below already darkens the whole world, so the overlay stays at or under 0.72:
+   * roads, buildings and tree lines must stay readable at night (playtest: 0.82 read as black).
+   */
   DAY_COLOR: 0x0b1020,
-  DAY_ALPHA: 0.55,
-  NIGHT_ALPHA: 0.82,
+  DAY_ALPHA: 0.45,
+  NIGHT_ALPHA: 0.72,
   MIST_COLOR: 0x8f99a4,
-  MIST_ALPHA: 0.62,
+  MIST_ALPHA: 0.6,
   /** World tint at full night (multiplied over the visible world as well). */
   NIGHT_TINT: 0x5b6890,
   /** Per-entity alpha follows its visibility with this time constant (fade in / out). */
@@ -143,7 +147,13 @@ export function conePixels(R: number = FOG.CONE_TEX_R): Uint8ClampedArray {
   return out;
 }
 
-/** RGBA pixels of the awareness disc: 2R × 2R, R texels = AWARE_R + AWARE_FADE world px. */
+/**
+ * RGBA pixels of the awareness disc: 2R × 2R, R texels = AWARE_R + AWARE_FADE world px.
+ * The ramp is eased (smoothstep of the linear awareness term, same 0 / 1 end points) so the disc
+ * melts into the cone's soft edges instead of reading as a separate, brighter bubble behind the
+ * player. Inside the cone both holes are fully open, so the visible world gets exactly one
+ * lighting (the world tint) whether it is seen through the cone or the disc.
+ */
 export function awarePixels(R: number = FOG.AWARE_TEX_R): Uint8ClampedArray {
   const n = 2 * R;
   const worldPerTexel = (VISION.AWARE_R + VISION.AWARE_FADE) / R;
@@ -153,7 +163,7 @@ export function awarePixels(R: number = FOG.AWARE_TEX_R): Uint8ClampedArray {
       const d = Math.hypot(x + 0.5 - R, y + 0.5 - R) * worldPerTexel;
       const o = (y * n + x) * 4;
       out[o] = out[o + 1] = out[o + 2] = 255;
-      out[o + 3] = Math.round(awareTexAlpha(d) * 255);
+      out[o + 3] = Math.round(smoothstep(0, 1, awareTexAlpha(d)) * 255);
     }
   }
   return out;

@@ -46,6 +46,29 @@ test("planAllocation favours high tiers", () => {
   assert.ok(high > 320, `high-tier share ${high}/400`);
 });
 
+test("planAllocation: floor items only land in T3/T4 containers (or the boss), never elsewhere", () => {
+  const picks = Array.from({ length: 8 }, (_, i) => ({ id: `f${i}`, value: i }));
+  const floor = new Set(picks.map((p) => p.id));
+  for (let seed = 0; seed < 50; seed++) {
+    const a = planAllocation(picks, CONTAINERS, 0, seed, floor);
+    const keys = [...a.keys()];
+    assert.ok(keys.every((k) => k === "2" || k === "3"), `seed ${seed}: ${keys.join(",")}`);
+    assert.equal([...a.values()].flat().length, 8, "dangerous containers reused when outnumbered");
+  }
+  const low: AllocContainer[] = [{ idx: 1, kind: "crate", tier: 0 }, { idx: 4, kind: "stash", tier: 2 }];
+  assert.equal(planAllocation(picks, low, 0, 1, floor).size, 0, "no T3/T4 container: floor items stay in the pool");
+  assert.deepEqual([...planAllocation(picks, low, 1, 1, floor).keys()], ["boss"], "boss stash takes its share");
+  // Mixed: risk items may go anywhere eligible, floor items only high.
+  const mixed = planAllocation(
+    [{ id: "r0", value: 1 }, { id: "f0", value: 2 }, { id: "f1", value: 3 }],
+    [...low, { idx: 9, kind: "safe", tier: 4 }],
+    0,
+    3,
+    new Set(["f0", "f1"]),
+  );
+  assert.deepEqual(mixed.get("9")?.sort(), ["f0", "f1"]);
+});
+
 test("durability conversion: armor % ↔ points, weapons stay %", () => {
   assert.equal(toRaidDur("armor_3", 50), ARMOR[3].durability / 2);
   assert.equal(fromRaidDur("armor_3", ARMOR[3].durability / 2), 50);

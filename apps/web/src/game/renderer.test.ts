@@ -5,7 +5,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { generateMap, legacyMapData } from "@extract/shared";
-import { LEGACY_MAP_ID, mapForState } from "./renderer";
+import { createMapOverlaySystem } from "./fullmap";
+import { LEGACY_MAP_ID, inputBlockedBy, mapForState } from "./renderer";
 import { SYSTEM_FACTORIES } from "./systems-registry";
 
 describe("mapForState", () => {
@@ -26,5 +27,41 @@ describe("SYSTEM_FACTORIES", () => {
     assert.equal(new Set(systems.map((s) => s.id)).size, systems.length);
     for (const s of systems) assert.equal(typeof s.dispose, "function");
     for (const s of systems) s.dispose();
+  });
+});
+
+describe("inputBlockedBy", () => {
+  it("the open full map (M) owns the mouse like the inventory: no fire, no aim", () => {
+    type L = (e: unknown) => void;
+    const listeners = new Map<string, L[]>();
+    const g = globalThis as { window?: unknown };
+    const hadWindow = "window" in g;
+    const prev = g.window;
+    g.window = {
+      addEventListener: (t: string, f: L) => listeners.set(t, [...(listeners.get(t) ?? []), f]),
+      removeEventListener: (t: string, f: L) => listeners.set(t, (listeners.get(t) ?? []).filter((x) => x !== f)),
+    };
+    const key = (code: string) => {
+      for (const f of listeners.get("keydown") ?? []) f({ code, repeat: false, metaKey: false, ctrlKey: false, altKey: false, target: null });
+    };
+    try {
+      const map = createMapOverlaySystem();
+      map.init?.({} as never);
+      const inventoryOpen = () => false;
+      assert.equal(inputBlockedBy(inventoryOpen, [map]), false, "closed map");
+      key("KeyM");
+      assert.equal(map.isInputBlocked?.(), true);
+      assert.equal(inputBlockedBy(inventoryOpen, [map]), true, "open map blocks fire and aim");
+      key("Escape");
+      assert.equal(inputBlockedBy(inventoryOpen, [map]), false, "Esc closes it");
+      assert.equal(inputBlockedBy(() => true, []), true, "DOM overlays still block");
+      assert.equal(inputBlockedBy(undefined, []), false);
+      key("KeyM");
+      map.dispose();
+      assert.equal(map.isInputBlocked?.(), false, "a disposed map blocks nothing");
+    } finally {
+      if (hadWindow) g.window = prev;
+      else delete g.window;
+    }
   });
 });

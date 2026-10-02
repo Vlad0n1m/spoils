@@ -101,6 +101,8 @@ export interface SearchTarget {
   ready: Set<PlayerRuntime>;
   /** Roster indexes that searched it at least once (RaidStats counters count each target once). */
   searchedBy: Set<number>;
+  /** Truth of "fully revealed and nothing left" (the public flag waits for disclosure.ts). */
+  emptied: boolean;
 }
 
 export class ContainerSystem {
@@ -112,10 +114,32 @@ export class ContainerSystem {
   private readonly corpseList: SearchTarget[] = [];
   /** Targets with at least one searcher (stepSearches iterates only these). */
   private readonly active = new Set<SearchTarget>();
+  /**
+   * The truth of every container's state. state.containerState is its public copy, updated only
+   * once the players who changed it have left (disclosure.ts): a flip seen far away must not mark
+   * a hidden player's live position.
+   */
+  private readonly truth: Uint8Array;
 
   constructor(private readonly m: Match) {
     const n = m.map.containers.length;
+    this.truth = new Uint8Array(n).fill(CONTAINER_STATE.UNTOUCHED);
     for (let i = 0; i < n; i++) m.state.containerState.push(CONTAINER_STATE.UNTOUCHED);
+  }
+
+  /** Real state of container `idx` (rules and bots; clients see the deferred public copy). */
+  stateOf(idx: number): number {
+    return this.truth[idx] ?? CONTAINER_STATE.UNTOUCHED;
+  }
+
+  private setState(idx: number, st: number, actors: Iterable<PlayerRuntime>): void {
+    if (this.truth[idx] === st) return;
+    this.truth[idx] = st;
+    const spot = this.m.map.containers[idx]!;
+    this.m.disclosure.defer(`c${idx}`, spot.x, spot.y, actors, () => {
+      const v = this.truth[idx]!;
+      if (this.m.state.containerState[idx] !== v) this.m.state.containerState[idx] = v;
+    });
   }
 
   /** Lost-pool items from raids/start ("boss" and unknown indexes are ignored until bosses exist). */
@@ -166,7 +190,7 @@ export class ContainerSystem {
     return out;
   }
 
-  private createTarget(t: Omit<SearchTarget, "loot" | "searchers" | "ready" | "searchedBy" | "initial">): SearchTarget {
+  private createTarget(t: Omit<SearchTarget, "loot" | "searchers" | "ready" | "searchedBy" | "initial" | "emptied">): SearchTarget {
     const loot = new ContainerLoot();
     // uint8 on the wire: a corpse holds ≤ 4 + 4 + 16 + 1 entries, a container a handful.
     loot.total = Math.min(255, t.items.length);
@@ -178,6 +202,7 @@ export class ContainerSystem {
       searchers: new Set(),
       ready: new Set(),
       searchedBy: new Set(),
+      emptied: false,
     };
     this.targets.set(t.key, target);
     this.m.state.loot.set(t.key, loot);
@@ -195,8 +220,8 @@ export class ContainerSystem {
       key, kind: "container", idx, corpse: null, owner: -1, x: spot.x, y: spot.y,
       openMs: containerOpenMs(spot), items: this.roll(idx),
     });
-    this.m.state.containerState[idx] = CONTAINER_STATE.OPENED;
-    // Lid creak: "someone was here" (containerState is public, the sound is positional).
+    this.setState(idx, CONTAINER_STATE.OPENED, [opener]);
+    // Lid creak: heard as a quantized sound; the opener's viewers also get the chest event.
     this.m.emit({ type: "chest", src: opener.rosterIndex, idx });
     emitSound(this.m, opener, SoundKind.loot, spot.x, spot.y);
     return t;
@@ -250,16 +275,48 @@ export class ContainerSystem {
     };
     const n = m.map.containers.length;
     for (let i = 0; i < n; i++) {
-      if (m.state.containerState[i] === CONTAINER_STATE.EMPTIED) continue;
+      if (this.truth[i] === CONTAINER_STATE.EMPTIED) continue;
       const c = m.map.containers[i]!;
       // Cheap box reject before the distance / LOS work (≈400 containers on the Steppe).
       if (Math.abs(c.x - p.x) > SEARCH.OPEN_RANGE || Math.abs(c.y - p.y) > SEARCH.OPEN_RANGE) continue;
       consider(i, c.x, c.y);
     }
     this.corpseList.forEach((t, k) => {
-      if (!t.corpse!.empty) consider(n + k, t.x, t.y);
+      if (!t.emptied) consider(n + k, t.x, t.y);
     });
     return best;
+  }
+
+  /**
+   * Open the target with loot key `key` (c<idx> / k<corpseId>) if it is openable from where the
+   * player stands (same range / line-of-sight / not-emptied rules as nearestOpenable). Bots use
+   * this instead of the generic F, which would open whatever is nearest. Returns true if opened.
+   */
+  openKey(rt: PlayerRuntime, key: string): boolean {
+    const m = this.m;
+    const nc = m.map.containers.length;
+    let n = -1;
+    let x = 0, y = 0;
+    if (/^c\d+$/.test(key)) {
+      const idx = Number(key.slice(1));
+      const spot = m.map.containers[idx];
+      if (!spot || this.stateOf(idx) === CONTAINER_STATE.EMPTIED) return false;
+      n = idx;
+      x = spot.x;
+      y = spot.y;
+    } else {
+      const k = this.corpseList.findIndex((t) => t.key === key);
+      const t = this.corpseList[k];
+      if (!t || t.emptied) return false;
+      n = nc + k;
+      x = t.x;
+      y = t.y;
+    }
+    const p = rt.pub;
+    if ((x - p.x) ** 2 + (y - p.y) ** 2 > SEARCH.OPEN_RANGE ** 2) return false;
+    if (!hasLineOfSight(m.idx, p.x, p.y, x, y, SOLID.MOVE)) return false;
+    this.open(rt, n);
+    return true;
   }
 
   /** F on what nearestOpenable returned: start (or keep) a search session. */
@@ -286,7 +343,12 @@ export class ContainerSystem {
       if (t.kind === "corpse") rt.stats.corpsesSearched++;
       else rt.stats.containersSearched++;
     }
-    if (t.corpse && !t.corpse.opened) t.corpse.opened = true;
+    if (t.corpse && !t.corpse.opened) {
+      const c = t.corpse;
+      m.disclosure.defer(`o${t.key}`, t.x, t.y, [rt], () => {
+        if (!c.opened) c.opened = true;
+      });
+    }
     emitSound(m, rt, SoundKind.search, rt.pub.x, rt.pub.y);
     rt.nextSearchSoundAt = m.clock + SOUND.SEARCH_REPEAT_MS;
     syncPublic(rt);
@@ -346,13 +408,20 @@ export class ContainerSystem {
     this.checkEmptied(t);
   }
 
-  /** Fully revealed and nothing left: public "emptied" (lid / body renders empty). */
-  checkEmptied(t: SearchTarget): void {
-    if (t.loot.revealed < t.loot.total || t.loot.slots.size > 0) return;
-    if (t.corpse) {
-      if (!t.corpse.empty) t.corpse.empty = true;
-    } else if (this.m.state.containerState[t.idx] !== CONTAINER_STATE.EMPTIED) {
-      this.m.state.containerState[t.idx] = CONTAINER_STATE.EMPTIED;
+  /**
+   * Fully revealed and nothing left: "emptied" (lid / body renders empty). The truth flips now; the
+   * public flag once `actors` (default: the target's searchers) have left (disclosure.ts).
+   */
+  checkEmptied(t: SearchTarget, actors: Iterable<PlayerRuntime> = t.searchers): void {
+    if (t.emptied || t.loot.revealed < t.loot.total || t.loot.slots.size > 0) return;
+    t.emptied = true;
+    const c = t.corpse;
+    if (c) {
+      this.m.disclosure.defer(`e${t.key}`, t.x, t.y, actors, () => {
+        if (!c.empty) c.empty = true;
+      });
+    } else {
+      this.setState(t.idx, CONTAINER_STATE.EMPTIED, actors);
     }
   }
 
@@ -449,7 +518,7 @@ function takeSlot(m: Match, rt: PlayerRuntime, t: SearchTarget, key: string, qty
       const r = placeItem(rt, old, old.qty);
       if (r.placed < old.qty) {
         const at = dropSpot(m, rt.pub.x, rt.pub.y, Math.floor(m.rng() * 12));
-        spawnGroundItem(m, { ...old, qty: old.qty - r.placed }, at.x, at.y);
+        spawnGroundItem(m, { ...old, qty: old.qty - r.placed }, at.x, at.y, rt);
       }
     }
   } else {
@@ -518,7 +587,7 @@ export function takeAll(m: Match, rt: PlayerRuntime): { code: InvErrCode | null;
 function afterTake(m: Match, rt: PlayerRuntime, t: SearchTarget): void {
   syncPublic(rt);
   emitSound(m, rt, SoundKind.loot, rt.pub.x, rt.pub.y);
-  m.containers.checkEmptied(t);
+  m.containers.checkEmptied(t, [rt, ...t.searchers]);
 }
 
 // ---------------------------------------------------------------- room entry points

@@ -212,7 +212,7 @@ function SignInCard({ loading, onGuest }: { loading: boolean; onGuest: () => voi
       <img src="/sprites/player.png" alt="" className="mx-auto h-24 w-24 animate-float-sm" draggable={false} />
       <h1 className="toon-text mt-4 text-balance text-4xl tracking-wide text-zooa-lime md:text-5xl">Ready to drop?</h1>
       <p className="font-body mx-auto mt-4 max-w-[44ch] text-base leading-relaxed text-white/70">
-        Pick a name to jump into a demo raid, or sign in to keep your raider.
+        Pick a name to jump into a raid, or sign in to keep your raider and stash.
       </p>
       <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
         {guestPlayUiEnabled && (

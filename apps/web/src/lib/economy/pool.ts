@@ -3,13 +3,14 @@ import {
   POOL,
   mulberry32,
   poolEntry,
-  poolReleaseCount,
+  poolReleasePlan,
   takeTreasuryTax,
   type ContainerKind,
   type LootTier,
   type SettledItem,
 } from "@extract/shared";
 import type { Tx } from "../inventory/db";
+import { poolMinReleasePerMatch } from "./config";
 import { applyMove, lockItem, type LockedItem } from "../inventory/transition";
 import { PARAM, lockNumberParam, setParam } from "./params";
 import { itemRefValueCr, toRaidDur } from "./value";
@@ -113,13 +114,16 @@ const POOL_KINDS: ReadonlySet<ContainerKind> = new Set<ContainerKind>(["crate", 
  * Pure placement of released pool items: the best POOL.BOSS_SHARE (by value) go to the boss stash
  * when one spawns, the rest go one per container, value-descending, each to a container picked
  * with weight (tier+1)² among the unused eligible ones (better loot in better containers, still a
- * surprise). Deterministic in `seed`. Items that find no home are left out (they stay in the pool).
+ * surprise). Floor items (`floorIds`, POOL.MIN_RELEASE_PER_MATCH) only go to dangerous containers
+ * (tier >= POOL.FLOOR_MIN_TIER) or the boss stash, so a free-kit farmer still has to fight for
+ * them. Deterministic in `seed`. Items that find no home are left out (they stay in the pool).
  */
 export function planAllocation(
   picks: ReadonlyArray<{ id: string; value: number }>,
   containers: readonly AllocContainer[],
   bossSlots: number,
   seed: number,
+  floorIds: ReadonlySet<string> = new Set(),
 ): Map<string, string[]> {
   const out = new Map<string, string[]>();
   const sorted = [...picks].sort((a, b) => b.value - a.value || (a.id < b.id ? -1 : 1));
@@ -130,12 +134,19 @@ export function planAllocation(
     rest = sorted.slice(POOL.BOSS_SHARE);
   }
   const preferred = containers.filter((c) => POOL_KINDS.has(c.kind));
-  const eligible = preferred.length > 0 ? preferred : [...containers];
-  if (eligible.length === 0) return out;
+  const eligible = (preferred.length > 0 ? preferred : [...containers]).sort((a, b) => a.idx - b.idx);
+  const dangerous = eligible.filter((c) => c.tier >= POOL.FLOOR_MIN_TIER);
   const rng = mulberry32((seed ^ 0x51ed270b) >>> 0);
-  let unused = [...eligible].sort((a, b) => a.idx - b.idx);
+  const used = new Set<number>();
   for (const p of rest) {
-    if (unused.length === 0) unused = [...eligible].sort((a, b) => a.idx - b.idx);
+    const from = floorIds.has(p.id) ? dangerous : eligible;
+    if (from.length === 0) continue;
+    let unused = from.filter((c) => !used.has(c.idx));
+    if (unused.length === 0) {
+      // Every candidate already holds one: start a second round over the same set.
+      for (const c of from) used.delete(c.idx);
+      unused = [...from];
+    }
     const total = unused.reduce((s, c) => s + (c.tier + 1) ** 2, 0);
     let roll = rng() * total;
     let pick = unused.length - 1;
@@ -147,7 +158,7 @@ export function planAllocation(
       }
     }
     const c = unused[pick]!;
-    unused.splice(pick, 1);
+    used.add(c.idx);
     const key = String(c.idx);
     out.set(key, [...(out.get(key) ?? []), p.id]);
   }
@@ -157,37 +168,46 @@ export function planAllocation(
 export interface AllocateResult {
   containerLoot: Record<string, SettledItem[]>;
   released: number;
+  /** Of `released`, how many came from the per-match floor (T3/T4 / boss only). */
+  floor: number;
 }
 
 /**
- * Releases lost-pool uniques into a starting match (critique: poolReleaseCount(pool, riskUnits),
- * boss share). Rows are picked at random with FOR UPDATE SKIP LOCKED so two matches starting at
- * once never get the same item, then moved lost_pool → in_raid (owner NULL, match set).
+ * Releases lost-pool uniques into a starting match: poolReleasePlan = the risk-driven count
+ * (poolReleaseCount(pool, riskUnits), boss share) topped up to the per-match floor
+ * (POOL.MIN_RELEASE_PER_MATCH, env POOL_MIN_RELEASE_PER_MATCH) while the pool holds more than
+ * POOL.FLOOR_MIN_POOL; floor items land only in T3/T4 containers / boss stashes. Rows are picked at
+ * random with FOR UPDATE SKIP LOCKED so two matches starting at once never get the same item, then
+ * moved lost_pool → in_raid (owner NULL, match set).
  */
 export async function allocatePool(
   tx: Tx,
   req: { matchId: string; matchSeed: number; containers: readonly AllocContainer[]; bossSlots: number; riskUnits: number },
 ): Promise<AllocateResult> {
-  const empty: AllocateResult = { containerLoot: {}, released: 0 };
-  if (req.riskUnits <= 0 || (req.containers.length === 0 && req.bossSlots <= 0)) return empty;
+  const empty: AllocateResult = { containerLoot: {}, released: 0, floor: 0 };
+  if (req.containers.length === 0 && req.bossSlots <= 0) return empty;
   const sizeRes = await tx.execute<{ n: string }>(sql`select count(*)::int as n from items where state = 'lost_pool'`);
-  const n = poolReleaseCount(Number(sizeRes.rows[0]?.n ?? 0), req.riskUnits);
-  if (n <= 0) return empty;
+  const rel = poolReleasePlan(Number(sizeRes.rows[0]?.n ?? 0), Math.max(0, req.riskUnits), poolMinReleasePerMatch());
+  if (rel.total <= 0) return empty;
   const picked = await tx.execute<{ id: string; def_id: string; rarity: number; durability: number }>(sql`
     select id, def_id, rarity, durability from items
     where state = 'lost_pool'
     order by random()
-    limit ${n}
+    limit ${rel.total}
     for update skip locked`);
   const byId = new Map(picked.rows.map((r) => [r.id, r]));
+  // Rows come back in random order: the first `risk` are risk releases, the rest the floor.
+  const floorIds = new Set(picked.rows.slice(rel.risk).map((r) => r.id));
   const plan = planAllocation(
     picked.rows.map((r) => ({ id: r.id, value: itemRefValueCr({ def: r.def_id, rarity: Number(r.rarity), dur: Number(r.durability) }) })),
     req.containers,
     req.bossSlots,
     req.matchSeed,
+    floorIds,
   );
   const containerLoot: Record<string, SettledItem[]> = {};
   let released = 0;
+  let floor = 0;
   for (const [key, ids] of plan) {
     for (const id of ids) {
       const it = await lockItem(tx, id);
@@ -196,7 +216,7 @@ export async function allocatePool(
         tx,
         it,
         { state: "in_raid", ownerId: null, matchId: req.matchId, loadoutId: null },
-        { reason: "alloc", refId: req.matchId },
+        { reason: floorIds.has(id) ? "alloc_floor" : "alloc", refId: req.matchId },
       );
       (containerLoot[key] ??= []).push({
         uid: moved.id,
@@ -206,7 +226,8 @@ export async function allocatePool(
         dur: toRaidDur(moved.defId, moved.durability),
       });
       released++;
+      if (floorIds.has(id)) floor++;
     }
   }
-  return { containerLoot, released };
+  return { containerLoot, released, floor };
 }

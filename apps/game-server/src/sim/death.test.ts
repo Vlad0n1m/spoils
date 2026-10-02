@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { ITEM_FLAG, SEARCH, dogTagCr, mulberry32 } from "@extract/shared";
 import { takeAll } from "./containers.js";
 import { deathSplit, killPlayer } from "./death.js";
+import { DISCLOSE } from "./disclosure.js";
 import { extractPlayer } from "./extraction.js";
-import { makeItem } from "./items.js";
+import { makeItem, withBotSettlement } from "./items.js";
+import { damagePlayer } from "./combat.js";
 import { Match } from "./match.js";
-import { clearDef, counterUid, giveItem, giveStack, giveWeapon, ids, pl, place, rtOf, run, testMap, testMatch } from "./test-utils.js";
+import { clearDef, counterUid, giveItem, giveStack, giveWeapon, ids, pl, place, rtOf, run, send, testMap, testMatch } from "./test-utils.js";
 
 /** Kill outright (no armor absorb, so durabilities stay as given). */
 function kill(m: Match, id: string, by: string | null = null) {
@@ -71,7 +73,8 @@ test("another player searches the corpse, carries the dog tag out, and the repor
   const rt = rtOf(m, a!);
   assert.equal(rt.self.searching, `k${rtOf(m, b!).rosterIndex}`);
   assert.equal(rt.search!.readyAt, m.clock + SEARCH.OPEN_MS.corpse);
-  assert.equal(m.state.corpses.get(String(rtOf(m, b!).rosterIndex))!.opened, true);
+  const body = m.state.corpses.get(String(rtOf(m, b!).rosterIndex))!;
+  assert.equal(body.opened, false, "public once the searcher left (disclosure.ts)");
   assert.equal(takeAll(m, rt).code, "not_ready");
   run(m, 6_000);
   const r = takeAll(m, rt);
@@ -80,10 +83,13 @@ test("another player searches the corpse, carries the dog tag out, and the repor
   const s = rt.self.slots;
   assert.equal(s.get("armor")!.uid, vest, "vest equipped from the body");
   assert.ok([...s.values()].some((i) => i.def === "junk_dogtag"));
-  assert.equal(m.state.corpses.get(String(rtOf(m, b!).rosterIndex))!.empty, true);
+  assert.equal(m.containers.corpseOf(rtOf(m, b!).rosterIndex)!.emptied, true);
+  assert.equal(body.empty, false);
   assert.equal(rt.stats.corpsesSearched, 1);
 
   extractPlayer(m, rt);
+  run(m, DISCLOSE.QUIET_MS + 100);
+  assert.deepEqual([body.opened, body.empty], [true, true], "published once the searcher was gone");
   const rep = rt.exitReport!;
   const tag = rep.extracted.find((i) => i.def === "junk_dogtag")!;
   assert.deepEqual([tag.label, tag.lvl, tag.victim], ["P1", 3, victimUser]);
@@ -108,7 +114,7 @@ test("bots leave no dog tag; an empty body becomes `empty` once searched", () =>
   assert.equal(t.items.length, 0, "FREE kit only: nothing inside, no dog tag");
   assert.ok(m.interact(h!));
   run(m, SEARCH.OPEN_MS.corpse + 50);
-  assert.equal(t.corpse!.empty, true);
+  assert.equal(t.emptied, true);
   // An empty body is no longer offered by F.
   assert.equal(m.containers.nearestOpenable(rtOf(m, h!)), -1);
 });
@@ -178,4 +184,93 @@ test("dead players cannot search; a body is searchable only within reach and sig
   clearDef(m, a!, "bandage");
   kill(m, a!);
   assert.equal(m.interact(a!), false);
+});
+
+test("bots: carried-out, broken and worn-out uniques ride on the end report (no web sweep), outcome lists destroyed", () => {
+  const m = testMatch(1, {
+    roster: [
+      { userId: "user0", nickname: "Human", isBot: false },
+      { userId: null, nickname: "B0", isBot: true },
+      { userId: null, nickname: "B1", isBot: true },
+      { userId: null, nickname: "B2", isBot: true },
+    ],
+    botBrains: false,
+  });
+  const [h, b0, b1, b2] = ids(m);
+  place(m, h!, 1000, 1000);
+  place(m, b0!, 1500, 1500);
+  place(m, b1!, 2000, 2000);
+  place(m, b2!, 2500, 2500);
+  // Uniques the bots picked up (e.g. lost-pool allocations), registered like pool items.
+  const broke = giveWeapon(m, b0!, "w2", "rifle", 1);
+  const kept = giveItem(m, b0!, "armor_1", "armor", { dur: 5 });
+  const carried = giveWeapon(m, b1!, "w2", "shotgun", 2);
+  const vest = giveItem(m, b2!, "armor_1", "armor", { dur: 1 });
+  const pack = giveItem(m, b2!, "backpack_1", "bp");
+  const hVest = giveItem(m, h!, "armor_1", "armor", { dur: 1 });
+  // b0 dies: rifle breaks, armor survives in the corpse.
+  const rolls = [0.1, 0.9];
+  m.rng = () => rolls.shift() ?? 0.5;
+  kill(m, b0!);
+  extractPlayer(m, rtOf(m, b1!));
+  // b2's and the human's vests are shot to 0 → destroyed; b2 times out at match end.
+  damagePlayer(m, rtOf(m, b2!), 30, null, "", 2500, 2500);
+  damagePlayer(m, rtOf(m, h!), 30, null, "", 1000, 1000);
+  assert.deepEqual(rtOf(m, h!).destroyed.map((i) => i.uid), [hVest]);
+  kill(m, h!);
+  assert.deepEqual(rtOf(m, h!).outcome!.destroyed!.map((i) => i.uid), [hVest], "OutcomeMsg.destroyed");
+  m.step(50);
+  assert.ok(m.ended);
+
+  const full = withBotSettlement(m.report!, m.allRuntimes());
+  assert.deepEqual(full.botLost!.map((i) => i.uid), [broke]);
+  assert.deepEqual(full.botDestroyed!.map((i) => i.uid), [vest]);
+  const left = full.leftOnMap.map((i) => i.uid);
+  for (const u of [kept, carried, pack]) assert.ok(left.includes(u), `${u} left on map`);
+  // Every tracked uid of the match appears exactly once across the web-bound reports.
+  const humanReports = m.exitReports.filter((r) => r.userId);
+  const reported = [
+    ...humanReports.flatMap((r) => [...r.extracted, ...r.lost, ...r.destroyed]),
+    ...full.leftOnMap,
+    ...full.botLost!,
+    ...full.botDestroyed!,
+  ].map((i) => i.uid).filter(Boolean);
+  assert.deepEqual([...reported].sort(), [...m.ledger.known.keys()].sort());
+  assert.deepEqual(withBotSettlement(full, m.allRuntimes()), full, "idempotent");
+});
+
+test("a kill by a bullet still in flight after its shooter died reaches the shooter's exit report (posted after the bullet)", () => {
+  const m = testMatch(3, { envSeed: 2 });
+  const [a, b, c] = ids(m);
+  place(m, a!, 1000, 3000);
+  place(m, b!, 1000, 2000);
+  place(m, c!, 2400, 2000);
+  pl(m, c!).hp = 5;
+  giveWeapon(m, b!, "w2", "sniper", 0, 5);
+  m.switchSlot(b!, "w2");
+  m.step(50);
+  m.drainEvents();
+  send(m, b!, { aim: 0, fire: true });
+  m.step(50);
+  const B = rtOf(m, b!);
+  assert.ok(m.bullets.some((x) => x.owner === B), "B's bullet is in flight");
+  killPlayer(m, B, rtOf(m, a!), "rifle");
+  const exits: Array<{ at: number; kills: number }> = [];
+  const take = () => {
+    for (const e of m.drainEvents()) if (e.type === "exit" && e.report.userId === B.userId) exits.push({ at: m.clock, kills: e.report.kills });
+  };
+  take();
+  assert.equal(exits.length, 0, "held while the bullet flies");
+  for (let k = 0; k < 40 && pl(m, c!).alive; k++) {
+    m.step(50);
+    take();
+  }
+  assert.equal(pl(m, c!).alive, false, "the in-flight bullet killed C");
+  for (let k = 0; k < 40 && exits.length === 0; k++) {
+    m.step(50);
+    take();
+  }
+  assert.equal(exits.length, 1, "exactly one exit report");
+  assert.equal(exits[0]!.kills, 1, "the posted report carries the late kill");
+  assert.equal(B.outcome!.kills, 1);
 });

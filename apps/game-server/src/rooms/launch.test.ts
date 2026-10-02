@@ -169,3 +169,21 @@ test("parseInvMove keeps loot moves (slot index keys) and refuses junk", () => {
   assert.equal(parseInvMove({ from: "ground", key: "1", uid: "", def: "x" }), null);
   assert.equal(parseInvMove({ from: "loot", key: "1", uid: "", def: "x", qty: 0 }), null);
 });
+
+test("planLaunch: a lost raids/start reply → the demo fallback runs under a fresh matchId (the committed raid is never settled)", async () => {
+  const humans: RosterEntry[] = [{ userId: "u1", nickname: "A", isBot: false, loadoutId: L1 }];
+  const M = "8b16b697-0000-4000-8000-000000000001";
+  let sentId = "";
+  const prevErr = console.error;
+  console.error = () => {};
+  try {
+    // The web committed (loadouts in_raid under M) but the reply never arrived.
+    const plan = await planLaunch(humans, { mode: "live", matchId: M, startRaid: async (req) => { sentId = req.matchId; return null; } });
+    assert.equal(sentId, M);
+    assert.equal(plan.options.mode, "demo");
+    assert.notEqual(plan.options.matchId, M, "demo exit/end reports must not settle the committed raid");
+    assert.match(plan.options.matchId!, /^[0-9a-f-]{36}$/);
+  } finally {
+    console.error = prevErr;
+  }
+});

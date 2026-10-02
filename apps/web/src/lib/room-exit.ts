@@ -48,6 +48,14 @@ export function describeRoomExit(code: number | undefined, reason?: string): Roo
       action: "back",
     };
   }
+  if (code === CLOSE_CODES.LOADOUT_REJECTED || r === "loadout_rejected") {
+    return {
+      title: "Loadout not locked",
+      message:
+        "Your loadout was no longer locked for this raid (unlocked in another tab, or the lock expired), so your gear stayed in the stash. Try again to re-lock it and find a new raid.",
+      action: "retry",
+    };
+  }
   if (r === "invalid_ticket") {
     return {
       title: "Join ticket expired",

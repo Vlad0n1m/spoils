@@ -73,12 +73,16 @@ export function dogTagPairMult(priorSamePair: number): 0 | 1 {
 /**
  * Container contents rolls (owned by the economy owner, retuned after econ-sim with the slot
  * capacities). Indexed by LootTier 0..4. FILL_CHANCE: a container rolls empty otherwise (Tarkov).
+ * Hackathon retune (playtest: "loot feels empty"): ≈12 % of Steppe containers roll empty
+ * (was ≈37 %) and T2+ get more junk lines, close to the demo-mode CHEST_TABLES item count
+ * (2–3 rolls per chest). Per-tier empty rate ≈ 1 − FILL × (1 − EMPTY^ROLLS): T0 19 %, T1 13 %,
+ * T2 12 %, T3 8 %, T4 5 %.
  */
 export const CONTAINER = {
-  ROLLS: [1, 1, 2, 2, 3] as readonly number[],
-  FILL_CHANCE: [0.6, 0.65, 0.72, 0.8, 0.85] as readonly number[],
+  ROLLS: [1, 2, 3, 3, 4] as readonly number[],
+  FILL_CHANCE: [0.88, 0.88, 0.88, 0.92, 0.95] as readonly number[],
   /** Chance an individual roll is empty. */
-  EMPTY_CHANCE: 0.25,
+  EMPTY_CHANCE: 0.08,
 } as const;
 
 /** One weighted fungible entry of a container table (junk, ammo or meds; qty per roll). */
@@ -263,6 +267,16 @@ export const POOL = {
   TAX_SHARE: 0.01,
   /** Best N released items go to the boss stash when a boss spawns. */
   BOSS_SHARE: 2,
+  /**
+   * Release FLOOR per match (hackathon tunable, see docs): even a lobby of free kits gets at least
+   * this many pool uniques, but only in dangerous spots (containers of tier >= FLOOR_MIN_TIER and
+   * boss stashes), so farming them still means fighting through T3/T4 POIs. Drawn only while the
+   * pool holds more than FLOOR_MIN_POOL items (the seeded reserve is never drained to zero by it).
+   * The web may override it with POOL_MIN_RELEASE_PER_MATCH.
+   */
+  MIN_RELEASE_PER_MATCH: 6,
+  FLOOR_MIN_POOL: 100,
+  FLOOR_MIN_TIER: 3,
 } as const;
 
 /** Durability the item enters the pool with, or null if it does not enter (bound or worn out). */
@@ -275,6 +289,23 @@ export function poolEntry(i: Pick<EconItem, "dur" | "bound">, broke: boolean): n
 /** riskUnits = non-FREE uniques across accepted loadouts; free-kit players add nothing. */
 export function poolReleaseCount(poolSize: number, riskUnits: number): number {
   return Math.max(0, Math.min(poolSize, POOL.MAX_PER_MATCH, Math.round(POOL.RISK_K * riskUnits)));
+}
+
+/**
+ * Pool items released into one match: the risk-driven count (poolReleaseCount) topped up to the
+ * floor `minRelease` while the pool is above FLOOR_MIN_POOL (never below it because of the floor).
+ * `floor` = how many of `total` are floor items (placed only in tier >= FLOOR_MIN_TIER / boss).
+ */
+export function poolReleasePlan(
+  poolSize: number,
+  riskUnits: number,
+  minRelease: number = POOL.MIN_RELEASE_PER_MATCH,
+): { total: number; risk: number; floor: number } {
+  const risk = poolReleaseCount(poolSize, riskUnits);
+  const above = Math.max(0, poolSize - risk - POOL.FLOOR_MIN_POOL);
+  const want = Math.max(0, Math.min(POOL.MAX_PER_MATCH, Math.floor(minRelease)) - risk);
+  const floor = Math.max(0, Math.min(want, above));
+  return { total: risk + floor, risk, floor };
 }
 
 /**

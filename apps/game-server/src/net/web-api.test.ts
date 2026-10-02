@@ -4,7 +4,8 @@ import { createServer } from "node:http";
 import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { HEADERS, type RaidStartRequest } from "@extract/shared";
-import { onExitSettled, parseExitSettled, postSigned, reportEnd, reportExit, startRaid } from "./web-api.js";
+import { SERVER_INSTANCE, announceBoot, onExitSettled, parseExitSettled, postSigned, reportEnd, reportExit, startRaid } from "./web-api.js";
+import { planLaunch } from "../rooms/matchmaking-room.js";
 
 const payload = { matchId: "m-1", userId: "u1", exit: "extract", extracted: [{ uid: "w-1", def: "rifle", qty: 1, rarity: 1, dur: 100 }] };
 
@@ -168,4 +169,97 @@ test("reportExit hands the web's receipt to the room listener; reportEnd waits f
   assert.deepEqual(order, ["/api/raids/exit", "/api/raids/end"]);
   assert.deepEqual(got, [["u1", { credits: 42, sold: [{ def: "junk_gpu", qty: 1, cr: 42 }], guest: false }]]);
   assert.equal(parseExitSettled({ credits: "x", sold: [] }), null);
+});
+
+test("announceBoot posts this process' identity to void-orphans, retries, returns the voided ids", async () => {
+  assert.equal(SERVER_INSTANCE.serverId, process.env.GAME_SERVER_ID?.trim() || "default");
+  assert.match(SERVER_INSTANCE.instanceId, /^[0-9a-f-]{36}$/);
+  const srv = await serve((n) => (n === 1 ? 503 : 200), JSON.stringify({ ok: true, status: "applied", voided: ["m-old"] }));
+  const prevLog = console.log;
+  console.log = () => {};
+  try {
+    await withEnv({ WEB_API_BASE_URL: `http://127.0.0.1:${srv.port}`, GAME_SERVER_HMAC_SECRET: "s" }, async () => {
+      assert.deepEqual(await announceBoot(SERVER_INSTANCE, { backoffMs: 5 }), ["m-old"]);
+    });
+  } finally {
+    console.log = prevLog;
+    srv.close();
+  }
+  assert.equal(srv.seen.length, 2);
+  assert.equal(srv.seen[1]!.path, "/api/raids/void-orphans");
+  assert.deepEqual(JSON.parse(srv.seen[1]!.body), { ...SERVER_INSTANCE });
+  await withEnv({ WEB_API_BASE_URL: undefined, GAME_SERVER_HMAC_SECRET: "s" }, async () => {
+    assert.deepEqual(await announceBoot(), [], "not configured: skipped");
+  });
+});
+
+test("raids/start carries this process' instance id (void-orphans can tell its raids apart)", async () => {
+  let seen: RaidStartRequest | null = null;
+  await planLaunch([{ userId: "u1", nickname: "U", isBot: false, loadoutId: "" }], {
+    mode: "live",
+    matchSeed: 7,
+    startRaid: async (req) => {
+      seen = req;
+      return { accepted: [], rejected: [], containerLoot: {}, autosellMult: 1 };
+    },
+  });
+  assert.equal(seen!.instanceId, SERVER_INSTANCE.instanceId);
+  assert.equal(seen!.serverId, SERVER_INSTANCE.serverId);
+});
+
+const exitReport = (matchId: string) =>
+  ({ ...payload, matchId, atMs: 1, kills: 0, level: 1, lost: [], destroyed: [], stats: { shotsFired: 0, dmgDealt: 0, containersSearched: 0, corpsesSearched: 0, bossKills: 0 } }) as never;
+
+test("reportExit outlasts a brief outage (slow re-posts) and the end report still follows it", async () => {
+  // Every exit attempt of the first fast round fails (deploy / cold start); the web is back after.
+  let exitHits = 0;
+  const order: string[] = [];
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      const path = req.url ?? "";
+      if (path.endsWith("/exit")) exitHits++;
+      const down = path.endsWith("/exit") && exitHits <= 3;
+      order.push(`${path}${down ? ":500" : ""}`);
+      res.statusCode = down ? 500 : 200;
+      res.end("{}");
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfo).port;
+  const prevErr = console.error;
+  console.error = () => {};
+  try {
+    await withEnv({ WEB_API_BASE_URL: `http://127.0.0.1:${port}`, GAME_SERVER_HMAC_SECRET: "s" }, async () => {
+      const exit = reportExit(exitReport("m-out"), { attempts: 2, backoffMs: 1, slowBackoffMs: 20, retryWindowMs: 5_000 });
+      const end = reportEnd({ matchId: "m-out" } as never, { backoffMs: 1 });
+      const [x, e] = await Promise.all([exit, end]);
+      assert.equal(x.status, "ok", "the exit got through after the outage");
+      assert.equal(e.status, "ok");
+    });
+  } finally {
+    console.error = prevErr;
+    server.close();
+  }
+  assert.deepEqual(order, ["/api/raids/exit:500", "/api/raids/exit:500", "/api/raids/exit:500", "/api/raids/exit", "/api/raids/end"]);
+});
+
+test("reportEnd is withheld when an exit never got through (its sweep would pool the extracted loot)", async () => {
+  const srv = await serve((n) => (n <= 100 ? 500 : 200));
+  const prevErr = console.error;
+  console.error = () => {};
+  try {
+    await withEnv({ WEB_API_BASE_URL: `http://127.0.0.1:${srv.port}`, GAME_SERVER_HMAC_SECRET: "s" }, async () => {
+      const exit = reportExit(exitReport("m-down"), { attempts: 2, backoffMs: 1, slowBackoffMs: 10, retryWindowMs: 50 });
+      const end = reportEnd({ matchId: "m-down" } as never, { backoffMs: 1 });
+      const [x, e] = await Promise.all([exit, end]);
+      assert.equal(x.status, "failed");
+      assert.deepEqual(e, { status: "failed", error: "exit_unsettled" });
+    });
+  } finally {
+    console.error = prevErr;
+    srv.close();
+  }
+  assert.ok(srv.seen.length >= 4, "fast retries plus slow rounds");
+  assert.ok(srv.seen.every((s) => s.path === "/api/raids/exit"), "no /api/raids/end was posted");
 });

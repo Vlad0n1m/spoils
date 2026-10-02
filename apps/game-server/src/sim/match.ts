@@ -6,7 +6,8 @@
  *
  * Tick order inside step() (later WPs fill the hooks, never the structure):
  *   bots → reload/heal timers → inputs (stepMovement, fire) → stepSearches → bullets → pickups →
- *   extraction → velocities → vision.update → aoi.update → deliverSounds → counters → syncPublic
+ *   extraction → velocities → disclosure → vision.update → aoi.update → deliverSounds → counters →
+ *   syncPublic → held exit reports
  * The room then runs syncViews → broadcastPatch → per-client `ev` batches (battle-room.ts).
  */
 
@@ -19,6 +20,7 @@ import {
   MAX_QUEUED_INPUTS,
   PLAYER,
   Player,
+  SOLID,
   SelfState,
   SoundKind,
   accepts,
@@ -27,6 +29,7 @@ import {
   MAP_IDS,
   extractMask,
   generateMap,
+  hasLineOfSight,
   healSpeedMult,
   isBagKey,
   isSlotKey,
@@ -65,6 +68,7 @@ import {
 } from "@extract/shared";
 import { cancelHeal, cancelReload, finishHealIfDue, finishReloadIfDue, startHeal, startReload, switchSlot } from "./actions.js";
 import { AoiSystem } from "./aoi.js";
+import { Disclosure } from "./disclosure.js";
 import { fixActive, giveFreeKit, moveOwn, removeForDrop, syncPublic, takeOpToken } from "./bag.js";
 import { BotBrain } from "./bot.js";
 import { stepBullets, tryFire } from "./combat.js";
@@ -75,7 +79,7 @@ import { GroundStore, autoPickup, dropSpot, groundUniques, nearestGroundItem, pi
 import { Ledger, cloneItem, makeItem, toSettled } from "./items.js";
 import { deliverSounds, emitSound, footstep } from "./sound.js";
 import type { Bullet, LoadoutMap, MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
-import { VisionSystem } from "./vision.js";
+import { VisionSystem, followAim } from "./vision.js";
 import { mapRuntime, warmMap, type MapRuntime } from "./nav.js";
 import { PathPlanner } from "./planner.js";
 
@@ -190,6 +194,8 @@ export class Match {
   readonly containers: ContainerSystem;
   readonly vision: VisionSystem;
   readonly aoi = new AoiSystem();
+  /** Player-made world changes waiting to go public (disclosure.ts). */
+  readonly disclosure: Disclosure = new Disclosure(this);
   readonly env: EnvRuntime;
   /** Extract id → bit index in SelfState.extractMask (MapData.extracts order). */
   readonly extractBit = new Map<string, number>();
@@ -371,6 +377,10 @@ export class Match {
         vx: 0,
         vy: 0,
         stepAcc: 0,
+        stepRunAcc: 0,
+        viewAim: p.aim,
+        viewAimSrc: p.aim,
+        exitHeld: false,
         lastHitBy: null,
         lastHitAt: -Infinity,
         reloadKey: "",
@@ -466,6 +476,26 @@ export class Match {
     return true;
   }
 
+  /**
+   * Bots: F on one specific ground item (range + line of sight as for F), never on whatever else
+   * happens to be nearest (Match.interact prefers containers and would open one instead).
+   */
+  pickupItem(id: string, groundId: string): boolean {
+    const rt = this.actor(id);
+    const g = this.ground.byId.get(groundId);
+    if (!rt || !g) return false;
+    const p = rt.pub;
+    if ((g.schema.x - p.x) ** 2 + (g.schema.y - p.y) ** 2 > PLAYER.INTERACT_RADIUS ** 2) return false;
+    if (!hasLineOfSight(this.idx, p.x, p.y, g.schema.x, g.schema.y, SOLID.MOVE)) return false;
+    return pickupGround(this, rt, g);
+  }
+
+  /** Bots: open one specific search target (loot key c<idx> / k<corpse>) if it is in reach. */
+  openSearch(id: string, key: string): boolean {
+    const rt = this.actor(id);
+    return rt ? this.containers.openKey(rt, key) : false;
+  }
+
   /** F: the nearest untouched container wins over loose items (inventory memo §2.2). */
   interact(id: string): boolean {
     const rt = this.actor(id);
@@ -531,7 +561,7 @@ export class Match {
     if (r.touchedActive) cancelReload(rt);
     if (r.item) {
       const at = dropSpot(this, rt.pub.x, rt.pub.y, Math.floor(this.rng() * 12));
-      spawnGroundItem(this, r.item, at.x, at.y);
+      spawnGroundItem(this, r.item, at.x, at.y, rt);
     }
     syncPublic(rt);
     return null;
@@ -583,11 +613,13 @@ export class Match {
       rt.vx = dt > 0 ? ((rt.pub.x - rt.prevX) * 1000) / dt : 0;
       rt.vy = dt > 0 ? ((rt.pub.y - rt.prevY) * 1000) / dt : 0;
     }
+    this.disclosure.step();
     this.vision.update(this);
     this.aoi.update(this);
     deliverSounds(this);
     this.updateCounters();
     for (const rt of this.ordered) syncPublic(rt);
+    this.releaseHeldExits();
 
     let humansAlive = false;
     let anyAlive = false;
@@ -625,7 +657,10 @@ export class Match {
         emitSound(this, rt, SoundKind.roll, p.x, p.y);
       }
       const moved = Math.hypot(r.x - p.x, r.y - p.y);
-      if (r.rolling) rt.stepAcc = 0;
+      if (r.rolling) {
+        rt.stepAcc = 0;
+        rt.stepRunAcc = 0;
+      }
       if (moved > 0) rt.movedAt = this.clock;
       p.x = r.x;
       p.y = r.y;
@@ -635,6 +670,7 @@ export class Match {
       const walking = input.walk === true;
       if (s.walking !== walking) s.walking = walking;
       p.aim = input.aim;
+      followAim(rt, input.aim);
       if (input.fire && !rt.triggerHeld) {
         rt.pressPending = true;
         rt.pressAt = this.clock;
@@ -697,6 +733,7 @@ export class Match {
       extracted: report.extracted,
       lost: report.lost,
       dropped: rt.dropped.map(settle),
+      destroyed: report.destroyed,
       kills: rt.self.kills,
       killedBy: rt.killedBy,
       atMs: this.clock,
@@ -708,7 +745,19 @@ export class Match {
     this.vision.clearRow(rt.rosterIndex);
     if (!rt.isBot) {
       this.emit({ type: "outcome", to: rt.rosterIndex, msg });
-      this.emit({ type: "exit", report });
+      // A bullet of theirs still in flight may yet kill (death.ts updates report.kills): the web
+      // report goes out once the last one is gone, so the posted kills (XP) are final.
+      if (this.bullets.some((b) => b.owner === rt)) rt.exitHeld = true;
+      else this.emit({ type: "exit", report });
+    }
+  }
+
+  /** Emit the exit reports held for bullets in flight once those bullets are gone. */
+  private releaseHeldExits(): void {
+    for (const rt of this.ordered) {
+      if (!rt.exitHeld || !rt.exitReport || this.bullets.some((b) => b.owner === rt)) continue;
+      rt.exitHeld = false;
+      this.emit({ type: "exit", report: rt.exitReport });
     }
   }
 
@@ -720,6 +769,8 @@ export class Match {
   private end(): void {
     for (const rt of this.ordered) if (rt.pub.alive) timeoutPlayer(this, rt);
     this.bullets = [];
+    // Every exit report goes out before the end report (the web's end sweep relies on it).
+    this.releaseHeldExits();
     this.state.phase = "ended";
     this.updateCounters();
     const leftOnMap = [...groundUniques(this), ...this.containers.leftInside()];

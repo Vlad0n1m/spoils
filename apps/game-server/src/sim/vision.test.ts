@@ -177,3 +177,32 @@ test("vision pass: 32 clustered players on the Steppe stay inside the per-tick b
   // Budget 0.2 ms on a dev machine; the assert leaves room for slow CI hosts.
   assert.ok(per < 1.5, `vision pass ${per.toFixed(3)} ms`);
 });
+
+test("vision: flipping aim between θ and θ+π every input does not give 360° vision (turn-rate-limited cone)", async () => {
+  const { VIEW_TURN_PER_INPUT, turnToward } = await import("./vision.js");
+  const run = (pattern: (k: number) => number, targetDx: number) => {
+    const m = testMatch(2, { envSeed: 2 });
+    const [v, t] = ids(m);
+    place(m, v!, 1500, 2000);
+    place(m, t!, 1500 + targetDx, 2000);
+    const rv = rtOf(m, v!).rosterIndex, rt = rtOf(m, t!).rosterIndex;
+    let seq = 0;
+    let seen = 0;
+    for (let tick = 0; tick < 80; tick++) {
+      // 30 Hz inputs over 50 ms ticks: 1 or 2 inputs per tick.
+      const n = tick % 2 === 0 ? 2 : 1;
+      for (let i = 0; i < n; i++, seq++) m.enqueueInput(v!, { seq: seq + 1, mx: 0, my: 0, aim: pattern(seq), fire: false });
+      m.step(SERVER_TICK_MS);
+      m.drainEvents();
+      if (tick >= 10 && m.vision.sees(rv, rt)) seen++;
+    }
+    return seen;
+  };
+  assert.equal(run(() => 0, -500), 0, "honest: nothing 500 px behind");
+  assert.equal(run((k) => (k % 2 ? Math.PI : 0), -500), 0, "alternating 0 / π every input");
+  assert.equal(run((k) => (Math.floor(k / 3) % 2 ? Math.PI : 0), -500), 0, "switching every 3 inputs");
+  assert.ok(run(() => Math.PI, -500) >= 60, "an honest turn still sees behind once the cone got there");
+  assert.ok(run((k) => (k % 2 ? Math.PI : 0), 500) >= 60, "the front stays seen");
+  assert.ok(Math.abs(turnToward(0, Math.PI - 0.01, VIEW_TURN_PER_INPUT) - VIEW_TURN_PER_INPUT) < 1e-9);
+  assert.equal(turnToward(3, -3, 1), Math.atan2(Math.sin(-3), Math.cos(-3)), "short way across ±π");
+});

@@ -251,3 +251,40 @@ test("sound: emitters — switch, body fall, search repeats", () => {
   const death = kinds(m.drainEvents(), B.r);
   assert.ok(death.includes(SoundKind.death) && death.includes(SoundKind.bodyFall), `${death}`);
 });
+
+test("sound: walk=true only on the input that completes a step does not make a running player quiet", () => {
+  const radii = (mode: "run" | "walk" | "exploit") => {
+    const { m, id } = setup(1);
+    at(m, id[0]!, 1500, 2000);
+    const rt = rtOf(m, id[0]!);
+    const runStep = 13; // ≥ the px one run input moves (PLAYER.SPEED / INPUT_HZ)
+    const out: number[] = [];
+    for (let k = 0; k < 60; k++) {
+      const walk = mode === "walk" || (mode === "exploit" && rt.stepAcc + runStep >= SOUND.STEP_EVERY_PX);
+      m.enqueueInput(id[0]!, { seq: k + 1, mx: 1, my: 0, aim: 0, fire: false, walk });
+      if (k % 3 !== 2) continue;
+      m.step(SERVER_TICK_MS * 2);
+      for (const e of m.drainEvents()) if (e.type === "sound" && e.kind === SoundKind.step) out.push(e.radius);
+    }
+    return out;
+  };
+  const loud = radii("run"), quiet = radii("walk"), exploit = radii("exploit");
+  assert.ok(loud.length >= 3 && quiet.length >= 1 && exploit.length >= 3);
+  assert.ok(Math.min(...loud) > Math.max(...quiet), "walking is quieter than running");
+  assert.ok(exploit.every((r) => r === loud[0]), `a mostly-run step stays loud: ${exploit.join(",")} vs ${loud[0]}`);
+});
+
+test("sound: a flood of one source's sounds in a tick is deduped before any per-listener work", () => {
+  const { m } = setup(3);
+  const A = listen(m, 0), B = listen(m, 1);
+  at(m, A.sid, 1000, 2000);
+  at(m, B.sid, 1200, 2000, Math.PI);
+  m.step(SERVER_TICK_MS);
+  m.drainEvents();
+  const src = rtOf(m, A.sid);
+  for (let k = 0; k < 500; k++) emitSound(m, src, SoundKind.switch, 1000, 2000);
+  emitSound(m, src, SoundKind.reload, 1000, 2000);
+  const msg = tickFor(m, B.r);
+  const got = decodeSoundMsg(msg).map((s) => s.kind).sort();
+  assert.deepEqual(got, [SoundKind.reload, SoundKind.switch].sort(), "one entry per kind");
+});

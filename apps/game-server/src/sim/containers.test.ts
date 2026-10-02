@@ -50,7 +50,8 @@ test("open delay, then items reveal one by one; the loot entry reaches the view 
   assert.ok(m.interact(a!));
   const ev0 = m.drainEvents();
   assert.ok(ev0.some((e) => e.type === "chest" && e.idx === 0), "lid event on first open");
-  assert.equal(m.state.containerState[0], CONTAINER_STATE.OPENED);
+  assert.equal(m.containers.stateOf(0), CONTAINER_STATE.OPENED);
+  assert.equal(m.state.containerState[0], CONTAINER_STATE.UNTOUCHED, "public once the opener left (disclosure.ts)");
   assert.equal(selfOf(m, a!).searching, "c0");
   assert.equal(selfOf(m, a!).searchReadyAt, OPEN_MS);
   assert.ok(pl(m, a!).act & 16, "ACT.LOOT is public");
@@ -211,7 +212,7 @@ test("partial stacks: qty splits keep the total; a full inventory takes what fit
   assert.equal(loot.slots.get("0")!.qty, 8);
   assert.equal(loot.slots.get("1")!.qty, 5);
   assert.ok(loot.slots.get("2"));
-  assert.equal(m.state.containerState[0], CONTAINER_STATE.OPENED);
+  assert.equal(m.containers.stateOf(0), CONTAINER_STATE.OPENED);
 
   // Room again: take-all empties the crate → EMPTIED for everyone.
   s.delete("p1");
@@ -220,7 +221,7 @@ test("partial stacks: qty splits keep the total; a full inventory takes what fit
   m.drainEvents();
   assert.equal(invTakeAllOp(m, a!), null);
   assert.equal(loot.slots.size, 0);
-  assert.equal(m.state.containerState[0], CONTAINER_STATE.EMPTIED);
+  assert.equal(m.containers.stateOf(0), CONTAINER_STATE.EMPTIED);
   assert.equal(countOf(s, "ammo_heavy"), 28, "15 given + 5 + the last 8");
   assert.equal(countOf(s, "junk_bolts"), 5);
   assert.equal(countOf(s, "junk_coldwallet"), 1);
@@ -298,7 +299,7 @@ test("FREE items displaced by a take vanish; broken items can never be taken", (
   assert.equal(takeFromLoot(m, rt, { from: "loot", key: "0", uid: r.uid, def: "rifle", to: "w1" }), null);
   assert.equal(s.get("w1")!.def, "rifle");
   assert.equal([...s.values()].filter((i) => i.def === "pistol").length, 0, "FREE pistol vanished");
-  assert.equal(m.state.items.size, 0);
+  assert.equal(m.ground.byId.size, 0);
   assert.equal(takeFromLoot(m, rt, { from: "loot", key: "1", uid: "", def: "ammo_light" }), "broken");
   assert.equal(takeAll(m, rt).taken, 0);
 });

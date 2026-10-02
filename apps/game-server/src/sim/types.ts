@@ -84,6 +84,17 @@ export interface PlayerRuntime {
   vy: number;
   /** Non-roll travel since the last footstep sound (sound.ts). */
   stepAcc: number;
+  /** Part of stepAcc covered by non-walk inputs: a step is quiet only when all of it was walked. */
+  stepRunAcc: number;
+  /**
+   * Facing the server vision cone uses (vision.ts): follows input aim at most VIEW_TURN_PER_INPUT
+   * per input, so flipping aim every input cannot sweep the cone around the whole circle.
+   */
+  viewAim: number;
+  /** Player.aim value viewAim last followed (an aim set outside the input path snaps the cone). */
+  viewAimSrc: number;
+  /** Human exit report held back while this player's own bullets are still in flight (match.ts). */
+  exitHeld: boolean;
   /** Last other player who damaged this one, and when (bots return fire during the peace window). */
   lastHitBy: PlayerRuntime | null;
   lastHitAt: number;

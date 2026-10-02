@@ -54,6 +54,17 @@ export interface GameContext {
   clockMs(): number;
   /** World → screen (CSS px). */
   toScreen(x: number, y: number): { x: number; y: number };
+  /**
+   * This frame an overlay (inventory, search panel, full map) owns the mouse: no fire, aim and
+   * camera look-ahead frozen.
+   */
+  inputBlocked(): boolean;
+  /**
+   * Where another player was last drawn on this client and when (performance.now(); `at` = now
+   * while they are still in view). Survives their removal from the state — a dead client's view
+   * drops every other player before the kill event arrives. Null if never seen.
+   */
+  lastSeen(id: string): { x: number; y: number; at: number } | null;
 }
 
 export interface GameSystem {
@@ -65,6 +76,8 @@ export interface GameSystem {
   frame?(dtMs: number, ctx: GameContext): void;
   /** Once per received S2C.EV batch (one per server tick). */
   onEvents?(ev: EventsMsg, ctx: GameContext): void;
+  /** True while this system's own canvas overlay owns the mouse (e.g. the full map). */
+  isInputBlocked?(): boolean;
   /** Screen resize. */
   resize?(width: number, height: number, ctx: GameContext): void;
   /** Release textures, audio nodes, listeners. Must be safe to call twice. */

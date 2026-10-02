@@ -171,7 +171,8 @@ test("loot entries reach only ready searchers; leave / re-enter / mutate never b
     assert.ok(c.dec.state.loot.get(key)!.slots.size >= 1, "dog tag at least");
     assert.equal(takeAll(m, C!).code, null);
     r.tick(2);
-    assert.equal(c.dec.state.corpses.get(String(A!.rosterIndex))!.empty, true, "emptied body is public");
+    assert.equal(m.containers.corpseOf(A!.rosterIndex)!.emptied, true);
+    assert.equal(c.dec.state.corpses.get(String(A!.rosterIndex))!.empty, false, "public only once the searcher left (disclosure.ts)");
     assert.ok([...c.dec.state.self.get(C!.selfKey)!.slots.values()].some((i) => i.def === "junk_dogtag"));
     // Reconnect of C: fresh view and decoder, search closed by the detach.
     r.views.detach(C!.rosterIndex, c.view);
@@ -184,4 +185,29 @@ test("loot entries reach only ready searchers; leave / re-enter / mutate never b
     console.warn = w;
   }
   assert.deepEqual(warns.filter((x) => /overflow|refId/i.test(x)), []);
+});
+
+test("a reconnect while the old socket is still open keeps the ready search's loot entry in the new view", () => {
+  const m = new Match({
+    roster: [{ userId: "u0", nickname: "A", isBot: false }],
+    rng: mulberry32(3), map: testMap({ containers: [CRATE] }), newUid: counterUid, now: () => 1_700_000_000_000,
+    emptyWorld: true, strictLedger: true, botBrains: false, envSeed: 1, weatherOverride: "clear",
+  });
+  m.containers.roll = () => [makeItem("junk_gpu"), makeItem("junk_apple", { qty: 2 })];
+  const r = new Room(m);
+  const a = r.join("u0", "s1");
+  const [A] = m.allRuntimes();
+  A!.pub.x = CRATE.x - 50; A!.pub.y = CRATE.y;
+  assert.ok(m.interact("s1"));
+  r.tick(60);
+  assert.ok(a.dec.state.loot.has("c0"), "ready: the entry is in the first view");
+  // Colyseus order on a reconnect from a new tab: the new join first; the old socket's leave then
+  // returns early (it no longer owns the seat), so no detach / closeSearch ever runs.
+  const b = r.join("u0", "s2");
+  r.tick(2);
+  assert.equal(A!.search?.key, "c0", "the session survived");
+  assert.ok(b.dec.state.loot.has("c0"), "the new view got the loot entry back");
+  assert.ok(m.interact("s2"), "F again stays a no-op on the same target");
+  r.tick(2);
+  assert.ok(b.dec.state.loot.has("c0"));
 });

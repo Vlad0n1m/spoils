@@ -94,19 +94,28 @@ export function emitSound(
   m.emit({ type: "sound", ...s });
 }
 
+/** Run distance (px) a step may contain and still count as walked (float noise only). */
+const STEP_RUN_EPS_PX = 0.5;
+
 /**
  * Footstep accumulator: one step sound per SOUND.STEP_EVERY_PX of non-roll travel. Rolling resets
- * it (the roll has its own sound). Variant = terrain material under the player; walking (Shift)
- * picks the quiet radius; inside a bush it is the louder rustle.
+ * it (the roll has its own sound). Variant = terrain material under the player; inside a bush it is
+ * the louder rustle. A step gets the quiet (walk) radius only when its whole distance was covered
+ * by walk inputs: the flag of the input that happens to complete the step decides nothing, so a
+ * client cannot run and send walk=true just on the crossing input (rt.stepRunAcc).
  */
 export function footstep(m: Match, rt: PlayerRuntime, moved: number, walk: boolean): void {
   rt.stepAcc += moved;
+  if (!walk) rt.stepRunAcc += moved;
   if (rt.stepAcc < SOUND.STEP_EVERY_PX) return;
   rt.stepAcc -= SOUND.STEP_EVERY_PX;
+  const quiet = rt.stepRunAcc - (walk ? 0 : rt.stepAcc) <= STEP_RUN_EPS_PX;
+  // The carried remainder came from this input: it is run distance of the next step unless walked.
+  rt.stepRunAcc = walk ? 0 : rt.stepAcc;
   const p = rt.pub;
   const surf = surfaceAt(m.map, p.x, p.y);
   const kind = bushIndexAt(m.bushIndex, p.x, p.y) >= 0 ? SoundKind.stepBush : SoundKind.step;
-  emitSound(m, rt, kind, p.x, p.y, surf.variant, { walk, rangeMult: surf.stepRangeMult });
+  emitSound(m, rt, kind, p.x, p.y, surf.variant, { walk: quiet, rangeMult: surf.stepRangeMult });
 }
 
 /**
@@ -148,8 +157,20 @@ export function deliverSounds(m: Match): void {
   channelSounds(m);
   const srt = soundRt(m);
   srt.heard.clear();
-  const pending = srt.pending;
-  if (pending.length === 0) return;
+  if (srt.pending.length === 0) return;
+  // One sound per (source, kind, variant) per tick before any per-listener work (raycasts): the
+  // listener-side dedupe would merge them anyway, and a message flood must not cost
+  // pending × listeners rays. World sounds (src −1) are all kept.
+  const pending: PendingSound[] = [];
+  const once = new Set<number>();
+  for (const s of srt.pending) {
+    if (s.src >= 0) {
+      const k = (s.src * 64 + s.kind) * 256 + s.variant;
+      if (once.has(k)) continue;
+      once.add(k);
+    }
+    pending.push(s);
+  }
   srt.pending = [];
   const hear = envNow(m).hear;
   const walls = getWallIndex(m.map);

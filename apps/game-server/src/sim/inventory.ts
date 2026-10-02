@@ -43,7 +43,11 @@ export class GroundStore {
     this.grid = new UniformGrid(width, height, 256);
   }
 
-  add(m: Match, item: ItemLike, x: number, y: number): GroundItem {
+  /**
+   * `actor` = the player whose action put it there (drop, swap overflow): only the actor and those
+   * who see them get it in their view until disclosure.ts publishes it (aoi.ts restriction).
+   */
+  add(m: Match, item: ItemLike, x: number, y: number, actor?: PlayerRuntime): GroundItem {
     const n = this.seq++;
     const g = new GroundItem();
     g.id = `g${n.toString(36)}`;
@@ -57,21 +61,46 @@ export class GroundStore {
     this.byN.set(n, rt);
     this.grid.set(n, x, y);
     m.state.items.set(g.id, g);
+    if (actor) {
+      m.aoi.restrict(g, "spawn", actor);
+      m.disclosure.defer(`g${g.id}`, x, y, [actor], () => m.aoi.unrestrict(g));
+    }
     return g;
   }
 
-  remove(m: Match, id: string): void {
+  /**
+   * Gone from the server's truth at once. Taken by `actor`: the schema entity stays in state for
+   * viewers who do not see the actor (a ghost) until disclosure.ts publishes the pickup.
+   */
+  remove(m: Match, id: string, actor?: PlayerRuntime): void {
     const rt = this.byId.get(id);
     if (!rt) return;
     this.byId.delete(id);
     this.byN.delete(rt.n);
     this.grid.delete(rt.n);
-    m.state.items.delete(id);
+    const g = rt.schema;
+    // A drop nobody else was shown yet (only the dropper's viewers hold it): just delete it.
+    if (!actor || m.aoi.restrictedAs(g) === "spawn") {
+      m.aoi.unrestrict(g);
+      m.state.items.delete(id);
+      return;
+    }
+    m.aoi.restrict(g, "ghost", actor);
+    m.disclosure.defer(`g${id}`, g.x, g.y, [actor], () => {
+      m.aoi.unrestrict(g);
+      if (m.state.items.get(id) === g) m.state.items.delete(id);
+    });
   }
 
-  setQty(rt: GroundRt, qty: number): void {
+  /** New quantity in the truth at once; the public field once `actor` left (disclosure.ts). */
+  setQty(m: Match, rt: GroundRt, qty: number, actor?: PlayerRuntime): void {
     rt.item.qty = qty;
-    if (rt.schema.qty !== qty) rt.schema.qty = qty;
+    const g = rt.schema;
+    const publish = () => {
+      if (g.qty !== rt.item.qty) g.qty = rt.item.qty;
+    };
+    if (actor) m.disclosure.defer(`q${g.id}`, g.x, g.y, [actor], publish);
+    else publish();
   }
 
   /** Items whose centre is within `r` of (x, y). */
@@ -90,8 +119,9 @@ export class GroundStore {
   }
 }
 
-export function spawnGroundItem(m: Match, item: ItemLike, x: number, y: number): GroundItem {
-  return m.ground.add(m, item, x, y);
+/** `actor` = the player who put it there (see GroundStore.add); none for world spawns. */
+export function spawnGroundItem(m: Match, item: ItemLike, x: number, y: number, actor?: PlayerRuntime): GroundItem {
+  return m.ground.add(m, item, x, y, actor);
 }
 
 /**
@@ -128,8 +158,8 @@ export function autoPickup(m: Match, rt: PlayerRuntime): void {
     if (!autoPicked(g.item.def)) continue;
     const { placed } = placeItem(rt, g.item, g.item.qty);
     if (placed <= 0) continue;
-    if (placed >= g.item.qty) m.ground.remove(m, g.schema.id);
-    else m.ground.setQty(g, g.item.qty - placed);
+    if (placed >= g.item.qty) m.ground.remove(m, g.schema.id, rt);
+    else m.ground.setQty(m, g, g.item.qty - placed, rt);
   }
 }
 
@@ -162,7 +192,7 @@ export function pickupGround(m: Match, rt: PlayerRuntime, g: GroundRt): boolean 
 
   /** Put `old` into storage; the ground at the pickup spot when it does not fit. */
   const stash = (old: ItemLike) => {
-    if (placeItem(rt, old).placed < old.qty) spawnGroundItem(m, old, at.x, at.y);
+    if (placeItem(rt, old).placed < old.qty) spawnGroundItem(m, old, at.x, at.y, rt);
   };
 
   if (d.cat === "weapon" && s.get("w1") && s.get("w2")) {
@@ -170,7 +200,7 @@ export function pickupGround(m: Match, rt: PlayerRuntime, g: GroundRt): boolean 
     if (!free) {
       const key = rt.self.active;
       const old = toPlain(s.get(key)!);
-      m.ground.remove(m, g.schema.id);
+      m.ground.remove(m, g.schema.id, rt);
       s.set(key, cloneItem(it));
       if (rt.reloadKey === key) rt.self.reloadUntil = 0;
       stash(old);
@@ -183,7 +213,7 @@ export function pickupGround(m: Match, rt: PlayerRuntime, g: GroundRt): boolean 
     const wornLevel = itemDef(worn.def)?.armorLevel ?? 0;
     if (armorIsUpgrade({ armor: wornLevel, armorDur: worn.dur }, d.armorLevel ?? 0, it.dur)) {
       const old = toPlain(worn);
-      m.ground.remove(m, g.schema.id);
+      m.ground.remove(m, g.schema.id, rt);
       s.set("armor", cloneItem(it));
       stash(old);
       syncPublic(rt);
@@ -193,7 +223,7 @@ export function pickupGround(m: Match, rt: PlayerRuntime, g: GroundRt): boolean 
   if (d.cat === "backpack" && s.get("bp") && (d.bpLevel ?? 0) > bpLevelOf(s)) {
     // Bigger pack: the bag contents belong to the player and keep their b-slots.
     const old = toPlain(s.get("bp")!);
-    m.ground.remove(m, g.schema.id);
+    m.ground.remove(m, g.schema.id, rt);
     s.set("bp", cloneItem(it));
     stash(old);
     syncPublic(rt);
@@ -201,8 +231,8 @@ export function pickupGround(m: Match, rt: PlayerRuntime, g: GroundRt): boolean 
   }
   const { placed } = placeItem(rt, it, it.qty);
   if (placed <= 0) return false;
-  if (placed >= it.qty) m.ground.remove(m, g.schema.id);
-  else m.ground.setQty(g, it.qty - placed);
+  if (placed >= it.qty) m.ground.remove(m, g.schema.id, rt);
+  else m.ground.setQty(m, g, it.qty - placed, rt);
   syncPublic(rt);
   return true;
 }
