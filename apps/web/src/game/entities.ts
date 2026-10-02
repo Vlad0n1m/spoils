@@ -275,9 +275,21 @@ export type ExtractStatus = "waiting" | "open" | "closed";
 
 export class ExtractView {
   readonly root = new Container();
-  private readonly g = new Graphics();
+  /**
+   * Static shapes, redrawn only when status / radius / progress change (WP-H: clearing and
+   * re-tessellating ~30 primitives per extract every frame was pure waste). The open-state
+   * pulse is animated with `alpha` / `scale` on these instead.
+   */
+  private readonly fill = new Graphics();
+  private readonly ring = new Graphics();
+  private readonly pulse = new Graphics();
+  private readonly progressG = new Graphics();
   private readonly caption: Text;
   private captionText = "";
+  private shapeKey = "";
+  /** Progress in whole percent as drawn, -1 = no progress ring. */
+  private progressPct = -1;
+  private progressR = -1;
 
   constructor() {
     this.caption = new Text({
@@ -293,7 +305,7 @@ export class ExtractView {
       resolution: 2,
     });
     this.caption.anchor.set(0.5);
-    this.root.addChild(this.g, this.caption);
+    this.root.addChild(this.fill, this.ring, this.pulse, this.progressG, this.caption);
   }
 
   /**
@@ -301,36 +313,33 @@ export class ExtractView {
    */
   update(x: number, y: number, r: number, status: ExtractStatus, caption: string, progress: number | null, nowMs: number) {
     this.root.position.set(x, y);
-    const g = this.g;
-    g.clear();
+    const key = `${status}|${r}`;
+    if (key !== this.shapeKey) {
+      this.shapeKey = key;
+      this.drawShapes(r, status);
+    }
     if (status === "open") {
       const p = 0.5 + 0.5 * Math.sin(nowMs / 300);
-      g.circle(0, 0, r).fill({ color: COLORS.extractOpen, alpha: 0.14 + 0.1 * p });
-      g.circle(0, 0, r).stroke({ width: 6, color: COLORS.extractOpen, alpha: 0.75 + 0.25 * p });
-      g.circle(0, 0, r * (0.55 + 0.4 * ((nowMs / 1400) % 1))).stroke({
-        width: 3,
-        color: COLORS.extractOpen,
-        alpha: 0.5 * (1 - ((nowMs / 1400) % 1)),
-      });
-    } else {
-      const c = status === "waiting" ? COLORS.extractWaiting : COLORS.extractClosed;
-      g.circle(0, 0, r).fill({ color: c, alpha: status === "waiting" ? 0.1 : 0.16 });
-      // Dashed ring: reads as "not active" at a glance.
-      const dashes = 24;
-      for (let i = 0; i < dashes; i++) {
-        const a0 = (i / dashes) * Math.PI * 2;
-        const a1 = a0 + (Math.PI * 2) / dashes / 2;
-        g.moveTo(Math.cos(a0) * r, Math.sin(a0) * r).arc(0, 0, r, a0, a1);
-      }
-      g.stroke({ width: 5, color: c, alpha: 0.85 });
+      this.fill.alpha = 0.14 + 0.1 * p;
+      this.ring.alpha = 0.75 + 0.25 * p;
+      const phase = (nowMs / 1400) % 1;
+      this.pulse.scale.set(0.55 + 0.4 * phase);
+      this.pulse.alpha = 0.5 * (1 - phase);
     }
-    if (progress !== null) {
-      const k = Math.max(0, Math.min(1, progress));
-      g.circle(0, 0, r + 12).stroke({ width: 8, color: 0x000000, alpha: 0.35 });
-      if (k > 0) {
-        g.moveTo(0, -(r + 12))
-          .arc(0, 0, r + 12, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2)
-          .stroke({ width: 8, color: 0xffffff, alpha: 0.95, cap: "round" });
+
+    const pct = progress === null ? -1 : Math.round(Math.max(0, Math.min(1, progress)) * 100);
+    if (pct !== this.progressPct || r !== this.progressR) {
+      this.progressPct = pct;
+      this.progressR = r;
+      const g = this.progressG;
+      g.clear();
+      if (pct >= 0) {
+        g.circle(0, 0, r + 12).stroke({ width: 8, color: 0x000000, alpha: 0.35 });
+        if (pct > 0) {
+          g.moveTo(0, -(r + 12))
+            .arc(0, 0, r + 12, -Math.PI / 2, -Math.PI / 2 + (pct / 100) * Math.PI * 2)
+            .stroke({ width: 8, color: 0xffffff, alpha: 0.95, cap: "round" });
+        }
       }
     }
     if (caption !== this.captionText) {
@@ -339,6 +348,35 @@ export class ExtractView {
     }
     // Above the ring (and the progress arc) so it never sits on top of the player in the middle.
     this.caption.y = -(r + 30);
+  }
+
+  private drawShapes(r: number, status: ExtractStatus) {
+    const { fill, ring, pulse } = this;
+    fill.clear();
+    ring.clear();
+    pulse.clear();
+    if (status === "open") {
+      // Drawn at full alpha; update() modulates the Graphics' alpha for the pulse.
+      fill.circle(0, 0, r).fill({ color: COLORS.extractOpen });
+      ring.circle(0, 0, r).stroke({ width: 6, color: COLORS.extractOpen });
+      // The expanding ring is scaled 0.55..0.95 per frame; width 4 scales to ~2.2..3.8 (was 3).
+      pulse.circle(0, 0, r).stroke({ width: 4, color: COLORS.extractOpen });
+      pulse.visible = true;
+    } else {
+      const c = status === "waiting" ? COLORS.extractWaiting : COLORS.extractClosed;
+      fill.circle(0, 0, r).fill({ color: c });
+      fill.alpha = status === "waiting" ? 0.1 : 0.16;
+      // Dashed ring: reads as "not active" at a glance.
+      const dashes = 24;
+      for (let i = 0; i < dashes; i++) {
+        const a0 = (i / dashes) * Math.PI * 2;
+        const a1 = a0 + (Math.PI * 2) / dashes / 2;
+        ring.moveTo(Math.cos(a0) * r, Math.sin(a0) * r).arc(0, 0, r, a0, a1);
+      }
+      ring.stroke({ width: 5, color: c });
+      ring.alpha = 0.85;
+      pulse.visible = false;
+    }
   }
 
   destroy() {

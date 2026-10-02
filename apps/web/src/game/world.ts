@@ -63,19 +63,29 @@ export class WorldView {
     const grass = new TilingSprite({ texture: tex.grass_tile, width: map.width, height: map.height });
     this.ground.addChild(grass);
 
-    // Dirt: one map-sized plain-dirt tiling sprite under a soft alpha mask painted from the
-    // patch circles (low-res canvas, upscaled). Each patch is a lumpy blob of overlapping soft
-    // circles, so patches fade into the grass, have irregular edges and merge when they overlap.
-    const dirt = new TilingSprite({ texture: tex.dirt_plain, width: map.width, height: map.height });
-    dirt.tileScale.set(0.75);
-    const maskTex = dirtMaskTexture(map);
-    if (maskTex) {
-      this.ownedTextures.push(maskTex);
-      const mask = new Sprite(maskTex);
-      mask.width = map.width;
-      mask.height = map.height;
-      dirt.mask = mask;
-      this.ground.addChild(dirt, mask);
+    // Dirt: each patch is one pre-rendered sprite (a lumpy blob of overlapping soft circles,
+    // filled with the dirt tile in world-aligned position). No alpha mask: a map-sized Sprite
+    // mask forced an extra full-screen filter pass and broke MSAA batching (measured ~20 ms of
+    // GPU per frame). Overlapping patches still merge: canvas source-over of the mask discs and
+    // the GPU's blending of two sprites of the same world-aligned dirt give the same pixels.
+    const dirtImg = textureImage(tex.dirt_plain);
+    if (dirtImg) {
+      const patches = map.dirt.map((d) => {
+        const lobes = dirtLobes(d);
+        return { lobes, bounds: lobesBounds(lobes) };
+      });
+      const res = dirtBakeRes(patches.map((p) => p.bounds));
+      for (const { lobes, bounds: b } of patches) {
+        const texture = bakeDirtPatch(lobes, b, dirtImg, res);
+        if (!texture) continue;
+        this.ownedTextures.push(texture);
+        const s = new Sprite(texture);
+        s.position.set(b.x, b.y);
+        s.width = b.w;
+        s.height = b.h;
+        this.ground.addChild(s);
+        this.addCullable(s, b.x + b.w / 2, b.y + b.h / 2, Math.hypot(b.w, b.h) / 2);
+      }
     }
 
     // Building floors: dark slate tiles.
@@ -201,8 +211,26 @@ export class WorldView {
   }
 }
 
-/** World units per mask pixel: patches are 90–240 px wide, so soft edges survive the upscale. */
-const DIRT_MASK_SCALE = 6;
+/** Dirt tile scale in the world (the old TilingSprite's tileScale). */
+const DIRT_TILE_SCALE = 0.75;
+/**
+ * Baked dirt texture pixels per world unit. The 256 px dirt tile covers 192 world px, so 1:1
+ * keeps the pattern's detail; today's 4800² map (26 patches) bakes to ~4.6 Mpx (~18 MB).
+ */
+const DIRT_BAKE_RES = 1;
+/**
+ * Cap on all baked dirt pixels (~64 MB RGBA). A bigger map with many more patches bakes at a
+ * lower resolution instead of eating RAM/VRAM; the chunked ground bake replaces this in v2.
+ */
+const DIRT_BAKE_MAX_PX = 16_000_000;
+
+/** Resolution to bake dirt patches with, so the total stays under DIRT_BAKE_MAX_PX. */
+export function dirtBakeRes(bounds: Array<{ w: number; h: number }>): number {
+  let px = 0;
+  for (const b of bounds) px += b.w * b.h;
+  const fit = px * DIRT_BAKE_RES * DIRT_BAKE_RES > DIRT_BAKE_MAX_PX ? Math.sqrt(DIRT_BAKE_MAX_PX / px) : DIRT_BAKE_RES;
+  return Math.max(0.25, fit);
+}
 /** Extra soft lobes around each patch's core circle. */
 const DIRT_LOBES = 5;
 
@@ -213,6 +241,49 @@ function hash01(a: number, b: number, c: number): number {
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
   h ^= h >>> 16;
   return (h >>> 0) / 0x1_0000_0000;
+}
+
+/** One soft disc of a dirt patch, in world units: opaque up to `core` × r, transparent at r. */
+export interface DirtLobe {
+  x: number;
+  y: number;
+  r: number;
+  core: number;
+  alpha: number;
+}
+
+/**
+ * The soft discs that make up one dirt patch: a slightly smaller core (so the lobes decide the
+ * outline) plus DIRT_LOBES offset lobes. Pure and deterministic, so every client draws the
+ * same blob.
+ */
+export function dirtLobes(d: { x: number; y: number; r: number }): DirtLobe[] {
+  const out: DirtLobe[] = [{ x: d.x, y: d.y, r: d.r * 0.8, core: 0.55, alpha: 1 }];
+  const turn = hash01(d.x, d.y, 0) * Math.PI * 2;
+  for (let i = 0; i < DIRT_LOBES; i++) {
+    const a = turn + (i / DIRT_LOBES) * Math.PI * 2 + (hash01(d.x, d.y, i + 1) - 0.5) * 0.9;
+    const off = d.r * (0.3 + 0.3 * hash01(d.x, d.y, i + 11));
+    const lr = d.r * (0.38 + 0.25 * hash01(d.x, d.y, i + 21));
+    out.push({ x: d.x + Math.cos(a) * off, y: d.y + Math.sin(a) * off, r: lr, core: 0.45, alpha: 0.85 });
+  }
+  return out;
+}
+
+/** World-space bounding box of a set of lobes, snapped outward to whole world units. */
+export function lobesBounds(lobes: DirtLobe[]): { x: number; y: number; w: number; h: number } {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const l of lobes) {
+    x0 = Math.min(x0, l.x - l.r);
+    y0 = Math.min(y0, l.y - l.r);
+    x1 = Math.max(x1, l.x + l.r);
+    y1 = Math.max(y1, l.y + l.r);
+  }
+  x0 = Math.floor(x0);
+  y0 = Math.floor(y0);
+  return { x: x0, y: y0, w: Math.ceil(x1) - x0, h: Math.ceil(y1) - y0 };
 }
 
 /** A soft disc: opaque up to `core` × radius, fading to transparent at the radius. */
@@ -227,26 +298,42 @@ function softDisc(ctx: CanvasRenderingContext2D, x: number, y: number, r: number
   ctx.fill();
 }
 
-function dirtMaskTexture(map: MapData): Texture | null {
+/** The decoded image behind a loaded texture (null when the sprite failed to load). */
+function textureImage(t: Texture): CanvasImageSource | null {
+  if (t === Texture.EMPTY) return null;
+  const res = t.source?.resource as unknown;
+  if (typeof HTMLImageElement !== "undefined" && res instanceof HTMLImageElement) return res;
+  if (typeof ImageBitmap !== "undefined" && res instanceof ImageBitmap) return res;
+  if (typeof HTMLCanvasElement !== "undefined" && res instanceof HTMLCanvasElement) return res;
+  return null;
+}
+
+/**
+ * Bakes one dirt patch: the lobes are painted as white soft discs (the alpha shape), then the
+ * dirt tile is drawn "source-in" in world-aligned position — the same pixels the old masked
+ * map-sized TilingSprite produced inside this patch's bounds.
+ */
+function bakeDirtPatch(
+  lobes: DirtLobe[],
+  b: { x: number; y: number; w: number; h: number },
+  img: CanvasImageSource,
+  res: number,
+): Texture | null {
   const c = document.createElement("canvas");
-  c.width = Math.ceil(map.width / DIRT_MASK_SCALE);
-  c.height = Math.ceil(map.height / DIRT_MASK_SCALE);
+  c.width = Math.max(1, Math.ceil(b.w * res));
+  c.height = Math.max(1, Math.ceil(b.h * res));
   const ctx = c.getContext("2d");
   if (!ctx) return null;
-  for (const d of map.dirt) {
-    const x = d.x / DIRT_MASK_SCALE;
-    const y = d.y / DIRT_MASK_SCALE;
-    const r = d.r / DIRT_MASK_SCALE;
-    // Core: a slightly smaller soft disc, so the lobes decide the outline.
-    softDisc(ctx, x, y, r * 0.8, 0.55, 1);
-    const turn = hash01(d.x, d.y, 0) * Math.PI * 2;
-    for (let i = 0; i < DIRT_LOBES; i++) {
-      const a = turn + (i / DIRT_LOBES) * Math.PI * 2 + (hash01(d.x, d.y, i + 1) - 0.5) * 0.9;
-      const off = r * (0.3 + 0.3 * hash01(d.x, d.y, i + 11));
-      const lr = r * (0.38 + 0.25 * hash01(d.x, d.y, i + 21));
-      softDisc(ctx, x + Math.cos(a) * off, y + Math.sin(a) * off, lr, 0.45, 0.85);
-    }
-  }
+  // World coordinates from here on.
+  ctx.setTransform(res, 0, 0, res, -b.x * res, -b.y * res);
+  for (const l of lobes) softDisc(ctx, l.x, l.y, l.r, l.core, l.alpha);
+  const pattern = ctx.createPattern(img, "repeat");
+  if (!pattern) return null;
+  // Tiles anchored at the world origin, like the old TilingSprite at (0, 0) with tileScale 0.75.
+  pattern.setTransform(new DOMMatrix().scale(DIRT_TILE_SCALE));
+  ctx.globalCompositeOperation = "source-in";
+  ctx.fillStyle = pattern;
+  ctx.fillRect(b.x, b.y, b.w, b.h);
   return new Texture({ source: new ImageSource({ resource: c, scaleMode: "linear" }) });
 }
 

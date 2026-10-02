@@ -13,8 +13,9 @@ import {
 } from "@extract/shared";
 import { getColyseusClient } from "@/lib/colyseus";
 import { describeRoomExit, errorCodeAndReason, type RoomExit } from "@/lib/room-exit";
+import { createHudStore, shallowEqual } from "@/game/hud";
 import type { GameRendererApi, HudSnapshot, RendererOptions } from "@/game/types";
-import { Hud } from "./hud";
+import { Hud, useHud } from "./hud";
 import { MatchOutcomeOverlay } from "./match-outcome-overlay";
 
 interface Props {
@@ -105,11 +106,23 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
   };
 }
 
+/** What this screen itself needs from the HUD: whether to show the loader / outcome overlay. */
+function screenSlice(s: HudSnapshot) {
+  const self = s.self;
+  return {
+    hasSelf: Boolean(self),
+    selfOut: Boolean(self && (!self.alive || self.extractedAt > 0)),
+    phase: s.phase,
+  };
+}
+
 export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<{ dispose: () => void } | null>(null);
   const disposeTimerRef = useRef<number | undefined>(undefined);
-  const [hud, setHud] = useState<HudSnapshot>(EMPTY_HUD);
+  // The renderer pushes HUD snapshots ~30×/s into this store; React reads throttled slices of it
+  // (≤ 10 commits/s) instead of re-rendering the whole tree on every push.
+  const [hudStore] = useState(() => createHudStore(EMPTY_HUD));
   const [err, setErr] = useState<RoomExit | null>(null);
   const [outcome, setOutcome] = useState<OutcomeMsg | null>(null);
   const [settlement, setSettlement] = useState<MatchSettlementPayload | null>(null);
@@ -122,7 +135,7 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
     window.clearTimeout(disposeTimerRef.current);
     if (!sessionRef.current && mountRef.current) {
       sessionRef.current = startBattle(mountRef.current, ticket, battleRoomId, {
-        onHud: setHud,
+        onHud: hudStore.push,
         onOutcome: setOutcome,
         onSettled: setSettlement,
         onDisconnect: (exit) => {
@@ -136,15 +149,15 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
       disposeTimerRef.current = window.setTimeout(() => {
         sessionRef.current?.dispose();
         sessionRef.current = null;
+        hudStore.dispose();
       }, 0);
     };
     // The parent remounts this component (key) for a new battle; props never change in place.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const self = hud.self;
-  const selfOut = Boolean(self && (!self.alive || self.extractedAt > 0));
-  const overlayVisible = Boolean(outcome) || selfOut || hud.phase === "ended" || disconnected;
+  const { hasSelf, selfOut, phase } = useHud(hudStore, screenSlice, shallowEqual);
+  const overlayVisible = Boolean(outcome) || selfOut || phase === "ended" || disconnected;
 
   return (
     <div
@@ -167,8 +180,8 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
         </div>
       ) : (
         <>
-          <Hud snapshot={hud} selfNickname={nickname} onLeave={onLeave} />
-          {!self && !overlayVisible && (
+          <Hud store={hudStore} selfNickname={nickname} onLeave={onLeave} />
+          {!hasSelf && !overlayVisible && (
             <div className="pointer-events-none absolute inset-0 grid place-items-center">
               <div className="toon-panel flex items-center gap-3 px-6 py-4 text-xl tracking-wide">
                 <span className="h-6 w-6 animate-spin rounded-full border-4 border-black border-t-zooa-lime" aria-hidden />
@@ -183,7 +196,7 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
         visible={!err && overlayVisible}
         outcome={outcome}
         settlement={settlement}
-        raidEnded={hud.phase === "ended" || settlement !== null}
+        raidEnded={phase === "ended" || settlement !== null}
         disconnected={disconnected}
         kick={kick}
         onContinue={onLeave}

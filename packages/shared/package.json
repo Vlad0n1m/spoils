@@ -15,7 +15,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "typecheck:tests": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@colyseus/schema": "^3.0.0",
