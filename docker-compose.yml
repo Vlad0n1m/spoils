@@ -1,0 +1,88 @@
+name: extract
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: extract
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U postgres -d extract",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: migrate
+    env_file:
+      - .env
+    environment:
+      CI: "true"
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/extract
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: runner
+      args:
+        NEXT_PUBLIC_GAME_SERVER_URL: ${NEXT_PUBLIC_GAME_SERVER_URL:-ws://localhost:2567}
+        NEXT_PUBLIC_SOLANA_RPC_URL: ${NEXT_PUBLIC_SOLANA_RPC_URL:-https://api.devnet.solana.com}
+        NEXT_PUBLIC_SOLANA_CLUSTER: ${NEXT_PUBLIC_SOLANA_CLUSTER:-devnet}
+        NEXT_PUBLIC_WALLET_DEV_TOPUP: ${NEXT_PUBLIC_WALLET_DEV_TOPUP:-0}
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/extract
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+
+  game-server:
+    build:
+      context: .
+      dockerfile: apps/game-server/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/extract
+      WEB_API_BASE_URL: http://web:3000
+      GAME_SERVER_PORT: "2567"
+    ports:
+      - "2567:2567"
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

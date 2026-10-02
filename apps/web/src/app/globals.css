@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #08070b;
+  color: #ece9f5;
+  font-family: var(--font-luckiest-guy), "Luckiest Guy", cursive;
+  line-height: 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+body * {
+  line-height: 1;
+}
+
+/*
+ * Luckiest Guy ships with an oversized ascender metric so glyphs
+ * hug the top of their line-box and every block feels "top-heavy".
+ * text-box-trim trims the unused ascender/descender space so the
+ * glyph actually sits in the middle of the block it's rendered in.
+ */
+@supports (text-box-trim: trim-both) {
+  body,
+  body * {
+    text-box-trim: trim-both;
+    text-box-edge: cap alphabetic;
+  }
+}
+
+@supports (-webkit-text-box-trim: trim-both) {
+  body,
+  body * {
+    -webkit-text-box-trim: trim-both;
+    -webkit-text-box-edge: cap alphabetic;
+  }
+}
+
+/*
+ * Optical centering nudge for Luckiest Guy. text-box-trim fixes the
+ * line-box in Chrome/Safari, but Firefox (and any fallback path) still
+ * renders the glyph hugging the top of its line-box. This class shifts
+ * the glyph down to the *optical* middle without affecting layout.
+ * Apply on an inline span wrapping text inside a flex-centered button.
+ */
+.optical-center {
+  display: inline-block;
+  transform: translateY(0.06em);
+  will-change: transform;
+}
+
+button {
+  font: inherit;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition;
+}
+
+.btn-primary {
+  @apply btn bg-accent-500 text-white hover:bg-accent-400 disabled:bg-ink-600 disabled:text-white/40 disabled:cursor-not-allowed;
+}
+
+.btn-ghost {
+  @apply btn border border-ink-500 bg-ink-700 text-white hover:bg-ink-600 disabled:opacity-50;
+}
+
+.card {
+  @apply rounded-xl border border-ink-600 bg-ink-700/80 backdrop-blur p-5;
+}
+
+.input {
+  @apply w-full rounded-lg border border-ink-500 bg-ink-800 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none;
+}
+
+.mono {
+  font-family: JetBrains Mono, ui-monospace, monospace;
+}
+

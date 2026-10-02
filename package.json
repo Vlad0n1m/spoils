@@ -1,0 +1,21 @@
+{
+  "name": "extract",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "dev": "pnpm shared:build && pnpm -r --parallel --filter \"./apps/*\" --filter @extract/shared run dev",
+    "dev:web": "pnpm shared:build && pnpm --filter web dev",
+    "dev:game": "pnpm shared:build && pnpm --filter game-server dev",
+    "shared:build": "pnpm --filter @extract/shared build",
+    "build": "pnpm shared:build && pnpm -r --filter \"./apps/*\" run build",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm -r run typecheck",
+    "db:ensure": "pnpm --filter web db:ensure",
+    "db:push": "pnpm --filter web db:push",
+    "db:studio": "pnpm --filter web db:studio"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
