@@ -1,0 +1,36 @@
+{
+  "style": "Game sprite in exactly the art style of the reference image (bright stylized cartoon like ZombsRoyale, flat colors, soft shading, thick dark outlines, chunky readable shapes).",
+  "view": "Seen STRICTLY from directly above (bird's-eye, 90 degrees top-down, NOT 3/4 or isometric view).",
+  "isolate": "Centered, single isolated object filling about 70% of the frame, on a perfectly flat solid pure magenta background (#FF00FF), no gradient, no ground texture, no cast shadow, no text.",
+  "tile": "Seamless tileable square ground texture filling the whole frame edge to edge, top-down, no objects, no text.",
+  "sprites": [
+    { "id": "player", "size": 256, "prompt": "A single soldier character: round helmet in the center, shoulders and small backpack visible around it, both arms reaching forward to the right as if holding a gun, but NO gun in the hands. Facing right. Helmet is neutral light gray so it can be color-tinted in engine." },
+    { "id": "boss", "size": 320, "prompt": "A big heavily armored boss soldier, much bulkier than a normal soldier: dark red heavy helmet with visor, thick shoulder plates, big backpack, arms reaching forward to the right as if holding a heavy gun, but NO gun. Facing right. Menacing." },
+
+    { "id": "pistol", "size": 192, "view": "Seen from above, gun lying flat so its side profile silhouette is visible, pointing right.", "prompt": "A compact black pistol." },
+    { "id": "rifle", "size": 256, "view": "Seen from above, gun lying flat so its side profile silhouette is visible, pointing right.", "prompt": "An assault rifle with a curved magazine, dark gray and olive." },
+    { "id": "shotgun", "size": 256, "view": "Seen from above, gun lying flat so its side profile silhouette is visible, pointing right.", "prompt": "A pump-action shotgun with a wooden stock and pump." },
+    { "id": "sniper", "size": 320, "view": "Seen from above, gun lying flat so its side profile silhouette is visible, pointing right.", "prompt": "A long bolt-action sniper rifle with a big scope, dark green and black." },
+
+    { "id": "chest_common", "size": 192, "view": "Seen from above at a slight angle so the lid is clearly visible.", "prompt": "A simple wooden loot chest with iron bands, closed." },
+    { "id": "chest_rare", "size": 192, "view": "Seen from above at a slight angle so the lid is clearly visible.", "prompt": "A sturdy loot chest with blue metal trim and a soft blue glow around it, closed." },
+    { "id": "chest_epic", "size": 192, "view": "Seen from above at a slight angle so the lid is clearly visible.", "prompt": "An ornate loot chest with purple metal trim and a soft purple glow, closed." },
+    { "id": "chest_legendary", "size": 224, "view": "Seen from above at a slight angle so the lid is clearly visible.", "prompt": "A shiny golden loot chest with sparkles and a hexagonal gem on the lid with a purple-to-teal gradient, closed." },
+
+    { "id": "backpack", "size": 160, "prompt": "A dropped olive military backpack lying on the ground, slightly open, a few items peeking out." },
+    { "id": "armor_1", "size": 160, "prompt": "A light tactical vest, gray fabric, simple. Laid flat." },
+    { "id": "armor_2", "size": 160, "prompt": "A medium armored vest with blue plates. Laid flat." },
+    { "id": "armor_3", "size": 160, "prompt": "A heavy armored vest with purple reinforced plates and pouches. Laid flat." },
+    { "id": "bandage", "size": 128, "prompt": "A rolled white bandage." },
+    { "id": "medkit", "size": 128, "prompt": "A small red medkit box with a white cross on the lid." },
+    { "id": "ammo", "size": 128, "prompt": "A small olive ammo box with a few brass bullets on top." },
+
+    { "id": "bush", "size": 256, "prompt": "A round dense green leafy bush, like the bushes in the reference image." },
+    { "id": "tree", "size": 320, "prompt": "A big round tree canopy seen from above, rich green leaves, like the trees in the reference image." },
+    { "id": "crate", "size": 192, "prompt": "A wooden supply crate with an X brace on the top, like the crates in the reference image." },
+    { "id": "rock", "size": 192, "prompt": "A cluster of gray boulders, like the rocks in the reference image." },
+
+    { "id": "grass_tile", "size": 256, "tile": true, "prompt": "Short green grass with tiny darker grass tufts and very rare small flowers, like the ground in the reference image." },
+    { "id": "dirt_tile", "size": 256, "tile": true, "prompt": "Brown packed dirt path with small pebbles, like the dirt patches in the reference image." }
+  ]
+}

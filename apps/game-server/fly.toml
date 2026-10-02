@@ -1,0 +1,34 @@
+app = "extract-game"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  GAME_SERVER_PORT = "2567"
+  NODE_ENV = "production"
+
+[[services]]
+  internal_port = 2567
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "connections"
+    soft_limit = 200
+    hard_limit = 400
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"

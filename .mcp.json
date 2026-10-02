@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "idosgames": {
+      "command": "npx",
+      "args": ["-y", "@idosgames/mcp"]
+    },
+    "idosgames-title": {
+      "type": "http",
+      "url": "https://site.idosgames.com/api/v2/mcp"
+    }
+  }
+}
