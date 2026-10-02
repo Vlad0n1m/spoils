@@ -51,7 +51,7 @@ export function GuestPlayDialog({
         <div>
           <h2 className="toon-text text-3xl tracking-wide text-zooa-lime">Play as guest</h2>
           <p className="font-body mt-3 text-base leading-relaxed text-white/70">
-            Pick a nickname and drop into a demo raid. Guest results are not tied to an account.
+            Pick a nickname and drop in with the free kit. Guest results are not tied to an account.
           </p>
         </div>
         <input

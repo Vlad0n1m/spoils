@@ -3,6 +3,7 @@ import {
   CONTAINER_KINDS,
   MAP_IDS,
   type ContainerKind,
+  type GameServerBoot,
   type MapId,
   type MatchEndReport,
   type PlayerExitReport,
@@ -49,7 +50,15 @@ export const raidStartRequestSchema = z.object({
     .array(z.object({ idx: z.number().int().min(0).max(100_000), kind: containerKind, tier: z.number().int().min(0).max(4) }))
     .max(4096),
   bossSlots: z.number().int().min(0).max(8),
+  instanceId: z.string().min(1).max(64).optional(),
+  serverId: z.string().min(1).max(64).optional(),
 }) as unknown as z.ZodType<RaidStartRequest>;
+
+export const gameServerBootSchema = z.object({
+  serverId: z.string().min(1).max(64),
+  instanceId: z.string().min(1).max(64),
+  bootedAt: z.number().finite().min(0),
+}) satisfies z.ZodType<GameServerBoot>;
 
 const statsSchema = z.object({
   shotsFired: z.number().int().min(0).default(0),
@@ -92,4 +101,6 @@ export const matchEndReportSchema = z.object({
     .max(64),
   leftOnMap: z.array(settledItemSchema).max(8192),
   minted: z.array(settledItemSchema).max(8192).default([]),
+  botLost: z.array(settledItemSchema).max(8192).optional(),
+  botDestroyed: z.array(settledItemSchema).max(8192).optional(),
 }) as unknown as z.ZodType<MatchEndReport>;

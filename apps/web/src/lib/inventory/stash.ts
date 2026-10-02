@@ -3,7 +3,7 @@ import type { LoadoutEntry } from "@extract/shared";
 import { items, loadoutDrafts, loadouts, stashStacks, users, type ItemState, type LoadoutRowEntry } from "../../db/schema";
 import type { Db } from "./db";
 import { expireStaleLocks } from "./loadout";
-import { voidStale } from "./raids";
+import { voidStale, voidStaleForUser } from "./raids";
 
 /** One unique as the lobby shows it. dur is the DB percentage. */
 export interface StashItemDto {
@@ -84,8 +84,13 @@ export async function getStash(db: Db, userId: string, now = new Date()): Promis
   };
 }
 
-/** Expire this user's stale locks and void crashed raids (cheap: both are index lookups). */
+/**
+ * Expire this user's stale locks and void crashed raids (cheap: index lookups): first the raid
+ * holding this user's gear when it is past MATCH.DURATION_MS + 5 min or its game server is gone
+ * (voidStaleForUser), then every raid past the global stale timeout.
+ */
 export async function lazyMaintenance(db: Db, userId: string, now = new Date()): Promise<void> {
   await db.transaction((tx) => expireStaleLocks(tx, now, userId));
+  await voidStaleForUser(db, userId, now);
   await voidStale(db, now);
 }

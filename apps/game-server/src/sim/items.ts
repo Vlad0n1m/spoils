@@ -18,6 +18,8 @@ import {
   armorMaxPoints,
   itemDef,
   type ItemLike,
+  type MatchEndReport,
+  type PlayerExitReport,
   type SettledItem,
 } from "@extract/shared";
 import type { UidOrigin, UidResolution } from "./types.js";
@@ -132,4 +134,46 @@ export class Ledger {
     this.anomalies.push(msg);
     console.error(`[ledger] ${msg}`);
   }
+}
+
+/** A reported unique (SettledItem has no flags: FREE items carry no uid). */
+function isReportedUnique(s: SettledItem): boolean {
+  return !!s.uid && itemDef(s.def)?.unique === true;
+}
+
+/**
+ * Bots are never reported to the web (no PlayerExitReport), so uniques they picked up (lost-pool
+ * allocations, a dead player's gear) would stay in_raid on the web and be swept as anomalies by
+ * raids/end. Their resolutions ride on the MatchEndReport instead:
+ * - extract / timeout: the items left the match with nobody to own them → leftOnMap (pool, no wear);
+ * - death: uniques that broke → botLost (pool with the death wear; survivors are in the corpse,
+ *   already in leftOnMap through the containers);
+ * - armor worn to 0 → botDestroyed.
+ * Returns a new report; leftOnMap keeps its order with the bot items appended. Idempotent per uid.
+ */
+export function withBotSettlement(
+  report: MatchEndReport,
+  bots: ReadonlyArray<{ isBot: boolean; exitReport: PlayerExitReport | null }>,
+): MatchEndReport {
+  const seen = new Set(report.leftOnMap.map((s) => s.uid).filter(Boolean));
+  const left: SettledItem[] = [];
+  const lost: SettledItem[] = [...(report.botLost ?? [])];
+  const destroyed: SettledItem[] = [...(report.botDestroyed ?? [])];
+  for (const s of [...lost, ...destroyed]) seen.add(s.uid);
+  const add = (to: SettledItem[], list: readonly SettledItem[]) => {
+    for (const s of list) {
+      if (!isReportedUnique(s) || seen.has(s.uid)) continue;
+      seen.add(s.uid);
+      to.push(s);
+    }
+  };
+  for (const b of bots) {
+    const r = b.exitReport;
+    if (!b.isBot || !r) continue;
+    add(destroyed, r.destroyed);
+    if (r.exit === "extract") add(left, r.extracted);
+    else if (r.exit === "dead") add(lost, r.lost);
+    else add(left, r.lost);
+  }
+  return { ...report, leftOnMap: [...report.leftOnMap, ...left], botLost: lost, botDestroyed: destroyed };
 }

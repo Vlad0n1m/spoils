@@ -2,7 +2,8 @@
  * Sound visualization (WP-S): a screen-space ring of arc markers around the local player for the
  * sounds the server sends in `ev.snd` — hidden sources at their quantized sector/band, visible
  * ones off screen or behind you at their exact direction. A behind-you marker gets a thicker arc
- * and a pulsing double chevron. The pure model lives in sound-ring.ts; this file only draws.
+ * and one arrowhead (it pulses only right after a trigger). Every glyph sits on a dark badge
+ * with a rim in the kind colour so it reads on any ground. The pure model lives in sound-ring.ts; this file only draws.
  *
  * Drawing budget: one Graphics for all arcs/chevrons, redrawn only while markers live (≤ 12), and a
  * small pool of icon Graphics that share one prebuilt white GraphicsContext per glyph and are
@@ -15,7 +16,7 @@ import { getSettings, subscribeSettings } from "./audio/settings";
 import {
   RING,
   SoundIndicators,
-  chevronPulse,
+  chevronAlpha,
   indicatorStyle,
   placeSounds,
   ringRadius,
@@ -24,61 +25,75 @@ import {
 } from "./sound-ring";
 import type { GameContext, GameSystem } from "./systems";
 
-/** Outline under every arc so white footsteps stay readable on sand and snow. */
-const HALO = { color: 0x000000, alpha: 0.35, extra: 4 } as const;
-/** Gap between the arc and its icon / chevrons, css px. */
-const ICON_GAP = 18;
-const CHEVRON = { gap: 9, size: 7, spacing: 8, width: 3 } as const;
+/** Outline under every arc so white footsteps stay readable on sand, concrete and snow. */
+const HALO = { color: 0x000000, alpha: 0.5, extra: 4 } as const;
+/** Gap between the arc and its badge edge / chevron, css px. */
+const ICON_GAP = 6;
+/** One filled arrowhead per behind-you marker (two thin chevrons read as noise). */
+const CHEVRON = { gap: 6, size: 11, width: 2 } as const;
 /** Screen margin for "on screen" (a sprite half-way off the edge is still noticed). */
 const ON_SCREEN_MARGIN = 16;
+/** Badge under every glyph: dark disc + rim. White parts are tinted with the kind colour. */
+const BADGE = { fill: 0x0d1117, fillAlpha: 0.82, rim: 2.5 } as const;
 
-/** White glyphs centred at 0,0 inside ~ICON_PX; tinted per kind. Dark details stay dark under tint. */
+/**
+ * Badge + white glyph centred at 0,0 (glyph inside ~ICON_PX, badge radius BADGE_R), tinted per kind:
+ * the rim and the glyph take the kind colour, the dark disc stays dark, so every marker reads the
+ * same way on bright concrete, grass or night ground. Each sound family gets its own silhouette:
+ * footprints, muzzle burst, chest, flag, skull…
+ */
 function buildIcon(icon: RingIcon): GraphicsContext {
   const g = new GraphicsContext();
-  const s = RING.ICON_PX / 2;
-  const outline = { width: 2, color: 0x000000, alpha: 0.55 };
+  const B = RING.BADGE_R;
+  g.circle(0, 0, B).fill({ color: BADGE.fill, alpha: BADGE.fillAlpha });
+  g.circle(0, 0, B - BADGE.rim / 2).stroke({ width: BADGE.rim, color: 0xffffff, alpha: 0.95 });
+  const s = RING.ICON_PX / 2 - 1;
   switch (icon) {
     case "steps":
-      g.ellipse(-4, 2, 3.2, 5.5).ellipse(4, -3, 3.2, 5.5).fill(0xffffff).stroke(outline);
-      g.circle(-4, -5.5, 1.6).circle(4, -10.5, 1.6).fill(0xffffff);
+      // Two shoe prints, left one lower: sole + heel each.
+      g.ellipse(-4.3, -1.2, 3.3, 5).circle(-4.3, 6, 2.5).fill(0xffffff);
+      g.ellipse(4.3, -5.6, 3.3, 5).circle(4.3, 1.6, 2.5).fill(0xffffff);
       break;
     case "burst": {
       const pts: number[] = [];
       for (let i = 0; i < 16; i++) {
-        const r = i % 2 === 0 ? s * 0.95 : s * 0.42;
+        const r = i % 2 === 0 ? s : s * 0.42;
         const a = (i / 16) * Math.PI * 2;
         pts.push(Math.cos(a) * r, Math.sin(a) * r);
       }
-      g.poly(pts).fill(0xffffff).stroke(outline);
+      g.poly(pts).fill(0xffffff);
+      g.circle(0, 0, s * 0.22).fill(BADGE.fill);
       break;
     }
     case "swirl":
-      g.arc(0, 0, s * 0.7, -Math.PI * 0.2, Math.PI * 1.35).stroke({ width: 3.5, color: 0xffffff, cap: "round" });
-      g.poly([s * 0.55, -s * 0.75, s * 0.95, -s * 0.15, s * 0.25, -s * 0.2]).fill(0xffffff);
+      g.arc(0, 0, s * 0.62, -Math.PI * 0.2, Math.PI * 1.35).stroke({ width: 3, color: 0xffffff, cap: "round" });
+      g.poly([s * 0.5, -s * 0.85, s * 0.98, -s * 0.2, s * 0.2, -s * 0.22]).fill(0xffffff);
       break;
     case "cross":
-      g.rect(-2.5, -s * 0.8, 5, s * 1.6).rect(-s * 0.8, -2.5, s * 1.6, 5).fill(0xffffff).stroke(outline);
+      g.rect(-2.5, -s * 0.8, 5, s * 1.6).rect(-s * 0.8, -2.5, s * 1.6, 5).fill(0xffffff);
       break;
     case "mag":
-      g.roundRect(-4, -s * 0.8, 8, s * 1.6, 2).fill(0xffffff).stroke(outline);
-      g.rect(-2, -s * 0.8 + 3, 4, 2).rect(-2, -1, 4, 2).fill(0x000000);
+      g.roundRect(-3.5, -s * 0.85, 7, s * 1.7, 2).fill(0xffffff);
+      g.rect(-1.75, -s * 0.85 + 3, 3.5, 1.8).rect(-1.75, -1, 3.5, 1.8).fill(BADGE.fill);
       break;
     case "chest":
-      g.roundRect(-s * 0.8, -s * 0.45, s * 1.6, s * 1.1, 2).fill(0xffffff).stroke(outline);
-      g.rect(-s * 0.8, -s * 0.12, s * 1.6, 2).rect(-1.5, -s * 0.2, 3, 4).fill(0x000000);
+      // Box, lid seam and lock.
+      g.roundRect(-s * 0.85, -s * 0.55, s * 1.7, s * 1.2, 2).fill(0xffffff);
+      g.rect(-s * 0.85, -s * 0.12, s * 1.7, 1.8).fill(BADGE.fill);
+      g.rect(-1.6, -s * 0.28, 3.2, 4.2).fill(BADGE.fill);
       break;
     case "flag":
-      g.rect(-s * 0.55, -s * 0.85, 2.5, s * 1.7).fill(0xffffff);
-      g.poly([-s * 0.4, -s * 0.85, s * 0.8, -s * 0.45, -s * 0.4, -s * 0.05]).fill(0xffffff).stroke(outline);
+      g.rect(-s * 0.6, -s * 0.85, 2.4, s * 1.75).fill(0xffffff);
+      g.poly([-s * 0.4, -s * 0.85, s * 0.85, -s * 0.42, -s * 0.4, 0]).fill(0xffffff);
       break;
     case "drop":
-      g.poly([0, -s * 0.9, s * 0.55, 0, -s * 0.55, 0]).fill(0xffffff);
-      g.circle(0, s * 0.2, s * 0.58).fill(0xffffff);
+      g.poly([0, -s * 0.95, s * 0.52, -s * 0.05, -s * 0.52, -s * 0.05]).fill(0xffffff);
+      g.circle(0, s * 0.2, s * 0.55).fill(0xffffff);
       break;
     case "skull":
-      g.circle(0, -2, s * 0.68).fill(0xffffff).stroke(outline);
-      g.rect(-s * 0.4, 2, s * 0.8, s * 0.45).fill(0xffffff);
-      g.circle(-3, -2.5, 2.2).circle(3, -2.5, 2.2).fill(0x000000);
+      g.circle(0, -1.5, s * 0.66).fill(0xffffff);
+      g.rect(-s * 0.38, 2, s * 0.76, s * 0.5).fill(0xffffff);
+      g.circle(-2.8, -2, 2).circle(2.8, -2, 2).fill(BADGE.fill);
       break;
   }
   return g;
@@ -149,7 +164,6 @@ export class SoundVizSystem implements GameSystem {
     const cam = c.camera();
     const R = ringRadius(cam.width, cam.height);
     const aim = c.aim();
-    const pulse = chevronPulse(now);
     g.clear();
     this.used = 0;
     for (const m of this.model.list) {
@@ -160,13 +174,16 @@ export class SoundVizSystem implements GameSystem {
       // Halo first, then the colored arc; occluded (muffled) ones are dashed.
       this.arc(g, R, a0, a1, st.width + HALO.extra, HALO.color, st.alpha * HALO.alpha, false);
       this.arc(g, R, a0, a1, st.width, m.color, st.alpha, m.occluded);
-      let iconR = R + st.width / 2 + ICON_GAP;
+      const iconAlpha = st.iconAlpha;
+      let edge = R + st.width / 2;
       if (st.behind) {
-        const base = R + st.width / 2 + CHEVRON.gap;
-        for (let k = 0; k < 2; k++) this.chevron(g, m.angle, base + k * CHEVRON.spacing, m.color, st.alpha * pulse);
-        iconR = base + CHEVRON.spacing + CHEVRON.size + ICON_GAP;
+        // One arrowhead between the arc and the badge, pointing away from the player.
+        const base = edge + CHEVRON.gap;
+        this.chevron(g, m.angle, base, m.color, iconAlpha * chevronAlpha(now - m.born));
+        edge = base + CHEVRON.size;
       }
-      this.placeIcon(m.icon, m.color, Math.cos(m.angle) * iconR, Math.sin(m.angle) * iconR, st.alpha, st.scale);
+      const iconR = edge + ICON_GAP + RING.BADGE_R;
+      this.placeIcon(m.icon, m.color, Math.cos(m.angle) * iconR, Math.sin(m.angle) * iconR, iconAlpha, st.scale);
     }
     for (let i = this.used; i < this.pool.length; i++) this.pool[i]!.visible = false;
     this.drawn = true;
@@ -220,19 +237,16 @@ export class SoundVizSystem implements GameSystem {
     }
   }
 
-  /** A "V" pointing outward (towards the source) with its tip at radius r. */
+  /** A filled arrowhead pointing outward (towards the source) with its base at radius r. */
   private chevron(g: Graphics, angle: number, r: number, color: number, alpha: number) {
     const cx = Math.cos(angle), cy = Math.sin(angle);
     const tx = -cy, ty = cx; // tangent
+    const half = CHEVRON.size * 0.8;
     const tipX = cx * (r + CHEVRON.size), tipY = cy * (r + CHEVRON.size);
-    g.moveTo(cx * r + tx * CHEVRON.size, cy * r + ty * CHEVRON.size)
-      .lineTo(tipX, tipY)
-      .lineTo(cx * r - tx * CHEVRON.size, cy * r - ty * CHEVRON.size)
-      .stroke({ width: CHEVRON.width + 2, color: HALO.color, alpha: alpha * HALO.alpha, cap: "round", join: "round" });
-    g.moveTo(cx * r + tx * CHEVRON.size, cy * r + ty * CHEVRON.size)
-      .lineTo(tipX, tipY)
-      .lineTo(cx * r - tx * CHEVRON.size, cy * r - ty * CHEVRON.size)
-      .stroke({ width: CHEVRON.width, color, alpha, cap: "round", join: "round" });
+    const pts = [cx * r + tx * half, cy * r + ty * half, tipX, tipY, cx * r - tx * half, cy * r - ty * half];
+    g.poly(pts)
+      .fill({ color, alpha })
+      .stroke({ width: CHEVRON.width, color: HALO.color, alpha: alpha * 0.7, join: "round" });
   }
 
   private placeIcon(icon: RingIcon, color: number, x: number, y: number, alpha: number, scale: number) {

@@ -132,7 +132,7 @@ export function MatchmakingPanel({ ticket, roomName, onCancel, onRetry, onBattle
   return (
     <div className="mx-auto w-full max-w-lg px-4 py-10 md:py-16">
       <div className="toon-panel bg-[#161b28]/95 p-6 text-center md:p-10">
-        <p className="text-xs uppercase tracking-[0.25em] text-white/50">Demo raid</p>
+        <p className="text-xs uppercase tracking-[0.25em] text-white/50">Raid</p>
         <h2 className="toon-text mt-2 text-4xl tracking-wide text-zooa-lime md:text-5xl">
           {err ? err.title : launching ? "Dropping in…" : "Finding raid"}
         </h2>

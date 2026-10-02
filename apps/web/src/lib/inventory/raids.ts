@@ -8,6 +8,7 @@ import {
   itemDef,
   junkSellCr,
   levelForXp,
+  type GameServerBoot,
   type JunkSellLine,
   type LoadoutSnapshot,
   type MatchEndReport,
@@ -25,7 +26,7 @@ import {
   type MatchResultPayload,
 } from "../../db/schema";
 import { credit } from "../economy/ledger";
-import { PARAM, getNumberParam } from "../economy/params";
+import { PARAM, getNumberParam, setParam } from "../economy/params";
 import { allocatePool, enterPool, type PoolCandidate } from "../economy/pool";
 import { fromRaidDur, toRaidDur } from "../economy/value";
 import { LOADOUT_LOCK_TTL_MS, type Db, type Tx } from "./db";
@@ -34,6 +35,13 @@ import { applyMove, isUuid, lockItem, lockMatchItems, addStack } from "./transit
 
 /** A raid still `running` this long after it started never reported its end: void it. */
 export const RAID_VOID_AFTER_MS = MATCH.DURATION_MS + 10 * 60_000;
+/**
+ * Lazy per-user void (lobby load, matches/join): the caller's own raid is voided sooner, so a
+ * player whose game server crashed gets their gear back 5 min after the match would have ended.
+ */
+export const RAID_USER_VOID_AFTER_MS = MATCH.DURATION_MS + 5 * 60_000;
+/** economy_params key of the last boot of a game server (GameServerBoot), per serverId. */
+export const GS_BOOT_PARAM = (serverId: string) => `gs_boot:${serverId}`;
 
 type RaidRow = {
   match_id: string;
@@ -71,8 +79,9 @@ async function ensureRaid(tx: Tx, matchId: string, mapId: string, matchSeed: num
  * is inserted first (a concurrent retry blocks on the primary key), and a replay returns the
  * stored response unchanged. Per player: the loadout must be `locked`, belong to the user and be
  * younger than LOADOUT_LOCK_TTL_MS; accepted loadouts move locked → in_raid and their items get
- * match_id. Then the lost pool is released into containers (live mode only; free-kit players add
- * no risk units, so a lobby of free kits gets no pool loot).
+ * match_id. Then the lost pool is released into containers (live mode only): risk units of the
+ * accepted loadouts decide the count, topped up to the per-match floor (POOL.MIN_RELEASE_PER_MATCH,
+ * T3/T4 containers only) so even a lobby of free kits finds some uniques.
  */
 export async function startRaid(db: Db, req: RaidStartRequest, now = new Date()): Promise<RaidStartResponse> {
   return db.transaction(async (tx) => {
@@ -157,7 +166,7 @@ export async function startRaid(db: Db, req: RaidStartRequest, now = new Date())
             bossSlots: req.bossSlots,
             riskUnits,
           })
-        : { containerLoot: {}, released: 0 };
+        : { containerLoot: {}, released: 0, floor: 0 };
     const response: RaidStartResponse = {
       accepted,
       rejected,
@@ -406,8 +415,37 @@ export async function applyEnd(db: Db, report: MatchEndReport, now = new Date())
         .filter((s) => s.uid && itemDef(s.def)?.unique)
         .map((s) => ({ id: s.uid, reportedPct: fromRaidDur(s.def, s.dur), broke: false, reason: "left" })),
     );
+    // Bots get no exit report: what broke on a bot's death enters the pool with the death wear,
+    // armor worn out on a bot is destroyed (extracts / timeouts of bots come in leftOnMap).
+    const botLost = await enterPool(
+      tx,
+      report.matchId,
+      (report.botLost ?? [])
+        .filter((s) => s.uid && itemDef(s.def)?.unique)
+        .map((s) => ({ id: s.uid, reportedPct: fromRaidDur(s.def, s.dur), broke: true, reason: "bot_break" })),
+    );
+    const botDestroyed: string[] = [];
+    for (const s of report.botDestroyed ?? []) {
+      if (!s.uid) continue;
+      const it = await lockItem(tx, s.uid);
+      if (!it || it.state !== "in_raid" || it.matchId !== report.matchId) continue;
+      await applyMove(
+        tx,
+        it,
+        { state: "destroyed", ownerId: null, matchId: null, loadoutId: null, durability: 0 },
+        { reason: "destroy", refId: report.matchId },
+      );
+      botDestroyed.push(it.id);
+    }
     const rest = await lockMatchItems(tx, report.matchId);
-    if (rest.length) console.warn(`[raids/end] ${report.matchId}: sweeping ${rest.length} unreported items into the pool`);
+    if (rest.length) {
+      console.warn(
+        `[raids/end] ${report.matchId}: sweeping ${rest.length} unreported items into the pool (${rest
+          .slice(0, 8)
+          .map((it) => `${it.defId}:${it.id}`)
+          .join(", ")})`,
+      );
+    }
     const sweep = await enterPool(
       tx,
       report.matchId,
@@ -441,10 +479,10 @@ export async function applyEnd(db: Db, report: MatchEndReport, now = new Date())
       .onConflictDoNothing();
     return {
       status: "applied",
-      pooled: left.pooled.length + sweep.pooled.length,
-      destroyed: left.destroyed.length + sweep.destroyed.length,
+      pooled: left.pooled.length + botLost.pooled.length + sweep.pooled.length,
+      destroyed: left.destroyed.length + botLost.destroyed.length + botDestroyed.length + sweep.destroyed.length,
       swept: rest.length,
-      skipped: left.skipped,
+      skipped: [...left.skipped, ...botLost.skipped],
     };
   });
 }
@@ -466,18 +504,128 @@ export async function voidStale(db: Db, now = new Date()): Promise<string[]> {
     .where(and(eq(raids.status, "running"), sql`${raids.startedAt} < ${cutoff}`));
   const voided: string[] = [];
   for (const { matchId } of cand) {
-    const done = await db.transaction(async (tx) => {
-      const r = await tx.execute<{ status: string; started_at: Date }>(
-        sql`select status, started_at from raids where match_id = ${matchId} for update skip locked`,
-      );
-      const row = r.rows[0];
-      if (!row || row.status !== "running" || new Date(row.started_at) >= cutoff) return false;
-      await voidRaidTx(tx, matchId, now);
-      return true;
-    });
-    if (done) voided.push(matchId);
+    if (await voidIf(db, matchId, now, (row) => new Date(row.started_at) < cutoff)) voided.push(matchId);
   }
   return voided;
+}
+
+type RunningRaid = { status: string; started_at: Date; server_id: string; instance_id: string | null };
+
+/** Void one raid in its own transaction if it is still running and `check` holds under the lock. */
+async function voidIf(db: Db, matchId: string, now: Date, check: (row: RunningRaid) => boolean): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const r = await tx.execute<RunningRaid>(sql`
+      select status, started_at,
+             coalesce(start_request->>'serverId', 'default') as server_id,
+             start_request->>'instanceId' as instance_id
+      from raids where match_id = ${matchId} for update skip locked`);
+    const row = r.rows[0];
+    if (!row || row.status !== "running" || !check(row)) return false;
+    await voidRaidTx(tx, matchId, now);
+    return true;
+  });
+}
+
+/** Stored per serverId: the boot as the web saw it (bootedAt = web clock, sentAt = server clock). */
+type BootRecord = GameServerBoot & { sentAt: number };
+
+async function lastBoot(db: Db | Tx, serverId: string): Promise<BootRecord | null> {
+  const r = await db.execute<{ value: unknown }>(sql`select value from economy_params where key = ${GS_BOOT_PARAM(serverId)}`);
+  const v = r.rows[0]?.value as Partial<BootRecord> | undefined;
+  return v && typeof v.instanceId === "string" && typeof v.bootedAt === "number"
+    ? { serverId, instanceId: v.instanceId, bootedAt: v.bootedAt, sentAt: typeof v.sentAt === "number" ? v.sentAt : 0 }
+    : null;
+}
+
+/**
+ * serverId of a game server that did not set GAME_SERVER_ID (and of raids started before server ids
+ * existed). Several processes may share it at once (regional servers, a rolling deploy), so a newer
+ * boot under it does NOT prove the older process is gone: its raids are only voided by timeout.
+ */
+export const DEFAULT_GAME_SERVER_ID = "default";
+
+/**
+ * A raid whose game server is gone: a newer process of the same (explicit) serverId has booted
+ * since it started (the raid carries another instanceId, or none — started before instance ids
+ * existed). Never true for DEFAULT_GAME_SERVER_ID, whose processes are not unique.
+ */
+function orphanedBy(boot: GameServerBoot | null, row: RunningRaid): boolean {
+  return (
+    !!boot &&
+    boot.serverId !== DEFAULT_GAME_SERVER_ID &&
+    row.server_id === boot.serverId &&
+    row.instance_id !== boot.instanceId &&
+    new Date(row.started_at).getTime() <= boot.bootedAt
+  );
+}
+
+/**
+ * Lazy void for one user (lobby load, POST /api/matches/join): the raid holding this user's
+ * loadout is voided when it started more than RAID_USER_VOID_AFTER_MS ago, or its game server is
+ * gone (orphanedBy the last boot of that serverId), so the gear comes back without waiting for
+ * the global cron. Returns the voided match ids.
+ */
+export async function voidStaleForUser(db: Db, userId: string, now = new Date()): Promise<string[]> {
+  const cand = await db.execute<{ match_id: string; server_id: string }>(sql`
+    select r.match_id, coalesce(r.start_request->>'serverId', 'default') as server_id
+    from loadouts l join raids r on r.match_id = l.match_id
+    where l.user_id = ${userId} and l.status = 'in_raid' and r.status = 'running'`);
+  const cutoff = now.getTime() - RAID_USER_VOID_AFTER_MS;
+  const voided: string[] = [];
+  for (const { match_id: matchId, server_id: serverId } of cand.rows) {
+    const boot = await lastBoot(db, serverId);
+    const done = await voidIf(db, matchId, now, (row) => new Date(row.started_at).getTime() < cutoff || orphanedBy(boot, row));
+    if (done) {
+      console.warn(`[raids/void] ${matchId}: voided lazily for user ${userId}`);
+      voided.push(matchId);
+    }
+  }
+  return voided;
+}
+
+export interface VoidOrphansResult {
+  status: "applied" | "stale";
+  voided: string[];
+}
+
+/**
+ * POST /api/raids/void-orphans (game server boot): records the boot of `boot.serverId` and voids
+ * every running raid that serverId started under another instanceId — its process is gone, so
+ * those raids can never report. Only for an explicit serverId: DEFAULT_GAME_SERVER_ID may be
+ * shared by live processes, so nothing is voided for it. An announcement older than the recorded
+ * one (a delayed retry of a previous boot) changes nothing. Idempotent.
+ */
+export async function voidOrphans(db: Db, boot: GameServerBoot, now = new Date()): Promise<VoidOrphansResult> {
+  // The web's clock decides "started before this boot" (game server and web clocks may differ).
+  const rec: BootRecord = { serverId: boot.serverId, instanceId: boot.instanceId, bootedAt: now.getTime(), sentAt: boot.bootedAt };
+  const fresh = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${GS_BOOT_PARAM(boot.serverId)}))`);
+    const prev = await lastBoot(tx, boot.serverId);
+    if (prev && prev.instanceId === boot.instanceId) return prev; // retry of this boot
+    if (prev && prev.sentAt > boot.bootedAt) return null; // a delayed retry of an older boot
+    await setParam(tx, GS_BOOT_PARAM(boot.serverId), rec);
+    return rec;
+  });
+  if (!fresh) return { status: "stale", voided: [] };
+  if (boot.serverId === DEFAULT_GAME_SERVER_ID) {
+    // Another live process may share this serverId: its raids would be voided under it (409 on
+    // every later exit). Recorded only; orphans of the default id fall to voidStale / the lazy void.
+    console.warn(
+      `[raids/void-orphans] ${boot.serverId}/${boot.instanceId}: serverId is not unique, orphans left to the stale timeout (set GAME_SERVER_ID per game server process group)`,
+    );
+    return { status: "applied", voided: [] };
+  }
+  const cand = await db.execute<{ match_id: string }>(sql`
+    select match_id from raids
+    where status = 'running' and started
+      and coalesce(start_request->>'serverId', 'default') = ${boot.serverId}
+      and coalesce(start_request->>'instanceId', '') <> ${boot.instanceId}`);
+  const voided: string[] = [];
+  for (const { match_id: matchId } of cand.rows) {
+    if (await voidIf(db, matchId, now, (row) => orphanedBy(fresh, row))) voided.push(matchId);
+  }
+  if (voided.length) console.warn(`[raids/void-orphans] ${boot.serverId}/${boot.instanceId}: voided ${voided.join(", ")}`);
+  return { status: "applied", voided };
 }
 
 async function voidRaidTx(tx: Tx, matchId: string, now: Date): Promise<void> {

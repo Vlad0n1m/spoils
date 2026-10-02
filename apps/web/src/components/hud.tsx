@@ -3,7 +3,7 @@
 import { AudioSettingsButton } from "./audio-settings";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
-import { BREAK_CHANCE_ON_DEATH, HEAL, WEAPONS, type WeaponId } from "@extract/shared";
+import { BREAK_CHANCE_ON_DEATH, HEAL, WEAPONS, itemDef, type WeaponId } from "@extract/shared";
 import { deepEqual, shallowEqual, type HudStore } from "@/game/hud";
 import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "@/game/types";
 import { fmtClock, fmtCr, isWeaponId, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
@@ -638,11 +638,25 @@ function WeaponSlotCard({
   );
 }
 
+/**
+ * v2 carry rule for a med (no per-item cap any more): it stacks `stack` per slot, so what still fits
+ * is the room left in its own stacks plus `stack` for every free pocket / backpack slot.
+ */
+export function medTooltip(kind: "bandage" | "medkit", count: number, freeSlots: number): string {
+  const heal = HEAL[kind];
+  const stack = Math.max(1, itemDef(kind)?.stack ?? 1);
+  const inStacks = Math.ceil(Math.max(0, count) / stack) * stack - Math.max(0, count);
+  const room = inStacks + Math.max(0, freeSlots) * stack;
+  const name = kind === "bandage" ? "Bandage" : "Medkit";
+  return `${name}: +${heal.HP} HP after a ${heal.MS / 1000} s channel · ${stack} per slot · room for ${room} more`;
+}
+
 function MedsPanel({ self }: { self: HudSelf }) {
+  const free = self.storageCap - self.storageUsed;
   return (
     <div className="toon-panel flex flex-col gap-1.5 p-2">
-      <MedRow icon="/sprites/bandage.png" count={self.bandages} max={HEAL.bandage.MAX_CARRY} keyHint="3" label="Bandage +25 HP" />
-      <MedRow icon="/sprites/medkit.png" count={self.medkits} max={HEAL.medkit.MAX_CARRY} keyHint="4" label="Medkit +75 HP" />
+      <MedRow icon="/sprites/bandage.png" count={self.bandages} keyHint="3" title={medTooltip("bandage", self.bandages, free)} />
+      <MedRow icon="/sprites/medkit.png" count={self.medkits} keyHint="4" title={medTooltip("medkit", self.medkits, free)} />
       <div
         className="flex items-center justify-between gap-2 border-t-2 border-black/50 pt-1 text-[0.65rem] tabular-nums text-white/75"
         title="Storage slots used (pockets + backpack) and the junk value you carry if you extract"
@@ -656,21 +670,9 @@ function MedsPanel({ self }: { self: HudSelf }) {
   );
 }
 
-function MedRow({
-  icon,
-  count,
-  max,
-  keyHint,
-  label,
-}: {
-  icon: string;
-  count: number;
-  max: number;
-  keyHint: string;
-  label: string;
-}) {
+function MedRow({ icon, count, keyHint, title }: { icon: string; count: number; keyHint: string; title: string }) {
   return (
-    <div className={clsx("flex items-center gap-1.5", count === 0 && "opacity-45")} title={`${label} (max ${max})`}>
+    <div className={clsx("flex items-center gap-1.5", count === 0 && "opacity-45")} title={title}>
       <span className="toon-key">{keyHint}</span>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={icon} alt="" className="h-8 w-8 object-contain" draggable={false} />

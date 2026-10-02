@@ -14,7 +14,7 @@ import {
 import { CLOSE } from "./close-codes.js";
 import type { RaidLaunchOptions } from "./inventory-handlers.js";
 import { LAUNCH_KEY, authenticate, releasePendingSeatsOf } from "./room-auth.js";
-import { startRaid } from "../net/web-api.js";
+import { SERVER_INSTANCE, startRaid } from "../net/web-api.js";
 import type { RosterEntry } from "../sim/types.js";
 import { MATCH_PLAYERS, matchMap } from "../sim/match.js";
 import { botNames } from "../sim/names.js";
@@ -199,7 +199,7 @@ export interface LaunchDeps {
  * A loadout id that cannot be a DB id never reaches the API (it would fail the whole request).
  */
 export async function planLaunch(humans: RosterEntry[], deps: LaunchDeps = {}): Promise<LaunchPlan> {
-  const matchId = deps.matchId ?? randomUUID();
+  let matchId = deps.matchId ?? randomUUID();
   const matchSeed = deps.matchSeed ?? randomInt(0, 2 ** 32);
   let mode = deps.mode ?? economyMode();
   const rejected = new Set<string>();
@@ -216,10 +216,19 @@ export async function planLaunch(humans: RosterEntry[], deps: LaunchDeps = {}): 
       players: humans.filter((h) => !rejected.has(h.userId!)).map((h) => ({ userId: h.userId!, loadoutId: h.loadoutId ?? "" })),
       containers: map.containers.map((c, idx) => ({ idx, kind: c.kind, tier: c.tier })),
       bossSlots: 0,
+      // The web voids this raid at once if this process dies and a new one boots (void-orphans).
+      instanceId: SERVER_INSTANCE.instanceId,
+      serverId: SERVER_INSTANCE.serverId,
     };
     res = await (deps.startRaid ?? startRaid)(req);
     if (!res) {
-      console.error(`[mm] raids/start ${matchId} unavailable: launching in demo mode`);
+      // The start may have committed on the web with only the reply lost: loadouts in_raid under
+      // this matchId. A demo raid under the same id would settle them (exit) and sweep them into
+      // the lost pool (end) although nobody carried them. A fresh id leaves that raid untouched
+      // until the web voids it (stale timeout / void-orphans: gear back to its owners).
+      const fresh = randomUUID();
+      console.error(`[mm] raids/start ${matchId} unavailable: launching in demo mode as ${fresh}`);
+      matchId = fresh;
       mode = "demo";
     }
   }

@@ -6,6 +6,7 @@ import {
   GUEST_DEMO_BALANCE_CENTS,
   isGuestPlayEnabled,
 } from "@/lib/guest-play";
+import { checkSameOriginRequest } from "@/lib/request-guard";
 
 const bodySchema = z.object({
   nickname: z
@@ -16,11 +17,13 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: Request) {
+  const blocked = checkSameOriginRequest(req, { json: true });
+  if (blocked) return NextResponse.json({ error: blocked.error }, { status: blocked.status });
   if (!isGuestPlayEnabled()) {
     return NextResponse.json({ error: "guest_play_disabled" }, { status: 403 });
   }
 
-  const parsed = bodySchema.safeParse(await req.json());
+  const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
       { error: "bad_body", details: parsed.error.flatten() },

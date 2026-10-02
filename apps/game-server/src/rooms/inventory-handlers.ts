@@ -61,8 +61,10 @@ export function testHooksEnabled(): boolean {
   return process.env.GAME_TEST_HOOKS === "1" && process.env.NODE_ENV !== "production";
 }
 
-export function registerInventoryHandlers(room: Room, match: () => Match): void {
-  room.onMessage(C2S.SEARCH_CLOSE, (client) => match().searchClose(client.sessionId));
+export function registerInventoryHandlers(room: Room, match: () => Match, intentOk: (client: Client) => boolean = () => true): void {
+  room.onMessage(C2S.SEARCH_CLOSE, (client) => {
+    if (intentOk(client)) match().searchClose(client.sessionId);
+  });
   room.onMessage(C2S.INV_MOVE, (client, raw: unknown) => {
     const msg = parseInvMove(raw);
     if (!msg) return;

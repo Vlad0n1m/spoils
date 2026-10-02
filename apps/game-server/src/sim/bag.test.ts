@@ -9,7 +9,8 @@ import {
   clearDef, giveItem, giveStack, giveWeapon, ids, pl, place, rtOf, run, selfOf, testMap, testMatch,
 } from "./test-utils.js";
 
-const groundDefs = (m: ReturnType<typeof testMatch>) => [...m.state.items.values()].map((g) => g.def).sort();
+// Server truth: player-made changes reach the public state later (disclosure.ts).
+const groundDefs = (m: ReturnType<typeof testMatch>) => [...m.ground.all()].map((g) => g.item.def).sort();
 
 test("free kit: FREE pistol in w1, FREE light ammo and a FREE bandage in pockets; public fields mirror it", () => {
   const m = testMatch(1);
@@ -133,15 +134,15 @@ test("ammo and meds are auto-picked up through the slot engine; the remainder st
   const s = rt.self.slots;
   assert.equal(ammoCount(rt, "light"), FREE_KIT.AMMO_LIGHT + 120);
   assert.equal(s.get("p2")!.qty + s.get("p3")!.qty, 120);
-  assert.equal(m.state.items.get(ammo.id)?.qty, 180);
-  assert.equal(m.state.items.get(shells.id)?.qty, 10);
-  assert.ok(m.state.items.has(far.id), "out of auto-pickup radius");
-  assert.ok(m.state.items.has(junk.id), "junk needs F");
+  assert.equal(m.ground.byId.get(ammo.id)?.item.qty, 180);
+  assert.equal(m.ground.byId.get(shells.id)?.item.qty, 10);
+  assert.ok(m.ground.byId.has(far.id), "out of auto-pickup radius");
+  assert.ok(m.ground.byId.has(junk.id), "junk needs F");
   // With room again (the FREE stack spent, the light ammo gone), the shells come in on the next step.
   m.ground.remove(m, ammo.id);
   s.delete("p0");
   run(m, 100);
-  assert.ok(!m.state.items.has(shells.id));
+  assert.ok(!m.ground.byId.has(shells.id));
 });
 
 test("weapons with F: empty slot, then the FREE pistol, then the active hand (old one to storage)", () => {
@@ -169,7 +170,7 @@ test("weapons with F: empty slot, then the FREE pistol, then the active hand (ol
   assert.ok(m.interact(a!));
   assert.equal(s.get("w1")!.def, "shotgun");
   assert.equal(s.get("w1")!.flags, 0);
-  assert.equal(m.state.items.size, 0);
+  assert.equal(m.ground.byId.size, 0);
 
   // Both real: the new one goes into the active hand, the old one into storage.
   const sniper = makeItem("sniper", { uid: m.newUid() });
@@ -257,13 +258,13 @@ test("F needs line of sight: nothing is opened or picked up through a wall", () 
   const rifle = spawnGroundItem(m, makeItem("junk_gpu"), 1070, 1520);
   assert.ok(Math.hypot(rifle.x - p.x, rifle.y - p.y) <= PLAYER.INTERACT_RADIUS);
   assert.ok(!m.interact(a!));
-  assert.equal(m.state.containerState[0], CONTAINER_STATE.UNTOUCHED);
-  assert.ok(m.state.items.has(rifle.id));
+  assert.equal(m.containers.stateOf(0), CONTAINER_STATE.UNTOUCHED);
+  assert.ok(m.ground.byId.has(rifle.id));
 
   // Around the wall's end the same container is in sight and works as usual.
   place(m, a!, 1070, 1560);
   assert.ok(m.interact(a!));
-  assert.equal(m.state.containerState[0], CONTAINER_STATE.OPENED);
+  assert.equal(m.containers.stateOf(0), CONTAINER_STATE.OPENED);
 });
 
 test("drops never scatter to the far side of a wall", () => {
@@ -361,7 +362,7 @@ test("death with a seeded RNG: every unique breaks or drops; fungibles drop; FRE
     assert.equal(pl(m, b!).alive, false);
     const rt = rtOf(m, b!);
     // v2: the remains are a searchable corpse (containers.ts), nothing lands on the ground.
-    assert.equal(m.state.items.size, 0);
+    assert.equal(m.ground.byId.size, 0);
     const ground = m.containers.remaining(m.containers.corpseOf(rt.rosterIndex)!);
     const uniques = ground.filter((i) => i.uid);
     const report = rt.exitReport!;
@@ -397,4 +398,26 @@ test("death with a seeded RNG: every unique breaks or drops; fungibles drop; FRE
     const vest = [...outcome.msg.lost, ...outcome.msg.dropped].find((r) => r.uid === armorUid)!;
     assert.equal(vest.dur, 99 - 10 * ARMOR[3].absorb, "armor carries its remaining absorb points");
   }
+});
+
+test("INV_MOVE onto a partly full stack moves only what fits; the rest stays in the source (whole and split)", () => {
+  const m = testMatch(1);
+  const [a] = ids(m);
+  const s = selfOf(m, a!).slots;
+  const total = () => [...s.values()].filter((i) => i.def === "ammo_light" && !(i.flags & ITEM_FLAG.FREE)).reduce((n, i) => n + i.qty, 0);
+  clearDef(m, a!, "ammo_light");
+  giveItem(m, a!, "ammo_light", "p0", { qty: 60 });
+  giveItem(m, a!, "ammo_light", "p1", { qty: 50 });
+  assert.equal(total(), 110);
+  // Whole stack p0 (60) → p1 (50 of 60): 10 move, 50 stay in p0.
+  assert.equal(m.invMove(a!, { from: "self", key: "p0", uid: "", def: "ammo_light", to: "p1" }), null);
+  assert.deepEqual([s.get("p0")?.qty, s.get("p1")?.qty], [50, 60]);
+  assert.equal(total(), 110, "nothing vanished");
+  // Split 30 of p0 onto a full p1: nothing fits → refused, nothing lost.
+  assert.notEqual(m.invMove(a!, { from: "self", key: "p0", uid: "", def: "ammo_light", to: "p1", qty: 30 }), null);
+  // Split 30 of p1 (60) onto p0 (50): 10 fit, p1 keeps 50.
+  run(m, 1000);
+  assert.equal(m.invMove(a!, { from: "self", key: "p1", uid: "", def: "ammo_light", to: "p0", qty: 30 }), null);
+  assert.deepEqual([s.get("p0")?.qty, s.get("p1")?.qty], [60, 50]);
+  assert.equal(total(), 110, "nothing vanished");
 });

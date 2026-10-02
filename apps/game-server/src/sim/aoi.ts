@@ -12,10 +12,17 @@
  *   (14 cells per crossing, about once per 2 s per player).
  * Despawns need nothing: deleting an entity from state sends a DELETE to every view holding it.
  * The room applies the drained diffs to the StateViews (views.ts).
+ *
+ * Restrictions (disclosure.ts): a ground item a player just dropped ("spawn") or picked up
+ * ("ghost") is, until the change is published, shown in its new state only to "knowers" — its
+ * actors and the viewers that see one of them (sticky) — and in its old state to everyone else
+ * (absent / still lying there). Restricted entities are few and reconciled every tick.
  */
 
 import { VISION, aoiCell, type Corpse, type GroundItem } from "@extract/shared";
+import { offMap } from "./audience.js";
 import type { Match } from "./match.js";
+import type { PlayerRuntime } from "./types.js";
 
 export type AoiEntity = GroundItem | Corpse;
 
@@ -23,6 +30,15 @@ export interface AoiDiff {
   viewer: number;
   add: AoiEntity[];
   remove: AoiEntity[];
+}
+
+export type RestrictKind = "spawn" | "ghost";
+
+interface Restriction {
+  kind: RestrictKind;
+  actors: Set<PlayerRuntime>;
+  /** Human roster indexes that saw an actor since the change (they get the new state). */
+  knowers: Set<number>;
 }
 
 interface Tracked {
@@ -42,6 +58,34 @@ export class AoiSystem {
   private readonly viewerCell = new Map<number, number>();
   private diffs = new Map<number, AoiDiff>();
   private stamp = 0;
+  private readonly restricted = new Map<AoiEntity, Restriction>();
+  /** Entities whose restriction just ended: reconciled once more so everyone gets the new state. */
+  private readonly released = new Set<AoiEntity>();
+
+  /** Show `e` in its new state only to knowers until unrestrict (a second actor adds up). */
+  restrict(e: AoiEntity, kind: RestrictKind, actor: PlayerRuntime): void {
+    const r = this.restricted.get(e);
+    if (r) {
+      r.actors.add(actor);
+      return;
+    }
+    this.restricted.set(e, { kind, actors: new Set([actor]), knowers: new Set() });
+  }
+
+  unrestrict(e: AoiEntity): void {
+    if (this.restricted.delete(e)) this.released.add(e);
+  }
+
+  restrictedAs(e: AoiEntity): RestrictKind | undefined {
+    return this.restricted.get(e)?.kind;
+  }
+
+  /** May viewer i hold `e` in its view right now (restrictions only; the ring is separate)? */
+  allowed(e: AoiEntity, i: number): boolean {
+    const r = this.restricted.get(e);
+    if (!r) return true;
+    return r.kind === "spawn" ? r.knowers.has(i) : !r.knowers.has(i);
+  }
 
   /** Recompute entity cells and viewer ring diffs. Called every tick at the end of Match.step. */
   update(m: Match): void {
@@ -79,12 +123,32 @@ export class AoiSystem {
         if (t.stamp === stamp) continue;
         this.cells.get(t.cell)?.delete(e);
         this.tracked.delete(e);
+        this.restricted.delete(e);
+        this.released.delete(e);
+      }
+    }
+    // Knowers first (vision.update already ran this tick), so every add below respects them.
+    for (const r of this.restricted.values()) {
+      for (const v of m.allRuntimes()) {
+        if (v.isBot || r.knowers.has(v.rosterIndex) || offMap(m, v.rosterIndex)) continue;
+        for (const a of r.actors) {
+          if (a === v || m.vision.sees(v.rosterIndex, a.rosterIndex)) {
+            r.knowers.add(v.rosterIndex);
+            break;
+          }
+        }
       }
     }
 
     for (const rt of m.allRuntimes()) {
       if (rt.isBot) continue;
       const i = rt.rosterIndex;
+      // Left the map (dead / extracted) before this tick: the ring freezes (no spectating). The
+      // tick of the death itself still runs, so the player's own corpse reaches their view.
+      if (offMap(m, i)) {
+        this.viewerCell.delete(i);
+        continue;
+      }
       const cell = this.cellKey(rt.pub.x, rt.pub.y);
       const prev = this.viewerCell.get(i);
       if (prev === undefined) {
@@ -96,7 +160,7 @@ export class AoiSystem {
         this.viewerCell.set(i, cell);
         const d = this.diffOf(i);
         this.forRingCells(cell, (k) => {
-          if (!this.cellInRing(prev, k)) for (const e of this.cells.get(k) ?? []) d.add.push(e);
+          if (!this.cellInRing(prev, k)) for (const e of this.cells.get(k) ?? []) if (this.allowed(e, i)) d.add.push(e);
         });
         this.forRingCells(prev, (k) => {
           if (!this.cellInRing(cell, k)) for (const e of this.cells.get(k) ?? []) d.remove.push(e);
@@ -105,9 +169,23 @@ export class AoiSystem {
     }
     if (spawned.length) {
       for (const [i, vc] of this.viewerCell) {
-        for (const e of spawned) if (this.cellInRing(vc, this.tracked.get(e)!.cell)) this.diffOf(i).add.push(e);
+        for (const e of spawned) if (this.cellInRing(vc, this.tracked.get(e)!.cell) && this.allowed(e, i)) this.diffOf(i).add.push(e);
       }
     }
+    // Restricted (and just released) entities: every ring viewer gets the state it may know.
+    const recon = (e: AoiEntity) => {
+      const t = this.tracked.get(e);
+      if (!t) return;
+      for (const [i, vc] of this.viewerCell) {
+        if (!this.cellInRing(vc, t.cell)) continue;
+        const d = this.diffOf(i);
+        if (this.allowed(e, i)) d.add.push(e);
+        else d.remove.push(e);
+      }
+    };
+    for (const e of this.restricted.keys()) recon(e);
+    for (const e of this.released) recon(e);
+    this.released.clear();
   }
 
   /** Diffs of the last update; the room applies them to the attached views. */
@@ -127,7 +205,7 @@ export class AoiSystem {
     this.viewerCell.set(i, cell);
     const out: AoiEntity[] = [];
     this.forRingCells(cell, (k) => {
-      for (const e of this.cells.get(k) ?? []) out.push(e);
+      for (const e of this.cells.get(k) ?? []) if (this.allowed(e, i)) out.push(e);
     });
     return out;
   }

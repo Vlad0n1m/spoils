@@ -463,6 +463,8 @@ export function createMapOverlaySystem(opts: MapOverlaySystemOptions = {}): Game
         );
       }
     },
+    // The open map owns the mouse (renderer: no fire, aim and look-ahead frozen).
+    isInputBlocked: () => wantOpen && !disposed,
     resize(w, h) {
       size = { w, h };
       overlay?.layout(w, h);

@@ -130,9 +130,9 @@ function Hero() {
             href="/play"
             className="toon-btn min-h-20 px-12 text-3xl tracking-wide md:min-h-24 md:px-16 md:text-4xl"
           >
-            <span className="optical-center">Play raid (demo)</span>
+            <span className="optical-center">Play raid</span>
           </Link>
-          <p className="font-body text-sm font-semibold text-white/75">Free demo · no wallet needed · bots fill the lobby</p>
+          <p className="font-body text-sm font-semibold text-white/75">Free to play · no wallet needed · bots fill the lobby</p>
         </Reveal>
       </div>
     </section>

@@ -4,7 +4,9 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { users } from "@/db/schema";
 import { getSession } from "@/lib/session";
-import { verifyPassword } from "@/lib/password";
+import { burnPasswordCompare, verifyPassword } from "@/lib/password";
+import { checkSameOriginRequest } from "@/lib/request-guard";
+import { clientIp, loginLimiter } from "@/lib/auth-rate-limit";
 
 const bodySchema = z.object({
   email: z.string().email().transform((s) => s.trim().toLowerCase()),
@@ -12,7 +14,9 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const parsed = bodySchema.safeParse(await req.json());
+  const blocked = checkSameOriginRequest(req, { json: true });
+  if (blocked) return NextResponse.json({ error: blocked.error }, { status: blocked.status });
+  const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
       { error: "bad_body", details: parsed.error.flatten() },
@@ -21,19 +25,26 @@ export async function POST(req: Request) {
   }
   const { email, password } = parsed.data;
 
+  const gate = loginLimiter.begin(clientIp(req), email);
+  if (!gate.ok) {
+    return NextResponse.json(
+      { error: "rate_limited" },
+      { status: 429, headers: { "Retry-After": String(gate.retryAfterSec) } },
+    );
+  }
+
   const rows = await db
     .select()
     .from(users)
     .where(eq(users.email, email))
     .limit(1);
-  if (rows.length === 0) {
+  const u = rows[0];
+  const ok = u ? await verifyPassword(password, u.passwordHash) : await burnPasswordCompare(password);
+  if (!u || !ok) {
+    loginLimiter.fail(email);
     return NextResponse.json({ error: "invalid_credentials" }, { status: 401 });
   }
-  const u = rows[0]!;
-  const ok = await verifyPassword(password, u.passwordHash);
-  if (!ok) {
-    return NextResponse.json({ error: "invalid_credentials" }, { status: 401 });
-  }
+  loginLimiter.succeed(email);
 
   const session = await getSession();
   session.guest = false;

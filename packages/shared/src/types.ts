@@ -52,6 +52,27 @@ export interface RaidStartRequest {
   containers: Array<{ idx: number; kind: ContainerKind; tier: LootTier }>;
   /** Boss stashes spawned this match (cut 3 → 0). */
   bossSlots: number;
+  /**
+   * Game server process that runs the match (GameServerBoot.instanceId). On its next boot the
+   * server calls POST /api/raids/void-orphans and raids of an older instance are voided at once.
+   */
+  instanceId?: string;
+  /** Stable id of the game server deployment (GameServerBoot.serverId); absent = "default". */
+  serverId?: string;
+}
+
+/** Game server → web at process boot (POST /api/raids/void-orphans, HMAC-signed). */
+export interface GameServerBoot {
+  /** Stable id of this deployment (env GAME_SERVER_ID, default "default"). */
+  serverId: string;
+  /** Random per process: raids of the same serverId with another instanceId are orphans. */
+  instanceId: string;
+  /** Wall-clock ms of the boot. */
+  bootedAt: number;
+}
+
+export interface VoidOrphansResponse {
+  voided: string[];
 }
 
 export interface RaidStartResponse {
@@ -113,6 +134,14 @@ export interface MatchEndReport {
   leftOnMap: SettledItem[];
   /** Demo mode only: uniques the server rolled itself (must be empty in live mode). */
   minted: SettledItem[];
+  /**
+   * Uniques that broke on a BOT's death (bots get no exit report): → lost pool with the death
+   * wear, like PlayerExitReport.lost of a human. Bot extracts / timeouts go to leftOnMap,
+   * worn-out armor a bot wore to `botDestroyed`.
+   */
+  botLost?: SettledItem[];
+  /** Uniques destroyed on a bot (durability hit 0): → destroyed. */
+  botDestroyed?: SettledItem[];
 }
 
 /**
@@ -151,6 +180,11 @@ export interface OutcomeMsg {
   lost: SettledItem[];
   /** Survived the death: lies in the corpse for others. */
   dropped: SettledItem[];
+  /**
+   * Durability hit 0 during the raid (armor fully absorbed) / broke for good: gone, not in the
+   * pool. Always set by the server (optional only so older fixtures still type-check).
+   */
+  destroyed?: SettledItem[];
   kills: number;
   killedBy: string;
   /** Match clock at the moment of the outcome. */

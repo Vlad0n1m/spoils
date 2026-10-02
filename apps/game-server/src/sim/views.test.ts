@@ -34,7 +34,7 @@ import {
   type ShotMsg,
 } from "@extract/shared";
 import { AoiSystem } from "./aoi.js";
-import { buildBatches } from "./audience.js";
+import { CLIP_BLUR, buildBatches } from "./audience.js";
 import { Match } from "./match.js";
 import { CLIP_MIN_PX } from "./spatial.js";
 import { counterUid, giveWeapon, testMap } from "./test-utils.js";
@@ -118,7 +118,10 @@ function verify(r: Room, c: Conn, where: string): void {
 
   // Ground items / corpses: exactly the AOI ring around the viewer.
   const ring = <T extends { x: number; y: number }>(map: Map<string, T>) =>
-    [...map.entries()].filter(([, e]) => AoiSystem.ringContains(me.pub.x, me.pub.y, e.x, e.y)).map(([k]) => k).sort();
+    [...map.entries()]
+      .filter(([, e]) => AoiSystem.ringContains(me.pub.x, me.pub.y, e.x, e.y) && m.aoi.allowed(e as never, c.roster))
+      .map(([k]) => k)
+      .sort();
   assert.deepEqual([...ds.items.keys()].sort(), ring(st.items as never), `${where}: items = AOI ring`);
   assert.deepEqual([...ds.corpses.keys()].sort(), ring(st.corpses as never), `${where}: corpses = AOI ring`);
   assert.deepEqual([...ds.containerState], [...st.containerState], `${where}: containerState`);
@@ -146,7 +149,8 @@ function verify(r: Room, c: Conn, where: string): void {
     }
     seen.clipped++;
     assert.deepEqual([s.cx, s.cy], [s.x, s.y], `${where}: clipped shot carries no centre`);
-    const onCircle = Math.abs(Math.hypot(s.x - me.pub.x, s.y - me.pub.y) - VISION.RANGE) < 1e-6;
+    // Entry point on the view circle, shifted sideways by the tracer blur (audience.ts CLIP_BLUR).
+    const onCircle = Math.abs(Math.hypot(s.x - me.pub.x, s.y - me.pub.y) - VISION.RANGE) <= CLIP_BLUR.MAX_SHIFT_PX + 1e-6;
     const fromShooter = Math.min(...r.rawShots.map((raw) => Math.hypot(raw.cx - s.x, raw.cy - s.y)));
     assert.ok(onCircle || fromShooter >= CLIP_MIN_PX - 1e-6, `${where}: clipped shot starts ${fromShooter.toFixed(1)} px from a hidden shooter`);
   }

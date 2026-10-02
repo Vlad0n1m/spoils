@@ -72,6 +72,7 @@ import { SYSTEM_FACTORIES } from "./systems-registry";
 import type { GameRendererApi, HudSnapshot, KillFeedEntry, RendererOptions } from "./types";
 import { WorldView, type ViewRect } from "./world";
 import { getGameAudio } from "./audio/game-audio";
+import { getCameraRig } from "./camera";
 
 /** About this many world units are visible (by area), whatever the window size. */
 const VIEW_W = 1600;
@@ -137,6 +138,18 @@ class FallbackWorld {
 
 type StaticWorld = { ground: Container; canopy: Container; update(view: ViewRect, self: { x: number; y: number } | null, dtMs?: number): void; destroy(): void; warmup?(x: number, y: number): void };
 
+const NO_SYSTEMS: readonly GameSystem[] = [];
+
+/**
+ * True when a DOM overlay (battle-screen's isInputBlocked) or a canvas system (the full map) owns
+ * the mouse. Allocation-free: called every frame.
+ */
+export function inputBlockedBy(external: (() => boolean) | undefined, systems: readonly GameSystem[]): boolean {
+  if (external?.()) return true;
+  for (const s of systems) if (s.isInputBlocked?.() === true) return true;
+  return false;
+}
+
 export class GameRenderer implements GameRendererApi {
   private app: Application | null = null;
   private tex: Textures | null = null;
@@ -176,6 +189,10 @@ export class GameRenderer implements GameRendererApi {
   private input: InputController | null = null;
 
   private players = new Map<string, Fading<Player, PlayerView>>();
+  /** Where players that left this client's view were last drawn (GameContext.lastSeen). */
+  private readonly goneAt = new Map<string, { x: number; y: number; at: number }>();
+  /** An overlay owns the mouse this frame (GameContext.inputBlocked). */
+  private inputBlockedNow = false;
   private playerPool: PlayerView[] = [];
   private items = new Map<string, Fading<GroundItem, ItemView>>();
   private corpses = new Map<string, Fading<Corpse, CorpseView>>();
@@ -393,6 +410,7 @@ export class GameRenderer implements GameRendererApi {
       m.clear();
     }
     for (const v of this.playerPool.splice(0)) v.destroy();
+    this.goneAt.clear();
     this.worldView?.destroy();
     this.worldView = null;
     this.containers?.destroy();
@@ -595,7 +613,9 @@ export class GameRenderer implements GameRendererApi {
 
   private removePlayer(id: string) {
     const e = this.players.get(id);
-    if (e) e.removing = true;
+    if (!e) return;
+    e.removing = true;
+    if (id !== this.selfId) this.goneAt.set(id, { x: e.view.x, y: e.view.y, at: performance.now() });
   }
 
   private addItem(id: string, it: GroundItem) {
@@ -850,6 +870,12 @@ export class GameRenderer implements GameRendererApi {
         x: this.screenW / 2 + (x - this.camX) * this.zoom,
         y: this.screenH / 2 + (y - this.camY) * this.zoom,
       }),
+      inputBlocked: () => this.inputBlockedNow,
+      lastSeen: (id) => {
+        const e = this.players.get(id);
+        if (e && !e.removing) return { x: e.view.x, y: e.view.y, at: performance.now() };
+        return this.goneAt.get(id) ?? null;
+      },
     };
   }
 
@@ -892,6 +918,9 @@ export class GameRenderer implements GameRendererApi {
     this.screenW = w;
     this.screenH = h;
     this.zoom = Math.sqrt((w * h) / (VIEW_W * VIEW_H)) || 1;
+    // Immersion camera (camera.ts): intro / cinematic zoom, look-ahead + focus offset, kick + shake.
+    const rig = getCameraRig();
+    if (rig) this.zoom *= rig.zoomMul;
 
     if (!this.mapData && state.mapId && (state.mapId !== LEGACY_MAP_ID || state.mapSeed)) this.buildMap(state);
     const map = this.mapData;
@@ -902,8 +931,9 @@ export class GameRenderer implements GameRendererApi {
     const controllable = !!this.idx && this.canAct();
     const pred = this.predictor;
 
-    // Overlays (inventory / search panel) own the mouse: no fire, aim frozen.
-    const blocked = !!this.opts.isInputBlocked?.();
+    // Overlays (inventory / search panel, full map) own the mouse: no fire, aim frozen.
+    const blocked = inputBlockedBy(this.opts.isInputBlocked, this.systemsReady ? this.systems : NO_SYSTEMS);
+    this.inputBlockedNow = blocked;
     this.input?.setFireBlocked(blocked);
 
     // Fixed-rate input loop, only while the player can act. Bursts are capped so a hidden tab
@@ -939,8 +969,8 @@ export class GameRenderer implements GameRendererApi {
     // After death / extraction selfRender keeps the last position: the camera stays there.
 
     if (this.selfRender) {
-      this.camX = this.selfRender.x;
-      this.camY = this.selfRender.y;
+      this.camX = this.selfRender.x + (rig?.offX ?? 0);
+      this.camY = this.selfRender.y + (rig?.offY ?? 0);
     }
     if (map) {
       // Never show the void past the map edge.
@@ -960,7 +990,9 @@ export class GameRenderer implements GameRendererApi {
     this.remoteFx.flush(now);
     const shake = this.effects?.update(now, dt, w, h) ?? { x: 0, y: 0 };
     this.world.scale.set(this.zoom);
-    this.world.position.set(w / 2 - this.camX * this.zoom + shake.x, h / 2 - this.camY * this.zoom + shake.y);
+    const sx = shake.x * (rig?.shakeScale ?? 1) + (rig?.shakeX ?? 0);
+    const sy = shake.y * (rig?.shakeScale ?? 1) + (rig?.shakeY ?? 0);
+    this.world.position.set(w / 2 - this.camX * this.zoom + sx, h / 2 - this.camY * this.zoom + sy);
 
     const halfW = w / 2 / this.zoom + CULL_MARGIN;
     const halfH = h / 2 / this.zoom + CULL_MARGIN;

@@ -642,8 +642,10 @@ export function buildChunkProps(
         low.addChild(propSprite(tex.shipping_container, "shipping_container", r, vertical, 2, flip));
         break;
       case "sandbags":
+        // Map sandbags are straight rect runs: the straight art. The curved `sandbags` sprite stays
+        // loaded for arc-shaped placements (none in the current generator).
         shadows.addChild(rectShadow(bt, r, 0.2));
-        low.addChild(propSprite(tex.sandbags, "sandbags", r, vertical, 6, flip));
+        low.addChild(propSprite(tex.sandbags_straight, "sandbags_straight", r, vertical, 6, flip));
         break;
       case "fence": {
         // Chain-link segments along the fence, posts at both ends of each.

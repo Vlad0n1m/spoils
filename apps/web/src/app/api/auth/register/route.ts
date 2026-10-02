@@ -7,6 +7,7 @@ import { users } from "@/db/schema";
 import { getSession } from "@/lib/session";
 import { deriveDepositPubkey } from "@/lib/keypair";
 import { hashPassword } from "@/lib/password";
+import { checkSameOriginRequest } from "@/lib/request-guard";
 
 const bodySchema = z.object({
   email: z.string().email().transform((s) => s.trim().toLowerCase()),
@@ -19,12 +20,14 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: Request) {
+  const blocked = checkSameOriginRequest(req, { json: true });
+  if (blocked) return NextResponse.json({ error: blocked.error }, { status: blocked.status });
   const session = await getSession();
   if (session.userId && !session.guest) {
     return NextResponse.json({ error: "already_logged_in" }, { status: 400 });
   }
 
-  const parsed = bodySchema.safeParse(await req.json());
+  const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
       { error: "bad_body", details: parsed.error.flatten() },

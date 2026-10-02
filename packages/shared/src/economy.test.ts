@@ -19,6 +19,8 @@ import {
   nextAutosellMult,
   poolEntry,
   poolReleaseCount,
+  poolReleasePlan,
+  rollContainerFungibles,
   priceBand,
   takeTreasuryTax,
   templateKey,
@@ -192,4 +194,39 @@ test("tables reference real item defs with valid quantities", () => {
   assert.equal(CONTAINER.ROLLS.length, 5);
   assert.equal(CONTAINER.FILL_CHANCE.length, 5);
   for (const p of CONTAINER.FILL_CHANCE) assert.ok(p > 0 && p <= 1);
+});
+
+test("poolReleasePlan: risk count topped up to the floor while the pool is above FLOOR_MIN_POOL", () => {
+  const big = POOL.FLOOR_MIN_POOL + 500;
+  assert.deepEqual(poolReleasePlan(big, 0), { total: POOL.MIN_RELEASE_PER_MATCH, risk: 0, floor: POOL.MIN_RELEASE_PER_MATCH }, "free-kit lobby gets the floor");
+  assert.deepEqual(poolReleasePlan(big, 2), { total: POOL.MIN_RELEASE_PER_MATCH, risk: 3, floor: POOL.MIN_RELEASE_PER_MATCH - 3 });
+  assert.deepEqual(poolReleasePlan(big, 50), { total: POOL.MAX_PER_MATCH, risk: POOL.MAX_PER_MATCH, floor: 0 }, "risk above the floor: no top-up");
+  assert.deepEqual(poolReleasePlan(POOL.FLOOR_MIN_POOL, 0), { total: 0, risk: 0, floor: 0 }, "reserve is never drawn by the floor");
+  assert.deepEqual(poolReleasePlan(POOL.FLOOR_MIN_POOL + 2, 0), { total: 2, risk: 0, floor: 2 }, "only down to the reserve");
+  assert.equal(poolReleasePlan(big, 0, 0).total, 0, "floor 0 = the old risk-only rule");
+  assert.equal(poolReleasePlan(big, 0, 99).total, POOL.MAX_PER_MATCH, "floor capped by MAX_PER_MATCH");
+});
+
+test("container fungibles: ~10-15% of containers roll empty, T2+ hold more lines", () => {
+  const kinds = ["crate", "toolbox", "fridge", "pc", "med_case", "weapon_box", "safe", "stash"] as const;
+  // Steppe tier mix (80/48/159/52/41).
+  const mix = [80, 48, 159, 52, 41];
+  let empty = 0;
+  let n = 0;
+  const lines = [0, 0, 0, 0, 0];
+  const per = [0, 0, 0, 0, 0];
+  for (let seed = 1; seed <= 40; seed++) {
+    mix.forEach((count, tier) => {
+      for (let i = 0; i < count; i++) {
+        const f = rollContainerFungibles(seed * 7919, tier * 1000 + i, { kind: kinds[i % kinds.length]!, tier: tier as 0 });
+        n++;
+        if (f.length === 0) empty++;
+        lines[tier]! += f.length;
+        per[tier]!++;
+      }
+    });
+  }
+  const rate = empty / n;
+  assert.ok(rate >= 0.08 && rate <= 0.16, `empty rate ${rate.toFixed(3)}`);
+  assert.ok(lines[3]! / per[3]! > lines[0]! / per[0]! + 0.8, "T3 has clearly more lines than T0");
 });

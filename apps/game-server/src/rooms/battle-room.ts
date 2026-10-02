@@ -13,9 +13,11 @@ import {
 } from "@extract/shared";
 import { CLOSE } from "./close-codes.js";
 import { raidOptions, registerInventoryHandlers } from "./inventory-handlers.js";
+import { IntentLimiter } from "./intent-limit.js";
 import { authenticate, isLaunchKey, releasePendingSeatsOf } from "./room-auth.js";
 import { reportEnd, reportExit } from "../net/web-api.js";
 import { buildBatches } from "../sim/audience.js";
+import { withBotSettlement } from "../sim/items.js";
 import { Match, expectedMapHash, warmMatchMap } from "../sim/match.js";
 import type { MatchEvent, RosterEntry } from "../sim/types.js";
 import { ViewSync } from "../sim/views.js";
@@ -72,6 +74,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
   private readonly owners = new Map<string, Client>();
   /** rosterIndex → connected client: all sim routing is by roster index. */
   private readonly byRoster = new Map<number, Client>();
+  private readonly intents = new IntentLimiter();
   private finishing = false;
   private summary: MatchSummaryMsg | null = null;
 
@@ -106,23 +109,32 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
       const samples = Array.isArray(raw) ? raw.slice(-MAX_INPUT_BATCH) : [raw];
       for (const s of samples) this.match.enqueueInput(client.sessionId, s);
     });
-    this.onMessage(C2S.INTERACT, (client) => this.match.interact(client.sessionId));
-    this.onMessage(C2S.RELOAD, (client) => this.match.reload(client.sessionId));
+    // Intent messages share one per-client token bucket (intent-limit.ts): floods are dropped.
+    const ok = (client: Client) => this.intents.take(client);
+    this.onMessage(C2S.INTERACT, (client) => {
+      if (ok(client)) this.match.interact(client.sessionId);
+    });
+    this.onMessage(C2S.RELOAD, (client) => {
+      if (ok(client)) this.match.reload(client.sessionId);
+    });
     this.onMessage(C2S.SWITCH, (client, raw: unknown) => {
+      if (!ok(client)) return;
       const slot = (raw as { slot?: unknown } | null)?.slot;
       // SwitchMsg is { slot: "w1" | "w2" }; the v1 numeric form is still accepted.
       const key = slot === "w1" || slot === 0 ? "w1" : slot === "w2" || slot === 1 ? "w2" : null;
       if (key) this.match.switchSlot(client.sessionId, key);
     });
     this.onMessage(C2S.HEAL, (client, raw: unknown) => {
+      if (!ok(client)) return;
       const kind = (raw as { kind?: unknown } | null)?.kind;
       if (kind === "bandage" || kind === "medkit") this.match.heal(client.sessionId, kind);
     });
     this.onMessage(C2S.PING, (client, raw: unknown) => {
+      if (!ok(client)) return;
       const t = (raw as { t?: unknown } | null)?.t;
       if (typeof t === "number" && Number.isFinite(t)) client.send(S2C.PONG, { t });
     });
-    registerInventoryHandlers(this, () => this.match);
+    registerInventoryHandlers(this, () => this.match, ok);
     // Unknown messages are ignored instead of logged: clients are untrusted.
     this.onMessage("*", () => {});
 
@@ -248,7 +260,9 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     if (this.finishing) return;
     this.finishing = true;
     this.summary = summary;
-    await Promise.race([reportEnd(report), new Promise((r) => setTimeout(r, SETTLE_WAIT_MS))]);
+    // Uniques bots carried out / broke / wore out have no exit report: they ride on the end report.
+    const full = withBotSettlement(report, this.match.allRuntimes());
+    await Promise.race([reportEnd(full), new Promise((r) => setTimeout(r, SETTLE_WAIT_MS))]);
     this.broadcast(S2C.SETTLED, summary);
     this.clock.setTimeout(() => void this.disconnect(), MATCH.DISPOSE_AFTER_END_MS);
   }

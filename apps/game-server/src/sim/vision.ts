@@ -18,9 +18,47 @@
  * by the squared-distance test, the rest early-out on the first clear ray (vision.test.ts bench).
  */
 
-import { VISION, bushIndexAt, canSee, visionRangeMult, type VisionEnv, type VisionTarget, type VisionViewer } from "@extract/shared";
+import {
+  COS_SERVER_CONE,
+  INPUT_DT_MS,
+  VISION,
+  bushIndexAt,
+  canSee,
+  visionRangeMult,
+  type VisionEnv,
+  type VisionTarget,
+  type VisionViewer,
+} from "@extract/shared";
 import { envNow } from "./environment.js";
 import type { Match } from "./match.js";
+import type { PlayerRuntime } from "./types.js";
+
+/**
+ * How fast a human's server vision cone may turn (rad/s). The cone faces rt.viewAim, which follows
+ * the input aim at most this fast, so a client flipping aim between θ and θ+π every input keeps a
+ * cone near θ instead of a 360° view. 720°/s: with the 15° server margin an honest 180° flick
+ * publishes what is behind ≈0.1 s after the flick starts. The gun (Player.aim) is not limited.
+ */
+export const VIEW_TURN_RAD_PER_S = 4 * Math.PI;
+export const VIEW_TURN_PER_INPUT = (VIEW_TURN_RAD_PER_S * INPUT_DT_MS) / 1000;
+
+/** `from` turned toward `to` by at most `max` radians (shortest way), normalized to (-π, π]. */
+export function turnToward(from: number, to: number, max: number): number {
+  const d = Math.atan2(Math.sin(to - from), Math.cos(to - from));
+  const out = Math.abs(d) <= max ? to : from + Math.sign(d) * max;
+  return Math.atan2(Math.sin(out), Math.cos(out));
+}
+
+/** One applied input of a human: the vision cone turns toward its aim (bots snap). */
+export function followAim(rt: PlayerRuntime, aim: number): void {
+  rt.viewAim = rt.isBot ? aim : turnToward(rt.viewAim, aim, VIEW_TURN_PER_INPUT);
+  rt.viewAimSrc = aim;
+}
+
+/** Facing of the vision cone. Player.aim set outside the input path (spawn, tests) snaps it. */
+function coneAim(rt: PlayerRuntime): number {
+  return rt.isBot || rt.pub.aim !== rt.viewAimSrc ? rt.pub.aim : rt.viewAim;
+}
 
 /** One published-row flip: viewer i starts / stops receiving target j. */
 export interface VisionChange {
@@ -74,7 +112,7 @@ export class VisionSystem {
       q.bot = rt.isBot;
       q.x = p.x;
       q.y = p.y;
-      q.aim = p.aim;
+      q.aim = coneAim(rt);
       q.vx = rt.vx;
       q.vy = rt.vy;
       q.inBush = p.alive && bushIndexAt(m.bushIndex, p.x, p.y) >= 0;
@@ -92,6 +130,9 @@ export class VisionSystem {
         const k = row + j;
         const t = this.pre[j]!;
         if (t.onMap && canSee(env, v, t)) this.lastSeen[k] = clock;
+        // A human's target that left the server cone drops at once (the client cone is narrower,
+        // so it is not drawn anyway): hysteresis bridges LOS flicker, never a cone swept past it.
+        else if (!v.bot && t.onMap && outsideCone(v, t)) this.lastSeen[k] = -Infinity;
         const want = clock - this.lastSeen[k]! <= VISION.HYSTERESIS_MS ? 1 : 0;
         if (want !== this.published[k]) {
           this.published[k] = want;
@@ -138,4 +179,11 @@ export class VisionSystem {
       }
     }
   }
+}
+
+/** Target outside the viewer's server cone and beyond the 360° awareness radius. */
+function outsideCone(v: VisionViewer, t: VisionTarget): boolean {
+  const dx = t.x - v.x, dy = t.y - v.y;
+  const d = Math.hypot(dx, dy);
+  return d > VISION.SERVER_AWARE_R && dx * Math.cos(v.aim) + dy * Math.sin(v.aim) < d * COS_SERVER_CONE;
 }

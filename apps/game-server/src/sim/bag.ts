@@ -247,17 +247,20 @@ export function moveOwn(rt: PlayerRuntime, msg: InvMoveMsg): MoveResult {
   const touched = from === rt.self.active || to === rt.self.active;
   const plan = planPlace(view, item, qty, to);
   if (plan.ok) {
+    // A targeted merge onto a partly full stack places only what fits (plan.placed < qty): the
+    // rest stays in the source slot, never vanishes.
+    const left = item.qty - plan.placed;
     // Moving the backpack item itself (bp → storage) must still leave a valid bag afterwards.
     const after = new Map<string, ItemLike>();
     for (const k of allKeys(s)) {
       const it = s.get(k);
       if (it && k !== from) after.set(k, it);
     }
-    if (!whole) after.set(from, { ...item, qty: item.qty - qty });
+    if (left > 0) after.set(from, { ...item, qty: left });
     for (const st of plan.steps) after.set(st.key, { ...item, qty: st.qty });
     if (!bagFits(after)) return { code: "bp_not_empty", touchedActive: false };
-    if (whole) s.delete(from);
-    else src.qty -= qty;
+    if (left <= 0) s.delete(from);
+    else src.qty = left;
     applyPlan(rt, item, plan);
     fixActive(rt);
     return { touchedActive: touched };

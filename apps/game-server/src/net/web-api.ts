@@ -1,7 +1,8 @@
 /**
  * Game server → web API calls, HMAC-signed over `${ts}.${body}` (headers in shared HEADERS).
- * Flow (critique "Settlement and loadout flow"): MatchmakingRoom.launch → POST /api/raids/start,
- * each human leaving the map → POST /api/raids/exit, match end → POST /api/raids/end.
+ * Flow (critique "Settlement and loadout flow"): process boot → POST /api/raids/void-orphans,
+ * MatchmakingRoom.launch → POST /api/raids/start, each human leaving the map → POST /api/raids/exit,
+ * match end → POST /api/raids/end.
  *
  * Every call is idempotent on the web side (raids row per matchId, raid_exits per (match, user),
  * raids.status for the end), so retrying the exact same body is always safe. A 409 means the raid
@@ -10,9 +11,10 @@
  */
 
 import { setTimeout as delay } from "node:timers/promises";
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import {
   HEADERS,
+  type GameServerBoot,
   type MatchEndReport,
   type PlayerExitReport,
   type RaidStartRequest,
@@ -37,6 +39,13 @@ export interface PostOptions {
   backoffMs?: number;
   /** Per-attempt timeout (default 10 s). */
   timeoutMs?: number;
+}
+
+export interface ExitPostOptions extends PostOptions {
+  /** How long a failing exit keeps being re-posted after the fast retries (default 10 min). */
+  retryWindowMs?: number;
+  /** First pause between those slow rounds; doubles up to EXIT_SLOW_BACKOFF_MAX_MS. */
+  slowBackoffMs?: number;
 }
 
 /**
@@ -83,6 +92,45 @@ export async function postSigned<T = unknown>(path: string, body: unknown, opts:
   }
   console.error(`[web-api] POST ${url} failed: ${lastErr}`);
   return { status: "failed", error: lastErr };
+}
+
+// ---------------------------------------------------------------- boot (void-orphans)
+
+/**
+ * Identity of this game-server process. serverId is stable per deployment (env GAME_SERVER_ID);
+ * instanceId is new on every boot and goes into every RaidStartRequest, so the web can tell the
+ * raids of a crashed previous process (same serverId, other instanceId) from live ones.
+ */
+export const SERVER_INSTANCE: Readonly<GameServerBoot> = Object.freeze({
+  serverId: (process.env.GAME_SERVER_ID?.trim() || "default").slice(0, 64),
+  instanceId: randomUUID(),
+  bootedAt: Date.now(),
+});
+
+/** Boot announce: the web may still be starting (dev), so retry for ≈1 min. */
+const BOOT_ATTEMPTS = 8;
+const BOOT_BACKOFF_MS = 500;
+
+/**
+ * POST /api/raids/void-orphans once at process boot (index.ts): raids started by a previous
+ * process of this serverId can never report their end, so the web voids them at once (gear back
+ * to its owners, pool items back to the pool) instead of after the stale-raid timeout. Returns
+ * the voided match ids ([] when skipped / failed). Never throws.
+ */
+export async function announceBoot(boot: GameServerBoot = SERVER_INSTANCE, opts: PostOptions = {}): Promise<string[]> {
+  const r = await postSigned<unknown>("/api/raids/void-orphans", boot, {
+    attempts: BOOT_ATTEMPTS,
+    backoffMs: BOOT_BACKOFF_MS,
+    ...opts,
+  });
+  if (r.status !== "ok") {
+    if (r.status === "rejected") console.error(`[web-api] raids/void-orphans refused: ${r.code} ${r.body}`);
+    return [];
+  }
+  const v = (r.body as { voided?: unknown } | null)?.voided;
+  const voided = Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  if (voided.length) console.log(`[web-api] voided ${voided.length} raid(s) orphaned by a previous process: ${voided.join(", ")}`);
+  return voided;
 }
 
 // ---------------------------------------------------------------- raids/start
@@ -163,10 +211,24 @@ export function offExitSettled(matchId: string): void {
  * the same tick, so both posts start together).
  */
 const pendingExits = new Map<string, Set<Promise<PostResult>>>();
+/**
+ * Matches with an exit report that never got through (web down for the whole retry window). Their
+ * end report is not sent: its sweep would move that player's extracted items into the lost pool.
+ * The raid is left to the web's void (stale timeout / void-orphans), which returns gear instead.
+ */
+const unsettledExits = new Set<string>();
 
-/** POST /api/raids/exit (retried; 409 = voided → stop). Never throws. */
-export function reportExit(report: PlayerExitReport, opts: PostOptions = {}): Promise<PostResult> {
-  const p = postExit(report, opts);
+const EXIT_RETRY_WINDOW_MS = 10 * 60_000;
+const EXIT_SLOW_BACKOFF_MS = 5_000;
+const EXIT_SLOW_BACKOFF_MAX_MS = 60_000;
+
+/**
+ * POST /api/raids/exit (retried; 409 = voided → stop). A brief outage (deploy, cold start) must
+ * not lose the report: after the fast retries it keeps re-posting with a slow backoff for
+ * retryWindowMs. Never throws.
+ */
+export function reportExit(report: PlayerExitReport, opts: ExitPostOptions = {}): Promise<PostResult> {
+  const p = postExitDurable(report, opts);
   let set = pendingExits.get(report.matchId);
   if (!set) pendingExits.set(report.matchId, (set = new Set()));
   set.add(p);
@@ -175,6 +237,22 @@ export function reportExit(report: PlayerExitReport, opts: PostOptions = {}): Pr
     if (set.size === 0 && pendingExits.get(report.matchId) === set) pendingExits.delete(report.matchId);
   });
   return p;
+}
+
+async function postExitDurable(report: PlayerExitReport, opts: ExitPostOptions): Promise<PostResult> {
+  const until = Date.now() + (opts.retryWindowMs ?? EXIT_RETRY_WINDOW_MS);
+  let wait = opts.slowBackoffMs ?? EXIT_SLOW_BACKOFF_MS;
+  for (;;) {
+    const r = await postExit(report, opts);
+    if (r.status !== "failed") return r;
+    if (Date.now() + wait > until) {
+      unsettledExits.add(report.matchId);
+      console.error(`[web-api] raids/exit ${report.matchId}/${report.userId} gave up: the end report will not be sent`);
+      return r;
+    }
+    await delay(wait);
+    wait = Math.min(wait * 2, EXIT_SLOW_BACKOFF_MAX_MS);
+  }
 }
 
 async function postExit(report: PlayerExitReport, opts: PostOptions): Promise<PostResult> {
@@ -195,10 +273,18 @@ async function postExit(report: PlayerExitReport, opts: PostOptions): Promise<Po
   return r;
 }
 
-/** POST /api/raids/end after every pending exit of the match settled (retried; 409 = voided → stop). */
+/**
+ * POST /api/raids/end after every pending exit of the match settled (retried; 409 = voided → stop).
+ * Not sent at all when an exit of this match never got through (see unsettledExits).
+ */
 export async function reportEnd(report: MatchEndReport, opts: PostOptions = {}): Promise<PostResult> {
   const pending = pendingExits.get(report.matchId);
   if (pending) await Promise.allSettled([...pending]);
+  if (unsettledExits.delete(report.matchId)) {
+    offExitSettled(report.matchId);
+    console.error(`[web-api] raids/end ${report.matchId} withheld: an exit report never reached the web (raid left to its void)`);
+    return { status: "failed", error: "exit_unsettled" };
+  }
   const r = await postSigned("/api/raids/end", report, opts);
   if (r.status === "rejected") console.error(`[web-api] raids/end ${report.matchId} refused: ${r.code} ${r.body}`);
   // Exit replies still in flight may arrive later; they then just find no listener.

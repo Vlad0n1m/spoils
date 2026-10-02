@@ -26,7 +26,16 @@ import { creditLedger, itemEvents, items, loadouts, matchResults, raids, stashSt
 import { PARAM, setParam } from "../economy/params";
 import { addStack } from "./transition";
 import { lockLoadout, unlockLoadout, saveDraft } from "./loadout";
-import { applyEnd, applyExit, startRaid, voidStale, RAID_VOID_AFTER_MS } from "./raids";
+import {
+  applyEnd,
+  applyExit,
+  startRaid,
+  voidOrphans,
+  voidStale,
+  voidStaleForUser,
+  RAID_USER_VOID_AFTER_MS,
+  RAID_VOID_AFTER_MS,
+} from "./raids";
 import { claimStarter } from "./starter";
 import { getStash } from "./stash";
 import { seedEconomy } from "../economy/seed";
@@ -501,6 +510,153 @@ describe("void", () => {
     assert.equal(relock.ok, true);
     const ledger = await db.select().from(creditLedger);
     assert.equal(ledger.length, 0);
+  });
+});
+
+/** `n` lost-pool rifles in one insert (the floor needs a pool above POOL.FLOOR_MIN_POOL). */
+async function bulkPool(n: number) {
+  await db.insert(items).values(
+    Array.from({ length: n }, (_, i) => ({ defId: i % 2 ? "rifle" : "armor_1", rarity: i % 4, durability: 80, state: "lost_pool" as const, origin: "seed" as const })),
+  );
+}
+
+describe("pool floor", () => {
+  test("a free-kit lobby gets POOL.MIN_RELEASE_PER_MATCH uniques, only in T3/T4 containers", async () => {
+    await bulkPool(POOL.FLOOR_MIN_POOL + 50);
+    const res = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }]));
+    const keys = Object.keys(res.containerLoot);
+    const all = Object.values(res.containerLoot).flat();
+    assert.equal(all.length, POOL.MIN_RELEASE_PER_MATCH);
+    // CONTAINERS: idx 2 = weapon_box T3, idx 3 = safe T4.
+    assert.ok(keys.every((k) => k === "2" || k === "3"), `floor landed in ${keys.join(",")}`);
+    assert.equal(await poolCount(), POOL.FLOOR_MIN_POOL + 50 - all.length);
+    const ev = await db.select().from(itemEvents).where(eq(itemEvents.reason, "alloc_floor"));
+    assert.equal(ev.length, all.length);
+  });
+
+  test("risk releases above the floor add nothing; the floor stops at FLOOR_MIN_POOL", async () => {
+    await bulkPool(POOL.FLOOR_MIN_POOL + 2);
+    const res = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }]));
+    assert.equal(Object.values(res.containerLoot).flat().length, 2, "only down to the reserve");
+    const res2 = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }]));
+    assert.deepEqual(res2.containerLoot, {}, "reserve untouched by the floor");
+  });
+
+  test("POOL_MIN_RELEASE_PER_MATCH=0 restores the risk-only rule", async () => {
+    await bulkPool(POOL.FLOOR_MIN_POOL + 50);
+    process.env.POOL_MIN_RELEASE_PER_MATCH = "0";
+    try {
+      const res = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }]));
+      assert.deepEqual(res.containerLoot, {});
+    } finally {
+      delete process.env.POOL_MIN_RELEASE_PER_MATCH;
+    }
+  });
+});
+
+describe("bot settlement", () => {
+  test("uniques broken / destroyed / carried out by bots resolve without an end sweep", async () => {
+    for (let i = 0; i < 3; i++) await makeItem(db, { def: i === 2 ? "armor_2" : "rifle", rarity: 1, state: "lost_pool", dur: 50 });
+    const p = await lockedPlayer(); // 3 risk units → 3 released (pool of 3)
+    const req = startReq([{ userId: p.userId, loadoutId: p.loadoutId }]);
+    const rel = Object.values((await startRaid(db, req)).containerLoot).flat();
+    assert.equal(rel.length, 3);
+    const rifles = rel.filter((r) => r.def === "rifle");
+    const armor = rel.find((r) => r.def === "armor_2")!;
+    await applyExit(db, exitReport(req.matchId, p.userId, { extracted: [] }));
+    const e = await applyEnd(
+      db,
+      endReport(req.matchId, {
+        // p's own gear "extracted" with nothing: left on the map for this test.
+        leftOnMap: [
+          { uid: p.rifle, def: "rifle", qty: 1, rarity: 1, dur: 100 },
+          { uid: p.armor, def: "armor_2", qty: 1, rarity: 1, dur: 10 },
+          { uid: p.bp, def: "backpack_1", qty: 1, rarity: 0, dur: 100 },
+          rifles[0]!, // a bot extracted it
+        ],
+        botLost: [rifles[1]!],
+        botDestroyed: [{ ...armor, dur: 0 }],
+      }),
+    );
+    assert.equal(e.status, "applied");
+    assert.equal(e.swept, 0, "nothing unreported");
+    assert.deepEqual([(await item(rifles[1]!.uid)).state, (await item(rifles[1]!.uid)).durability], ["lost_pool", 50 - POOL.BREAK_DUR_LOSS]);
+    assert.equal((await item(rifles[0]!.uid)).state, "lost_pool");
+    assert.equal((await item(rifles[0]!.uid)).durability, 50, "bot extract: no wear");
+    assert.equal((await item(armor.uid)).state, "destroyed");
+  });
+});
+
+describe("orphaned raids", () => {
+  test("void-orphans voids raids of a previous instance of an explicit serverId, not the new one's", async () => {
+    const a = await lockedPlayer();
+    const b = await lockedPlayer();
+    const c = await lockedPlayer();
+    const t0 = new Date();
+    const old = startReq([{ userId: a.userId, loadoutId: a.loadoutId }], { instanceId: "inst-1", serverId: "eu-1" });
+    const legacy = startReq([{ userId: b.userId, loadoutId: b.loadoutId }]);
+    const other = startReq([{ userId: c.userId, loadoutId: c.loadoutId }], { instanceId: "x-1", serverId: "eu-2" });
+    for (const r of [old, legacy, other]) await startRaid(db, r, t0);
+
+    const boot = { serverId: "eu-1", instanceId: "inst-2", bootedAt: Date.now() };
+    const res = await voidOrphans(db, boot, new Date(t0.getTime() + 5_000));
+    assert.equal(res.status, "applied");
+    assert.deepEqual(res.voided, [old.matchId]);
+    assert.equal((await item(a.rifle)).state, "in_stash");
+    assert.equal((await item(a.rifle)).ownerId, a.userId);
+    assert.equal(await stack(a.userId, "ammo_light"), 100, "loadout ammo refunded");
+    assert.equal((await item(b.rifle)).state, "in_raid", "a raid without serverId (default) is left to the timeout");
+    assert.equal((await item(c.rifle)).state, "in_raid", "another serverId is untouched");
+    assert.equal((await applyExit(db, exitReport(old.matchId, a.userId, {}))).status, "voided");
+
+    // A raid the new instance starts afterwards survives a retry of the same announcement.
+    const d = await lockedPlayer();
+    const fresh = startReq([{ userId: d.userId, loadoutId: d.loadoutId }], { instanceId: "inst-2", serverId: "eu-1" });
+    await startRaid(db, fresh, new Date(t0.getTime() + 10_000));
+    assert.deepEqual((await voidOrphans(db, boot, new Date(t0.getTime() + 20_000))).voided, []);
+    // A delayed retry of the OLDER boot changes nothing.
+    const stale = await voidOrphans(db, { serverId: "eu-1", instanceId: "inst-1", bootedAt: boot.bootedAt - 60_000 });
+    assert.deepEqual(stale, { status: "stale", voided: [] });
+    assert.equal((await item(d.rifle)).state, "in_raid");
+  });
+
+  test("void-orphans never voids across instances of the shared 'default' serverId (live raids of another process)", async () => {
+    // Server A (no GAME_SERVER_ID) is running a raid; server B, also "default", boots.
+    const a = await lockedPlayer();
+    const t0 = new Date();
+    const live = startReq([{ userId: a.userId, loadoutId: a.loadoutId }], { instanceId: "inst-A", serverId: "default" });
+    await startRaid(db, live, t0);
+    const res = await voidOrphans(db, { serverId: "default", instanceId: "inst-B", bootedAt: Date.now() }, new Date(t0.getTime() + 5_000));
+    assert.deepEqual(res, { status: "applied", voided: [] });
+    assert.equal((await item(a.rifle)).state, "in_raid");
+    // ... and the lazy per-user void does not treat B's boot as A's death either.
+    assert.deepEqual(await voidStaleForUser(db, a.userId, new Date(t0.getTime() + 6_000)), []);
+    // A's player still extracts normally.
+    assert.equal((await applyExit(db, exitReport(live.matchId, a.userId, {}))).status, "applied");
+  });
+
+  test("lobby load voids the user's raid lazily: past DURATION + 5 min, or its server rebooted", async () => {
+    const p = await lockedPlayer();
+    const t0 = new Date();
+    const req = startReq([{ userId: p.userId, loadoutId: p.loadoutId }], { instanceId: "inst-1" });
+    await startRaid(db, req, t0);
+    assert.deepEqual(await voidStaleForUser(db, p.userId, new Date(t0.getTime() + MATCH.DURATION_MS)), [], "still running");
+    // getStash (lobby, /api/matches/join) runs lazyMaintenance → voidStaleForUser.
+    const s = await getStash(db, p.userId, new Date(t0.getTime() + RAID_USER_VOID_AFTER_MS + 1000));
+    assert.equal(RAID_USER_VOID_AFTER_MS < RAID_VOID_AFTER_MS, true, "sooner than the global timeout");
+    assert.equal(s!.active, null, "gear is back");
+    assert.equal(s!.uniques.find((u) => u.id === p.rifle)?.state, "in_stash");
+    const relock = await lockLoadout(db, p.userId, [{ key: "w1", itemId: p.rifle, def: "rifle", qty: 1 }]);
+    assert.equal(relock.ok, true);
+
+    // Orphan path: the server booted again (boot recorded without voiding, e.g. a lost reply).
+    const q = await lockedPlayer();
+    const t1 = new Date();
+    const req2 = startReq([{ userId: q.userId, loadoutId: q.loadoutId }], { instanceId: "inst-1", serverId: "eu-1" });
+    await startRaid(db, req2, t1);
+    await setParam(db, "gs_boot:eu-1", { serverId: "eu-1", instanceId: "inst-9", bootedAt: t1.getTime() + 1000, sentAt: 1 });
+    assert.deepEqual(await voidStaleForUser(db, q.userId, new Date(t1.getTime() + 2000)), [req2.matchId]);
+    assert.equal((await item(q.rifle)).state, "in_stash");
   });
 });
 

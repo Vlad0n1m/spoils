@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SERVER_TICK_MS, SoundKind, VISION, envConfigOf, quantizeFa, sampleEnv, type ShotMsg } from "@extract/shared";
-import { buildBatches } from "./audience.js";
+import { SERVER_TICK_MS, SoundKind, VISION, envConfigOf, mulberry32, quantizeFa, sampleEnv, type ShotMsg } from "@extract/shared";
+import { CLIP_BLUR, buildBatches } from "./audience.js";
+import { killPlayer } from "./death.js";
+import { extractPlayer } from "./extraction.js";
 import { envNow } from "./environment.js";
 import type { Match } from "./match.js";
 import { CLIP_MIN_PX, clipRayToCircle } from "./spatial.js";
@@ -66,7 +68,8 @@ test("audience: the vision rows behind the scene are what the comments say", () 
 
 test("audience: SHOT is full for the shooter and its viewers, clipped (s = '') for listeners the path crosses, absent otherwise", () => {
   const { m, R, S, all } = scene();
-  const b = buildBatches(m, [shot(m, R.A!, S.A!, 1000, 2500, [0])], all);
+  // rand = null: the exact clipping geometry (the blur has its own test below).
+  const b = buildBatches(m, [shot(m, R.A!, S.A!, 1000, 2500, [0])], all, null);
   for (const n of ["A", "C"]) assert.equal(b.get(R[n]!)!.shots![0]!.s, S.A, `${n}: full shot`);
   assert.equal(b.get(R.G!), undefined, "G: nothing (the path never enters its circle)");
   const h = b.get(R.H!)!.shots![0]!;
@@ -86,7 +89,7 @@ test("audience: SHOT is full for the shooter and its viewers, clipped (s = '') f
   assert.ok(Math.hypot(d.x - 1000, d.y - 2500) >= CLIP_MIN_PX);
 
   // Shooting away from D (−x): the closest approach is behind the muzzle → nothing for D.
-  const away = buildBatches(m, [shot(m, R.A!, S.A!, 1000, 2500, [Math.PI])], all);
+  const away = buildBatches(m, [shot(m, R.A!, S.A!, 1000, 2500, [Math.PI])], all, null);
   assert.equal(away.get(R.D!), undefined);
 });
 
@@ -119,7 +122,7 @@ test("audience: HIT goes to target (with fa), shooter and the target's viewers; 
   for (const n of ["D", "F", "G"]) assert.equal(b.get(R[n]!), undefined, `${n}: nothing`);
 });
 
-test("audience: KILL is broadcast (names only); CHEST goes to the container's AOI with `by` only for viewers", () => {
+test("audience: KILL is broadcast (names only); CHEST goes only to the opener and its viewers", () => {
   const { m, R, S, all } = scene();
   const kill: MatchEvent = { type: "kill", msg: { victim: "P1", victimId: S.B!, killer: "P0", killerId: S.A!, weapon: "rifle" } };
   const chest: MatchEvent = { type: "chest", src: R.A!, idx: 0 };
@@ -127,7 +130,9 @@ test("audience: KILL is broadcast (names only); CHEST goes to the container's AO
   for (const r of all) assert.equal(b.get(r)!.kills!.length, 1);
   assert.deepEqual(b.get(R.C!)!.chest, [{ idx: 0, by: S.A }]);
   assert.deepEqual(b.get(R.A!)!.chest, [{ idx: 0, by: S.A }]);
-  assert.deepEqual(b.get(R.D!)!.chest, [{ idx: 0 }], "D does not see the opener");
+  // D's AOI ring holds the container but D does not see A: a chest event would mark a hidden
+  // player's live position at a known spot (D hears the lid; containerState flips later).
+  assert.equal(b.get(R.D!)!.chest, undefined, "D does not see the opener");
   assert.equal(b.get(R.G!)!.chest, undefined, "G's ring does not hold the container");
 });
 
@@ -172,4 +177,89 @@ test("environment: state carries the env seed; envNow equals sampleEnv on the sy
   assert.equal(forced.state.weatherOverride, "fog");
   assert.equal(envNow(forced).kind, "fog");
   assert.equal(testMatch(1, { weatherOverride: "lava" }).state.weatherOverride, "");
+});
+
+/** Distance from (px, py) to the line through (x, y) with angle a. */
+function lineDist(x: number, y: number, a: number, px: number, py: number): number {
+  return Math.abs((px - x) * Math.sin(a) - (py - y) * Math.cos(a));
+}
+
+/** Intersection of two (point, angle) lines, or null when parallel. */
+function intersect(x1: number, y1: number, a1: number, x2: number, y2: number, a2: number): [number, number] | null {
+  const d1x = Math.cos(a1), d1y = Math.sin(a1), d2x = Math.cos(a2), d2y = Math.sin(a2);
+  const den = d1x * d2y - d1y * d2x;
+  if (Math.abs(den) < 1e-12) return null;
+  const t = ((x2 - x1) * d2y - (y2 - y1) * d2x) / den;
+  return [x1 + d1x * t, y1 + d1y * t];
+}
+
+test("audience: two clipped tracers of a hidden shooter no longer intersect on them (blurred per recipient and shot)", () => {
+  const { m, R, S, all } = scene();
+  const minMiss = CLIP_BLUR.MIN_SHIFT_PX * Math.cos(CLIP_BLUR.MAX_TURN);
+  const errs: number[] = [];
+  for (let seed = 1; seed <= 40; seed++) {
+    const rand = mulberry32(seed);
+    // Two in-spread rifle shots from one camping spot (the reviewer's triangulation).
+    const b1 = buildBatches(m, [shot(m, R.A!, S.A!, 1000, 2500, [0.021])], all, rand);
+    const b2 = buildBatches(m, [shot(m, R.A!, S.A!, 1000, 2500, [-0.013])], all, rand);
+    for (const n of ["H", "F"]) {
+      const c1 = b1.get(R[n]!)!.shots![0]!, c2 = b2.get(R[n]!)!.shots![0]!;
+      assert.equal(c1.s, "", `${n}: clipped`);
+      assert.deepEqual([c1.cx, c1.cy], [c1.x, c1.y]);
+      // Every blurred line misses the shooter, so no intersection of two of them can hit it.
+      for (const c of [c1, c2]) assert.ok(lineDist(c.x, c.y, c.a[0]!, 1000, 2500) >= minMiss - 1e-9, `${n}: line misses the shooter`);
+      const p = intersect(c1.x, c1.y, c1.a[0]!, c2.x, c2.y, c2.a[0]!);
+      errs.push(p ? Math.hypot(p[0] - 1000, p[1] - 2500) : Infinity);
+      // The tracer still starts beside the listener's circle, never near the shooter.
+      assert.ok(Math.hypot(c1.x - 1000, c1.y - 2500) >= Math.min(CLIP_BLUR.MIN_SHIFT_PX, 100));
+    }
+  }
+  assert.ok(Math.min(...errs) >= minMiss, `closest triangulation ${Math.min(...errs).toFixed(1)} px`);
+  errs.sort((a, b) => a - b);
+  assert.ok(errs[errs.length >> 1]! > 300, `median triangulation error ${errs[errs.length >> 1]!.toFixed(0)} px`);
+  // The default blur draws from the CSPRNG: two copies of one shot differ.
+  const x1 = buildBatches(m, [shot(m, R.A!, S.A!, 1000, 2500, [0])], all).get(R.F!)!.shots![0]!;
+  const x2 = buildBatches(m, [shot(m, R.A!, S.A!, 1000, 2500, [0])], all).get(R.F!)!.shots![0]!;
+  assert.notDeepEqual([x1.x, x1.y, x1.a], [x2.x, x2.y, x2.a]);
+});
+
+test("audience: dead and extracted players get no shots, hits or chest events after they left the map (no spectating)", () => {
+  const m = testMatch(5, { envSeed: 2, map: testMap({ containers: [{ x: 1500, y: 2700, kind: "crate", tier: 0, zone: null }] }) });
+  const id = ids(m);
+  const at: Array<[number, number]> = [[1000, 2500], [1500, 2900], [1300, 2950], [4500, 4500], [1700, 2900]];
+  id.forEach((k, i) => {
+    pl(m, k).x = at[i]![0];
+    pl(m, k).y = at[i]![1];
+  });
+  const [A, D, X, , E] = id.map((k) => rtOf(m, k));
+  m.step(SERVER_TICK_MS);
+  m.drainEvents();
+  killPlayer(m, D!, null, "");
+  extractPlayer(m, X!);
+  // The tick of the death / extraction itself still delivers (the killing shot, the own corpse).
+  m.step(SERVER_TICK_MS);
+  m.drainEvents();
+  m.step(SERVER_TICK_MS);
+  m.drainEvents();
+  const all = m.allRuntimes().map((r) => r.rosterIndex);
+  const evs: MatchEvent[] = [
+    shot(m, A!.rosterIndex, A!.id, 1000, 2500, [0]),
+    { type: "hit", src: D!.rosterIndex, target: E!.rosterIndex, msg: { t: E!.id, s: D!.id, x: 1700, y: 2900, d: 10, ar: false }, fa: 0 },
+    { type: "chest", src: A!.rosterIndex, idx: 0 },
+    { type: "kill", msg: { victim: "P4", victimId: E!.id, killer: "", killerId: "", weapon: "" } },
+  ];
+  const b = buildBatches(m, evs, all, null);
+  for (const gone of [D!, X!]) {
+    const got = b.get(gone.rosterIndex)!;
+    assert.deepEqual(Object.keys(got), ["kills"], `${gone.nickname}: kill feed only (${JSON.stringify(got)})`);
+  }
+  assert.ok(b.get(A!.rosterIndex)!.shots && b.get(A!.rosterIndex)!.chest, "the living shooter still gets its own events");
+
+  // AOI: a new corpse next to the dead / extracted players' bodies is not added to their views.
+  killPlayer(m, E!, null, "");
+  m.step(SERVER_TICK_MS);
+  m.drainEvents();
+  const added = m.aoi.drainDiffs().filter((d) => d.add.length > 0).map((d) => d.viewer);
+  assert.ok(!added.includes(D!.rosterIndex) && !added.includes(X!.rosterIndex), `AOI adds went to ${added}`);
+  assert.ok(added.includes(A!.rosterIndex), "the living nearby viewer gets the corpse");
 });

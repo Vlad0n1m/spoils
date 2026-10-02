@@ -54,7 +54,21 @@ export const RING = {
   MAX_MARKERS: 12,
   /** Chevron pulse period (ms). */
   CHEVRON_PERIOD_MS: 450,
+  /**
+   * The behind-you chevron pulses only right after the marker (re)triggers, then holds steady:
+   * a dozen markers blinking forever read as noise (playtest).
+   */
+  CHEVRON_PULSE_MS: 900,
+  /** Glyph box (css px); the glyph sits on a dark round badge of BADGE_R with a coloured rim. */
   ICON_PX: 22,
+  BADGE_R: 15,
+  /**
+   * Icons carry WHAT was heard and must stay readable for far / muffled sounds; the arc carries
+   * how far (width, alpha) and muffling (dashes). Icon alpha = max(ICON_MIN_ALPHA, band alpha ·
+   * occlusion), held for the first ICON_HOLD of the life, then fading linearly to 0.
+   */
+  ICON_MIN_ALPHA: 0.75,
+  ICON_HOLD: 0.45,
 } as const;
 
 /** Glyph drawn just outside the arc. Kinds sharing a glyph also share a merge bucket. */
@@ -153,7 +167,10 @@ export function placeSounds(sounds: readonly DecodedSound[], env: PlacementEnv):
 
 /** Visual state of one marker at `now`; null once it has faded out. */
 export interface IndicatorStyle {
+  /** Arc alpha: band × occlusion × fade. */
   alpha: number;
+  /** Badge / icon / chevron alpha: slower fade, floored so far sounds stay legible. */
+  iconAlpha: number;
   width: number;
   scale: number;
   behind: boolean;
@@ -163,18 +180,30 @@ export function indicatorStyle(ind: SoundIndicator, now: number, aim: number): I
   const age = now - ind.born;
   if (age >= ind.lifeMs) return null;
   const t = Math.max(0, age) / ind.lifeMs;
-  let alpha = SOUND_BAND_ALPHA[ind.band] * Math.pow(1 - t, RING.FADE_POW);
-  if (ind.occluded) alpha *= RING.OCCLUDED_ALPHA;
+  let strength = SOUND_BAND_ALPHA[ind.band];
+  if (ind.occluded) strength *= RING.OCCLUDED_ALPHA;
+  const alpha = strength * Math.pow(1 - t, RING.FADE_POW);
+  const iconFade = t <= RING.ICON_HOLD ? 1 : (1 - t) / (1 - RING.ICON_HOLD);
+  const iconAlpha = Math.max(RING.ICON_MIN_ALPHA, strength) * iconFade;
   const behind = isBehind(ind.angle, aim, RING.BEHIND_HALF_FOV);
   const width = RING.BAND_WIDTH[ind.band] * (behind ? RING.BEHIND_WIDTH_MULT : 1);
   const pop = Math.min(1, Math.max(0, age) / RING.POP_MS);
   const scale = RING.POP_SCALE + (1 - RING.POP_SCALE) * pop;
-  return { alpha, width, scale, behind };
+  return { alpha, iconAlpha, width, scale, behind };
 }
 
 /** Pulsing chevron alpha multiplier (0.55..1). */
 export function chevronPulse(now: number): number {
   return 0.775 + 0.225 * Math.sin((now / RING.CHEVRON_PERIOD_MS) * Math.PI * 2);
+}
+
+/**
+ * Chevron alpha multiplier for a marker of age `ageMs`: starts at 1, dips to 0.55 and back for
+ * CHEVRON_PULSE_MS after a (re)trigger, then stays at 1 (a footstep run re-pulses with each step).
+ */
+export function chevronAlpha(ageMs: number): number {
+  if (!(ageMs >= 0) || ageMs >= RING.CHEVRON_PULSE_MS) return 1;
+  return 0.775 + 0.225 * Math.cos((ageMs / RING.CHEVRON_PERIOD_MS) * Math.PI * 2);
 }
 
 /**

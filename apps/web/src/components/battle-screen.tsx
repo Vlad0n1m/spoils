@@ -21,6 +21,7 @@ import { describeRoomExit, errorCodeAndReason, type RoomExit } from "@/lib/room-
 import { createHudStore, shallowEqual, type HudStore } from "@/game/hud";
 import type { GameRendererApi, HudSnapshot, PanelActions, RendererOptions } from "@/game/types";
 import { createRoomInventoryClient } from "@/game/inventory-client";
+import { cineExitOf, outcomeHoldMs } from "@/game/outcome-hold";
 import { Hud, useHud } from "./hud";
 import { InventoryOverlay } from "./inventory/inventory-overlay";
 import { MatchOutcomeOverlay } from "./match-outcome-overlay";
@@ -242,6 +243,8 @@ function screenSlice(s: HudSnapshot) {
   return {
     hasSelf: Boolean(self),
     selfOut: Boolean(self && (!self.alive || self.extractedAt > 0)),
+    /** Which canvas beat plays (cinematics.ts): the overlay waits for it. */
+    selfExit: cineExitOf(self, null),
     phase: s.phase,
   };
 }
@@ -289,8 +292,19 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const { hasSelf, selfOut, phase } = useHud(hudStore, screenSlice, shallowEqual);
-  const overlayVisible = Boolean(outcome) || selfOut || phase === "ended" || disconnected;
+  const { hasSelf, selfOut, selfExit, phase } = useHud(hudStore, screenSlice, shallowEqual);
+  // The extraction / death cinematic plays on the canvas first; the overlay's dim and card would
+  // hide it. Once the hold ran out it stays (one battle per mount).
+  const cineExit = selfExit ?? cineExitOf(null, outcome?.exit);
+  const holdMs = outcomeHoldMs(cineExit, phase, disconnected);
+  const [holdDone, setHoldDone] = useState(false);
+  useEffect(() => {
+    if (!cineExit || holdMs === 0) return;
+    const t = window.setTimeout(() => setHoldDone(true), holdMs);
+    return () => window.clearTimeout(t);
+  }, [cineExit, holdMs]);
+  const overlayVisible =
+    phase === "ended" || disconnected || ((Boolean(outcome) || selfOut) && (holdMs === 0 || holdDone));
 
   return (
     <div

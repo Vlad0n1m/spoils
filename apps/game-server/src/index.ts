@@ -37,3 +37,6 @@ gameServer.define(ROOMS.BATTLE, BattleRoom);
 
 await gameServer.listen(port);
 console.log(`[game-server] listening on :${port}`);
+// Raids of a previous (crashed) process can never settle: have the web void them now.
+const { announceBoot } = await import("./net/web-api.js");
+void announceBoot();

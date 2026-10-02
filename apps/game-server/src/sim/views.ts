@@ -17,6 +17,7 @@
 
 import type { StateView } from "@colyseus/schema";
 import type { AoiEntity } from "./aoi.js";
+import { offMap } from "./audience.js";
 import type { Match } from "./match.js";
 
 export class ViewSync {
@@ -35,7 +36,15 @@ export class ViewSync {
     view.add(rt.pub);
     this.views.set(rosterIndex, view);
     this.syncPlayers(rosterIndex, view);
-    for (const e of this.m.aoi.ring(this.m, rosterIndex, rt.pub.x, rt.pub.y)) if (this.live(e) && !view.has(e)) view.add(e);
+    // A player who already left the map gets no world around their body (no spectating).
+    if (!offMap(this.m, rosterIndex)) {
+      for (const e of this.m.aoi.ring(this.m, rosterIndex, rt.pub.x, rt.pub.y)) if (this.live(e) && !view.has(e)) view.add(e);
+    }
+    // A reconnect in the middle of a ready search session: the old view held the loot entry and no
+    // new `view add` will come (the player is already in the target's ready set).
+    const t = rt.search ? this.m.containers.targets.get(rt.search.key) : undefined;
+    const loot = t?.ready.has(rt) ? this.m.state.loot.get(t.key) : undefined;
+    if (loot && !view.has(loot)) view.add(loot);
   }
 
   detach(rosterIndex: number, view?: StateView): void {
