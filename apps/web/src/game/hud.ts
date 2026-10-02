@@ -1,4 +1,7 @@
-/** Builds the HudSnapshot (src/game/types.ts) from the synced state. Pure: no Pixi, no DOM. */
+/**
+ * Builds the HudSnapshot (src/game/types.ts) from the synced state, and the store React reads it
+ * through. Pure: no Pixi, no DOM, no React.
+ */
 
 import {
   ARMOR,
@@ -216,4 +219,110 @@ export function buildHud({ state, selfId, selfPos, clockMs, killFeed, pingMs, id
     killFeed,
     pingMs,
   };
+}
+
+/* ------------------------------------------------------------------ HUD store */
+
+/** React commits at most this often (perf budget HUD_COMMITS_PER_S = 10). */
+export const HUD_PUBLISH_INTERVAL_MS = 100;
+/** How far clockNow() extrapolates past the last snapshot (a stalled renderer must not run timers away). */
+const CLOCK_EXTRAPOLATE_MAX_MS = 250;
+
+/**
+ * External store between the renderer (pushes a HudSnapshot ~30×/s through `onHud`) and React
+ * (reads with useSyncExternalStore). Publishing is throttled to one per HUD_PUBLISH_INTERVAL_MS
+ * with a trailing flush, so the newest snapshot always lands. Components select small slices
+ * and re-render only when theirs changed; progress bars and countdowns animate on rAF through
+ * `clockNow()` instead of re-rendering React.
+ */
+export interface HudStore {
+  /** Renderer → store, any rate. */
+  push(snapshot: HudSnapshot): void;
+  /** Last published snapshot (stable between publishes, as useSyncExternalStore requires). */
+  getSnapshot(): HudSnapshot;
+  subscribe(listener: () => void): () => void;
+  /** Match clock now, extrapolated from the newest pushed snapshot (for rAF-driven leaves). */
+  clockNow(): number;
+  /** Cancels a pending trailing publish. The store stays usable. */
+  dispose(): void;
+}
+
+export interface HudStoreDeps {
+  now?: () => number;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
+  intervalMs?: number;
+}
+
+export function createHudStore(initial: HudSnapshot, deps: HudStoreDeps = {}): HudStore {
+  const now = deps.now ?? (() => performance.now());
+  const setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearTimer = deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
+  const interval = deps.intervalMs ?? HUD_PUBLISH_INTERVAL_MS;
+
+  let published = initial;
+  let latest = initial;
+  let latestAt = now();
+  let lastPublishAt = -Infinity;
+  let timer: unknown = null;
+  const listeners = new Set<() => void>();
+
+  const publish = () => {
+    timer = null;
+    lastPublishAt = now();
+    if (published === latest) return;
+    published = latest;
+    for (const l of [...listeners]) l();
+  };
+
+  return {
+    push(snapshot) {
+      latest = snapshot;
+      latestAt = now();
+      if (timer !== null) return; // the trailing flush will publish the newest one
+      const wait = lastPublishAt + interval - latestAt;
+      if (wait <= 0) publish();
+      else timer = setTimer(publish, wait);
+    },
+    getSnapshot: () => published,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    clockNow: () => latest.clockMs + Math.min(CLOCK_EXTRAPOLATE_MAX_MS, Math.max(0, now() - latestAt)),
+    dispose() {
+      if (timer !== null) clearTimer(timer);
+      timer = null;
+    },
+  };
+}
+
+/** Equality for selected slices: same keys with Object.is-equal values (one level deep). */
+export function shallowEqual<T>(a: T, b: T): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a) as Array<keyof T>;
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) {
+    if (!Object.prototype.hasOwnProperty.call(b, k) || !Object.is(a[k], b[k])) return false;
+  }
+  return true;
+}
+
+/**
+ * Structural equality for plain JSON-like data (HudSelf, slots, …). The renderer rebuilds
+ * these objects on every push, so identity says nothing about whether the HUD must re-render.
+ */
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+    if (!deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])) return false;
+  }
+  return true;
 }

@@ -1,0 +1,13 @@
+{
+  // Type-checks the *.test.ts files too (the build tsconfig excludes them, and tsx does not
+  // type-check). @types/node is borrowed from the game server because this package may not add
+  // dependencies; swap to a local devDependency when one is allowed.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "typeRoots": ["../../apps/game-server/node_modules/@types"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": []
+}

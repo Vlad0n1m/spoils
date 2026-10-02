@@ -1,8 +1,9 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 import { BREAK_CHANCE_ON_DEATH, HEAL, WEAPONS, type WeaponId } from "@extract/shared";
+import { deepEqual, shallowEqual, type HudStore } from "@/game/hud";
 import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "@/game/types";
 import { fmtClock, isWeaponId, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
 
@@ -17,50 +18,92 @@ const PX_PER_METER = 40;
 const HELP_STORAGE_KEY = "extract:hud-controls-open";
 
 /**
+ * Reads a slice of the HUD store. The component re-renders only when `isEqual` says the slice
+ * changed, so a 30 Hz renderer and a 10 Hz store publish cost nothing for panels whose numbers
+ * did not move. `select` must be a pure function of the snapshot.
+ */
+export function useHud<T>(
+  store: HudStore,
+  select: (s: HudSnapshot) => T,
+  isEqual: (a: T, b: T) => boolean = Object.is,
+): T {
+  const cache = useRef<{ snap: HudSnapshot; value: T } | null>(null);
+  const get = () => {
+    const snap = store.getSnapshot();
+    const c = cache.current;
+    if (c && c.snap === snap) return c.value;
+    const value = select(snap);
+    if (c && isEqual(c.value, value)) {
+      c.snap = snap;
+      return c.value;
+    }
+    cache.current = { snap, value };
+    return value;
+  };
+  return useSyncExternalStore(store.subscribe, get, get);
+}
+
+/**
+ * Calls `frame(clockMs)` on every animation frame while mounted, with the store's extrapolated
+ * match clock. Used by progress bars and countdowns to animate through refs without React.
+ */
+function useClockFrames(store: HudStore, frame: (clockMs: number) => void) {
+  const ref = useRef(frame);
+  // Latest-callback ref: the loop below is started once per store, but must see new props.
+  useEffect(() => {
+    ref.current = frame;
+  });
+  useEffect(() => {
+    let id = 0;
+    const loop = () => {
+      ref.current(store.clockNow());
+      id = requestAnimationFrame(loop);
+    };
+    loop();
+    return () => cancelAnimationFrame(id);
+  }, [store]);
+}
+
+const isInPlay = (s: HudSnapshot) => Boolean(s.self && s.self.alive && s.self.extractedAt === 0);
+
+/**
  * In-raid HUD. Pointer events are off for the whole layer so aiming/shooting on the canvas is
  * never blocked; only the few buttons opt back in.
  */
 export const Hud = memo(function Hud({
-  snapshot,
+  store,
   selfNickname,
   onLeave,
 }: {
-  snapshot: HudSnapshot;
+  store: HudStore;
   selfNickname: string;
   onLeave: () => void;
 }) {
-  const me = snapshot.self;
-  const inPlay = Boolean(me && me.alive && me.extractedAt === 0);
+  const inPlay = useHud(store, isInPlay);
 
   return (
     <div className="pointer-events-none absolute inset-0 select-none text-white">
-      {inPlay && me && <LowHpVignette hp={me.hp} maxHp={me.maxHp} />}
+      {inPlay && <LowHpVignette store={store} />}
 
-      <KillFeed entries={snapshot.killFeed} clockMs={snapshot.clockMs} selfNickname={selfNickname} />
+      <KillFeed store={store} selfNickname={selfNickname} />
 
       <div className="absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center gap-2">
-        <PhaseTimer snapshot={snapshot} />
-        {inPlay && snapshot.nearestExtract && <ExtractCompass target={snapshot.nearestExtract} />}
+        <PhaseTimer store={store} />
+        {inPlay && <ExtractCompass store={store} />}
       </div>
 
-      {inPlay && me && (
+      {inPlay && (
         <>
-          {me.extracting && (
-            <ExtractRing
-              clockMs={snapshot.clockMs}
-              startedAtMs={me.extracting.startedAtMs}
-              channelMs={me.extracting.channelMs}
-            />
-          )}
+          <ExtractRing store={store} />
           <div className="absolute bottom-3 left-1/2 flex w-max max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col items-center gap-2">
-            {snapshot.interactHint && <InteractHint hint={snapshot.interactHint} />}
-            <ActionProgress self={me} clockMs={snapshot.clockMs} />
-            <BottomBar self={me} />
+            <InteractHint store={store} />
+            <ActionProgress store={store} />
+            <BottomBar store={store} />
           </div>
         </>
       )}
 
-      <PingBadge pingMs={snapshot.pingMs} />
+      <PingBadge store={store} />
       <ControlsHelp onLeave={onLeave} />
     </div>
   );
@@ -68,23 +111,33 @@ export const Hud = memo(function Hud({
 
 /* ------------------------------------------------------------------ top */
 
-function PhaseTimer({ snapshot }: { snapshot: HudSnapshot }) {
-  const { phase, clockMs, durationMs, extractOpenAtMs } = snapshot;
-  const left = durationMs - clockMs;
-  const urgent = phase === "open" && left <= FINAL_MINUTE_MS;
+/** What the top bar shows; the countdown is whole seconds, so this changes about once a second. */
+function phaseTimerSlice(s: HudSnapshot) {
+  const left = s.durationMs - s.clockMs;
+  return {
+    phase: s.phase,
+    countdown: s.phase === "drop" ? fmtClock(s.extractOpenAtMs - s.clockMs) : s.phase === "open" ? fmtClock(left) : "",
+    urgent: s.phase === "open" && left <= FINAL_MINUTE_MS,
+    aliveCount: s.aliveCount,
+    totalPlayers: s.totalPlayers,
+  };
+}
+
+function PhaseTimer({ store }: { store: HudStore }) {
+  const { phase, countdown, urgent, aliveCount, totalPlayers } = useHud(store, phaseTimerSlice, shallowEqual);
 
   let label: React.ReactNode;
   if (phase === "drop") {
     label = (
       <>
-        Extraction opens in <span className="tabular-nums text-amber-300">{fmtClock(extractOpenAtMs - clockMs)}</span>
+        Extraction opens in <span className="tabular-nums text-amber-300">{countdown}</span>
       </>
     );
   } else if (phase === "open") {
     label = (
       <>
         Extraction open —{" "}
-        <span className={clsx("tabular-nums", urgent ? "text-rose-400" : "text-zooa-lime")}>{fmtClock(left)}</span> left
+        <span className={clsx("tabular-nums", urgent ? "text-rose-400" : "text-zooa-lime")}>{countdown}</span> left
       </>
     );
   } else {
@@ -111,17 +164,29 @@ function PhaseTimer({ snapshot }: { snapshot: HudSnapshot }) {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/sprites/player.png" alt="" className="h-6 w-6" draggable={false} />
         <span className="toon-text-thin tabular-nums">
-          {snapshot.aliveCount}
-          <span className="text-white/60">/{snapshot.totalPlayers}</span>
+          {aliveCount}
+          <span className="text-white/60">/{totalPlayers}</span>
         </span>
       </span>
     </div>
   );
 }
 
-function ExtractCompass({ target }: { target: NonNullable<HudSnapshot["nearestExtract"]> }) {
-  const deg = (Math.atan2(target.dy, target.dx) * 180) / Math.PI;
-  const meters = Math.max(0, Math.round(target.dist / PX_PER_METER));
+/** Compass, quantized to what is visible (1° of arrow, 1 m of distance). */
+function compassSlice(s: HudSnapshot) {
+  const t = s.nearestExtract;
+  if (!t) return null;
+  return {
+    deg: Math.round((Math.atan2(t.dy, t.dx) * 180) / Math.PI),
+    meters: Math.max(0, Math.round(t.dist / PX_PER_METER)),
+    open: t.open,
+  };
+}
+
+function ExtractCompass({ store }: { store: HudStore }) {
+  const target = useHud(store, compassSlice, shallowEqual);
+  if (!target) return null;
+  const { deg, meters } = target;
   return (
     <div
       className={clsx(
@@ -152,19 +217,21 @@ function ExtractCompass({ target }: { target: NonNullable<HudSnapshot["nearestEx
   );
 }
 
-function KillFeed({
-  entries,
-  clockMs,
-  selfNickname,
-}: {
-  entries: KillFeedEntry[];
-  clockMs: number;
-  selfNickname: string;
-}) {
-  const fresh = entries
-    .filter((e) => clockMs - e.atMs < KILL_FEED_TTL_MS)
+/** Kill feed lines still fresh at this snapshot's clock, newest first. */
+function killFeedSlice(s: HudSnapshot): KillFeedEntry[] {
+  return s.killFeed
+    .filter((e) => s.clockMs - e.atMs < KILL_FEED_TTL_MS)
     .slice(-KILL_FEED_MAX)
     .reverse();
+}
+
+/** Entries never change once created, so the same ids in the same order mean the same list. */
+function sameEntries(a: KillFeedEntry[], b: KillFeedEntry[]) {
+  return a.length === b.length && a.every((e, i) => e.id === b[i]!.id);
+}
+
+function KillFeed({ store, selfNickname }: { store: HudStore; selfNickname: string }) {
+  const fresh = useHud(store, killFeedSlice, sameEntries);
   if (fresh.length === 0) return null;
   return (
     <ol className="absolute left-3 top-3 flex max-w-[min(22rem,40vw)] flex-col gap-1.5" aria-label="Kill feed">
@@ -211,39 +278,54 @@ function Name({ name, self, victim }: { name: string; self: boolean; victim?: bo
 
 /* --------------------------------------------------------------- center */
 
-function ExtractRing({
-  clockMs,
-  startedAtMs,
-  channelMs,
-}: {
-  clockMs: number;
-  startedAtMs: number;
-  channelMs: number;
-}) {
-  const pct = clamp01((clockMs - startedAtMs) / Math.max(1, channelMs));
-  const secsLeft = Math.max(0, (channelMs - (clockMs - startedAtMs)) / 1000);
-  const R = 52;
-  const C = 2 * Math.PI * R;
+const RING_R = 52;
+const RING_C = 2 * Math.PI * RING_R;
+
+const extractingSlice = (s: HudSnapshot) => s.self?.extracting ?? null;
+
+function ExtractRing({ store }: { store: HudStore }) {
+  const ex = useHud(store, extractingSlice, shallowEqual);
+  if (!ex) return null;
+  return <ExtractRingView store={store} startedAtMs={ex.startedAtMs} channelMs={ex.channelMs} />;
+}
+
+/** Ring and countdown animate on rAF through refs: no React render per frame or per publish. */
+function ExtractRingView({ store, startedAtMs, channelMs }: { store: HudStore; startedAtMs: number; channelMs: number }) {
+  const arcRef = useRef<SVGCircleElement | null>(null);
+  const textRef = useRef<HTMLSpanElement | null>(null);
+  const progress = (clockMs: number) => ({
+    pct: clamp01((clockMs - startedAtMs) / Math.max(1, channelMs)),
+    secsLeft: Math.max(0, (channelMs - (clockMs - startedAtMs)) / 1000),
+  });
+  useClockFrames(store, (clockMs) => {
+    const { pct, secsLeft } = progress(clockMs);
+    arcRef.current?.setAttribute("stroke-dashoffset", String(RING_C * (1 - pct)));
+    if (textRef.current) textRef.current.textContent = secsLeft.toFixed(1);
+  });
+  const initial = progress(store.clockNow());
   return (
     <div className="absolute bottom-[clamp(13rem,30vh,17rem)] left-1/2 flex -translate-x-1/2 flex-col items-center gap-2">
       <div className="relative h-32 w-32">
         <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90" aria-hidden>
-          <circle cx="64" cy="64" r={R} fill="rgba(13,17,26,0.85)" stroke="#000" strokeWidth="18" />
-          <circle cx="64" cy="64" r={R} fill="none" stroke="#2a3346" strokeWidth="11" />
+          <circle cx="64" cy="64" r={RING_R} fill="rgba(13,17,26,0.85)" stroke="#000" strokeWidth="18" />
+          <circle cx="64" cy="64" r={RING_R} fill="none" stroke="#2a3346" strokeWidth="11" />
           <circle
+            ref={arcRef}
             cx="64"
             cy="64"
-            r={R}
+            r={RING_R}
             fill="none"
             stroke="#CCFF00"
             strokeWidth="11"
             strokeLinecap="round"
-            strokeDasharray={C}
-            strokeDashoffset={C * (1 - pct)}
+            strokeDasharray={RING_C}
+            strokeDashoffset={RING_C * (1 - initial.pct)}
           />
         </svg>
         <div className="absolute inset-0 grid place-items-center">
-          <span className="toon-text text-3xl tabular-nums text-zooa-lime">{secsLeft.toFixed(1)}</span>
+          <span ref={textRef} className="toon-text text-3xl tabular-nums text-zooa-lime">
+            {initial.secsLeft.toFixed(1)}
+          </span>
         </div>
       </div>
       <div className="toon-chip px-4 py-1.5 text-center text-sm tracking-wide">
@@ -254,7 +336,11 @@ function ExtractRing({
   );
 }
 
-function InteractHint({ hint }: { hint: string }) {
+const hintSlice = (s: HudSnapshot) => s.interactHint;
+
+function InteractHint({ store }: { store: HudStore }) {
+  const hint = useHud(store, hintSlice);
+  if (!hint) return null;
   // Renderer formats hints as "F — <action>"; show the key as a keycap.
   const m = /^F\s*[—–-]\s*(.+)$/.exec(hint);
   return (
@@ -265,38 +351,85 @@ function InteractHint({ hint }: { hint: string }) {
   );
 }
 
-function ActionProgress({ self, clockMs }: { self: HudSelf; clockMs: number }) {
-  let label: string | null = null;
-  let start = 0;
-  let until = 0;
-  let color = "#ffc21a";
-  if (self.reloading) {
-    label = "Reloading";
-    start = self.reloading.startMs;
-    until = self.reloading.untilMs;
-  } else if (self.healing) {
-    label = self.healing.kind === "medkit" ? "Using medkit" : "Bandaging";
-    start = self.healing.startMs;
-    until = self.healing.untilMs;
-    color = "#4ade80";
+/** The running reload or heal (reload wins, as before), or null. Changes only when one starts or ends. */
+function actionSlice(s: HudSnapshot) {
+  const self = s.self;
+  if (!self) return null;
+  if (self.reloading) return { label: "Reloading", start: self.reloading.startMs, until: self.reloading.untilMs, color: "#ffc21a" };
+  if (self.healing) {
+    return {
+      label: self.healing.kind === "medkit" ? "Using medkit" : "Bandaging",
+      start: self.healing.startMs,
+      until: self.healing.untilMs,
+      color: "#4ade80",
+    };
   }
-  if (!label) return null;
-  const pct = clamp01((clockMs - start) / Math.max(1, until - start));
-  const left = Math.max(0, (until - clockMs) / 1000);
+  return null;
+}
+
+function ActionProgress({ store }: { store: HudStore }) {
+  const action = useHud(store, actionSlice, shallowEqual);
+  if (!action) return null;
+  return <ActionProgressView store={store} {...action} />;
+}
+
+/** The bar and seconds animate on rAF through refs. */
+function ActionProgressView({
+  store,
+  label,
+  start,
+  until,
+  color,
+}: {
+  store: HudStore;
+  label: string;
+  start: number;
+  until: number;
+  color: string;
+}) {
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const textRef = useRef<HTMLSpanElement | null>(null);
+  const progress = (clockMs: number) => ({
+    pct: clamp01((clockMs - start) / Math.max(1, until - start)),
+    left: Math.max(0, (until - clockMs) / 1000),
+  });
+  useClockFrames(store, (clockMs) => {
+    const { pct, left } = progress(clockMs);
+    if (barRef.current) barRef.current.style.width = `${pct * 100}%`;
+    if (textRef.current) textRef.current.textContent = `${left.toFixed(1)}s`;
+  });
+  const initial = progress(store.clockNow());
   return (
     <div className="toon-panel flex w-64 items-center gap-2 px-2.5 py-1.5">
       <span className="toon-text-thin w-24 shrink-0 text-xs tracking-wide">{label}</span>
       <div className="relative h-3.5 flex-1 overflow-hidden rounded-full border-2 border-black bg-black/60">
-        <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${pct * 100}%`, background: color }} />
+        <div
+          ref={barRef}
+          className="absolute inset-y-0 left-0 rounded-full"
+          style={{ width: `${initial.pct * 100}%`, background: color }}
+        />
       </div>
-      <span className="w-9 shrink-0 text-right text-xs tabular-nums text-white/80">{left.toFixed(1)}s</span>
+      <span ref={textRef} className="w-9 shrink-0 text-right text-xs tabular-nums text-white/80">
+        {initial.left.toFixed(1)}s
+      </span>
     </div>
   );
 }
 
 /* --------------------------------------------------------------- bottom */
 
-function BottomBar({ self }: { self: HudSelf }) {
+/**
+ * Everything the bottom bar shows. Timers are left out (they belong to ActionProgress /
+ * ExtractRing), so a reload ticking does not re-render the weapon cards.
+ */
+function bottomBarSlice(s: HudSnapshot): HudSelf | null {
+  if (!s.self) return null;
+  return { ...s.self, reloading: null, healing: null, extracting: null };
+}
+
+function BottomBar({ store }: { store: HudStore }) {
+  const self = useHud(store, bottomBarSlice, deepEqual);
+  if (!self) return null;
   return (
     <div className="flex items-end gap-2 md:gap-3">
       <VitalsPanel self={self} />
@@ -447,7 +580,10 @@ function MedRow({
 
 /* -------------------------------------------------------------- corners */
 
-function PingBadge({ pingMs }: { pingMs: number | null }) {
+const pingSlice = (s: HudSnapshot) => s.pingMs;
+
+function PingBadge({ store }: { store: HudStore }) {
+  const pingMs = useHud(store, pingSlice);
   const tone =
     pingMs == null ? "bg-zinc-500" : pingMs < 100 ? "bg-emerald-400" : pingMs < 200 ? "bg-amber-400" : "bg-rose-500";
   return (
@@ -555,8 +691,15 @@ function ControlsHelp({ onLeave }: { onLeave: () => void }) {
   );
 }
 
-function LowHpVignette({ hp, maxHp }: { hp: number; maxHp: number }) {
-  const t = 1 - clamp01(hp / Math.max(1, maxHp) / 0.35);
+/** Vignette strength from HP; 0 above 35% HP, so full-health frames select a constant. */
+function lowHpSlice(s: HudSnapshot) {
+  const self = s.self;
+  if (!self) return 0;
+  return 1 - clamp01(self.hp / Math.max(1, self.maxHp) / 0.35);
+}
+
+function LowHpVignette({ store }: { store: HudStore }) {
+  const t = useHud(store, lowHpSlice);
   if (t <= 0) return null;
   return (
     <div

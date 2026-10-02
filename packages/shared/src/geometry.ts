@@ -4,6 +4,14 @@
  * agree on where walls are.
  */
 
+/**
+ * Collision flags: one index, three masks (map memo §5). Every solid carries `f`:
+ * movement (shared prediction) queries MOVE, bullets SHOT, fog-of-war rays and bot sight SIGHT.
+ * Windows are MOVE only, sandbags/barrels MOVE|SHOT, wooden fences MOVE|SIGHT (wallbang), water MOVE.
+ */
+export const SOLID = { MOVE: 1, SHOT: 2, SIGHT: 4, ALL: 7 } as const;
+export type SolidMask = number;
+
 /** Axis-aligned rectangle, top-left origin. */
 export interface Rect {
   x: number;
@@ -18,9 +26,20 @@ export interface Circle {
   r: number;
 }
 
+export interface SolidRect extends Rect {
+  f: SolidMask;
+}
+export interface SolidCircle extends Circle {
+  f: SolidMask;
+}
+
+/**
+ * Input to buildCollisionIndex. `f` may be omitted (v1 legacy solids): it then means SOLID.ALL,
+ * which reproduces the v1 behaviour where everything blocked everything.
+ */
 export interface Solids {
-  rects: Rect[];
-  circles: Circle[];
+  rects: ReadonlyArray<Rect & { f?: SolidMask }>;
+  circles: ReadonlyArray<Circle & { f?: SolidMask }>;
 }
 
 /** Uniform grid over the solids so queries only touch nearby obstacles. */
@@ -28,8 +47,11 @@ export interface CollisionIndex {
   cell: number;
   cols: number;
   rows: number;
-  rects: Rect[];
-  circles: Circle[];
+  rects: ReadonlyArray<Rect>;
+  circles: ReadonlyArray<Circle>;
+  /** Flags per rect / circle (SOLID bits): one typed-array lookup per candidate, so masks are free. */
+  rectFlags: Uint8Array;
+  circleFlags: Uint8Array;
   /** Per cell: indices into rects / circles. */
   rectCells: number[][];
   circleCells: number[][];
@@ -67,6 +89,8 @@ export function buildCollisionIndex(
     cell, cols, rows,
     rects: solids.rects,
     circles: solids.circles,
+    rectFlags: Uint8Array.from(solids.rects, (r) => r.f ?? SOLID.ALL),
+    circleFlags: Uint8Array.from(solids.circles, (c) => c.f ?? SOLID.ALL),
     rectCells, circleCells,
     rectStamp: new Uint32Array(solids.rects.length),
     circleStamp: new Uint32Array(solids.circles.length),
@@ -74,10 +98,14 @@ export function buildCollisionIndex(
   };
 }
 
-/** Visit every solid whose cells overlap the box [x0,x1]×[y0,y1]. Return true from a callback to stop. */
+/**
+ * Visit every solid with (f & mask) !== 0 whose cells overlap the box [x0,x1]×[y0,y1].
+ * Return true from a callback to stop.
+ */
 export function forEachSolidNear(
   idx: CollisionIndex,
   x0: number, y0: number, x1: number, y1: number,
+  mask: SolidMask,
   onRect: (r: Rect) => boolean | void,
   onCircle: (c: Circle) => boolean | void,
 ): void {
@@ -98,11 +126,13 @@ export function forEachSolidNear(
       for (const i of idx.rectCells[k]!) {
         if (idx.rectStamp[i] === s) continue;
         idx.rectStamp[i] = s;
+        if ((idx.rectFlags[i]! & mask) === 0) continue;
         if (onRect(idx.rects[i]!)) return;
       }
       for (const i of idx.circleCells[k]!) {
         if (idx.circleStamp[i] === s) continue;
         idx.circleStamp[i] = s;
+        if ((idx.circleFlags[i]! & mask) === 0) continue;
         if (onCircle(idx.circles[i]!)) return;
       }
     }
@@ -144,7 +174,7 @@ function pushOutOfCircle(x: number, y: number, r: number, c: Circle): { x: numbe
   return { x: c.x + (dx / d) * min, y: c.y + (dy / d) * min };
 }
 
-/** Resolve overlaps of a circle with nearby solids (a few relaxation passes). */
+/** Resolve overlaps of a circle with nearby MOVE solids (a few relaxation passes). */
 export function resolveCircle(
   idx: CollisionIndex,
   x: number,
@@ -156,7 +186,7 @@ export function resolveCircle(
   for (let pass = 0; pass < 3; pass++) {
     let moved = false;
     forEachSolidNear(
-      idx, px - r - 1, py - r - 1, px + r + 1, py + r + 1,
+      idx, px - r - 1, py - r - 1, px + r + 1, py + r + 1, SOLID.MOVE,
       (rect) => {
         const p = pushOutOfRect(px, py, r, rect);
         if (p) { px = p.x; py = p.y; moved = true; }
@@ -171,7 +201,7 @@ export function resolveCircle(
   return { x: px, y: py };
 }
 
-/** Move a circle by (dx, dy), sliding along walls. Sub-steps keep fast moves from tunneling. */
+/** Move a circle by (dx, dy), sliding along MOVE solids. Sub-steps keep fast moves from tunneling. */
 export function moveCircle(
   idx: CollisionIndex,
   x: number,
@@ -192,11 +222,13 @@ export function moveCircle(
   return { x: px, y: py };
 }
 
-/** Is a circle at (x, y) free of solids? */
-export function circleIsFree(idx: CollisionIndex, x: number, y: number, r: number): boolean {
+/** Is a circle at (x, y) free of solids (default: MOVE solids)? */
+export function circleIsFree(
+  idx: CollisionIndex, x: number, y: number, r: number, mask: SolidMask = SOLID.MOVE,
+): boolean {
   let free = true;
   forEachSolidNear(
-    idx, x - r, y - r, x + r, y + r,
+    idx, x - r, y - r, x + r, y + r, mask,
     (rect) => {
       if (pushOutOfRect(x, y, r, rect)) { free = false; return true; }
     },
@@ -250,16 +282,21 @@ export function segmentRectT(
   return tmin;
 }
 
-/** First solid hit along the segment (x0,y0)→(x1,y1): t in [0, 1], or Infinity when clear. */
+/**
+ * First solid hit along the segment (x0,y0)→(x1,y1): t in [0, 1], or Infinity when clear.
+ * Default mask SHOT (bullets). Visits the segment's bounding box; for long rays prefer
+ * raycastSolidsDDA, which returns the same t.
+ */
 export function raycastSolids(
   idx: CollisionIndex,
   x0: number, y0: number, x1: number, y1: number,
+  mask: SolidMask = SOLID.SHOT,
 ): number {
   const dx = x1 - x0;
   const dy = y1 - y0;
   let best = Infinity;
   forEachSolidNear(
-    idx, x0, y0, x1, y1,
+    idx, x0, y0, x1, y1, mask,
     (rect) => {
       const t = segmentRectT(x0, y0, dx, dy, rect);
       if (t < best) best = t;
@@ -272,12 +309,90 @@ export function raycastSolids(
   return best;
 }
 
-/** Clear line of sight between two points (no solid in between). */
+/**
+ * Same result as raycastSolids (same mask semantics) but walks only the cells the segment crosses
+ * (Amanatides–Woo DDA): ~2.6× faster for 1000 px rays (fog memo, 0/20000 mismatches).
+ * Default mask SIGHT: this is the vision ray.
+ */
+export function raycastSolidsDDA(
+  idx: CollisionIndex,
+  x0: number, y0: number, x1: number, y1: number,
+  mask: SolidMask = SOLID.SIGHT,
+): number {
+  const dx = x1 - x0, dy = y1 - y0, cell = idx.cell;
+  idx.stamp = (idx.stamp + 1) >>> 0;
+  if (idx.stamp === 0) {
+    idx.rectStamp.fill(0);
+    idx.circleStamp.fill(0);
+    idx.stamp = 1;
+  }
+  const s = idx.stamp;
+  let cx = Math.floor(x0 / cell), cy = Math.floor(y0 / cell);
+  const ex = Math.floor(x1 / cell), ey = Math.floor(y1 / cell);
+  const stepX = dx > 0 ? 1 : -1, stepY = dy > 0 ? 1 : -1;
+  const tDX = dx !== 0 ? Math.abs(cell / dx) : Infinity;
+  const tDY = dy !== 0 ? Math.abs(cell / dy) : Infinity;
+  let tMX = dx !== 0 ? ((dx > 0 ? (cx + 1) * cell : cx * cell) - x0) / dx : Infinity;
+  let tMY = dy !== 0 ? ((dy > 0 ? (cy + 1) * cell : cy * cell) - y0) / dy : Infinity;
+  let best = Infinity;
+  // Guard bounds the walk for degenerate input (NaN) — a 24k map is 96 cells wide at 256 px.
+  for (let guard = 0; guard < 4096; guard++) {
+    if (cx >= 0 && cy >= 0 && cx < idx.cols && cy < idx.rows) {
+      const k = cy * idx.cols + cx;
+      for (const i of idx.rectCells[k]!) {
+        if (idx.rectStamp[i] === s) continue;
+        idx.rectStamp[i] = s;
+        if ((idx.rectFlags[i]! & mask) === 0) continue;
+        const t = segmentRectT(x0, y0, dx, dy, idx.rects[i]!);
+        if (t < best) best = t;
+      }
+      for (const i of idx.circleCells[k]!) {
+        if (idx.circleStamp[i] === s) continue;
+        idx.circleStamp[i] = s;
+        if ((idx.circleFlags[i]! & mask) === 0) continue;
+        const c = idx.circles[i]!;
+        const t = segmentCircleT(x0, y0, dx, dy, c.x, c.y, c.r);
+        if (t < best) best = t;
+      }
+      // A hit before the ray leaves this cell cannot be beaten by solids in later cells.
+      if (best <= Math.min(tMX, tMY)) return best;
+    }
+    if (cx === ex && cy === ey) break;
+    // The segment ends inside this cell. Checked in addition to the end-cell test because
+    // accumulated float error in tMX/tMY can step past (ex, ey) diagonally, which would otherwise
+    // walk empty cells until the guard.
+    if (tMX > 1 && tMY > 1) break;
+    if (tMX < tMY) { tMX += tDX; cx += stepX; } else { tMY += tDY; cy += stepY; }
+  }
+  return best;
+}
+
+/** Clear line of sight between two points (default: no SIGHT solid in between). */
 export function hasLineOfSight(
   idx: CollisionIndex,
   x0: number, y0: number, x1: number, y1: number,
+  mask: SolidMask = SOLID.SIGHT,
 ): boolean {
-  return raycastSolids(idx, x0, y0, x1, y1) === Infinity;
+  return raycastSolidsDDA(idx, x0, y0, x1, y1, mask) === Infinity;
+}
+
+/**
+ * Number of rect solids the segment crosses, capped at `max` — sound occlusion. Pass the server's
+ * walls-only index (critique: one ray against walls, so crates and trees do not muffle).
+ */
+export function countOccluders(
+  idx: CollisionIndex,
+  x0: number, y0: number, x1: number, y1: number,
+  max = 3,
+  mask: SolidMask = SOLID.SIGHT,
+): number {
+  const dx = x1 - x0, dy = y1 - y0;
+  let n = 0;
+  forEachSolidNear(idx, x0, y0, x1, y1, mask, (r) => {
+    if (segmentRectT(x0, y0, dx, dy, r) <= 1) n++;
+    return n >= max;
+  }, () => false);
+  return n;
 }
 
 export function rectsOverlap(a: Rect, b: Rect, margin = 0): boolean {

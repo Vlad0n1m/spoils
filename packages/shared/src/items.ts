@@ -1,8 +1,12 @@
-/** Weapons, armor, ammo, rarity and chest loot tables. */
+/**
+ * Weapons, armor, ammo, rarity and the demo chest loot tables. Inventory item definitions
+ * (ids, stacks, icons, junk values) live in item-defs.ts and build on these.
+ */
 
 export type WeaponId = "pistol" | "rifle" | "shotgun" | "sniper";
 export type AmmoType = "light" | "shell" | "heavy";
 export type HealKind = "bandage" | "medkit";
+/** v1 loot-roll kinds (CHEST_TABLES); v2 ground items carry an item def id instead. */
 export type GroundItemKind = "weapon" | "armor" | "ammo" | "bandage" | "medkit";
 
 /** 0 common, 1 rare, 2 epic, 3 legendary. */
@@ -33,6 +37,8 @@ export interface WeaponDef {
   reloadMs: number;
   /** Distance from the player center to the muzzle along the aim. */
   muzzle: number;
+  /** Gunshot hearing radius, px (sound.ts; × sampleEnv().hear). */
+  soundRadius: number;
 }
 
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
@@ -40,25 +46,25 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     id: "pistol", name: "Pistol", ammo: "light",
     damage: 15, pellets: 1, fireIntervalMs: 280, auto: false,
     bulletSpeed: 1700, range: 750, spread: 0.035,
-    magSize: 12, reloadMs: 1200, muzzle: 44,
+    magSize: 12, reloadMs: 1200, muzzle: 44, soundRadius: 2000,
   },
   rifle: {
     id: "rifle", name: "Assault rifle", ammo: "light",
     damage: 12, pellets: 1, fireIntervalMs: 100, auto: true,
     bulletSpeed: 1900, range: 900, spread: 0.06,
-    magSize: 30, reloadMs: 2000, muzzle: 58,
+    magSize: 30, reloadMs: 2000, muzzle: 58, soundRadius: 2400,
   },
   shotgun: {
     id: "shotgun", name: "Shotgun", ammo: "shell",
     damage: 9, pellets: 7, fireIntervalMs: 850, auto: false,
     bulletSpeed: 1500, range: 420, spread: 0.2,
-    magSize: 5, reloadMs: 2600, muzzle: 56,
+    magSize: 5, reloadMs: 2600, muzzle: 56, soundRadius: 2200,
   },
   sniper: {
     id: "sniper", name: "Sniper rifle", ammo: "heavy",
     damage: 75, pellets: 1, fireIntervalMs: 1400, auto: false,
     bulletSpeed: 3200, range: 1700, spread: 0.004,
-    magSize: 5, reloadMs: 2800, muzzle: 66,
+    magSize: 5, reloadMs: 2800, muzzle: 66, soundRadius: 3600,
   },
 };
 
@@ -98,8 +104,8 @@ export interface ChestTable {
 }
 
 /**
- * Chest contents by chest rarity. In the full economy chests are filled from the pool of lost
- * items (docs/GAME_DESIGN.md §7); in the demo they roll from these tables.
+ * Chest contents by chest rarity. DEMO MODE ONLY: in live mode valuables come only from the lost
+ * pool (RaidStartResponse.containerLoot). lootRollToItem (item-defs.ts) converts a roll to a def.
  */
 export const CHEST_TABLES: Record<Rarity, ChestTable> = {
   0: {
