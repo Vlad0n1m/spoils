@@ -86,10 +86,10 @@ export function RegisterForm() {
     <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-6 md:py-14">
       <div className="grid grid-cols-1 items-start gap-10 lg:grid-cols-12 lg:gap-12">
         <Reveal as="div" delay={0} className="lg:col-span-5">
-          <p className="font-display text-xs uppercase tracking-[0.2em] text-zooa-lime/80">ZOOA</p>
+          <p className="font-display text-xs uppercase tracking-[0.2em] text-zooa-lime/80">EXTRACT</p>
           <h1 className="mt-3 font-display text-3xl tracking-wide text-[#c4f07a] md:text-4xl">Create account</h1>
           <p className="mt-4 max-w-[52ch] text-sm leading-relaxed text-white/55">
-            Pick a nickname, secure password, and a real email. You will get an in-game balance and a deposit address after signup.
+            Pick a nickname, secure password, and a real email. Your raider name is yours across raids.
           </p>
           <Link
             href="/auth/login"
