@@ -301,6 +301,12 @@
       "size": 256,
       "prompt": "Dark forest floor: moss, fallen pine needles and small leaves, deep green and brown.",
       "tile": true
+    },
+    {
+      "id": "sandbags_straight",
+      "size": 256,
+      "view": "Seen STRICTLY from directly above (bird's-eye, 90 degrees top-down).",
+      "prompt": "A perfectly STRAIGHT horizontal wall of stacked tan sandbags seen from directly above, two rows, long and narrow (about 4:1), no curve."
     }
   ]
 }
