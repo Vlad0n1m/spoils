@@ -82,3 +82,38 @@ button {
   font-family: JetBrains Mono, ui-monospace, monospace;
 }
 
+/*
+ * Cartoon game UI: thick black outlines and a hard drop shadow, same language as the sprites
+ * in /public/sprites. Used by the HUD, lobby and landing.
+ */
+.toon-panel {
+  @apply rounded-2xl border-[3px] border-black bg-[#1d2333]/90 shadow-[0_4px_0_#000];
+}
+
+.toon-chip {
+  @apply rounded-full border-[3px] border-black bg-[#1d2333]/90 shadow-[0_3px_0_#000];
+}
+
+.toon-btn {
+  @apply inline-flex items-center justify-center rounded-2xl border-[3px] border-black bg-zooa-lime px-6 text-black shadow-[0_5px_0_#000] transition-[transform,box-shadow,filter] hover:brightness-105 active:translate-y-[3px] active:shadow-[0_2px_0_#000] disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+.toon-btn-ghost {
+  @apply inline-flex items-center justify-center rounded-2xl border-[3px] border-black bg-white px-6 text-black shadow-[0_5px_0_#000] transition-[transform,box-shadow] hover:bg-zinc-100 active:translate-y-[3px] active:shadow-[0_2px_0_#000];
+}
+
+/* Keycap hint, e.g. [F] [R] [1]. */
+.toon-key {
+  @apply inline-flex h-6 min-w-6 items-center justify-center rounded-md border-2 border-black bg-white px-1 text-xs leading-none text-black shadow-[0_2px_0_#000];
+}
+
+/* Outlined display text (stroke drawn under the fill so glyphs stay fat). */
+.toon-text {
+  -webkit-text-stroke: 0.14em #000;
+  paint-order: stroke fill;
+}
+
+.toon-text-thin {
+  -webkit-text-stroke: 0.08em #000;
+  paint-order: stroke fill;
+}

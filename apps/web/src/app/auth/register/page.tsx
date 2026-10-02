@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { RegisterForm } from "@/components/register-form";
 
 export const metadata: Metadata = {
-  title: "Register — ZOOA",
+  title: "Register — EXTRACT",
 };
 
 function RegisterFallback() {

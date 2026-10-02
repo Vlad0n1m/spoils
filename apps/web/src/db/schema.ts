@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { MatchSettlementPayload } from "@extract/shared";
 import {
   pgTable,
   uuid,
@@ -7,6 +8,7 @@ import {
   timestamp,
   integer,
   boolean,
+  jsonb,
   pgEnum,
   uniqueIndex,
   index,
@@ -104,6 +106,10 @@ export const withdrawals = pgTable(
   }),
 );
 
+/*
+ * `matches`, `match_instant_payouts` and `match_participants` belong to the old buy-in money flow.
+ * Nothing writes them any more; they stay declared so `db:push` does not drop existing data.
+ */
 export const matches = pgTable("matches", {
   id: uuid("id").defaultRandom().primaryKey(),
   entryTierCents: bigint("entry_tier_cents", { mode: "bigint" }).notNull(),
@@ -115,7 +121,6 @@ export const matches = pgTable("matches", {
     .notNull(),
 });
 
-/** Credited on successful extract; match settlement adds (finalPayout - instantPayout) so totals stay fair. */
 export const matchInstantPayouts = pgTable(
   "match_instant_payouts",
   {
@@ -162,9 +167,33 @@ export const matchParticipants = pgTable(
   }),
 );
 
+/**
+ * One row per finished raid, written by POST /api/matches/settle (HMAC from the game server).
+ * The whole settlement is kept as jsonb: the item economy will later replay it into stash/item
+ * ledgers, so nothing from the server's report may be lost now.
+ */
+export const matchResults = pgTable(
+  "match_results",
+  {
+    matchId: uuid("match_id").primaryKey(),
+    /** uint32 seed does not fit a signed int4. */
+    mapSeed: bigint("map_seed", { mode: "number" }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }).notNull(),
+    payload: jsonb("payload").$type<MatchSettlementPayload>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    endedIdx: index("match_results_ended_idx").on(t.endedAt),
+  }),
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Match = typeof matches.$inferSelect;
 export type MatchParticipant = typeof matchParticipants.$inferSelect;
 export type Deposit = typeof deposits.$inferSelect;
 export type Withdrawal = typeof withdrawals.$inferSelect;
+export type MatchResult = typeof matchResults.$inferSelect;

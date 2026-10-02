@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { LoginForm } from "@/components/login-form";
 
 export const metadata: Metadata = {
-  title: "Sign in — ZOOA",
+  title: "Sign in — EXTRACT",
 };
 
 function LoginFallback() {

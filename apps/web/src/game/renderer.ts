@@ -1,484 +1,728 @@
+/**
+ * Pixi 8 renderer + input + netcode for the battle room.
+ *
+ * - The server is authoritative; the client sends an InputSample every INPUT_DT_MS plus
+ *   discrete intents (interact / reload / switch / heal).
+ * - The local player is predicted with the shared applyMovement() and reconciled against
+ *   Player.lastSeq on every state patch; remote players are interpolated ~100 ms in the past.
+ * - The static map is rebuilt locally from state.mapSeed with generateMap().
+ *
+ * Used by battle-screen.tsx: `new GameRenderer({ mountEl, room, onHud }); await r.start(); … r.stop()`.
+ */
+
+import { Application, Container } from "pixi.js";
+import { getStateCallbacks } from "colyseus.js";
 import {
-  Application,
-  Container,
-  Graphics,
-  Text,
-  TextStyle,
-  Ticker,
-} from "pixi.js";
-import { getStateCallbacks, type Room } from "colyseus.js";
-import type { HudSnapshot } from "@/components/battle-screen";
-import { formatMassUnitsAsUsd } from "@/lib/format-money";
+  applyMovement,
+  ARMOR,
+  C2S,
+  generateMap,
+  getCollisionIndex,
+  INPUT_DT_MS,
+  MATCH,
+  PLAYER,
+  RARITY_COLORS,
+  S2C,
+  WEAPONS,
+  WORLD,
+  type BattleState,
+  type ChestOpenedMsg,
+  type CollisionIndex,
+  type Extract,
+  type GroundItem,
+  type Chest,
+  type HitMsg,
+  type InputSample,
+  type KillMsg,
+  type MapData,
+  type Player,
+  type ShotMsg,
+  type WeaponId,
+} from "@extract/shared";
+import { COLORS, destroyTextures, loadTextures, type Textures } from "./assets";
+import { Effects } from "./effects";
+import { ChestView, ExtractView, ItemView, PlayerView } from "./entities";
+import { buildHud, extractStatus } from "./hud";
+import { InputController } from "./input";
+import { Minimap } from "./minimap";
+import { decayFactor, Predictor } from "./prediction";
+import type { GameRendererApi, HudSnapshot, KillFeedEntry, RendererOptions } from "./types";
+import { WorldView, type ViewRect } from "./world";
 
-interface PlayerView {
-  container: Container;
-  bodyG: Graphics;
-  headG: Graphics;
-  label: Text;
-  lineColor: number;
-  /** Avoid re-rasterizing Text every frame when mass/nick unchanged. */
-  lastLabelKey: string;
-  prevX: number;
-  prevY: number;
-  curX: number;
-  curY: number;
-  bodyPoints: { px: number; py: number; cx: number; cy: number }[];
+/** About this many world units are visible (by area), whatever the window size. */
+const VIEW_W = 1600;
+const VIEW_H = 900;
+/** Retina at full resolution is expensive for little gain with this art style. */
+const MAX_RESOLUTION = 1.5;
+/** Remote players are drawn this far in the past (two 20 Hz patches) so there is always a pair to interpolate. */
+const INTERP_DELAY_MS = 100;
+/** Corrections larger than this snap instead of gliding (spawn, teleport, long desync). */
+const SNAP_DIST = 96;
+/** Time constant for gliding away small prediction errors. */
+const CORRECTION_TAU_MS = 90;
+const HUD_INTERVAL_MS = 33;
+const PING_INTERVAL_MS = 2000;
+const KILL_FEED_MAX = 5;
+const KILL_FEED_TTL_MS = 6000;
+/** Padding around the viewport for culling, so big sprites do not pop at the edges. */
+const CULL_MARGIN = 160;
+/** Never let the local clock estimate run further than this ahead of the last server clock. */
+const CLOCK_LEAD_MAX_MS = 250;
+
+interface Tracked<T, V> {
+  state: T;
+  view: V;
 }
 
-interface OrbView {
-  g: Graphics;
-  px: number;
-  py: number;
-}
+export class GameRenderer implements GameRendererApi {
+  private app: Application | null = null;
+  private tex: Textures | null = null;
+  private started = false;
+  private stopped = false;
 
-interface Opts {
-  mountEl: HTMLElement;
-  room: Room;
-  selfUserId: string;
-  onHud: (snap: HudSnapshot) => void;
-}
+  private readonly world = new Container();
+  private readonly groundSlot = new Container();
+  private readonly shadowSlot = new Container();
+  private readonly extractLayer = new Container();
+  private readonly chestLayer = new Container();
+  private readonly itemLayer = new Container();
+  private readonly obstacleSlot = new Container();
+  private readonly wallSlot = new Container();
+  private readonly playerLayer = new Container();
+  private readonly effectsSlot = new Container();
+  private readonly canopySlot = new Container();
+  private readonly floatSlot = new Container();
 
-const COLOR_PALETTE = [
-  0x9945ff, 0x14f195, 0xff6b6b, 0x4dd0e1, 0xffeb3b, 0xff9800, 0xab47bc,
-  0x66bb6a, 0x42a5f5, 0xec407a, 0xffa726, 0x26a69a, 0x7e57c2, 0xd4e157,
-  0x29b6f6,
-];
+  private worldView: WorldView | null = null;
+  private map: MapData | null = null;
+  private idx: CollisionIndex | null = null;
+  private minimap: Minimap | null = null;
+  private effects: Effects | null = null;
+  private input: InputController | null = null;
 
-function colorFor(sessionId: string): number {
-  let h = 0;
-  for (let i = 0; i < sessionId.length; i++) h = (h * 31 + sessionId.charCodeAt(i)) | 0;
-  return COLOR_PALETTE[Math.abs(h) % COLOR_PALETTE.length]!;
-}
+  private players = new Map<string, Tracked<Player, PlayerView>>();
+  private chests = new Map<string, Tracked<Chest, ChestView>>();
+  private items = new Map<string, Tracked<GroundItem, ItemView>>();
+  private extracts = new Map<string, Tracked<Extract, ExtractView>>();
 
-/** ~30 Hz — enough for HUD/timer; avoids React reconciling at display refresh rate. */
-const HUD_EMIT_INTERVAL_MS = 33;
+  private disposers: Array<() => void> = [];
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
 
-const ZONE_EPS = 0.25;
+  // Netcode
+  private readonly predictor = new Predictor((x, y, input, mult) =>
+    this.idx ? applyMovement(this.idx, x, y, input, mult) : { x, y },
+  );
+  /** Predicted position before the latest input, for smoothing between 30 Hz input steps. */
+  private prevPredX = 0;
+  private prevPredY = 0;
+  /** Visual offset left over from reconciliation, decays to 0. */
+  private corrX = 0;
+  private corrY = 0;
+  private inputAcc = 0;
+  private aim = 0;
+  /** Local player's rendered position (what the camera follows and aim is measured from). */
+  private selfRender: { x: number; y: number } | null = null;
+  private camX = WORLD.WIDTH / 2;
+  private camY = WORLD.HEIGHT / 2;
+  private zoom = 1;
 
-/** Fewer segments in the stroke path; long snakes dominate GPU. */
-function bodyDrawStep(segmentCount: number): number {
-  if (segmentCount > 200) return 4;
-  if (segmentCount > 120) return 3;
-  if (segmentCount > 60) return 2;
-  return 1;
-}
+  // Clock estimate between 20 Hz patches.
+  private clockBase = 0;
+  private clockBaseAt = 0;
 
-export class GameRenderer {
-  private app = new Application();
-  private world = new Container();
-  private orbsLayer = new Container();
-  private snakesLayer = new Container();
-  private zoneG = new Graphics();
-  private gridG = new Graphics();
-  private players = new Map<string, PlayerView>();
-  private orbs = new Map<string, OrbView>();
-  private mounted = false;
-  private mouse = { x: 0, y: 0 };
-  private boost = false;
-  /** Track LMB on game only so HUD clicks do not start boost. */
-  private onPointerDownBound = (e: PointerEvent) => this.onPointer(e, true);
-  private onPointerUpBound = (e: PointerEvent) => this.onPointer(e, false);
-  private onWinBlurBound = () => {
-    this.boost = false;
-  };
-  private inputTickAt = 0;
-  private selfSessionId: string | null = null;
-  private camera = { x: 0, y: 0 };
-  /** Skip redundant zone Graphics clears when state hasn't changed (same between ~20 Hz patches). */
-  private zoneSnap = { cx: NaN, cy: NaN, r: NaN };
-  private lastHudEmitAt = 0;
-  /** Colyseus may fire onChange very often; sync body→view once per frame max. */
-  private pendingPlayerSync = new Map<string, any>();
-  private playerSyncRaf: number | null = null;
-  private resizeBound = () => this.onResize();
-  private mouseBound = (e: MouseEvent) => {
-    this.mouse.x = e.clientX;
-    this.mouse.y = e.clientY;
-  };
-  private keyDownBound = (e: KeyboardEvent) => this.onKey(e);
-  private tickerBound = (t: Ticker) => this.tick(t);
+  private lastFrameAt = 0;
+  private lastHudAt = 0;
+  private pingMs: number | null = null;
+  private killFeed: Array<KillFeedEntry & { receivedAt: number }> = [];
+  private killSeq = 0;
 
-  constructor(private opts: Opts) {}
+  constructor(private readonly opts: RendererOptions) {}
 
-  async start() {
-    const dpr = window.devicePixelRatio || 1;
-    await this.app.init({
-      background: 0x08070b,
+  private get selfId(): string {
+    return this.opts.room.sessionId;
+  }
+
+  private get state(): BattleState | null {
+    try {
+      return (this.opts.room.state as BattleState | undefined) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async start(): Promise<void> {
+    if (this.started || this.stopped) return;
+    this.started = true;
+
+    const app = new Application();
+    await app.init({
+      background: COLORS.background,
       resizeTo: this.opts.mountEl,
-      antialias: false,
+      antialias: true,
       autoDensity: true,
+      resolution: Math.min(MAX_RESOLUTION, window.devicePixelRatio || 1),
       powerPreference: "high-performance",
       preference: "webgl",
-      /** 1× — fewer shaded pixels; main win on Retina. */
-      resolution: Math.min(1, dpr),
     });
-    this.opts.mountEl.appendChild(this.app.canvas);
-    this.app.ticker.maxFPS = 60;
-    this.app.stage.addChild(this.world);
-    this.world.addChild(this.gridG);
-    this.world.addChild(this.zoneG);
-    this.world.addChild(this.orbsLayer);
-    this.world.addChild(this.snakesLayer);
-    this.mounted = true;
-    this.drawGrid();
-    window.addEventListener("resize", this.resizeBound);
-    window.addEventListener("mousemove", this.mouseBound, { passive: true });
-    window.addEventListener("keydown", this.keyDownBound);
-    // LMB boost only on the game canvas (HUD/leaderboard sit above; no accidental boost on UI)
-    this.app.canvas.addEventListener("pointerdown", this.onPointerDownBound);
-    window.addEventListener("pointerup", this.onPointerUpBound);
-    window.addEventListener("pointercancel", this.onPointerUpBound);
-    window.addEventListener("blur", this.onWinBlurBound);
-    this.app.ticker.add(this.tickerBound);
-
-    const room = this.opts.room;
-    const $ = getStateCallbacks(room);
-
-    room.onMessage("joined", (msg: any) => {
-      this.selfSessionId = msg.sessionId ?? room.sessionId;
-    });
-    this.selfSessionId = room.sessionId;
-
-    $(room.state).players.onAdd((player: any, sessionId: string) => {
-      this.addOrUpdatePlayer(sessionId, player, true);
-      $(player).onChange(() => {
-        this.pendingPlayerSync.set(sessionId, player);
-        this.schedulePlayerSyncFlush();
-      });
-    });
-    $(room.state).players.onRemove((_: any, sessionId: string) => {
-      const v = this.players.get(sessionId);
-      if (v) {
-        this.snakesLayer.removeChild(v.container);
-        this.players.delete(sessionId);
-      }
-    });
-    $(room.state).orbs.onAdd((orb: any, id: string) => {
-      this.addOrb(id, orb);
-    });
-    $(room.state).orbs.onRemove((_: any, id: string) => {
-      const v = this.orbs.get(id);
-      if (v) {
-        this.orbsLayer.removeChild(v.g);
-        this.orbs.delete(id);
-      }
-    });
-  }
-
-  private schedulePlayerSyncFlush() {
-    if (this.playerSyncRaf !== null) return;
-    this.playerSyncRaf = requestAnimationFrame(() => {
-      this.playerSyncRaf = null;
-      for (const [sessionId, player] of this.pendingPlayerSync) {
-        this.addOrUpdatePlayer(sessionId, player, false);
-      }
-      this.pendingPlayerSync.clear();
-    });
-  }
-
-  stop() {
-    if (!this.mounted) return;
-    this.mounted = false;
-    if (this.playerSyncRaf !== null) {
-      cancelAnimationFrame(this.playerSyncRaf);
-      this.playerSyncRaf = null;
+    if (this.stopped) {
+      app.destroy(true, { children: true });
+      return;
     }
-    this.pendingPlayerSync.clear();
-    window.removeEventListener("resize", this.resizeBound);
-    window.removeEventListener("mousemove", this.mouseBound as EventListener);
-    window.removeEventListener("keydown", this.keyDownBound);
-    this.app.canvas.removeEventListener("pointerdown", this.onPointerDownBound);
-    window.removeEventListener("pointerup", this.onPointerUpBound);
-    window.removeEventListener("pointercancel", this.onPointerUpBound);
-    window.removeEventListener("blur", this.onWinBlurBound);
-    this.app.ticker.remove(this.tickerBound);
-    this.app.destroy(true, { children: true });
-  }
+    this.app = app;
 
-  private onResize() {
-    if (!this.mounted) return;
-    this.app.renderer.resize(
-      this.opts.mountEl.clientWidth,
-      this.opts.mountEl.clientHeight,
+    const tex = await loadTextures();
+    if (this.stopped) {
+      destroyTextures(tex);
+      return;
+    }
+    this.tex = tex;
+
+    this.opts.mountEl.appendChild(app.canvas);
+    app.canvas.style.display = "block";
+    app.canvas.style.touchAction = "none";
+
+    this.effects = new Effects();
+    this.effectsSlot.addChild(this.effects.layer);
+    this.floatSlot.addChild(this.effects.floatLayer);
+    this.world.addChild(
+      this.groundSlot,
+      this.shadowSlot,
+      this.extractLayer,
+      this.chestLayer,
+      this.itemLayer,
+      this.obstacleSlot,
+      this.wallSlot,
+      this.playerLayer,
+      this.effectsSlot,
+      this.canopySlot,
+      this.floatSlot,
     );
+    app.stage.addChild(this.world, this.effects.vignette);
+
+    this.input = new InputController(app.canvas, {
+      interact: () => this.sendIntent(C2S.INTERACT, {}),
+      reload: () => this.sendIntent(C2S.RELOAD, {}),
+      selectSlot: (slot) => this.sendIntent(C2S.SWITCH, { slot }),
+      toggleSlot: () => {
+        const me = this.state?.players.get(this.selfId);
+        if (me) this.sendIntent(C2S.SWITCH, { slot: me.active === 1 ? 0 : 1 });
+      },
+      heal: (kind) => this.sendIntent(C2S.HEAL, { kind }),
+    });
+    this.input.attach();
+
+    this.attachMessages();
+    this.attachState();
+
+    this.sendPing();
+    this.pingTimer = setInterval(() => this.sendPing(), PING_INTERVAL_MS);
+
+    this.lastFrameAt = performance.now();
+    app.ticker.add(this.tick);
   }
 
-  private onPointer(e: PointerEvent, down: boolean) {
-    if (e.button !== 0) return;
-    this.boost = down;
+  stop(): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.teardown();
   }
 
-  private onKey(e: KeyboardEvent) {
-    if (e.code === "KeyE" && !e.repeat) {
-      this.opts.room.send("extract");
+  /** Idempotent cleanup; also called when stop() races an unfinished start(). */
+  private teardown() {
+    for (const d of this.disposers.splice(0)) {
+      try {
+        d();
+      } catch {
+        /* the room may already be gone */
+      }
+    }
+    if (this.pingTimer !== null) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+    this.input?.detach();
+    this.input = null;
+
+    for (const m of [this.players, this.chests, this.items, this.extracts] as Array<
+      Map<string, Tracked<unknown, { destroy(): void }>>
+    >) {
+      for (const t of m.values()) t.view.destroy();
+      m.clear();
+    }
+    this.worldView?.destroy();
+    this.worldView = null;
+    this.minimap?.destroy();
+    this.minimap = null;
+    this.effects?.destroy();
+    this.effects = null;
+
+    if (this.app) {
+      this.app.ticker.remove(this.tick);
+      this.app.destroy(true, { children: true });
+      this.app = null;
+    }
+    if (this.tex) {
+      destroyTextures(this.tex);
+      this.tex = null;
+    }
+    this.map = null;
+    this.idx = null;
+  }
+
+  private sendIntent(type: string, payload: object) {
+    if (this.stopped) return;
+    const me = this.state?.players.get(this.selfId);
+    if (!me || !me.alive || me.extractedAt > 0) return;
+    try {
+      this.opts.room.send(type, payload);
+    } catch {
+      /* socket closing */
     }
   }
 
-  private drawGrid() {
-    this.gridG.clear();
-    const size = 200;
-    const range = 3000;
-    this.gridG.setStrokeStyle({ width: 1, color: 0x1f1d2b, alpha: 0.5 });
-    for (let x = -range; x <= range; x += size) {
-      this.gridG.moveTo(x, -range);
-      this.gridG.lineTo(x, range);
+  private sendPing() {
+    try {
+      this.opts.room.send(C2S.PING, { t: performance.now() });
+    } catch {
+      /* socket closing */
     }
-    for (let y = -range; y <= range; y += size) {
-      this.gridG.moveTo(-range, y);
-      this.gridG.lineTo(range, y);
-    }
-    this.gridG.stroke();
   }
 
-  private addOrUpdatePlayer(sessionId: string, player: any, isNew: boolean) {
-    let view = this.players.get(sessionId);
-    if (!view) {
-      const container = new Container();
-      const bodyG = new Graphics();
-      const headG = new Graphics();
-      const label = new Text({
-        text: "",
-        style: new TextStyle({
-          fontSize: 12,
-          fill: 0xffffff,
-          fontFamily: "JetBrains Mono, ui-monospace, monospace",
-          align: "center",
-          stroke: { color: 0x000000, width: 3 },
-        }),
+  // ---------------------------------------------------------------------------------------
+  // Room wiring
+
+  private attachMessages() {
+    const room = this.opts.room;
+    const on = <T>(type: string, cb: (msg: T) => void) => {
+      const off = room.onMessage<T>(type, (msg) => {
+        if (!this.stopped) cb(msg);
       });
-      label.anchor.set(0.5, 1);
-      container.addChild(bodyG);
-      container.addChild(headG);
-      container.addChild(label);
-      this.snakesLayer.addChild(container);
-      view = {
-        container,
-        bodyG,
-        headG,
-        label,
-        lineColor: colorFor(sessionId),
-        lastLabelKey: "",
-        prevX: player.headX,
-        prevY: player.headY,
-        curX: player.headX,
-        curY: player.headY,
-        bodyPoints: [],
+      if (typeof off === "function") this.disposers.push(off);
+    };
+
+    on<ShotMsg>(S2C.SHOT, (m) => this.onShot(m));
+    on<HitMsg>(S2C.HIT, (m) => this.onHit(m));
+    on<KillMsg>(S2C.KILL, (m) => this.onKill(m));
+    on<ChestOpenedMsg>(S2C.CHEST, (m) => {
+      const c = this.chests.get(m.id)?.state;
+      if (!c || !this.effects) return;
+      const color = RARITY_COLORS[c.rarity as 0 | 1 | 2 | 3] ?? RARITY_COLORS[0];
+      const now = performance.now();
+      this.effects.ring(c.x, c.y, color, 80, 450, now);
+      this.effects.burst(c.x, c.y, color, 16, 320, now);
+    });
+    on<{ t: number }>(S2C.PONG, (m) => {
+      if (typeof m?.t === "number") this.pingMs = Math.max(0, Math.round(performance.now() - m.t));
+    });
+  }
+
+  /** Subscribe to collections; tolerates a room whose state has not arrived yet. */
+  private attachState() {
+    const room = this.opts.room;
+    const state = this.state;
+    const $ = (() => {
+      try {
+        return getStateCallbacks(room);
+      } catch {
+        return undefined;
+      }
+    })();
+    if (!state || !$) {
+      const retry = () => {
+        if (!this.stopped) this.attachState();
       };
-      this.players.set(sessionId, view);
+      room.onStateChange.once(retry);
+      this.disposers.push(() => room.onStateChange.remove(retry));
+      return;
     }
-    view.prevX = view.curX;
-    view.prevY = view.curY;
-    view.curX = player.headX;
-    view.curY = player.headY;
-    const segLen = player.body.length;
-    while (view.bodyPoints.length < segLen) {
-      const i = view.bodyPoints.length;
-      const seg = player.body[i];
-      // New segments must spawn at the server tail, not the head — avoids a visible snap to the end.
-      const x = seg?.x ?? view.bodyPoints[i - 1]?.cx ?? player.headX;
-      const y = seg?.y ?? view.bodyPoints[i - 1]?.cy ?? player.headY;
-      view.bodyPoints.push({ px: x, py: y, cx: x, cy: y });
-    }
-    while (view.bodyPoints.length > segLen) view.bodyPoints.pop();
-    for (let i = 0; i < segLen; i++) {
-      const seg = player.body[i];
-      const bp = view.bodyPoints[i]!;
-      // Only update network targets; px/py keep interpolating in tick (no per-frame snap).
-      bp.cx = seg.x;
-      bp.cy = seg.y;
-    }
-    if (!player.alive) {
-      view.container.alpha = 0.15;
-    } else {
-      view.container.alpha = 1;
-    }
-    void isNew;
+
+    // `$` is typed for the generic room; the decoded instances follow BattleState.
+    const s$ = $(state) as unknown as {
+      players: CollectionProxy<Player>;
+      chests: CollectionProxy<Chest>;
+      items: CollectionProxy<GroundItem>;
+      extracts: CollectionProxy<Extract>;
+    };
+
+    this.disposers.push(
+      s$.players.onAdd((p, id) => this.addPlayer(id, p)),
+      s$.players.onRemove((_p, id) => this.removeTracked(this.players, id)),
+      s$.chests.onAdd((c, id) => this.addChest(id, c)),
+      s$.chests.onRemove((_c, id) => this.removeTracked(this.chests, id)),
+      s$.items.onAdd((it, id) => this.addItem(id, it)),
+      s$.items.onRemove((_it, id) => this.removeTracked(this.items, id)),
+      s$.extracts.onAdd((e, id) => this.addExtract(id, e)),
+      s$.extracts.onRemove((_e, id) => this.removeTracked(this.extracts, id)),
+    );
+
+    const onPatch = () => this.onStatePatch();
+    room.onStateChange(onPatch);
+    this.disposers.push(() => room.onStateChange.remove(onPatch));
+    // The first full state may already be decoded: take it as the first snapshot.
+    this.onStatePatch();
   }
 
-  private addOrb(id: string, orb: any) {
-    const g = new Graphics();
-    const tier = orb.tier ?? 0;
-    const color = tier === 1 ? 0x14f195 : 0xb07bff;
-    const size = tier === 1 ? 6 : 4;
-    g.circle(0, 0, size).fill({ color });
-    const ox = orb.x;
-    const oy = orb.y;
-    g.position.set(ox, oy);
-    this.orbsLayer.addChild(g);
-    this.orbs.set(id, { g, px: ox, py: oy });
+  private addPlayer(id: string, p: Player) {
+    if (!this.tex) return;
+    this.removeTracked(this.players, id);
+    const view = new PlayerView(this.tex, id, id === this.selfId, p.nickname);
+    view.buffer.push({ t: performance.now(), x: p.x, y: p.y, aim: p.aim });
+    view.place(p.x, p.y, p.aim);
+    this.playerLayer.addChild(view.root);
+    this.players.set(id, { state: p, view });
+    if (id === this.selfId) this.aim = p.aim;
   }
 
-  /** Frame-rate–independent smoothing (matches old ~0.35 / ~0.15 per 60Hz frame at 60fps). */
-  private blendToward(t: Ticker, per60HzFrame: number): number {
-    const frames = t.deltaMS / (1000 / 60);
-    return 1 - Math.pow(1 - per60HzFrame, frames);
+  private addChest(id: string, c: Chest) {
+    if (!this.tex) return;
+    this.removeTracked(this.chests, id);
+    const view = new ChestView(this.tex, c.rarity);
+    this.chestLayer.addChild(view.root);
+    this.chests.set(id, { state: c, view });
   }
 
-  /** If Colyseus session id and map key ever diverge, recover self via roster userId so HUD/mass sync. */
-  private syncSelfSessionFromState(state: any) {
-    const uid = this.opts.selfUserId;
-    if (!uid) return;
-    const cur = this.selfSessionId
-      ? state.players.get(this.selfSessionId)
-      : undefined;
-    if (cur?.userId === uid) return;
-    state.players.forEach((p: any, sessionId: string) => {
-      if (p.userId === uid && !p.isBot) {
-        this.selfSessionId = sessionId;
-      }
-    });
+  private addItem(id: string, it: GroundItem) {
+    if (!this.tex) return;
+    this.removeTracked(this.items, id);
+    const view = new ItemView(this.tex);
+    view.sync(it);
+    this.itemLayer.addChild(view.root);
+    this.items.set(id, { state: it, view });
   }
 
-  private tick(t: Ticker) {
-    if (!this.mounted) return;
-    const state: any = this.opts.room.state;
-    if (!state) return;
-    this.syncSelfSessionFromState(state);
-    const w = this.app.screen.width;
-    const h = this.app.screen.height;
-    const margin = 450;
-    const camX = this.camera.x;
-    const camY = this.camera.y;
-    const fx0 = camX - w / 2 - margin;
-    const fx1 = camX + w / 2 + margin;
-    const fy0 = camY - h / 2 - margin;
-    const fy1 = camY + h / 2 + margin;
+  private addExtract(id: string, e: Extract) {
+    this.removeTracked(this.extracts, id);
+    const view = new ExtractView();
+    this.extractLayer.addChild(view.root);
+    this.extracts.set(id, { state: e, view });
+  }
 
-    // Softer = less jaggy; body slightly slower than head so the rope reads fluid.
-    const headBlend = this.blendToward(t, 0.26);
-    const segBlend = this.blendToward(t, 0.17);
-    const camBlend = this.blendToward(t, 0.15);
-    const orbBlend = this.blendToward(t, 0.32);
-    for (const [sid, view] of this.players) {
-      const player = state.players.get(sid);
-      if (!player) continue;
-      const x = view.prevX + (view.curX - view.prevX) * headBlend;
-      const y = view.prevY + (view.curY - view.prevY) * headBlend;
-      view.prevX = x;
-      view.prevY = y;
+  private removeTracked<T, V extends { destroy(): void }>(m: Map<string, Tracked<T, V>>, id: string) {
+    const t = m.get(id);
+    if (!t) return;
+    t.view.destroy();
+    m.delete(id);
+  }
 
-      const r = player.radius;
-      const color = view.lineColor;
-      const pts = view.bodyPoints;
-      const n = pts.length;
-      for (let i = 0; i < n; i++) {
-        const bp = pts[i]!;
-        bp.px = bp.px + (bp.cx - bp.px) * segBlend;
-        bp.py = bp.py + (bp.cy - bp.py) * segBlend;
-      }
-
-      if (x < fx0 || x > fx1 || y < fy0 || y > fy1) {
-        view.container.visible = false;
-        continue;
-      }
-      view.container.visible = true;
-
-      const step = bodyDrawStep(n);
-      view.bodyG.clear();
-      view.bodyG.setStrokeStyle({ width: r * 1.6, color, alpha: 0.85, cap: "round", join: "round" });
-      view.bodyG.moveTo(x, y);
-      for (let i = 0; i < n; i += step) {
-        const bp = pts[i]!;
-        view.bodyG.lineTo(bp.px, bp.py);
-      }
-      if (n > 0 && (n - 1) % step !== 0) {
-        const bp = pts[n - 1]!;
-        view.bodyG.lineTo(bp.px, bp.py);
-      }
-      view.bodyG.stroke();
-
-      view.headG.clear();
-      view.headG.circle(x, y, r).fill({ color });
-      view.headG.circle(x, y, r * 0.55).fill({ color: 0xffffff, alpha: 0.85 });
-      const labelKey = `${player.nickname}\0${player.massUnits}\0${player.alive}`;
-      if (view.lastLabelKey !== labelKey) {
-        view.lastLabelKey = labelKey;
-        const usd = formatMassUnitsAsUsd(player.massUnits);
-        view.label.text = `${player.nickname}\n${usd}`;
-      }
-      view.label.position.set(x, y - r - 4);
-    }
-
-    for (const [id, v] of this.orbs) {
-      const orb = state.orbs.get(id);
-      if (!orb) continue;
-      v.px = v.px + (orb.x - v.px) * orbBlend;
-      v.py = v.py + (orb.y - v.py) * orbBlend;
-      v.g.position.set(v.px, v.py);
-      v.g.visible = v.px >= fx0 && v.px <= fx1 && v.py >= fy0 && v.py <= fy1;
-    }
-
-    if (state.zone?.radius != null && state.zone.radius > 0) {
-      const zx = state.zone.cx;
-      const zy = state.zone.cy;
-      const zr = state.zone.radius;
-      if (
-        !Number.isFinite(this.zoneSnap.r) ||
-        Math.abs(zx - this.zoneSnap.cx) > ZONE_EPS ||
-        Math.abs(zy - this.zoneSnap.cy) > ZONE_EPS ||
-        Math.abs(zr - this.zoneSnap.r) > ZONE_EPS
-      ) {
-        this.zoneSnap = { cx: zx, cy: zy, r: zr };
-        this.zoneG.clear();
-        this.zoneG.setStrokeStyle({ width: 6, color: 0xff5060, alpha: 0.7 });
-        this.zoneG.circle(zx, zy, zr).stroke();
-        this.zoneG.setStrokeStyle({ width: 2, color: 0xff5060, alpha: 0.25 });
-        this.zoneG.circle(zx, zy, zr + 8).stroke();
-      }
-    } else if (Number.isFinite(this.zoneSnap.r)) {
-      this.zoneSnap = { cx: NaN, cy: NaN, r: NaN };
-      this.zoneG.clear();
-    }
-
-    // camera follow self
-    const self = this.selfSessionId ? this.players.get(this.selfSessionId) : null;
-    let cx = 0,
-      cy = 0;
-    if (self) {
-      cx = self.prevX;
-      cy = self.prevY;
-    }
-    this.camera.x += (cx - this.camera.x) * camBlend;
-    this.camera.y += (cy - this.camera.y) * camBlend;
-    this.world.position.set(w / 2 - this.camera.x, h / 2 - this.camera.y);
-
+  /** Runs after every decoded patch (20 Hz): timestamps for interpolation + reconciliation. */
+  private onStatePatch() {
+    const state = this.state;
+    if (!state || this.stopped) return;
     const now = performance.now();
-    // Send input ~30Hz. Aim from the visible head, not the screen center:
-    // camera smoothing means those differ, which is very noticeable near the head.
-    if (now - this.inputTickAt > 33 && self) {
-      this.inputTickAt = now;
-      const headScreenX = self.prevX + w / 2 - this.camera.x;
-      const headScreenY = self.prevY + h / 2 - this.camera.y;
-      const angle = Math.atan2(this.mouse.y - headScreenY, this.mouse.x - headScreenX);
-      this.opts.room.send("input", { angle, boost: this.boost });
+    if (state.clockMs !== this.clockBase) {
+      this.clockBase = state.clockMs;
+      this.clockBaseAt = now;
     }
 
-    if (now - this.lastHudEmitAt < HUD_EMIT_INTERVAL_MS) return;
-    this.lastHudEmitAt = now;
+    state.players.forEach((p, id) => {
+      const t = this.players.get(id);
+      if (!t || id === this.selfId) return;
+      t.view.buffer.push({ t: now, x: p.x, y: p.y, aim: p.aim });
+    });
 
-    const selfPlayer = this.selfSessionId
-      ? state.players.get(this.selfSessionId)
-      : null;
-    const lb: HudSnapshot["leaderboard"] = [];
-    state.players.forEach((p: any) => {
-      lb.push({
-        nickname: p.nickname,
-        mass: p.massUnits,
-        alive: p.alive,
-      });
-    });
-    lb.sort((a, b) => Number(BigInt(b.mass) - BigInt(a.mass)));
-    this.opts.onHud({
-      phase: state.phase ?? "lockin",
-      clockMs: state.clockMs ?? 0,
-      selfMassUnits: selfPlayer?.massUnits ?? "0",
-      selfAlive: selfPlayer?.alive ?? false,
-      selfDiedAt: selfPlayer?.diedAt ?? 0,
-      selfExtractStartedAt: selfPlayer?.extractStartedAt ?? 0,
-      selfExtractedAt: selfPlayer?.extractedAt ?? 0,
-      selfExitOrder: selfPlayer?.exitOrder ?? 0,
-      zoneRadius: state.zone?.radius ?? 0,
-      leaderboard: lb,
-    });
+    const me = state.players.get(this.selfId);
+    if (!me) return;
+    if (!me.alive || me.extractedAt > 0 || !this.idx) {
+      // Not controllable (or the map is not built yet): follow the server directly.
+      this.predictor.reset(me.x, me.y);
+      this.prevPredX = me.x;
+      this.prevPredY = me.y;
+      this.corrX = 0;
+      this.corrY = 0;
+      return;
+    }
+    if (!this.predictor.isInitialized) {
+      this.predictor.reset(me.x, me.y);
+      this.prevPredX = me.x;
+      this.prevPredY = me.y;
+      return;
+    }
+    const { dx, dy } = this.predictor.reconcile(me.x, me.y, me.lastSeq);
+    if (dx === 0 && dy === 0) return;
+    // Shift the current interpolation segment with the correction…
+    this.prevPredX += dx;
+    this.prevPredY += dy;
+    const err = Math.hypot(this.corrX - dx, this.corrY - dy);
+    if (err > SNAP_DIST) {
+      this.corrX = 0;
+      this.corrY = 0;
+    } else {
+      // …and keep the drawn position where it was, gliding to the corrected one.
+      this.corrX -= dx;
+      this.corrY -= dy;
+    }
   }
+
+  private onShot(m: ShotMsg) {
+    if (!this.effects || !Array.isArray(m.a) || !(m.w in WEAPONS)) return;
+    const now = performance.now();
+    let x = m.x;
+    let y = m.y;
+    const isSelf = m.s === this.selfId;
+    if (isSelf && this.selfRender && m.a.length) {
+      // Our own shots start at the gun we see (the predicted position), not where the
+      // server had us one round trip ago.
+      const a = m.a.reduce((s, v) => s + v, 0) / m.a.length;
+      const muzzle = WEAPONS[m.w as WeaponId].muzzle;
+      x = this.selfRender.x + Math.cos(a) * muzzle;
+      y = this.selfRender.y + Math.sin(a) * muzzle;
+    }
+    this.effects.shot(this.idx, m.s, m.w, x, y, m.a, isSelf, now);
+  }
+
+  private onHit(m: HitMsg) {
+    if (!this.effects) return;
+    const now = performance.now();
+    this.effects.hit(m.s, m.x, m.y, !!m.ar, now);
+    if (m.t === this.selfId) {
+      if (m.d > 0) this.effects.damageNumber(m.x, m.y, m.d, COLORS.damageTaken, now);
+      this.effects.hurtFlash(m.d);
+    } else if (m.s === this.selfId && m.d > 0) {
+      this.effects.damageNumber(m.x, m.y, m.d, m.ar ? COLORS.hitArmor : COLORS.damageDealt, now);
+    }
+  }
+
+  private onKill(m: KillMsg) {
+    const now = performance.now();
+    this.killFeed.push({
+      id: ++this.killSeq,
+      killer: m.killer,
+      victim: m.victim,
+      weapon: m.weapon,
+      atMs: this.clockNow(now),
+      receivedAt: now,
+    });
+    if (this.killFeed.length > KILL_FEED_MAX) this.killFeed.splice(0, this.killFeed.length - KILL_FEED_MAX);
+    const v = this.players.get(m.victimId)?.view;
+    if (v && this.effects) {
+      this.effects.burst(v.x, v.y, 0xff3b3b, 22, 380, now);
+      this.effects.ring(v.x, v.y, 0xffffff, 70, 400, now);
+    }
+  }
+
+  private clockNow(now: number): number {
+    const state = this.state;
+    if (!state) return 0;
+    if (state.phase === "ended" || this.clockBaseAt === 0) return state.clockMs;
+    const lead = Math.min(CLOCK_LEAD_MAX_MS, now - this.clockBaseAt);
+    const dur = state.durationMs || MATCH.DURATION_MS;
+    return Math.min(dur, Math.round(this.clockBase + Math.max(0, lead)));
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Frame
+
+  private tick = () => {
+    const app = this.app;
+    const state = this.state;
+    if (!app || this.stopped || !state) return;
+    const now = performance.now();
+    const dt = Math.min(100, now - this.lastFrameAt);
+    this.lastFrameAt = now;
+    const w = app.screen.width;
+    const h = app.screen.height;
+    this.zoom = Math.sqrt((w * h) / (VIEW_W * VIEW_H)) || 1;
+
+    if (!this.worldView && state.mapSeed) this.buildMap(state.mapSeed);
+
+    const clock = this.clockNow(now);
+    const me = state.players.get(this.selfId) ?? null;
+    const controllable = !!me && me.alive && me.extractedAt === 0 && state.phase !== "ended" && !!this.idx;
+
+    // Fixed-rate input loop. Bursts are capped so a hidden tab does not dump a backlog.
+    this.inputAcc = Math.min(this.inputAcc + dt, INPUT_DT_MS * 3);
+    while (this.inputAcc >= INPUT_DT_MS) {
+      this.inputAcc -= INPUT_DT_MS;
+      if (controllable && me) this.sendInput(me, clock);
+      else this.input?.sampleFire();
+    }
+
+    // Local player: predicted position, smoothed between input steps, plus decaying correction.
+    if (me && controllable) {
+      const k = this.inputAcc / INPUT_DT_MS;
+      const decay = decayFactor(dt, CORRECTION_TAU_MS);
+      this.corrX *= decay;
+      this.corrY *= decay;
+      if (Math.abs(this.corrX) < 0.05) this.corrX = 0;
+      if (Math.abs(this.corrY) < 0.05) this.corrY = 0;
+      const x = this.prevPredX + (this.predictor.x - this.prevPredX) * k + this.corrX;
+      const y = this.prevPredY + (this.predictor.y - this.prevPredY) * k + this.corrY;
+      this.selfRender = { x, y };
+      this.updateAim(w, h);
+    } else if (me && me.alive && me.extractedAt === 0) {
+      // Map not built yet or the match is over: show the server position as is.
+      this.selfRender = { x: me.x, y: me.y };
+    }
+    // After death / extraction selfRender keeps the last position: the camera stays there.
+
+    if (this.selfRender) {
+      this.camX = this.selfRender.x;
+      this.camY = this.selfRender.y;
+    }
+    const shake = this.effects?.update(now, dt, w, h) ?? { x: 0, y: 0 };
+    this.world.scale.set(this.zoom);
+    this.world.position.set(w / 2 - this.camX * this.zoom + shake.x, h / 2 - this.camY * this.zoom + shake.y);
+
+    const halfW = w / 2 / this.zoom + CULL_MARGIN;
+    const halfH = h / 2 / this.zoom + CULL_MARGIN;
+    const view: ViewRect = { x0: this.camX - halfW, y0: this.camY - halfH, x1: this.camX + halfW, y1: this.camY + halfH };
+    const inView = (x: number, y: number) => x >= view.x0 && x <= view.x1 && y >= view.y0 && y <= view.y1;
+
+    const selfOnMap = controllable ? this.selfRender : null;
+    this.worldView?.update(view, selfOnMap);
+    const selfBush = selfOnMap && this.worldView ? this.worldView.bushAt(selfOnMap.x, selfOnMap.y) : null;
+
+    // Players
+    const renderT = now - INTERP_DELAY_MS;
+    for (const [id, { state: p, view: v }] of this.players) {
+      const onMap = p.alive && p.extractedAt === 0;
+      if (id === this.selfId) {
+        const pos = this.selfRender ?? { x: p.x, y: p.y };
+        v.place(pos.x, pos.y, controllable ? this.aim : p.aim);
+      } else {
+        const s = v.buffer.sample(renderT) ?? { x: p.x, y: p.y, aim: p.aim };
+        v.place(s.x, s.y, s.aim);
+      }
+      v.root.visible = onMap && inView(v.x, v.y);
+      if (!v.root.visible) continue;
+      v.setColor(p.color);
+      v.setNickname(p.nickname);
+      v.setWeapon(p.slots.at(p.active)?.weapon ?? "");
+      if (id !== this.selfId) {
+        const armorMax = p.armor >= 1 && p.armor <= 3 ? ARMOR[p.armor as 1 | 2 | 3].durability : 0;
+        v.setBars(p.hp, p.armor, p.armorDur, armorMax);
+        const bush = this.worldView?.bushAt(v.x, v.y) ?? null;
+        v.setLabelVisible(!bush || bush === selfBush);
+      }
+    }
+
+    for (const { state: c, view: v } of this.chests.values()) {
+      v.root.visible = inView(c.x, c.y);
+      if (v.root.visible) v.update(c, now);
+    }
+    for (const { state: it, view: v } of this.items.values()) {
+      v.root.visible = inView(it.x, it.y);
+      if (!v.root.visible) continue;
+      v.sync(it);
+      v.update(it.x, it.y, now);
+    }
+
+    const extractInfo: Array<{ x: number; y: number; r: number; status: ReturnType<typeof extractStatus> }> = [];
+    for (const [id, { state: e, view: v }] of this.extracts) {
+      const status = extractStatus(e, clock);
+      extractInfo.push({ x: e.x, y: e.y, r: e.r, status });
+      v.root.visible = Math.abs(e.x - this.camX) < halfW + e.r && Math.abs(e.y - this.camY) < halfH + e.r;
+      if (!v.root.visible) continue;
+      let progress: number | null = null;
+      if (me && controllable && me.extractStartedAt > 0) {
+        const inside = this.selfRender && Math.hypot(this.selfRender.x - e.x, this.selfRender.y - e.y) <= e.r;
+        if (me.extractId === id || (!me.extractId && inside)) {
+          progress = (clock - me.extractStartedAt) / MATCH.EXTRACT_CHANNEL_MS;
+        }
+      }
+      v.update(e.x, e.y, e.r, status, extractCaption(status, e, clock), progress, now);
+    }
+
+    if (this.minimap) {
+      this.minimap.layout(w, h);
+      this.minimap.update(
+        extractInfo,
+        this.selfRender && me?.alive && me.extractedAt === 0
+          ? { x: this.selfRender.x, y: this.selfRender.y, aim: controllable ? this.aim : me.aim }
+          : null,
+        now,
+      );
+    }
+
+    if (now - this.lastHudAt >= HUD_INTERVAL_MS) {
+      this.lastHudAt = now;
+      this.emitHud(state, clock, now);
+    }
+  };
+
+  private buildMap(seed: number) {
+    if (!this.tex || !this.app) return;
+    const map = generateMap(seed);
+    this.map = map;
+    this.idx = getCollisionIndex(map);
+    const wv = new WorldView(map, this.tex);
+    this.worldView = wv;
+    this.groundSlot.addChild(wv.ground);
+    this.shadowSlot.addChild(wv.shadows);
+    this.obstacleSlot.addChild(wv.obstacles);
+    this.wallSlot.addChild(wv.walls);
+    this.canopySlot.addChild(wv.canopy);
+    this.minimap = new Minimap(map);
+    this.app.stage.addChild(this.minimap.root);
+    // Prediction was waiting for the collision index: start it from the server position.
+    const me = this.state?.players.get(this.selfId);
+    if (me) {
+      this.predictor.reset(me.x, me.y);
+      this.prevPredX = me.x;
+      this.prevPredY = me.y;
+    }
+  }
+
+  private sendInput(me: Player, clock: number) {
+    const input = this.input;
+    if (!input) return;
+    const { mx, my } = input.movement();
+    const fire = input.sampleFire();
+    const seq = this.predictor.nextSeq();
+    const sample: InputSample = { seq, mx, my, aim: this.aim, fire };
+    try {
+      this.opts.room.send(C2S.INPUT, sample);
+    } catch {
+      return;
+    }
+    const healing = me.healUntil > clock && me.healKind !== "";
+    this.prevPredX = this.predictor.x;
+    this.prevPredY = this.predictor.y;
+    this.predictor.apply({ seq, mx, my, speedMult: healing ? PLAYER.HEAL_SPEED_MULT : 1 });
+  }
+
+  /** Aim from the rendered player position to the cursor, in world space (shake excluded). */
+  private updateAim(w: number, h: number) {
+    if (!this.input?.hasPointer || !this.selfRender) return;
+    const wx = this.camX + (this.input.mouseX - w / 2) / this.zoom;
+    const wy = this.camY + (this.input.mouseY - h / 2) / this.zoom;
+    const dx = wx - this.selfRender.x;
+    const dy = wy - this.selfRender.y;
+    if (dx * dx + dy * dy > 1) this.aim = Math.atan2(dy, dx);
+  }
+
+  private emitHud(state: BattleState, clock: number, now: number) {
+    while (this.killFeed.length && now - this.killFeed[0]!.receivedAt > KILL_FEED_TTL_MS) this.killFeed.shift();
+    const snapshot: HudSnapshot = buildHud({
+      state,
+      selfId: this.selfId,
+      selfPos: this.selfRender,
+      clockMs: clock,
+      killFeed: this.killFeed.map(({ receivedAt: _r, ...e }) => e),
+      pingMs: this.pingMs,
+    });
+    try {
+      this.opts.onHud(snapshot);
+    } catch (err) {
+      console.error("[game] onHud failed", err);
+    }
+  }
+}
+
+/** Minimal shape of the colyseus collection callback proxy we use. */
+interface CollectionProxy<V> {
+  onAdd(cb: (item: V, key: string) => void, immediate?: boolean): () => void;
+  onRemove(cb: (item: V, key: string) => void): () => void;
+}
+
+function fmtClock(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function extractCaption(status: ReturnType<typeof extractStatus>, e: Extract, clock: number): string {
+  if (status === "closed") return "CLOSED";
+  if (status === "waiting") return `OPENS IN ${fmtClock(e.openAt - clock)}`;
+  if (e.closeAt > 0 && e.closeAt - clock <= 60_000) return `CLOSES IN ${fmtClock(e.closeAt - clock)}`;
+  return "EXTRACT";
 }

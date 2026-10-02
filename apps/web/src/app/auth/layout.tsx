@@ -3,8 +3,8 @@ import { TopBar } from "@/components/top-bar";
 import { ZooaAmbientBg } from "@/components/zooa-ambient-bg";
 
 export const metadata: Metadata = {
-  title: "Account — ZOOA",
-  description: "Sign in or create a ZOOA account",
+  title: "Account — EXTRACT",
+  description: "Sign in or create an EXTRACT account",
 };
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {

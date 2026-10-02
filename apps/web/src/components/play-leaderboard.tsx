@@ -1,136 +1,92 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import clsx from "clsx";
 import { Reveal } from "@/components/reveal";
+import type { RecentRaidRow } from "@/lib/recent-raids";
+import { ItemTile } from "./item-tile";
 
-type Row = {
-  rank: number;
-  nick: string;
-  netUsd: string;
-  winrate: string;
-  avgExtractUsd: string;
-  reward: string;
-};
+const EXIT_LABEL = {
+  extract: { text: "Extracted", cls: "bg-zooa-lime text-black" },
+  dead: { text: "KIA", cls: "bg-rose-500 text-white" },
+  timeout: { text: "Lost", cls: "bg-amber-400 text-black" },
+} as const;
 
-const DEMO_ROWS: Row[] = [
-  {
-    rank: 1,
-    nick: "vex.null",
-    netUsd: "+$4,281.40",
-    winrate: "61.2%",
-    avgExtractUsd: "$187.40",
-    reward: "Apex shard",
-  },
-  {
-    rank: 2,
-    nick: "rio_kestrel",
-    netUsd: "+$3,904.15",
-    winrate: "58.4%",
-    avgExtractUsd: "$164.08",
-    reward: "Gold coil",
-  },
-  {
-    rank: 3,
-    nick: "mara.ink",
-    netUsd: "+$3,412.90",
-    winrate: "55.7%",
-    avgExtractUsd: "$151.22",
-    reward: "Gold coil",
-  },
-  {
-    rank: 4,
-    nick: "coldframe",
-    netUsd: "+$2,887.05",
-    winrate: "52.1%",
-    avgExtractUsd: "$138.65",
-    reward: "Silver thread",
-  },
-  {
-    rank: 5,
-    nick: "9leaf",
-    netUsd: "+$2,441.33",
-    winrate: "49.8%",
-    avgExtractUsd: "$121.90",
-    reward: "Silver thread",
-  },
-  {
-    rank: 6,
-    nick: "halcyon drift",
-    netUsd: "+$2,108.77",
-    winrate: "47.3%",
-    avgExtractUsd: "$109.44",
-    reward: "Bronze tag",
-  },
-  {
-    rank: 7,
-    nick: "kite_runner_02",
-    netUsd: "+$1,756.20",
-    winrate: "44.6%",
-    avgExtractUsd: "$96.08",
-    reward: "Bronze tag",
-  },
-  {
-    rank: 8,
-    nick: "siltwave",
-    netUsd: "+$1,429.88",
-    winrate: "41.9%",
-    avgExtractUsd: "$88.33",
-    reward: "Bronze tag",
-  },
-];
+function timeAgo(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
 
+/** Lobby board of the latest human results (GET /api/matches/recent). */
 export function PlayLeaderboard() {
+  const [rows, setRows] = useState<RecentRaidRow[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/matches/recent", { cache: "no-store" })
+      .then((r) => r.json() as Promise<{ rows?: RecentRaidRow[] }>)
+      .then((d) => {
+        if (!cancelled) setRows(Array.isArray(d.rows) ? d.rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setRows([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
-    <section
-      className="rounded-[2rem] border border-white/10 bg-zooa-dark/80 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_20px_40px_-15px_rgba(0,0,0,0.35)] backdrop-blur md:p-8"
-      aria-label="Leaderboard preview"
-    >
-      <Reveal as="h2" delay={40} className="font-display text-2xl tracking-wide text-[#c4f07a] md:text-3xl">
-        Leaderboard
+    <section className="toon-panel bg-[#161b28]/95 p-6 md:p-8" aria-label="Recent raids">
+      <Reveal as="h2" delay={40} className="toon-text text-3xl tracking-wide text-white md:text-4xl">
+        Recent raids
       </Reveal>
-      <p className="mt-2 text-sm leading-relaxed text-white/55">
-        Demo standings for UI only. Net is session-style profit; avg extract is mean successful cash-out.
-      </p>
-      <div className="mt-6 -mx-1 overflow-x-auto px-1 pb-1 [scrollbar-gutter:stable]">
-        <table className="w-full min-w-[36rem] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-white/10">
-              <th scope="col" className="pb-3 pr-3 font-display text-xs font-normal uppercase tracking-[0.14em] text-white/45">
-                #
-              </th>
-              <th scope="col" className="pb-3 pr-3 font-display text-xs font-normal uppercase tracking-[0.14em] text-white/45">
-                Rider
-              </th>
-              <th scope="col" className="pb-3 pr-3 font-display text-xs font-normal uppercase tracking-[0.14em] text-white/45">
-                Net
-              </th>
-              <th scope="col" className="pb-3 pr-3 font-display text-xs font-normal uppercase tracking-[0.14em] text-white/45">
-                Win rate
-              </th>
-              <th scope="col" className="pb-3 pr-3 font-display text-xs font-normal uppercase tracking-[0.14em] text-white/45">
-                Avg extract
-              </th>
-              <th scope="col" className="pb-3 font-display text-xs font-normal uppercase tracking-[0.14em] text-white/45">
-                Reward
-              </th>
-            </tr>
-          </thead>
-          <tbody className="font-mono tabular-nums text-white/85">
-            {DEMO_ROWS.map((row) => (
-              <tr
-                key={row.nick}
-                className="border-b border-white/[0.06] transition-colors last:border-0 hover:bg-white/[0.03]"
+      <p className="mt-3 text-sm leading-relaxed text-white/55">Who made it out — and with what.</p>
+
+      {rows === null ? (
+        <ul className="mt-6 space-y-2" aria-hidden>
+          {[0, 1, 2].map((i) => (
+            <li key={i} className="h-14 animate-pulse rounded-2xl bg-white/[0.05]" />
+          ))}
+        </ul>
+      ) : rows.length === 0 ? (
+        <p className="mt-6 rounded-2xl border-2 border-dashed border-white/15 px-4 py-8 text-center text-sm text-white/50">
+          No raids yet. Be the first to extract.
+        </p>
+      ) : (
+        <ul className="mt-6 space-y-2">
+          {rows.map((r) => {
+            const exit = EXIT_LABEL[r.exitType];
+            return (
+              <li
+                key={`${r.matchId}:${r.nickname}`}
+                className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border-2 border-black/70 bg-white/[0.04] px-3 py-2.5"
               >
-                <td className="py-3 pr-3 align-middle text-zooa-lime/90">{row.rank}</td>
-                <td className="py-3 pr-3 align-middle text-white/90">{row.nick}</td>
-                <td className="py-3 pr-3 align-middle text-zooa-lime/95">{row.netUsd}</td>
-                <td className="py-3 pr-3 align-middle">{row.winrate}</td>
-                <td className="py-3 pr-3 align-middle">{row.avgExtractUsd}</td>
-                <td className="py-3 align-middle text-white/70">{row.reward}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                <span className={clsx("rounded-full border-2 border-black px-2.5 py-1 text-[0.7rem] tracking-wide", exit.cls)}>
+                  {exit.text}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-base tracking-wide text-white">{r.nickname}</span>
+                {r.extracted.length > 0 && (
+                  <span className="flex gap-1.5">
+                    {r.extracted.slice(0, 4).map((it) => (
+                      <ItemTile key={it.uid} item={it} size="sm" showName={false} />
+                    ))}
+                  </span>
+                )}
+                <span className="w-16 text-right text-sm tabular-nums text-white/75">
+                  {r.kills} {r.kills === 1 ? "kill" : "kills"}
+                </span>
+                <span className="w-20 text-right text-xs text-white/40">{timeAgo(r.endedAt)}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </section>
   );
 }

@@ -2,290 +2,236 @@
 
 import { useEffect, useState } from "react";
 import clsx from "clsx";
-import { ROUND_MS } from "@extract/shared";
-import type {
-  MatchSettlementParticipant,
-  MatchSettlementPayload,
-  PlayerOutcomePayload,
+import {
+  BREAK_CHANCE_ON_DEATH,
+  type ItemRef,
+  type MatchSettlementPayload,
+  type OutcomeMsg,
 } from "@extract/shared";
-import { formatUsdCents } from "@/lib/format-money";
+import { fmtClock } from "@/lib/items-ui";
+import { ItemTile } from "./item-tile";
 
-function fmtRemainRound(clockMs: number): string {
-  const ms = Math.max(0, ROUND_MS - clockMs);
-  const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  const rs = s % 60;
-  return `${m}:${rs.toString().padStart(2, "0")}`;
-}
-
-function headline(part: MatchSettlementParticipant | undefined): string {
-  if (!part) return "Round settled";
-  if (part.isBot) return "Match over";
-  const d = BigInt(part.deltaCents);
-  if (part.exitType === "extract") {
-    if (d > 0n) return "Extract paid off";
-    if (d < 0n) return "Extract — net loss";
-    return "Extract — even";
-  }
-  if (part.exitType === "dead") return "Eliminated";
-  if (part.exitType === "timeout") {
-    if (d > 0n) return "Round complete";
-    if (d < 0n) return "Squeezed out — no extract";
-    return "Out without extract";
-  }
-  return "Round complete";
-}
-
-function previewHeadline(opts: {
-  selfDiedAt: number;
-  selfExtractedAt: number;
-  selfExitOrder: number;
-}): string {
-  if (opts.selfExtractedAt > 0) return "Extract complete";
-  if (opts.selfDiedAt > 0) return "Eliminated";
-  return "Round over";
-}
-
-function outcomeToParticipant(o: PlayerOutcomePayload): MatchSettlementParticipant {
-  return {
-    userId: o.userId,
-    isBot: false,
-    entryCents: o.entryCents,
-    payoutCents: o.payoutCents,
-    deltaCents: o.deltaCents,
-    exitType: o.exitType,
-    exitOrder: o.exitOrder,
-  };
-}
+/** Delay before the result card appears, so the player sees the moment of death / extraction. */
+const CONTENT_DELAY_MS = 900;
 
 export function MatchOutcomeOverlay({
-  phase,
+  visible,
+  outcome,
   settlement,
-  playerOutcome,
-  userId,
-  entryTierCents,
-  arenaPhase,
-  clockMs,
-  selfDiedAt,
-  selfExtractedAt,
-  selfExitOrder,
+  raidEnded,
+  disconnected,
   onContinue,
 }: {
-  phase: "off" | "fading" | "content";
+  visible: boolean;
+  /** This player's personal result (S2C.OUTCOME). */
+  outcome: OutcomeMsg | null;
   settlement: MatchSettlementPayload | null;
-  playerOutcome: PlayerOutcomePayload | null;
-  userId: string;
-  entryTierCents: string;
-  arenaPhase: "lockin" | "open" | "ended";
-  clockMs: number;
-  selfDiedAt: number;
-  selfExtractedAt: number;
-  selfExitOrder: number;
+  raidEnded: boolean;
+  disconnected: boolean;
   onContinue: () => void;
 }) {
-  const [darkOn, setDarkOn] = useState(false);
+  const [dim, setDim] = useState(false);
+  const [showContent, setShowContent] = useState(false);
 
   useEffect(() => {
-    if (phase === "off") {
-      setDarkOn(false);
+    if (!visible) {
+      setDim(false);
+      setShowContent(false);
       return;
     }
-    const id = requestAnimationFrame(() => {
-      requestAnimationFrame(() => setDarkOn(true));
+    // Two frames so the opacity transition actually runs from 0.
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setDim(true));
     });
-    return () => cancelAnimationFrame(id);
-  }, [phase]);
+    const t = window.setTimeout(() => setShowContent(true), CONTENT_DELAY_MS);
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      window.clearTimeout(t);
+    };
+  }, [visible]);
 
-  if (phase === "off") return null;
-
-  const meFromSettle = settlement?.participants.find(
-    (p) => p.userId === userId && !p.isBot,
-  );
-  const meEarly =
-    playerOutcome && playerOutcome.userId === userId
-      ? outcomeToParticipant(playerOutcome)
-      : undefined;
-  const me = meFromSettle ?? meEarly;
-
-  const delta = me?.deltaCents ?? null;
-  const deltaBi = delta !== null ? BigInt(delta) : null;
-  const positive = deltaBi !== null ? deltaBi > 0n : null;
-  const negative = deltaBi !== null ? deltaBi < 0n : null;
-
-  const hasNumbers = Boolean(me && (settlement || playerOutcome));
-  const onlyWaiting =
-    !settlement && !playerOutcome && arenaPhase !== "ended";
-  const syncingOnly = !settlement && !playerOutcome && arenaPhase === "ended";
-  const provisionalNumbers = Boolean(playerOutcome && !settlement);
-
-  const title = settlement
-    ? headline(me)
-    : playerOutcome
-      ? headline(me)
-      : previewHeadline({ selfDiedAt, selfExtractedAt, selfExitOrder });
-
-  const previewExit =
-    selfExtractedAt > 0 ? "extract" : selfDiedAt > 0 ? "dead" : "—";
+  if (!visible) return null;
 
   return (
     <div className="fixed inset-0 z-[100] flex flex-col">
       <div
         className={clsx(
-          "pointer-events-none absolute inset-0 bg-[#060509] transition-opacity duration-1000 ease-out",
-          darkOn ? "opacity-100" : "opacity-0",
+          "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(6,8,12,0.55),rgba(6,8,12,0.92))] transition-opacity duration-700 ease-out",
+          dim ? "opacity-100" : "opacity-0",
         )}
         aria-hidden
       />
-      {phase === "content" && (
-        <div className="relative flex min-h-[100dvh] flex-1 items-center justify-center p-4 sm:p-8">
-          <div className="pointer-events-auto w-full max-w-md animate-outcome-enter">
-            <div
-              className={clsx(
-                "rounded-[1.75rem] border p-8 shadow-[0_24px_48px_-20px_rgba(0,0,0,0.55)]",
-                "border-white/[0.07] bg-ink-800/[0.92] backdrop-blur-md",
-                "shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
-              )}
-            >
-              <div className="space-y-1">
-                <p className="text-[0.65rem] font-medium uppercase tracking-[0.2em] text-white/45">
-                  Arena result
-                </p>
-                <h2
-                  className={clsx(
-                    "text-2xl font-semibold tracking-tight text-white sm:text-[1.65rem]",
-                    settlement && positive === true && "text-emerald-400/95",
-                    settlement && negative === true && "text-rose-400/95",
-                    !settlement && playerOutcome && positive === true && "text-emerald-400/95",
-                    !settlement && playerOutcome && negative === true && "text-rose-400/95",
-                  )}
-                >
-                  {title}
-                </h2>
-              </div>
-
-              {onlyWaiting && (
-                <div className="mt-8 space-y-3 text-sm  text-white/55">
-                  <p>
-                    The match is still running. You will see your net result in USD as soon as you
-                    are out (or connect stayed).
-                  </p>
-                  <p className="font-mono text-white/70">
-                    ~{fmtRemainRound(clockMs)} left on the round clock
-                  </p>
-                </div>
-              )}
-
-              {syncingOnly && (
-                <p className="mt-8 text-sm text-white/55">
-                  Receiving settlement from the server…
-                </p>
-              )}
-
-              {provisionalNumbers && playerOutcome?.exitType === "extract" && (
-                <p className="mt-6 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-xs  text-white/50">
-                  Estimate from extractors so far ({playerOutcome.totalExtractorsSoFar}). If more
-                  players extract later, the multiplier changes — we will refresh at match end.
-                </p>
-              )}
-
-              {provisionalNumbers && playerOutcome?.exitType === "dead" && (
-                <p className="mt-6 text-xs text-white/45">
-                  Stake loss is final; row below is your balance for this queue.
-                </p>
-              )}
-
-              {hasNumbers && me && (
-                <div className="mt-8 space-y-6">
-                  {!me.isBot && (
-                    <div>
-                      <div className="flex items-baseline justify-between gap-2">
-                        <p className="text-xs uppercase tracking-wider text-white/40">Net</p>
-                        {provisionalNumbers && (
-                          <span className="text-[0.65rem] uppercase tracking-wider text-amber-400/80">
-                            Early
-                          </span>
-                        )}
-                        {settlement && (
-                          <span className="text-[0.65rem] uppercase tracking-wider text-white/35">
-                            Final
-                          </span>
-                        )}
-                      </div>
-                      <p
-                        className={clsx(
-                          "font-mono text-4xl tabular-nums tracking-tight sm:text-5xl",
-                          positive === true && "text-emerald-400",
-                          negative === true && "text-rose-400",
-                          deltaBi === 0n && "text-white/90",
-                        )}
-                      >
-                        {delta !== null && deltaBi !== null ? (
-                          <>
-                            {deltaBi < 0n ? "" : "+"}
-                            {formatUsdCents(delta)}
-                          </>
-                        ) : (
-                          "—"
-                        )}
-                      </p>
-                      <p className="mt-2 max-w-[65ch] text-sm  text-white/45">
-                        Stake{" "}
-                        <span className="font-mono text-white/70">
-                          {formatUsdCents(
-                            me.entryCents !== "0" ? me.entryCents : entryTierCents,
-                          )}
-                        </span>{" "}
-                        · Payout{" "}
-                        <span className="font-mono text-white/70">
-                          {formatUsdCents(me.payoutCents)}
-                        </span>
-                      </p>
-                    </div>
-                  )}
-
-                  {settlement && !meFromSettle && (
-                    <p className="text-sm text-white/55">
-                      Settlement did not include your seat (reconnect or demo session).
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {(settlement || playerOutcome || onlyWaiting) && (
-                <dl className="mt-6 grid grid-cols-2 gap-3 border-t border-white/[0.06] pt-6 text-sm">
-                  <div>
-                    <dt className="text-white/40">Exit</dt>
-                    <dd className="font-mono capitalize text-white/80">
-                      {me?.exitType ?? previewExit}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-white/40">Order</dt>
-                    <dd className="font-mono text-white/80">
-                      {me?.exitOrder != null && me.exitOrder > 0
-                        ? `#${me.exitOrder}`
-                        : selfExitOrder > 0
-                          ? `#${selfExitOrder}`
-                          : "—"}
-                    </dd>
-                  </div>
-                </dl>
-              )}
-
-              <button
-                type="button"
-                onClick={onContinue}
-                className={clsx(
-                  "btn-primary mt-10 w-full rounded-xl py-3 text-sm font-medium",
-                  "transition-transform active:scale-[0.98]",
-                )}
-              >
-                Back to lobby
-              </button>
-            </div>
+      {showContent && (
+        <div className="relative flex min-h-[100dvh] flex-1 items-center justify-center overflow-y-auto p-4 sm:p-8">
+          <div className="w-full max-w-lg animate-outcome-enter">
+            {outcome ? (
+              <ResultCard outcome={outcome} settlement={settlement} onContinue={onContinue} />
+            ) : (
+              <WaitingCard raidEnded={raidEnded} disconnected={disconnected} onContinue={onContinue} />
+            )}
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+const EXIT_STYLE = {
+  extract: { title: "Extracted!", color: "text-zooa-lime", band: "bg-zooa-lime" },
+  dead: { title: "Eliminated", color: "text-rose-400", band: "bg-rose-500" },
+  timeout: { title: "Time's up", color: "text-amber-300", band: "bg-amber-400" },
+} as const;
+
+function ResultCard({
+  outcome,
+  settlement,
+  onContinue,
+}: {
+  outcome: OutcomeMsg;
+  settlement: MatchSettlementPayload | null;
+  onContinue: () => void;
+}) {
+  const style = EXIT_STYLE[outcome.exit];
+  const humans = settlement?.participants.filter((p) => !p.isBot) ?? [];
+  const raidersOut = settlement?.participants.filter((p) => p.exitType === "extract").length ?? 0;
+
+  return (
+    <section className="toon-panel overflow-hidden bg-[#161b28]/95 p-0" aria-live="polite">
+      <div className={clsx("h-3 border-b-[3px] border-black", style.band)} aria-hidden />
+      <div className="p-6 sm:p-8">
+        <p className="text-xs uppercase tracking-[0.25em] text-white/50">Raid result</p>
+        <h2 className={clsx("toon-text mt-2 text-5xl tracking-wide sm:text-6xl", style.color)}>{style.title}</h2>
+        <p className="mt-3 text-lg tracking-wide text-white/85">{subtitle(outcome)}</p>
+
+        <div className="mt-6 space-y-5">
+          {outcome.exit === "extract" && (
+            <ItemSection
+              title="Brought out"
+              items={outcome.extracted}
+              empty="Nothing valuable this time — the free kit doesn't count. Loot chests for weapons and armor."
+            />
+          )}
+
+          {outcome.exit === "dead" && (
+            <>
+              {outcome.dropped.length === 0 && outcome.lost.length === 0 ? (
+                <p className="text-sm leading-relaxed text-white/60">
+                  You only carried the free kit, so nothing was lost.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                  <ItemSection title="Dropped for others" items={outcome.dropped} empty="Nothing dropped." />
+                  <ItemSection title="Broke" items={outcome.lost} empty="Nothing broke." dim />
+                </div>
+              )}
+              <p className="rounded-xl border-2 border-black/60 bg-black/30 px-3 py-2 text-xs leading-relaxed text-white/60">
+                On death every item has a {Math.round(BREAK_CHANCE_ON_DEATH * 100)}% chance to break; the rest drops by
+                your body for anyone to loot. The free pistol never drops.
+              </p>
+            </>
+          )}
+
+          {outcome.exit === "timeout" && (
+            <ItemSection
+              title="Lost on the map"
+              items={outcome.lost}
+              empty="You only carried the free kit, so nothing was lost."
+              dim
+            />
+          )}
+        </div>
+
+        <dl className="mt-6 grid grid-cols-3 gap-2 border-t-[3px] border-black/50 pt-5 text-center">
+          <Stat label="Kills" value={String(outcome.kills)} />
+          <Stat label={outcome.exit === "extract" ? "Out at" : "Survived"} value={fmtClock(outcome.atMs)} />
+          <Stat
+            label="Extracted"
+            value={settlement ? `${raidersOut}/${settlement.participants.length}` : "…"}
+            title={
+              settlement
+                ? `${humans.filter((p) => p.exitType === "extract").length} of ${humans.length} human raiders got out`
+                : "Raid still running"
+            }
+          />
+        </dl>
+
+        <button type="button" onClick={onContinue} className="toon-btn mt-8 min-h-14 w-full text-xl tracking-wide">
+          Back to lobby
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function subtitle(o: OutcomeMsg): string {
+  if (o.exit === "extract") return "Everything you carried is yours to keep.";
+  if (o.exit === "dead") return o.killedBy ? `Killed by ${o.killedBy}` : "You died.";
+  return "You were still on the map when the raid ended. Everything you carried is lost.";
+}
+
+function ItemSection({
+  title,
+  items,
+  empty,
+  dim,
+}: {
+  title: string;
+  items: ItemRef[];
+  empty: string;
+  dim?: boolean;
+}) {
+  return (
+    <div>
+      <h3 className="text-sm uppercase tracking-[0.18em] text-white/55">{title}</h3>
+      {items.length === 0 ? (
+        <p className="mt-2 text-sm leading-relaxed text-white/50">{empty}</p>
+      ) : (
+        <ul className="mt-3 flex flex-wrap gap-3">
+          {items.map((it) => (
+            <li key={it.uid}>
+              <ItemTile item={it} dim={dim} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value, title }: { label: string; value: string; title?: string }) {
+  return (
+    <div title={title}>
+      <dt className="text-[0.65rem] uppercase tracking-[0.18em] text-white/45">{label}</dt>
+      <dd className="toon-text-thin mt-1 text-2xl tabular-nums text-white">{value}</dd>
+    </div>
+  );
+}
+
+function WaitingCard({
+  raidEnded,
+  disconnected,
+  onContinue,
+}: {
+  raidEnded: boolean;
+  disconnected: boolean;
+  onContinue: () => void;
+}) {
+  const title = disconnected ? "Connection lost" : raidEnded ? "Raid over" : "Counting your loot…";
+  const body = disconnected
+    ? "You were disconnected from the raid. Its result is saved when the raid ends."
+    : "Waiting for the server to send your result.";
+  return (
+    <section className="toon-panel bg-[#161b28]/95 p-8 text-center">
+      <h2 className="toon-text text-4xl tracking-wide text-white">{title}</h2>
+      <p className="mt-4 text-sm leading-relaxed text-white/60">{body}</p>
+      {!disconnected && (
+        <div className="mx-auto mt-6 h-10 w-10 animate-spin rounded-full border-4 border-black border-t-zooa-lime" aria-hidden />
+      )}
+      <button type="button" onClick={onContinue} className="toon-btn mt-8 min-h-12 w-full text-lg tracking-wide">
+        Back to lobby
+      </button>
+    </section>
   );
 }

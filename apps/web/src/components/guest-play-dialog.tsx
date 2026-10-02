@@ -32,7 +32,11 @@ export function GuestPlayDialog({
       if (r.ok && data.status === "ok") {
         onSuccess();
       } else {
-        setError(data.error ?? "guest_failed");
+        setError(
+          data.error === "bad_body"
+            ? "2–16 characters: letters, numbers, underscores."
+            : (data.error ?? "guest_failed"),
+        );
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "guest_failed");
@@ -42,31 +46,36 @@ export function GuestPlayDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <form onSubmit={submit} className="card w-full max-w-md space-y-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
+      <form onSubmit={submit} className="toon-panel w-full max-w-md space-y-5 bg-[#161b28] p-6 md:p-8">
         <div>
-          <h2 className="text-xl font-semibold">Demo (no wallet)</h2>
-          <p className="text-sm text-white/60">
-            Virtual balance with no real money. Same match flow as registered
-            players.
+          <h2 className="toon-text text-3xl tracking-wide text-zooa-lime">Play as guest</h2>
+          <p className="mt-3 text-sm leading-relaxed text-white/60">
+            Pick a nickname and drop into a demo raid. Guest results are not tied to an account.
           </p>
         </div>
         <input
           autoFocus
-          className="input"
+          className="w-full rounded-2xl border-[3px] border-black bg-white px-4 py-3 text-lg tracking-wide text-black placeholder:text-black/35 focus:outline-none focus:ring-4 focus:ring-zooa-lime/60"
           value={nickname}
           onChange={(e) => setNickname(e.target.value)}
           placeholder="your_nick"
           minLength={2}
           maxLength={16}
+          pattern="[a-zA-Z0-9_]+"
+          required
         />
-        {error && <p className="text-sm text-red-400">{error}</p>}
-        <div className="flex gap-2 justify-end">
-          <button type="button" onClick={onClose} className="btn-ghost text-xs">
+        {error && (
+          <p className="text-sm text-rose-300" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="flex justify-end gap-3">
+          <button type="button" onClick={onClose} className="toon-btn-ghost min-h-11 text-sm">
             Cancel
           </button>
-          <button type="submit" disabled={busy} className="btn-primary text-xs">
-            {busy ? "..." : "Play"}
+          <button type="submit" disabled={busy} className="toon-btn min-h-11 text-base tracking-wide">
+            {busy ? "…" : "Let's go"}
           </button>
         </div>
       </form>

@@ -18,8 +18,8 @@ const pixel = Press_Start_2P({
 });
 
 export const metadata: Metadata = {
-  title: "ZOOA",
-  description: "PvP battle royale — get paid for your skill",
+  title: "EXTRACT",
+  description: "Top-down extraction shooter — drop in, loot up, get out alive",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
