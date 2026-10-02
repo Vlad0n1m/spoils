@@ -14,13 +14,15 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@colyseus/schema": "^3.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "tsx": "^4.21.0",
     "typescript": "^5.6.3"
   }
 }
