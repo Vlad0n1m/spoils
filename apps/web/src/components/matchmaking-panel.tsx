@@ -5,11 +5,15 @@ import clsx from "clsx";
 import type { Room } from "colyseus.js";
 import { MATCH, type JoinTicket } from "@extract/shared";
 import { getColyseusClient } from "@/lib/colyseus";
+import { describeRoomExit, errorCodeAndReason, type RoomExit } from "@/lib/room-exit";
+import { wireMatchmakingRoom } from "@/lib/matchmaking-room";
 
 interface Props {
   ticket: JoinTicket;
   roomName: string;
   onCancel: () => void;
+  /** Start a fresh search (new ticket) after a kick such as QUEUE_CLOSED / LAUNCH_FAILED. */
+  onRetry: () => void;
   onBattleReady: (battleRoomId: string) => void;
 }
 
@@ -40,14 +44,14 @@ function readMmState(state: unknown, fallbackDeadline: number): MmView {
   };
 }
 
-export function MatchmakingPanel({ ticket, roomName, onCancel, onBattleReady }: Props) {
+export function MatchmakingPanel({ ticket, roomName, onCancel, onRetry, onBattleReady }: Props) {
   const [view, setView] = useState<MmView>(() => ({
     players: 1,
     deadlineAt: Date.now() + MATCH.MATCHMAKING_TIMEOUT_MS,
     launching: false,
   }));
   const [now, setNow] = useState(() => Date.now());
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<RoomExit | null>(null);
   const sessionRef = useRef<{ dispose: () => void } | null>(null);
   const disposeTimerRef = useRef<number | undefined>(undefined);
   const onReadyRef = useRef(onBattleReady);
@@ -74,13 +78,25 @@ export function MatchmakingPanel({ ticket, roomName, onCancel, onBattleReady }: 
             return;
           }
           room = joined;
-          joined.onStateChange((state: unknown) => setView(readMmState(state, fallbackDeadline)));
-          joined.onMessage("battle_ready", (msg: { battleRoomId?: unknown }) => {
-            if (typeof msg?.battleRoomId === "string") onReadyRef.current(msg.battleRoomId);
+          wireMatchmakingRoom(joined, {
+            isDisposed: () => disposed,
+            onState: (state) => setView(readMmState(state, fallbackDeadline)),
+            onBattleReady: (battleRoomId) => onReadyRef.current(battleRoomId),
+            onError: (code, message) => setErr(describeRoomExit(code, message) ?? genericExit(message)),
+            // Kicks (QUEUE_CLOSED, JOINED_ELSEWHERE, LAUNCH_FAILED) arrive as a close code.
+            onClosed: (code, reason) =>
+              setErr(
+                describeRoomExit(code, reason) ?? {
+                  title: "Matchmaking closed",
+                  message: "The lobby closed before the raid started. Try again.",
+                  action: "retry",
+                },
+              ),
           });
-          joined.onError((code, message) => setErr(message ?? `error_${code}`));
         } catch (e) {
-          if (!disposed) setErr(e instanceof Error ? e.message : "join_failed");
+          if (disposed) return;
+          const { code, reason } = errorCodeAndReason(e);
+          setErr(describeRoomExit(code, reason) ?? genericExit(reason));
         }
       })();
       sessionRef.current = {
@@ -104,12 +120,21 @@ export function MatchmakingPanel({ ticket, roomName, onCancel, onBattleReady }: 
   const humans = Math.max(1, Math.min(MATCH.MAX_PLAYERS, view.players));
   const launching = view.launching || secsLeft === 0;
 
+  // Leave synchronously on Cancel: the unmount dispose is deferred a tick (StrictMode), and a
+  // battle_ready landing in that tick would otherwise still pull the player into the raid.
+  const cancel = () => {
+    window.clearTimeout(disposeTimerRef.current);
+    sessionRef.current?.dispose();
+    sessionRef.current = null;
+    onCancel();
+  };
+
   return (
     <div className="mx-auto w-full max-w-lg px-4 py-10 md:py-16">
       <div className="toon-panel bg-[#161b28]/95 p-6 text-center md:p-10">
         <p className="text-xs uppercase tracking-[0.25em] text-white/50">Demo raid</p>
         <h2 className="toon-text mt-2 text-4xl tracking-wide text-zooa-lime md:text-5xl">
-          {err ? "Matchmaking failed" : launching ? "Dropping in…" : "Finding raid"}
+          {err ? err.title : launching ? "Dropping in…" : "Finding raid"}
         </h2>
 
         {!err && (
@@ -148,19 +173,39 @@ export function MatchmakingPanel({ ticket, roomName, onCancel, onBattleReady }: 
         )}
 
         {err && (
-          <p className="mt-5 break-words font-mono text-sm text-rose-300" role="alert">
-            {err}
+          <p className="font-body mx-auto mt-5 max-w-[40ch] break-words text-base leading-relaxed text-white/75" role="alert">
+            {err.message}
           </p>
         )}
 
+        {err?.action === "retry" && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="toon-btn mt-8 min-h-14 w-full max-w-xs text-xl tracking-wide"
+          >
+            <span className="optical-center">Try again</span>
+          </button>
+        )}
         <button
           type="button"
-          onClick={onCancel}
-          className="toon-btn-ghost mt-8 min-h-12 w-full max-w-xs text-base tracking-wide"
+          onClick={cancel}
+          className={clsx(
+            "toon-btn-ghost min-h-12 w-full max-w-xs text-base tracking-wide",
+            err?.action === "retry" ? "mt-3" : "mt-8",
+          )}
         >
-          {err ? "Back" : "Cancel"}
+          <span className="optical-center">{err ? "Back to lobby" : "Cancel"}</span>
         </button>
       </div>
     </div>
   );
+}
+
+function genericExit(message?: string): RoomExit {
+  return {
+    title: "Matchmaking failed",
+    message: message ? `Couldn't reach the raid lobby (${message}).` : "Couldn't reach the raid lobby.",
+    action: "retry",
+  };
 }

@@ -199,3 +199,26 @@ test("a kill credits the killer and finishes the victim", () => {
   assert.ok(!send(m, b!, { mx: 1 }));
   assert.ok(!m.interact(b!));
 });
+
+test("a kill landing after the shooter already finished updates their result", () => {
+  const m = testMatch(2);
+  const [a, b] = ids(m);
+  const shooter = m.runtime(a!)!;
+  m.finishPlayer(shooter, "extract");
+  const first = m.drainEvents().find((e) => e.type === "outcome");
+  assert.ok(first && first.type === "outcome");
+  assert.equal(first.msg.kills, 0);
+
+  // Their bullet was still in flight and kills B afterwards.
+  const victim = pl(m, b!);
+  victim.hp = 5;
+  damagePlayer(m, victim, 15, shooter, "sniper", 0, 0);
+  assert.equal(pl(m, a!).kills, 1);
+  assert.equal(shooter.outcome?.kills, 1);
+  assert.equal(shooter.outcome?.exit, "extract");
+  const resent = m.drainEvents().find((e) => e.type === "outcome" && e.to === a);
+  assert.ok(resent && resent.type === "outcome");
+  assert.equal(resent.msg.kills, 1);
+  // The copy already sent stays as it was; the resend carries the correction.
+  assert.equal(first.msg.kills, 0);
+});

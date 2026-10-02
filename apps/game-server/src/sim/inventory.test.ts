@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AMMO, ARMOR, Chest, HEAL, PLAYER } from "@extract/shared";
 import { damagePlayer } from "./combat.js";
-import { newArmorDrop, newWeaponDrop, spawnGroundItem } from "./inventory.js";
-import { giveWeapon, ids, pl, place, run, testMatch } from "./test-utils.js";
+import { armorIsUpgrade, dropSpot, newArmorDrop, newWeaponDrop, openChest, spawnGroundItem } from "./inventory.js";
+import { giveWeapon, ids, pl, place, run, testMap, testMatch } from "./test-utils.js";
 
 test("bandage heals after HEAL.bandage.MS and is consumed only on completion", () => {
   const m = testMatch(1);
@@ -139,7 +139,7 @@ test("weapons need F: empty slot first, then the active slot is swapped", () => 
   assert.ok(!m.interact(a!));
 });
 
-test("armor is taken only if better (higher level, or same level with more durability)", () => {
+test("armor is taken only if it can absorb more (same durability: higher level)", () => {
   const m = testMatch(1);
   const [a] = ids(m);
   place(m, a!, 1000, 1500);
@@ -166,6 +166,84 @@ test("armor is taken only if better (higher level, or same level with more durab
   const old = [...m.state.items.values()].find((i) => i.uid === (lvl2 as { uid: string }).uid);
   assert.ok(old);
   assert.equal(old.armorDur, 50);
+});
+
+test("remaining durability decides armor: a worn-out high level never blocks a fresh lower one", () => {
+  const m = testMatch(1);
+  const [a] = ids(m);
+  place(m, a!, 1000, 1500);
+  const p = pl(m, a!);
+  p.armor = 3;
+  p.armorDur = 3;
+  p.armorUid = "worn-l3";
+  giveWeapon(m, a!, 1, "rifle", 2);
+  p.active = 1;
+
+  // A shotgun farther away must not be what F grabs while a better vest lies at the feet.
+  const shotgun = spawnGroundItem(m, newWeaponDrop(m, "shotgun", 0), 1060, 1500);
+  const l2 = spawnGroundItem(m, newArmorDrop(m, 2), 1010, 1500);
+  assert.equal(armorIsUpgrade(p, 2, ARMOR[2].durability), true);
+  assert.ok(m.interact(a!));
+  assert.equal(p.armor, 2);
+  assert.equal(p.armorDur, ARMOR[2].durability);
+  assert.ok(!m.state.items.has(l2.id));
+  assert.ok(m.state.items.has(shotgun.id));
+  assert.equal(p.slots[1]!.weapon, "rifle");
+  // The swapped-out vest is not an upgrade back (no ping-pong); equal durability prefers the level.
+  assert.equal(armorIsUpgrade(p, 3, 3), false);
+  assert.equal(armorIsUpgrade(p, 3, ARMOR[2].durability), true);
+  assert.equal(armorIsUpgrade(p, 1, ARMOR[2].durability), false);
+});
+
+test("F needs line of sight: nothing is opened or picked up through a wall", () => {
+  const base = testMap();
+  // A 24 px wall between the player (x 1000) and the loot (x 1070): 70 px apart, within reach.
+  const wall = { x: 1023, y: 1300, w: 24, h: 400 };
+  const m = testMatch(1, { map: { ...base, walls: [...base.walls, wall] } });
+  const [a] = ids(m);
+  place(m, a!, 1000, 1500);
+  const p = pl(m, a!);
+
+  const c = new Chest();
+  c.id = "c-behind";
+  c.x = 1070;
+  c.y = 1500;
+  c.rarity = 3;
+  m.state.chests.set(c.id, c);
+  m.chestContents.set(c.id, [newWeaponDrop(m, "sniper", 3)]);
+  const rifle = spawnGroundItem(m, newWeaponDrop(m, "rifle", 2), 1070, 1520);
+  const armor = spawnGroundItem(m, newArmorDrop(m, 3), 1070, 1480);
+
+  assert.ok(Math.hypot(rifle.x - p.x, rifle.y - p.y) <= PLAYER.INTERACT_RADIUS);
+  assert.ok(!m.interact(a!));
+  assert.equal(c.opened, false);
+  assert.ok(m.state.items.has(rifle.id));
+  assert.ok(m.state.items.has(armor.id));
+  assert.equal(p.armor, 0);
+
+  // Around the wall's end the same loot is in sight and works as usual.
+  place(m, a!, 1070, 1560);
+  assert.ok(m.interact(a!));
+  assert.equal(c.opened, true);
+});
+
+test("drops never scatter to the far side of a wall", () => {
+  const base = testMap();
+  const wall = { x: 1023, y: 1300, w: 24, h: 400 };
+  const m = testMatch(1, { map: { ...base, walls: [...base.walls, wall] } });
+  const [a] = ids(m);
+  const c = new Chest();
+  c.id = "c-wall";
+  c.x = 1000;
+  c.y = 1500;
+  c.rarity = 3;
+  m.state.chests.set(c.id, c);
+  m.chestContents.set(c.id, Array.from({ length: 8 }, () => newWeaponDrop(m, "rifle", 1)));
+  openChest(m, m.runtime(a!)!, c);
+  const spawned = [...m.state.items.values()];
+  assert.equal(spawned.length, 8);
+  for (const it of spawned) assert.ok(it.x < wall.x, `item at (${it.x}, ${it.y}) is behind the wall`);
+  for (let n = 0; n < 24; n++) assert.ok(dropSpot(m, 1000, 1500, n).x < wall.x);
 });
 
 test("F prefers the nearest unopened chest; contents spawn around it", () => {
@@ -241,5 +319,7 @@ test("death with a seeded RNG: every valuable item breaks or drops; ammo and med
     const outcome = m.drainEvents().find((e) => e.type === "outcome");
     assert.ok(outcome && outcome.type === "outcome");
     assert.equal(outcome.msg.lost.length + outcome.msg.dropped.length, 2);
+    const armorRef = [...outcome.msg.lost, ...outcome.msg.dropped].find((r) => r.uid === "armor-uid")!;
+    assert.equal(armorRef.dur, 99 - 10 * ARMOR[3].absorb, "armor ref carries its remaining durability");
   }
 });

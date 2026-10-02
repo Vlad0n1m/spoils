@@ -9,6 +9,7 @@ import {
   type OutcomeMsg,
 } from "@extract/shared";
 import { fmtClock } from "@/lib/items-ui";
+import type { RoomExit } from "@/lib/room-exit";
 import { ItemTile } from "./item-tile";
 
 /** Delay before the result card appears, so the player sees the moment of death / extraction. */
@@ -20,6 +21,7 @@ export function MatchOutcomeOverlay({
   settlement,
   raidEnded,
   disconnected,
+  kick = null,
   onContinue,
 }: {
   visible: boolean;
@@ -28,6 +30,8 @@ export function MatchOutcomeOverlay({
   settlement: MatchSettlementPayload | null;
   raidEnded: boolean;
   disconnected: boolean;
+  /** Why the room dropped us, when it was a kick (e.g. joined from another tab). */
+  kick?: RoomExit | null;
   onContinue: () => void;
 }) {
   const [dim, setDim] = useState(false);
@@ -69,7 +73,7 @@ export function MatchOutcomeOverlay({
             {outcome ? (
               <ResultCard outcome={outcome} settlement={settlement} onContinue={onContinue} />
             ) : (
-              <WaitingCard raidEnded={raidEnded} disconnected={disconnected} onContinue={onContinue} />
+              <WaitingCard raidEnded={raidEnded} disconnected={disconnected} kick={kick} onContinue={onContinue} />
             )}
           </div>
         </div>
@@ -103,7 +107,7 @@ function ResultCard({
       <div className="p-6 sm:p-8">
         <p className="text-xs uppercase tracking-[0.25em] text-white/50">Raid result</p>
         <h2 className={clsx("toon-text mt-2 text-5xl tracking-wide sm:text-6xl", style.color)}>{style.title}</h2>
-        <p className="mt-3 text-lg tracking-wide text-white/85">{subtitle(outcome)}</p>
+        <p className="font-body mt-3 text-lg font-semibold leading-snug text-white/85">{subtitle(outcome)}</p>
 
         <div className="mt-6 space-y-5">
           {outcome.exit === "extract" && (
@@ -117,7 +121,7 @@ function ResultCard({
           {outcome.exit === "dead" && (
             <>
               {outcome.dropped.length === 0 && outcome.lost.length === 0 ? (
-                <p className="text-sm leading-relaxed text-white/60">
+                <p className="font-body text-base leading-relaxed text-white/70">
                   You only carried the free kit, so nothing was lost.
                 </p>
               ) : (
@@ -126,7 +130,7 @@ function ResultCard({
                   <ItemSection title="Broke" items={outcome.lost} empty="Nothing broke." dim />
                 </div>
               )}
-              <p className="rounded-xl border-2 border-black/60 bg-black/30 px-3 py-2 text-xs leading-relaxed text-white/60">
+              <p className="font-body rounded-xl border-2 border-black/60 bg-black/30 px-3 py-2 text-sm leading-relaxed text-white/70">
                 On death every item has a {Math.round(BREAK_CHANCE_ON_DEATH * 100)}% chance to break; the rest drops by
                 your body for anyone to loot. The free pistol never drops.
               </p>
@@ -186,7 +190,7 @@ function ItemSection({
     <div>
       <h3 className="text-sm uppercase tracking-[0.18em] text-white/55">{title}</h3>
       {items.length === 0 ? (
-        <p className="mt-2 text-sm leading-relaxed text-white/50">{empty}</p>
+        <p className="font-body mt-2 text-base leading-relaxed text-white/65">{empty}</p>
       ) : (
         <ul className="mt-3 flex flex-wrap gap-3">
           {items.map((it) => (
@@ -212,20 +216,24 @@ function Stat({ label, value, title }: { label: string; value: string; title?: s
 function WaitingCard({
   raidEnded,
   disconnected,
+  kick,
   onContinue,
 }: {
   raidEnded: boolean;
   disconnected: boolean;
+  kick: RoomExit | null;
   onContinue: () => void;
 }) {
-  const title = disconnected ? "Connection lost" : raidEnded ? "Raid over" : "Counting your loot…";
-  const body = disconnected
-    ? "You were disconnected from the raid. Its result is saved when the raid ends."
-    : "Waiting for the server to send your result.";
+  const title = kick ? kick.title : disconnected ? "Connection lost" : raidEnded ? "Raid over" : "Counting your loot…";
+  const body = kick
+    ? kick.message
+    : disconnected
+      ? "You were disconnected from the raid. Its result is saved when the raid ends."
+      : "Waiting for the server to send your result.";
   return (
     <section className="toon-panel bg-[#161b28]/95 p-8 text-center">
       <h2 className="toon-text text-4xl tracking-wide text-white">{title}</h2>
-      <p className="mt-4 text-sm leading-relaxed text-white/60">{body}</p>
+      <p className="font-body mt-4 text-base leading-relaxed text-white/70">{body}</p>
       {!disconnected && (
         <div className="mx-auto mt-6 h-10 w-10 animate-spin rounded-full border-4 border-black border-t-zooa-lime" aria-hidden />
       )}

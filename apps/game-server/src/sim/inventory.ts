@@ -14,7 +14,9 @@ import {
   PLAYER,
   WEAPONS,
   WORLD,
+  armorIsUpgrade,
   circleIsFree,
+  hasLineOfSight,
   pickWeighted,
   type AmmoType,
   type Chest,
@@ -35,9 +37,19 @@ export function weaponRef(uid: string, weapon: string, rarity: number): ItemRef 
   return { uid, kind: "weapon", type: weapon, rarity };
 }
 
-/** Armor has no rarity of its own; level 1..3 maps to rarity 0..2 so "rare+" checks work. */
-export function armorRef(uid: string, level: number): ItemRef {
-  return { uid, kind: "armor", type: "armor", rarity: Math.max(0, level - 1), level };
+/**
+ * Armor has no rarity of its own; level 1..3 maps to rarity 0..2 so "rare+" checks work.
+ * `dur` is the remaining durability at the moment the ref is taken, so wear persists in the economy.
+ */
+export function armorRef(uid: string, level: number, dur: number): ItemRef {
+  return { uid, kind: "armor", type: "armor", rarity: Math.max(0, level - 1), level, dur: Math.max(0, dur) };
+}
+
+/** ItemRef of a valuable LootDrop (weapon / armor), null for ammo and meds. */
+export function dropRef(d: LootDrop): ItemRef | null {
+  if (d.kind === "weapon") return weaponRef(d.uid, d.weapon, d.rarity);
+  if (d.kind === "armor") return armorRef(d.uid, d.level, d.dur);
+  return null;
 }
 
 export function newWeaponDrop(m: Match, weapon: WeaponId, rarity: Rarity): LootDrop {
@@ -48,8 +60,9 @@ export function newWeaponDrop(m: Match, weapon: WeaponId, rarity: Rarity): LootD
 
 export function newArmorDrop(m: Match, level: 1 | 2 | 3): LootDrop {
   const uid = m.newUid();
-  m.ledger.set(uid, armorRef(uid, level));
-  return { kind: "armor", level, dur: ARMOR[level].durability, uid };
+  const dur = ARMOR[level].durability;
+  m.ledger.set(uid, armorRef(uid, level, dur));
+  return { kind: "armor", level, dur, uid };
 }
 
 /** Roll a chest's contents once at match setup so it can be audited before anyone opens it. */
@@ -95,7 +108,8 @@ export function rollFloorLoot(m: Match): LootDrop {
 
 /**
  * Position for the n-th item scattered around (x, y): a golden-angle spiral, skipping spots inside
- * solids so dropped loot never ends up unreachable inside a crate or wall.
+ * solids so dropped loot never ends up unreachable inside a crate or wall, and spots behind a wall
+ * so loot from a chest or body indoors never lands on the outside of the building (or vice versa).
  */
 export function dropSpot(m: Match, x: number, y: number, n: number): { x: number; y: number } {
   const B = WORLD.BORDER + 16;
@@ -106,7 +120,7 @@ export function dropSpot(m: Match, x: number, y: number, n: number): { x: number
     const px = x + Math.cos(a) * r;
     const py = y + Math.sin(a) * r;
     if (px < B || py < B || px > m.map.width - B || py > m.map.height - B) continue;
-    if (circleIsFree(m.idx, px, py, 12)) return { x: px, y: py };
+    if (circleIsFree(m.idx, px, py, 12) && hasLineOfSight(m.idx, x, y, px, py)) return { x: px, y: py };
   }
   return { x, y };
 }
@@ -237,9 +251,8 @@ export function pickupWeapon(m: Match, rt: PlayerRuntime, p: Player, item: Groun
   return true;
 }
 
-export function armorIsUpgrade(p: Player, level: number, dur: number): boolean {
-  return level > p.armor || (level === p.armor && dur > p.armorDur);
-}
+/** The rule lives in the shared contract so the HUD hint and the bots agree with the server. */
+export { armorIsUpgrade } from "@extract/shared";
 
 export function pickupArmor(m: Match, p: Player, item: GroundItem): boolean {
   if (item.armor < 1 || item.armor > 3 || !item.uid) return false;
@@ -259,7 +272,10 @@ export function pickupArmor(m: Match, p: Player, item: GroundItem): boolean {
   return true;
 }
 
-/** F: nearest unopened chest in reach, else the nearest weapon / armor (armor only if it is an upgrade). */
+/**
+ * F: nearest unopened chest in reach, else the nearest weapon / armor (armor only if it is an
+ * upgrade). Only targets in line of sight count, so nothing is looted through a wall.
+ */
 export function interact(m: Match, rt: PlayerRuntime, p: Player): boolean {
   const reach2 = PLAYER.INTERACT_RADIUS * PLAYER.INTERACT_RADIUS;
   const d2 = (x: number, y: number) => (x - p.x) ** 2 + (y - p.y) ** 2;
@@ -269,7 +285,9 @@ export function interact(m: Match, rt: PlayerRuntime, p: Player): boolean {
   for (const c of m.state.chests.values()) {
     if (c.opened) continue;
     const d = d2(c.x, c.y);
-    if (d <= best) { best = d; chest = c; }
+    if (d > best || !hasLineOfSight(m.idx, p.x, p.y, c.x, c.y)) continue;
+    best = d;
+    chest = c;
   }
   if (chest) {
     openChest(m, rt, chest);
@@ -285,10 +303,32 @@ export function interact(m: Match, rt: PlayerRuntime, p: Player): boolean {
       continue;
     }
     const d = d2(g.x, g.y);
-    if (d <= best) { best = d; item = g; }
+    if (d > best || !hasLineOfSight(m.idx, p.x, p.y, g.x, g.y)) continue;
+    best = d;
+    item = g;
   }
   if (!item) return false;
   return item.kind === "weapon" ? pickupWeapon(m, rt, p, item) : pickupArmor(m, p, item);
+}
+
+/**
+ * Valuable items still on the map: on the ground (dropped by the dead, swapped out, never picked
+ * up) or inside unopened chests. Settlement reports them as `leftOnMap`.
+ */
+export function leftOnMapRefs(m: Match): ItemRef[] {
+  const out: ItemRef[] = [];
+  for (const g of m.state.items.values()) {
+    if (!g.uid) continue;
+    if (g.kind === "weapon") out.push(weaponRef(g.uid, g.weapon, g.rarity));
+    else if (g.kind === "armor") out.push(armorRef(g.uid, g.armor, g.armorDur));
+  }
+  for (const contents of m.chestContents.values()) {
+    for (const d of contents) {
+      const ref = dropRef(d);
+      if (ref) out.push(ref);
+    }
+  }
+  return out;
 }
 
 /** Valuable items the player carries right now (non-free weapons and armor). */
@@ -297,7 +337,7 @@ export function carriedRefs(p: Player): ItemRef[] {
   for (const s of p.slots) {
     if (s.weapon && !s.free && s.uid) out.push(weaponRef(s.uid, s.weapon, s.rarity));
   }
-  if (p.armor > 0 && p.armorUid) out.push(armorRef(p.armorUid, p.armor));
+  if (p.armor > 0 && p.armorUid) out.push(armorRef(p.armorUid, p.armor, p.armorDur));
   return out;
 }
 
@@ -328,7 +368,7 @@ export function dropOnDeath(m: Match, rt: PlayerRuntime, p: Player): void {
   }
 
   if (p.armor > 0 && p.armorUid) {
-    const ref = armorRef(p.armorUid, p.armor);
+    const ref = armorRef(p.armorUid, p.armor, p.armorDur);
     if (m.rng() < BREAK_CHANCE_ON_DEATH) {
       rt.lost.push(ref);
     } else {

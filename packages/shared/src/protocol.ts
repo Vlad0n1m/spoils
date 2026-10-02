@@ -5,6 +5,35 @@
 
 import type { WeaponId } from "./items.js";
 
+/** Colyseus room names. */
+export const ROOMS = {
+  /** Single demo matchmaking queue. Join with { ticket }. */
+  MATCHMAKING: "mm",
+  /** One room per match. Join by id with { ticket }. */
+  BATTLE: "battle",
+} as const;
+
+/** Matchmaking room → client: the battle is created, join it by id. */
+export const MM_BATTLE_READY = "battle_ready";
+export interface BattleReadyMsg {
+  battleRoomId: string;
+}
+
+/**
+ * WebSocket close codes the rooms use when kicking a client. Above 4100: Colyseus reserves
+ * 4000–4010 (e.g. 4002 = WS_CLOSE_WITH_ERROR).
+ */
+export const CLOSE_CODES = {
+  /** Battle: the ticket's user is not in this match's roster. */
+  NOT_IN_ROSTER: 4101,
+  /** Matchmaking: the queue already launched its battle. */
+  QUEUE_CLOSED: 4102,
+  /** The same user connected again from another tab / device; the old connection is dropped. */
+  JOINED_ELSEWHERE: 4103,
+  /** Matchmaking: the battle room could not be created. */
+  LAUNCH_FAILED: 4150,
+} as const;
+
 /** Client → server message names. */
 export const C2S = {
   /** InputSample (movement + aim + trigger), every INPUT_DT_MS. */
@@ -50,9 +79,12 @@ export interface ShotMsg {
   /** Shooter sessionId. */
   s: string;
   w: WeaponId;
-  /** Muzzle position. */
+  /** Muzzle position (where tracers start). */
   x: number;
   y: number;
+  /** Shooter centre (where the server spawns the pellets and starts the wall test). */
+  cx: number;
+  cy: number;
   /** Angle of every pellet. */
   a: number[];
 }
@@ -94,6 +126,8 @@ export interface ItemRef {
   rarity: number;
   /** Armor level (armor only). */
   level?: number;
+  /** Remaining armor durability (armor only), so wear persists in the economy. */
+  dur?: number;
 }
 
 export type ExitType = "extract" | "dead" | "timeout";

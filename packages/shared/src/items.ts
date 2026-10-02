@@ -151,6 +151,20 @@ export const CHEST_TABLES: Record<Rarity, ChestTable> = {
   },
 };
 
+/**
+ * Should F take this armor over what is worn? Remaining durability is the total damage a vest can
+ * still absorb, so it decides first; the level only breaks ties. A worn-out high-level vest never
+ * blocks a fresh lower-level one. One rule for the server, the bots and the HUD hint.
+ */
+export function armorIsUpgrade(
+  worn: { armor: number; armorDur: number },
+  level: number,
+  dur: number,
+): boolean {
+  const wornDur = worn.armor > 0 ? worn.armorDur : 0;
+  return dur > wornDur || (dur === wornDur && level > worn.armor);
+}
+
 /** Damage after rarity and armor. Returns the HP loss and how much armor durability was used. */
 export function applyDamage(
   rawDamage: number,

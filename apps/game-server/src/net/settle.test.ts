@@ -11,7 +11,14 @@ const payload: MatchSettlementPayload = {
   mapSeed: 7,
   startedAt: 1,
   endedAt: 2,
-  participants: [{ userId: "u1", nickname: "Neo", isBot: false, exitType: "extract", kills: 2, extracted: [], lost: [] }],
+  participants: [
+    {
+      userId: "u1", nickname: "Neo", isBot: false, exitType: "extract", kills: 2,
+      extracted: [{ uid: "w-1", kind: "weapon", type: "rifle", rarity: 1 }],
+      lost: [{ uid: "a-1", kind: "armor", type: "armor", rarity: 1, level: 2, dur: 0 }],
+    },
+  ],
+  leftOnMap: [{ uid: "a-2", kind: "armor", type: "armor", rarity: 0, level: 1, dur: 42.5 }],
 };
 
 function withEnv<T>(env: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {

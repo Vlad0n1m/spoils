@@ -6,8 +6,9 @@
  */
 
 import { Container, Graphics, ImageSource, Sprite, Text, Texture } from "pixi.js";
-import { raycastSolids, WEAPONS, type CollisionIndex, type WeaponId } from "@extract/shared";
+import { WEAPONS, type CollisionIndex, type WeaponId } from "@extract/shared";
 import { COLORS } from "./assets";
+import { tracerLengths } from "./shots";
 
 interface Tracer {
   shooter: string;
@@ -91,10 +92,16 @@ export class Effects {
     this.vignette.eventMode = "none";
   }
 
+  /**
+   * Somebody fired. (cx, cy) is the shooter's centre, where the server spawns the pellets and
+   * raycasts walls from; (x, y) is the muzzle, where tracers and the flash are drawn from.
+   */
   shot(
     idx: CollisionIndex | null,
     shooter: string,
     weapon: WeaponId,
+    cx: number,
+    cy: number,
     x: number,
     y: number,
     angles: number[],
@@ -102,29 +109,33 @@ export class Effects {
     now: number,
   ) {
     const def = WEAPONS[weapon] ?? WEAPONS.pistol;
+    if (isSelf) this.shakeAmp = Math.max(this.shakeAmp, SHAKE[weapon] ?? 2);
+    // The muzzle pokes through a wall: the server's bullets stop inside it, draw nothing.
+    const lens = tracerLengths(idx, cx, cy, x, y, angles, def.range);
+    if (!lens) return;
     let sumA = 0;
-    for (const a of angles) {
-      const dx = Math.cos(a);
-      const dy = Math.sin(a);
-      let len = def.range;
-      if (idx) {
-        const t = raycastSolids(idx, x, y, x + dx * def.range, y + dy * def.range);
-        if (t !== Infinity) len = def.range * t;
-      }
+    angles.forEach((a, i) => {
+      sumA += a;
+      const len = lens[i]!;
+      if (len <= 0) return;
       this.tracers.push({
-        shooter, sx: x, sy: y, dx, dy, len, speed: def.bulletSpeed, born: now,
+        shooter, sx: x, sy: y, dx: Math.cos(a), dy: Math.sin(a), len, speed: def.bulletSpeed, born: now,
         width: weapon === "sniper" ? 4 : weapon === "shotgun" ? 2.5 : 3,
       });
-      sumA += a;
-    }
+    });
     if (this.tracers.length > MAX_TRACERS) this.tracers.splice(0, this.tracers.length - MAX_TRACERS);
     const avg = angles.length ? sumA / angles.length : 0;
     this.flashes.push({ x, y, a: avg, born: now, size: weapon === "shotgun" || weapon === "sniper" ? 1.4 : 1 });
-    if (isSelf) this.shakeAmp = Math.max(this.shakeAmp, SHAKE[weapon] ?? 2);
   }
 
   /** A bullet from `shooter` hit someone at (x, y): stop the matching tracer there and burst. */
   hit(shooter: string, x: number, y: number, armor: boolean, now: number) {
+    this.stopTracer(shooter, x, y);
+    this.hitBurst(x, y, armor, now);
+  }
+
+  /** Stop the tracer from `shooter` that passes closest to (x, y) at that point. */
+  stopTracer(shooter: string, x: number, y: number) {
     let best: Tracer | null = null;
     let bestErr = 40;
     for (const t of this.tracers) {
@@ -140,6 +151,10 @@ export class Effects {
       }
     }
     if (best) best.len = Math.max(0, (x - best.sx) * best.dx + (y - best.sy) * best.dy);
+  }
+
+  /** Impact particles where a bullet hit a player. */
+  hitBurst(x: number, y: number, armor: boolean, now: number) {
     this.burst(x, y, armor ? COLORS.hitArmor : COLORS.hitFlesh, 9, 260, now);
   }
 

@@ -63,9 +63,10 @@ export class WorldView {
     const grass = new TilingSprite({ texture: tex.grass_tile, width: map.width, height: map.height });
     this.ground.addChild(grass);
 
-    // Dirt: one map-sized dirt tiling sprite under a soft alpha mask painted from the patch
-    // circles (low-res canvas, upscaled), so patches fade into the grass and merge when they overlap.
-    const dirt = new TilingSprite({ texture: tex.dirt_tile, width: map.width, height: map.height });
+    // Dirt: one map-sized plain-dirt tiling sprite under a soft alpha mask painted from the
+    // patch circles (low-res canvas, upscaled). Each patch is a lumpy blob of overlapping soft
+    // circles, so patches fade into the grass, have irregular edges and merge when they overlap.
+    const dirt = new TilingSprite({ texture: tex.dirt_plain, width: map.width, height: map.height });
     dirt.tileScale.set(0.75);
     const maskTex = dirtMaskTexture(map);
     if (maskTex) {
@@ -201,7 +202,30 @@ export class WorldView {
 }
 
 /** World units per mask pixel: patches are 90–240 px wide, so soft edges survive the upscale. */
-const DIRT_MASK_SCALE = 8;
+const DIRT_MASK_SCALE = 6;
+/** Extra soft lobes around each patch's core circle. */
+const DIRT_LOBES = 5;
+
+/** Deterministic 0..1 noise from a patch and a lobe index (same blobs on every client). */
+function hash01(a: number, b: number, c: number): number {
+  let h = Math.imul(Math.round(a) | 0, 0x27d4eb2d) ^ Math.imul(Math.round(b) | 0, 0x165667b1) ^ Math.imul(c | 0, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 0x1_0000_0000;
+}
+
+/** A soft disc: opaque up to `core` × radius, fading to transparent at the radius. */
+function softDisc(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, core: number, alpha: number) {
+  if (r <= 0) return;
+  const g = ctx.createRadialGradient(x, y, r * core, x, y, r);
+  g.addColorStop(0, `rgba(255,255,255,${alpha})`);
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
 
 function dirtMaskTexture(map: MapData): Texture | null {
   const c = document.createElement("canvas");
@@ -213,13 +237,15 @@ function dirtMaskTexture(map: MapData): Texture | null {
     const x = d.x / DIRT_MASK_SCALE;
     const y = d.y / DIRT_MASK_SCALE;
     const r = d.r / DIRT_MASK_SCALE;
-    const g = ctx.createRadialGradient(x, y, r * 0.55, x, y, r);
-    g.addColorStop(0, "rgba(255,255,255,1)");
-    g.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
+    // Core: a slightly smaller soft disc, so the lobes decide the outline.
+    softDisc(ctx, x, y, r * 0.8, 0.55, 1);
+    const turn = hash01(d.x, d.y, 0) * Math.PI * 2;
+    for (let i = 0; i < DIRT_LOBES; i++) {
+      const a = turn + (i / DIRT_LOBES) * Math.PI * 2 + (hash01(d.x, d.y, i + 1) - 0.5) * 0.9;
+      const off = r * (0.3 + 0.3 * hash01(d.x, d.y, i + 11));
+      const lr = r * (0.38 + 0.25 * hash01(d.x, d.y, i + 21));
+      softDisc(ctx, x + Math.cos(a) * off, y + Math.sin(a) * off, lr, 0.45, 0.85);
+    }
   }
   return new Texture({ source: new ImageSource({ resource: c, scaleMode: "linear" }) });
 }

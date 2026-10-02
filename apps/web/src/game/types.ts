@@ -53,7 +53,13 @@ export interface HudSnapshot {
   /** Match clock when extraction points open. */
   extractOpenAtMs: number;
   self: HudSelf | null;
+  /**
+   * Players still on the map (alive and not extracted), humans and bots. After the raid ends
+   * this holds the last count taken while it was running (the server's end-of-match timeout
+   * takes everyone off the map, which would otherwise read 0).
+   */
   aliveCount: number;
+  /** Roster size (humans + bots) of this raid; does not shrink when players die or leave. */
   totalPlayers: number;
   /** Direction to the nearest extraction point that is open (or will open), relative to the player. */
   nearestExtract: { dx: number; dy: number; dist: number; open: boolean } | null;

@@ -9,7 +9,6 @@ export const dynamic = "force-dynamic";
 const MATCH_LIMIT = 10;
 const ROW_LIMIT = 12;
 
-
 /**
  * Lobby board: latest human results from settled raids. Bots are left out — they fill demo
  * lobbies and would drown the real players.
@@ -24,7 +23,10 @@ export async function GET() {
 
     const out: RecentRaidRow[] = [];
     for (const r of rows) {
-      const humans = r.payload.participants.filter((p) => !p.isBot);
+      // Payloads are stored as sent; newer ones also carry `leftOnMap` (not shown here). Skip a
+      // malformed row instead of failing the whole board.
+      const participants = Array.isArray(r.payload?.participants) ? r.payload.participants : [];
+      const humans = participants.filter((p) => !p.isBot);
       const humansExtracted = humans.filter((p) => p.exitType === "extract").length;
       for (const p of humans) {
         out.push({
@@ -33,7 +35,7 @@ export async function GET() {
           nickname: p.nickname,
           exitType: p.exitType,
           kills: p.kills,
-          extracted: p.extracted,
+          extracted: Array.isArray(p.extracted) ? p.extracted : [],
           humans: humans.length,
           humansExtracted,
         });

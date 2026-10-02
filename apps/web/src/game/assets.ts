@@ -29,7 +29,7 @@ export const SPRITE_NAMES = [
   "crate",
   "rock",
   "grass_tile",
-  "dirt_tile",
+  "dirt_plain",
 ] as const;
 
 export type SpriteName = (typeof SPRITE_NAMES)[number];
@@ -45,7 +45,7 @@ async function loadOne(name: SpriteName): Promise<Texture> {
     console.warn(`[game] sprite ${name} failed to load`);
     return Texture.EMPTY;
   }
-  const tiles = name === "grass_tile" || name === "dirt_tile";
+  const tiles = name === "grass_tile" || name === "dirt_plain";
   return new Texture({
     source: new ImageSource({
       resource: img,

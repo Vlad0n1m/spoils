@@ -53,6 +53,11 @@ export const PLAYER = {
 /** On death every non-free item breaks with this chance (decided by Vlad, 50%). */
 export const BREAK_CHANCE_ON_DEATH = 0.5;
 
+/**
+ * Heals are channels: all HP lands when the channel completes (Player.healUntil). Firing or
+ * switching weapons cancels the heal and the item is NOT consumed — so HP must not trickle in
+ * during the channel, or cancelling would give free healing.
+ */
 export const HEAL = {
   bandage: { HP: 25, MS: 3_000, MAX_CARRY: 10 },
   medkit: { HP: 75, MS: 6_000, MAX_CARRY: 3 },

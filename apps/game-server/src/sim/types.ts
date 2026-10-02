@@ -49,6 +49,11 @@ export interface PlayerRuntime {
   pressPending: boolean;
   pressAt: number;
   nextFireAt: number;
+  /** Match clock when the player's position last changed (bots: "standing still in a bush"). */
+  movedAt: number;
+  /** Last other player who damaged this one, and when (bots return fire during the peace window). */
+  lastHitBy: PlayerRuntime | null;
+  lastHitAt: number;
   /** Slot the running reload belongs to (the active slot when it started). */
   reloadSlot: number;
 

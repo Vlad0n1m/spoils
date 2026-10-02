@@ -128,6 +128,12 @@
       "size": 256,
       "tile": true,
       "prompt": "Brown packed dirt path with small pebbles, like the dirt patches in the reference image."
+    },
+    {
+      "id": "dirt_plain",
+      "size": 256,
+      "tile": true,
+      "prompt": "Plain brown packed dirt ground with small pebbles and subtle cracks, NO grass at all, evenly lit, matching the dirt patches in the reference image."
     }
   ]
 }

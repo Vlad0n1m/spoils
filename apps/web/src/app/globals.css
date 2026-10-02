@@ -58,6 +58,30 @@ button {
   font: inherit;
 }
 
+@layer base {
+  /* Typed text must keep its case (nicknames, emails): never the caps-only display font. */
+  input,
+  textarea,
+  select {
+    font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  /*
+   * Readable copy: paragraphs, hints, explanations. The display font (Luckiest Guy) stays the
+   * default for headings, buttons and labels. In the components layer so `leading-*` /
+   * `tracking-*` utilities still override it, while it beats the global `body *` rules above.
+   */
+  .font-body {
+    font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+    line-height: 1.5;
+    letter-spacing: normal;
+    text-box-trim: none;
+    -webkit-text-box-trim: none;
+  }
+}
+
 .btn {
   @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition;
 }
