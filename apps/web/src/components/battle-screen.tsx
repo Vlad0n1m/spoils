@@ -1,21 +1,28 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Room } from "colyseus.js";
 import {
   BattleState,
   MATCH,
   ROOMS,
   S2C,
+  generateMap,
+  mapHash,
+  type BattleJoinOptions,
   type JoinTicket,
-  type MatchSettlementPayload,
+  type JoinedMsg,
+  type MapData,
+  type MatchSummaryMsg,
   type OutcomeMsg,
 } from "@extract/shared";
 import { getColyseusClient } from "@/lib/colyseus";
 import { describeRoomExit, errorCodeAndReason, type RoomExit } from "@/lib/room-exit";
-import { createHudStore, shallowEqual } from "@/game/hud";
-import type { GameRendererApi, HudSnapshot, RendererOptions } from "@/game/types";
+import { createHudStore, shallowEqual, type HudStore } from "@/game/hud";
+import type { GameRendererApi, HudSnapshot, PanelActions, RendererOptions } from "@/game/types";
+import { createRoomInventoryClient } from "@/game/inventory-client";
 import { Hud, useHud } from "./hud";
+import { InventoryOverlay } from "./inventory/inventory-overlay";
 import { MatchOutcomeOverlay } from "./match-outcome-overlay";
 
 interface Props {
@@ -34,15 +41,87 @@ const EMPTY_HUD: HudSnapshot = {
   aliveCount: 0,
   totalPlayers: 0,
   nearestExtract: null,
+  extracts: [],
   interactHint: null,
   killFeed: [],
   pingMs: null,
 };
 
+/** What an in-raid overlay (inventory, search panel, full map) gets once the room is joined. */
+export interface BattleOverlayContext {
+  room: Room<BattleState>;
+  /** The local player's key in state.self (S2C.JOINED), null until known. */
+  selfKey: () => string | null;
+  /** The static map once the renderer built it. */
+  map: () => MapData | null;
+  hud: HudStore;
+}
+
+export interface BattleOverlayInstance {
+  node: ReactNode;
+  /** True while the overlay owns the mouse (no fire, aim frozen). */
+  isInputBlocked?(): boolean;
+  /** Panel keys the game input forwards (Tab / T / Esc / M). */
+  panelActions?: PanelActions;
+  dispose?(): void;
+}
+
+export interface BattleOverlay {
+  id: string;
+  create(ctx: BattleOverlayContext): BattleOverlayInstance;
+}
+
+/**
+ * In-raid overlays mounted over the canvas (the `<OverlaySlot>` of the critique). Feature lanes
+ * register here at the integration step (e.g. the inventory overlay: createRoomInventoryClient +
+ * <InventoryOverlay client/>), so they never edit the screen or the renderer themselves.
+ */
+export const BATTLE_OVERLAYS: BattleOverlay[] = [
+  {
+    // Tab inventory + search panel. Keys arrive through the renderer's input (panelActions), so
+    // bindInventoryHotkeys is NOT used here (it would toggle twice).
+    id: "inventory",
+    create(ctx) {
+      const client = createRoomInventoryClient(ctx.room, {
+        selfKey: ctx.selfKey,
+        containers: () => ctx.map()?.containers ?? null,
+      });
+      return {
+        node: <InventoryOverlay client={client} />,
+        isInputBlocked: client.isBlocking,
+        panelActions: {
+          toggleInventory: client.toggle,
+          // T outside a search would only toast "not searching".
+          takeAll: () => {
+            if (client.getSnapshot().search) client.takeAll();
+          },
+          closePanel: () => void client.escape(),
+        },
+        dispose: client.dispose,
+      };
+    },
+  },
+];
+
+/** mapHash of the v2 map, sent on join so the server can log generator drift (computed once). */
+let steppeHash: string | null = null;
+function clientMapHash(): string {
+  if (steppeHash === null) {
+    try {
+      steppeHash = mapHash(generateMap("steppe"));
+    } catch {
+      steppeHash = "";
+    }
+  }
+  return steppeHash;
+}
+
 interface BattleCallbacks {
+  hud: HudStore;
   onHud: (s: HudSnapshot) => void;
   onOutcome: (o: OutcomeMsg) => void;
-  onSettled: (p: MatchSettlementPayload) => void;
+  onSettled: (p: MatchSummaryMsg) => void;
+  onOverlays: (nodes: Array<{ id: string; node: ReactNode }>) => void;
   /** The room closed on us; `exit` explains a kick (e.g. JOINED_ELSEWHERE), null = plain close. */
   onDisconnect: (exit: RoomExit | null) => void;
   onError: (exit: RoomExit) => void;
@@ -56,11 +135,14 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
   let disposed = false;
   let room: Room<BattleState> | null = null;
   let renderer: GameRendererApi | null = null;
+  let selfKey: string | null = null;
+  const overlays: BattleOverlayInstance[] = [];
 
   void (async () => {
     try {
       const client = await getColyseusClient();
-      const joined = await client.joinById(battleRoomId, { ticket }, BattleState);
+      const options: BattleJoinOptions = { ticket, mapHash: clientMapHash() };
+      const joined = await client.joinById(battleRoomId, options, BattleState);
       if (disposed) {
         void joined.leave().catch(() => {});
         return;
@@ -71,8 +153,12 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
         void joined.leave().catch(() => {});
         throw new Error(`unexpected_room_${joined.name}`);
       }
+      // JOINED arrives right after the join, long before the renderer module has loaded.
+      joined.onMessage(S2C.JOINED, (msg: JoinedMsg) => {
+        if (typeof msg?.selfKey === "string" && msg.selfKey) selfKey = msg.selfKey;
+      });
       joined.onMessage(S2C.OUTCOME, (msg: OutcomeMsg) => cb.onOutcome(msg));
-      joined.onMessage(S2C.SETTLED, (msg: MatchSettlementPayload) => cb.onSettled(msg));
+      joined.onMessage(S2C.SETTLED, (msg: MatchSummaryMsg) => cb.onSettled(msg));
       joined.onLeave((code, reason) => {
         if (!disposed) cb.onDisconnect(describeRoomExit(code, reason));
       });
@@ -82,7 +168,44 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
       if (disposed) return;
       // src/game/types.ts is the contract; the renderer module is built against it separately.
       const Renderer = mod.GameRenderer as unknown as new (o: RendererOptions) => GameRendererApi;
-      renderer = new Renderer({ mountEl, room: joined, onHud: cb.onHud });
+      const ctx: BattleOverlayContext = {
+        room: joined,
+        selfKey: () => selfKey ?? renderer?.selfKey?.() ?? null,
+        map: () => renderer?.map?.() ?? null,
+        hud: cb.hud,
+      };
+      for (const o of BATTLE_OVERLAYS) {
+        try {
+          overlays.push(o.create(ctx));
+        } catch (err) {
+          console.error(`[battle] overlay ${o.id} failed`, err);
+        }
+      }
+      // First overlay that handles a panel key wins.
+      const panel = (k: keyof PanelActions) => () => {
+        for (const o of overlays) {
+          const f = o.panelActions?.[k];
+          if (f) return f();
+        }
+      };
+      // Only forward a key some overlay handles: an unhandled M must stay with the map system.
+      const has = (k: keyof PanelActions) => overlays.some((o) => o.panelActions?.[k]);
+      renderer = new Renderer({
+        mountEl,
+        room: joined,
+        onHud: cb.onHud,
+        selfKey: () => selfKey,
+        isInputBlocked: () => overlays.some((o) => o.isInputBlocked?.() === true),
+        panelActions: overlays.some((o) => o.panelActions)
+          ? {
+              toggleInventory: panel("toggleInventory"),
+              takeAll: has("takeAll") ? panel("takeAll") : undefined,
+              closePanel: panel("closePanel"),
+              toggleMap: has("toggleMap") ? panel("toggleMap") : undefined,
+            }
+          : undefined,
+      });
+      cb.onOverlays(overlays.map((o, i) => ({ id: BATTLE_OVERLAYS[i]?.id ?? String(i), node: o.node })));
       await renderer.start();
     } catch (e) {
       if (disposed) return;
@@ -101,6 +224,13 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
     dispose() {
       disposed = true;
       renderer?.stop();
+      for (const o of overlays.splice(0)) {
+        try {
+          o.dispose?.();
+        } catch {
+          /* best effort */
+        }
+      }
       void room?.leave().catch(() => {});
     },
   };
@@ -125,7 +255,8 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
   const [hudStore] = useState(() => createHudStore(EMPTY_HUD));
   const [err, setErr] = useState<RoomExit | null>(null);
   const [outcome, setOutcome] = useState<OutcomeMsg | null>(null);
-  const [settlement, setSettlement] = useState<MatchSettlementPayload | null>(null);
+  const [settlement, setSettlement] = useState<MatchSummaryMsg | null>(null);
+  const [overlayNodes, setOverlayNodes] = useState<Array<{ id: string; node: ReactNode }>>([]);
   const [disconnected, setDisconnected] = useState(false);
   const [kick, setKick] = useState<RoomExit | null>(null);
 
@@ -135,7 +266,9 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
     window.clearTimeout(disposeTimerRef.current);
     if (!sessionRef.current && mountRef.current) {
       sessionRef.current = startBattle(mountRef.current, ticket, battleRoomId, {
+        hud: hudStore,
         onHud: hudStore.push,
+        onOverlays: setOverlayNodes,
         onOutcome: setOutcome,
         onSettled: setSettlement,
         onDisconnect: (exit) => {
@@ -181,6 +314,9 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
       ) : (
         <>
           <Hud store={hudStore} selfNickname={nickname} onLeave={onLeave} />
+          {overlayNodes.map((o) => (
+            <Fragment key={o.id}>{o.node}</Fragment>
+          ))}
           {!hasSelf && !overlayVisible && (
             <div className="pointer-events-none absolute inset-0 grid place-items-center">
               <div className="toon-panel flex items-center gap-3 px-6 py-4 text-xl tracking-wide">

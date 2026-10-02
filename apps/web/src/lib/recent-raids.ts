@@ -1,4 +1,4 @@
-import type { ExitType, ItemRef } from "@extract/shared";
+import type { ExitType, SettledItem } from "@extract/shared";
 
 /** Row of GET /api/matches/recent (one human's result in a settled raid). */
 export interface RecentRaidRow {
@@ -7,7 +7,7 @@ export interface RecentRaidRow {
   nickname: string;
   exitType: ExitType;
   kills: number;
-  extracted: ItemRef[];
+  extracted: SettledItem[];
   /** Humans in that raid / how many of them got out. */
   humans: number;
   humansExtracted: number;

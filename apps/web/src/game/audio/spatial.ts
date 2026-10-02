@@ -11,6 +11,7 @@
  *
  * Angles use the screen convention (y down): atan2(dy, dx), so 0 = right, +π/2 = down.
  */
+import { ENV, SOUND, SOUND_BAND_GAIN, bandMid, sectorAngle as sharedSectorAngle } from "@extract/shared";
 
 export interface SpatialResult {
   /** Linear gain multiplier, 0..1. */
@@ -44,20 +45,18 @@ export const BEHIND_CUTOFF_K = 0.45;
 export const BEHIND_GAIN_K = 0.15;
 
 /**
- * Mirrors packages/shared sound.ts (SOUND.SECTORS, SOUND_BAND_GAIN, bandMid). Kept local because
- * the shared contract is being rewritten in parallel and apps/web compiles against the built dist;
- * WP-A1 can swap these for the shared imports once the v2 dist lands.
+ * Hidden-source quantization comes straight from the shared sound contract (sound.ts), so the
+ * server's band split and the client's band gain can never drift apart.
  */
-export const SECTORS = 16;
-export const BAND_GAIN = [1.0, 0.5, 0.22] as const;
-const BAND_MID = [0.17, 0.5, 0.83] as const;
+export const SECTORS = SOUND.SECTORS;
+export const BAND_GAIN = SOUND_BAND_GAIN;
 /** Hidden pan width: the sector is quantized to 22.5°, so keep it slightly narrower than visible. */
 export const HIDDEN_PAN_WIDTH = 0.8;
 /** Hidden sources behind the listener are capped at this cutoff (mobility memo). */
 export const HIDDEN_BEHIND_CUTOFF = 3500;
 
 /** Stylized speed of sound for thunder delay (px/s); real speed would make it feel laggy. */
-export const THUNDER_SPEED_PX_S = 3000;
+export const THUNDER_SPEED_PX_S = ENV.THUNDER_SPEED;
 
 export const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -140,10 +139,8 @@ export interface HiddenInput {
   facing?: number;
 }
 
-/** Centre angle of a sector, radians (same convention as shared `sectorAngle`). */
-export function sectorAngle(sector: number): number {
-  return (sector * Math.PI * 2) / SECTORS;
-}
+/** Centre angle of a sector, radians (the shared contract's own helper). */
+export const sectorAngle = sharedSectorAngle;
 
 /** The wire packs `band | occluded << 2` into one number (critique.md, Sound contract). */
 export function unpackBand(packed: number): { band: 0 | 1 | 2; occluded: boolean } {
@@ -161,7 +158,7 @@ export function spatializeHidden(i: HiddenInput): SpatialResult | null {
   const band = clamp(Math.round(i.band), 0, 2) as 0 | 1 | 2;
   const sector = ((Math.round(i.sector) % SECTORS) + SECTORS) % SECTORS;
   const ang = sectorAngle(sector);
-  const u = BAND_MID[band];
+  const u = bandMid(band);
   let gain: number = BAND_GAIN[band];
   let cutoff = MAX_CUTOFF * Math.pow(EDGE_CUTOFF_RATIO, u);
   const pan = HIDDEN_PAN_WIDTH * Math.cos(ang);

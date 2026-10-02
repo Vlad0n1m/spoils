@@ -1,0 +1,319 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  CONTAINER_STATE,
+  ITEM_FLAG,
+  SEARCH,
+  containerOpenMs,
+  countOf,
+  revealMs,
+  type ContainerSpot,
+  type ItemLike,
+} from "@extract/shared";
+import { damagePlayer } from "./combat.js";
+import { closeSearch, invTakeAllOp, invTakeOp, takeAll, takeFromLoot } from "./containers.js";
+import { extractPlayer } from "./extraction.js";
+import { makeItem } from "./items.js";
+import type { Match } from "./match.js";
+import type { MatchEvent } from "./types.js";
+import { giveItem, giveStack, giveWeapon, ids, pl, place, rtOf, run, selfOf, testMap, testMatch, type Timed } from "./test-utils.js";
+
+const CRATE: ContainerSpot = { x: 1100, y: 1500, kind: "crate", tier: 1, zone: null };
+const OPEN_MS = containerOpenMs(CRATE);
+
+/** A 2-player match with one crate whose contents are `items` (uniques get registered as minted). */
+function crateMatch(items: () => ItemLike[], n = 2): Match {
+  const m = testMatch(n, { map: testMap({ containers: [CRATE] }) });
+  m.containers.roll = () => {
+    const out = items();
+    for (const it of out) if (it.uid) m.ledger.register(it, "minted");
+    return out;
+  };
+  return m;
+}
+
+const contents = (m: Match) => () => [
+  makeItem("rifle", { uid: m.newUid(), rarity: 1, mag: 7, dur: 80 }),
+  makeItem("ammo_heavy", { qty: 20 }),
+  makeItem("junk_gpu"),
+];
+
+const views = (ev: Timed[]) => ev.filter((e) => e.type === "view").map((e) => (e.type === "view" ? `${e.to}:${e.op}:${e.key}` : ""));
+const errs = (m: Match) => m.drainEvents().flatMap((e) => (e.type === "invErr" ? [e.msg.code] : []));
+
+test("open delay, then items reveal one by one; the loot entry reaches the view only once ready", () => {
+  let m!: Match;
+  m = crateMatch(() => contents(m)());
+  const [a] = ids(m);
+  place(m, a!, 1040, 1500);
+  const rt = rtOf(m, a!);
+  assert.ok(m.interact(a!));
+  const ev0 = m.drainEvents();
+  assert.ok(ev0.some((e) => e.type === "chest" && e.idx === 0), "lid event on first open");
+  assert.equal(m.state.containerState[0], CONTAINER_STATE.OPENED);
+  assert.equal(selfOf(m, a!).searching, "c0");
+  assert.equal(selfOf(m, a!).searchReadyAt, OPEN_MS);
+  assert.ok(pl(m, a!).act & 16, "ACT.LOOT is public");
+  const loot = m.state.loot.get("c0")!;
+  assert.equal(loot.total, 3);
+  assert.equal(loot.slots.size, 0, "nothing revealed before the delay");
+
+  // Taking before the delay is refused; F again on the same target is a no-op.
+  assert.equal(takeFromLoot(m, rt, { from: "loot", key: "0", uid: "", def: "rifle" }), "not_ready");
+  assert.ok(m.interact(a!));
+  assert.equal(rt.search!.readyAt, OPEN_MS);
+
+  const early = run(m, OPEN_MS - 50);
+  assert.deepEqual(views(early), []);
+  const atReady = run(m, 50);
+  assert.deepEqual(views(atReady), [`${rt.rosterIndex}:add:c0`]);
+  assert.equal(loot.revealed, 0);
+  const items = m.containers.targets.get("c0")!.items;
+  const t0 = OPEN_MS + revealMs(items[0]!);
+  const t1 = t0 + revealMs(items[1]!);
+  const t2 = t1 + revealMs(items[2]!);
+  assert.equal(loot.nextRevealAt, t0);
+  run(m, t0 - m.clock - 50);
+  assert.equal(loot.revealed, 0);
+  assert.equal(takeFromLoot(m, rt, { from: "loot", key: "1", uid: "", def: "ammo_heavy" }), "not_revealed");
+  run(m, 50);
+  assert.equal(loot.revealed, 1);
+  assert.equal(loot.slots.get("0")!.def, "rifle");
+  assert.equal(loot.slots.get("0")!.mag, 7);
+  run(m, t1 - m.clock);
+  assert.equal(loot.revealed, 2);
+  run(m, t2 - m.clock);
+  assert.equal(loot.revealed, 3);
+  assert.equal(loot.nextRevealAt, 0, "done");
+  assert.deepEqual([...loot.slots.keys()].sort(), ["0", "1", "2"]);
+});
+
+test("searchers share one reveal; it pauses (keeping progress) when nobody is past the delay", () => {
+  let m!: Match;
+  m = crateMatch(() => contents(m)());
+  const [a, b] = ids(m);
+  place(m, a!, 1040, 1500);
+  place(m, b!, 1160, 1500);
+  assert.ok(m.interact(a!));
+  run(m, OPEN_MS);
+  const loot = m.state.loot.get("c0")!;
+  const items = m.containers.targets.get("c0")!.items;
+  run(m, revealMs(items[0]!));
+  assert.equal(loot.revealed, 1);
+  // B joins: B has its own open delay, the reveal goes no faster with two.
+  assert.ok(m.interact(b!));
+  assert.equal(rtOf(m, b!).search!.readyAt, m.clock + OPEN_MS);
+  const next = loot.nextRevealAt;
+  run(m, next - m.clock);
+  assert.equal(loot.revealed, 2);
+  // Both leave: paused, progress kept.
+  m.searchClose(a!);
+  m.searchClose(b!);
+  run(m, 50);
+  assert.equal(loot.nextRevealAt, 0);
+  run(m, 5_000);
+  assert.equal(loot.revealed, 2);
+  // Re-open: the delay again, then the last item.
+  const ev = run(m, 0);
+  assert.deepEqual(views(ev), []);
+  assert.ok(m.interact(b!));
+  run(m, OPEN_MS + revealMs(items[2]!));
+  assert.equal(loot.revealed, 3);
+});
+
+test("cancel rules: SEARCH_CLOSE, distance > CANCEL_RANGE, roll, fire, death, extract; moving within range is fine", () => {
+  const scenarios: Array<[string, (m: Match, id: string) => void]> = [
+    ["close", (m, id) => m.searchClose(id)],
+    ["range", (m, id) => { place(m, id, CRATE.x - SEARCH.CANCEL_RANGE - 5, CRATE.y); run(m, 50); }],
+    ["roll", (m, id) => { run(m, 100, { [id]: { roll: true, mx: -1 } }); }],
+    ["fire", (m, id) => { run(m, 100, { [id]: { fire: true } }); }],
+    ["death", (m, id) => { pl(m, id).hp = 1; damagePlayer(m, rtOf(m, id), 50, null, "", 0, 0); }],
+    ["extract", (m, id) => extractPlayer(m, rtOf(m, id))],
+  ];
+  for (const [name, cancel] of scenarios) {
+    let m!: Match;
+    m = crateMatch(() => contents(m)());
+    const [a] = ids(m);
+    place(m, a!, 1040, 1500);
+    assert.ok(m.interact(a!));
+    run(m, OPEN_MS + 50);
+    // Walking around inside the cancel range keeps the session.
+    place(m, a!, CRATE.x, CRATE.y + SEARCH.CANCEL_RANGE - 10);
+    run(m, 50);
+    assert.equal(selfOf(m, a!).searching, "c0", `${name}: still searching`);
+    const ev: MatchEvent[] = [];
+    const emit = m.emit.bind(m);
+    m.emit = (e) => { ev.push(e); emit(e); };
+    cancel(m, a!);
+    run(m, 50);
+    const rt = rtOf(m, a!);
+    assert.equal(rt.search, null, `${name}: session closed`);
+    assert.equal(selfOf(m, a!).searching, "", name);
+    assert.ok(ev.some((e) => e.type === "view" && e.op === "remove" && e.key === "c0"), `${name}: loot entry leaves the view`);
+    assert.equal(m.containers.targets.get("c0")!.searchers.size, 0, name);
+  }
+});
+
+test("take races: the first take wins, the second gets INV_ERR gone; stale clicks are refused", () => {
+  let m!: Match;
+  m = crateMatch(() => contents(m)());
+  const [a, b] = ids(m);
+  place(m, a!, 1040, 1500);
+  place(m, b!, 1160, 1500);
+  assert.ok(m.interact(a!));
+  assert.ok(m.interact(b!));
+  run(m, 4_000);
+  const loot = m.state.loot.get("c0")!;
+  assert.equal(loot.revealed, 3);
+  const rifle = loot.slots.get("0")!;
+  const uid = rifle.uid;
+  m.drainEvents();
+  assert.equal(invTakeOp(m, a!, { from: "loot", key: "0", uid, def: "rifle" }), null);
+  assert.equal(invTakeOp(m, b!, { from: "loot", key: "0", uid, def: "rifle" }), "gone");
+  assert.deepEqual(errs(m), ["gone"]);
+  const sa = selfOf(m, a!).slots;
+  assert.equal(sa.get("w2")!.uid, uid, "rifle into the empty weapon slot");
+  assert.equal(sa.get("w2")!.mag, 7);
+  assert.equal(sa.get("w2")!.dur, 80);
+  assert.ok(!loot.slots.has("0"));
+  // Wrong def / uid for a slot = stale click.
+  assert.equal(invTakeOp(m, b!, { from: "loot", key: "2", uid: "", def: "junk_hdd" }), "gone");
+  assert.equal(invTakeOp(m, b!, { from: "loot", key: "9", uid: "", def: "junk_gpu" }), "gone");
+  // Not searching at all.
+  m.searchClose(b!);
+  assert.equal(invTakeOp(m, b!, { from: "loot", key: "2", uid: "", def: "junk_gpu" }), "not_searching");
+});
+
+test("partial stacks: qty splits keep the total; a full inventory takes what fits and reports full", () => {
+  const m = crateMatch(() => [makeItem("ammo_heavy", { qty: 20 }), makeItem("junk_bolts", { qty: 5 }), makeItem("junk_coldwallet")]);
+  const [a] = ids(m);
+  place(m, a!, 1040, 1500);
+  assert.ok(m.interact(a!));
+  run(m, 5_000);
+  const rt = rtOf(m, a!);
+  const loot = m.state.loot.get("c0")!;
+  assert.equal(takeFromLoot(m, rt, { from: "loot", key: "0", uid: "", def: "ammo_heavy", qty: 7 }), null);
+  assert.equal(loot.slots.get("0")!.qty, 13);
+  assert.equal(countOf(rt.self.slots, "ammo_heavy"), 7);
+  assert.equal(takeFromLoot(m, rt, { from: "loot", key: "0", uid: "", def: "ammo_heavy", qty: 14 }), "bad_slot");
+
+  // Fill storage except one pocket that already holds 15 heavy rounds (room for 5 more).
+  const s = rt.self.slots;
+  for (const k of ["p0", "p1", "p2", "p3"]) s.delete(k);
+  giveItem(m, a!, "ammo_heavy", "p0", { qty: 15 });
+  giveItem(m, a!, "junk_gpu", "p1");
+  giveItem(m, a!, "junk_gpu", "p2");
+  giveItem(m, a!, "junk_gpu", "p3");
+  const r = takeAll(m, rt);
+  assert.equal(r.code, "full");
+  assert.equal(r.taken, 1, "only the heavy rounds fit (5 of 13)");
+  assert.equal(s.get("p0")!.qty, 20);
+  assert.equal(loot.slots.get("0")!.qty, 8);
+  assert.equal(loot.slots.get("1")!.qty, 5);
+  assert.ok(loot.slots.get("2"));
+  assert.equal(m.state.containerState[0], CONTAINER_STATE.OPENED);
+
+  // Room again: take-all empties the crate → EMPTIED for everyone.
+  s.delete("p1");
+  s.delete("p2");
+  s.delete("p3");
+  m.drainEvents();
+  assert.equal(invTakeAllOp(m, a!), null);
+  assert.equal(loot.slots.size, 0);
+  assert.equal(m.state.containerState[0], CONTAINER_STATE.EMPTIED);
+  assert.equal(countOf(s, "ammo_heavy"), 28, "15 given + 5 + the last 8");
+  assert.equal(countOf(s, "junk_bolts"), 5);
+  assert.equal(countOf(s, "junk_coldwallet"), 1);
+  // An emptied container is not offered by F any more.
+  assert.equal(m.containers.nearestOpenable(rt), -1);
+});
+
+test("targeted take onto an occupied slot: the displaced item is auto-placed, or dropped at the feet", () => {
+  let m!: Match;
+  m = crateMatch(() => [makeItem("sniper", { uid: m.newUid(), rarity: 2 }), makeItem("armor_2", { uid: m.newUid() })]);
+  const [a] = ids(m);
+  place(m, a!, 1040, 1500);
+  const rt = rtOf(m, a!);
+  const s = rt.self.slots;
+  const rifle = giveWeapon(m, a!, "w1", "rifle", 1);
+  giveWeapon(m, a!, "w2", "shotgun");
+  assert.ok(m.interact(a!));
+  run(m, 5_000);
+  const loot = m.state.loot.get("c0")!;
+  const sniper = loot.slots.get("0")!;
+  // Start a reload on w1 (the active slot): replacing that weapon cancels it.
+  s.get("w1")!.mag = 0;
+  m.reload(a!);
+  assert.ok(rt.self.reloadUntil > 0);
+  assert.equal(takeFromLoot(m, rt, { from: "loot", key: "0", uid: sniper.uid, def: "sniper", to: "w1" }), null);
+  assert.equal(s.get("w1")!.def, "sniper");
+  assert.equal(rt.self.reloadUntil, 0, "reload of the replaced weapon cancelled");
+  assert.equal(pl(m, a!).weapon, "sniper");
+  const stored = [...s.entries()].find(([, it]) => it.uid === rifle);
+  assert.ok(stored && /^p\d$/.test(stored[0]), "old rifle went to a pocket");
+
+  // Storage full: the displaced vest lands on the ground next to the player.
+  giveItem(m, a!, "armor_1", "armor");
+  const vest1 = s.get("armor")!.uid;
+  for (const k of ["p0", "p1", "p2", "p3"]) if (!s.get(k)) giveItem(m, a!, "junk_gpu", k as "p0");
+  const armor = loot.slots.get("1")!;
+  assert.equal(takeFromLoot(m, rt, { from: "loot", key: "1", uid: armor.uid, def: "armor_2" }), "full", "auto-place: no room");
+  assert.equal(takeFromLoot(m, rt, { from: "loot", key: "1", uid: armor.uid, def: "armor_2", to: "armor" }), null);
+  assert.equal(s.get("armor")!.def, "armor_2");
+  assert.equal(pl(m, a!).armor, 2);
+  const onGround = [...m.ground.all()].map((g) => g.item);
+  assert.deepEqual(onGround.map((i) => i.uid), [vest1]);
+});
+
+test("INV_* ops are rate limited per player (token bucket)", () => {
+  let m!: Match;
+  m = crateMatch(() => contents(m)());
+  const [a] = ids(m);
+  place(m, a!, 1040, 1500);
+  assert.ok(m.interact(a!));
+  run(m, 5_000);
+  m.drainEvents();
+  let rate = 0;
+  for (let i = 0; i < SEARCH.OPS_BURST + 10; i++) {
+    if (invTakeOp(m, a!, { from: "loot", key: "9", uid: "", def: "x" }) === "rate") rate++;
+  }
+  assert.ok(rate >= 9, `rate limited ${rate}`);
+  run(m, 2_000);
+  assert.notEqual(invTakeOp(m, a!, { from: "loot", key: "9", uid: "", def: "x" }), "rate");
+});
+
+test("FREE items displaced by a take vanish; broken items can never be taken", () => {
+  let m!: Match;
+  m = crateMatch(() => [makeItem("rifle", { uid: m.newUid() }), makeItem("ammo_light", { qty: 5, flags: ITEM_FLAG.BROKEN })]);
+  const [a] = ids(m);
+  place(m, a!, 1040, 1500);
+  const rt = rtOf(m, a!);
+  const s = rt.self.slots;
+  giveWeapon(m, a!, "w2", "shotgun");
+  assert.equal(s.get("w1")!.flags & ITEM_FLAG.FREE, ITEM_FLAG.FREE);
+  assert.ok(m.interact(a!));
+  run(m, 5_000);
+  const loot = m.state.loot.get("c0")!;
+  const r = loot.slots.get("0")!;
+  assert.equal(takeFromLoot(m, rt, { from: "loot", key: "0", uid: r.uid, def: "rifle", to: "w1" }), null);
+  assert.equal(s.get("w1")!.def, "rifle");
+  assert.equal([...s.values()].filter((i) => i.def === "pistol").length, 0, "FREE pistol vanished");
+  assert.equal(m.state.items.size, 0);
+  assert.equal(takeFromLoot(m, rt, { from: "loot", key: "1", uid: "", def: "ammo_light" }), "broken");
+  assert.equal(takeAll(m, rt).taken, 0);
+});
+
+test("a search survives taking damage; closing twice is harmless", () => {
+  let m!: Match;
+  m = crateMatch(() => contents(m)());
+  const [a] = ids(m);
+  place(m, a!, 1040, 1500);
+  assert.ok(m.interact(a!));
+  damagePlayer(m, rtOf(m, a!), 10, null, "", 0, 0);
+  run(m, 100);
+  assert.equal(selfOf(m, a!).searching, "c0");
+  closeSearch(m, rtOf(m, a!), "close");
+  closeSearch(m, rtOf(m, a!), "close");
+  assert.equal(selfOf(m, a!).searching, "");
+  assert.equal(giveStack(m, a!, "bandage", 1), 1);
+});

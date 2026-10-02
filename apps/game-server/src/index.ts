@@ -1,19 +1,20 @@
-import "./env.js";
 import { Encoder } from "@colyseus/schema";
-import express from "express";
-import { createServer } from "node:http";
-import { Server, matchMaker } from "@colyseus/core";
-import { WebSocketTransport } from "@colyseus/ws-transport";
-import { monitor } from "@colyseus/monitor";
-import { BattleRoom } from "./rooms/battle-room.js";
-import { MatchmakingRoom } from "./rooms/matchmaking-room.js";
-import { ROOMS } from "@extract/shared";
+import { NET } from "@extract/shared";
 
-/**
- * The default 8 KB is too small: a full 16-player battle state measures ~8–9 KB (players with
- * weapon slots, ~60–80 ground items, ~30 chests). 64 KB leaves ample room for late-match drops.
- */
-Encoder.BUFFER_SIZE = 64 * 1024;
+// FIRST statement (critique): the full v2 state (30 players, containers, views) overflowed the 8 KB
+// default. Static imports are hoisted in ESM, so everything that could create a room or serializer
+// is imported dynamically below, after this line has run.
+Encoder.BUFFER_SIZE = NET.ENCODER_BUFFER_BYTES;
+
+await import("./env.js");
+const { default: express } = await import("express");
+const { createServer } = await import("node:http");
+const { Server, matchMaker } = await import("@colyseus/core");
+const { WebSocketTransport } = await import("@colyseus/ws-transport");
+const { monitor } = await import("@colyseus/monitor");
+const { BattleRoom } = await import("./rooms/battle-room.js");
+const { MatchmakingRoom } = await import("./rooms/matchmaking-room.js");
+const { ROOMS } = await import("@extract/shared");
 
 const port = Number(process.env.GAME_SERVER_PORT ?? 2567);
 

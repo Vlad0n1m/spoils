@@ -1,29 +1,42 @@
 /**
- * Display objects for state entities (players, chests, ground items, extraction points).
- * Views only draw; positions/visibility are decided by the renderer each frame.
+ * Display objects for state entities (players, ground items, corpses, static containers,
+ * extraction points) and the damage-direction arc. Views only draw; positions, visibility and
+ * fog alpha are decided by the renderer each frame.
+ *
+ * v2: remote players are LOS-filtered by the server and come and go constantly, so PlayerView is
+ * pooled and reusable (reset); it animates the public `act` flags (roll / reload / heal / loot /
+ * extract) because the timers behind them are owner-only now, and shows the backpack level.
+ * Ground items carry an item def id; icons not in the static Textures are loaded on demand.
  */
 
-import { Container, Graphics, Sprite, Text } from "pixi.js";
+import { Container, Graphics, GraphicsContext, ImageSource, Sprite, Text, Texture } from "pixi.js";
 import {
+  ACT,
+  CONTAINER_STATE,
+  INPUT_DT_MS,
   PLAYER,
   RARITY_COLORS,
+  ROLL,
   WEAPONS,
-  type Chest,
-  type GroundItem,
+  WORLD,
+  itemDef,
+  type ContainerSpot,
+  type EventsMsg,
   type WeaponId,
 } from "@extract/shared";
 import {
   AMMO_TINT,
   CHEST_SIZE,
-  CHEST_SPRITES,
   COLORS,
   PLAYER_SPRITE_SIZE,
   WEAPON_GROUND_LENGTH,
   WEAPON_HELD_LENGTH,
   playerColor,
+  type SpriteName,
   type Textures,
 } from "./assets";
 import { SnapshotBuffer } from "./prediction";
+import type { GameContext, GameSystem } from "./systems";
 
 function isWeaponId(w: string): w is WeaponId {
   return w in WEAPONS;
@@ -38,40 +51,138 @@ function fitWidth(s: Sprite, w: number) {
 
 const LABEL_FONT = "ui-rounded, 'Trebuchet MS', system-ui, sans-serif";
 
+/* ---------------------------------------------------------------------------- icon cache */
+
+/**
+ * Textures for `/sprites/<name>.png` that are not part of the static Textures set (junk icons,
+ * backpacks, corpse): loaded on first use, owned (and destroyed) by the cache. `get` returns null
+ * until the image decoded, so callers retry next frame.
+ */
+export class IconCache {
+  private readonly tex = new Map<string, Texture | null>();
+  private destroyed = false;
+
+  constructor(private readonly base = "/sprites/") {}
+
+  get(name: string): Texture | null {
+    const hit = this.tex.get(name);
+    if (hit !== undefined) return hit;
+    this.tex.set(name, null);
+    if (typeof Image === "undefined") return null;
+    const img = new Image();
+    img.src = `${this.base}${name}.png`;
+    img
+      .decode()
+      .then(() => {
+        if (this.destroyed) return;
+        this.tex.set(
+          name,
+          new Texture({ source: new ImageSource({ resource: img, autoGenerateMipmaps: true, scaleMode: "linear" }) }),
+        );
+      })
+      .catch(() => {
+        if (!this.destroyed) this.tex.set(name, Texture.EMPTY);
+      });
+    return null;
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    for (const t of this.tex.values()) if (t && t !== Texture.EMPTY && !t.destroyed) t.destroy(true);
+    this.tex.clear();
+  }
+}
+
+/** A static Textures entry when there is one (weapons, armor, meds, ammo), else the icon cache. */
+function iconTexture(tex: Textures, icons: IconCache, name: string): Texture | null {
+  const t = (tex as Partial<Record<string, Texture>>)[name];
+  if (t && t !== Texture.EMPTY) return t;
+  return icons.get(name);
+}
+
+/* ---------------------------------------------------------------------------- players */
+
+/** Roll animation length (one full spin): ROLL.TICKS inputs. */
+export const ROLL_ANIM_MS = ROLL.TICKS * INPUT_DT_MS;
+
+/** Backpack sprite width on the player's back per level (1..3). */
+const BACKPACK_W = [0, 28, 34, 40] as const;
+
+/** Body spin while rolling: one turn over the roll, eased so it starts and ends gently. */
+export function rollSpin(sinceMs: number): number {
+  const t = Math.max(0, Math.min(1, sinceMs / ROLL_ANIM_MS));
+  return 2 * Math.PI * (t * t * (3 - 2 * t));
+}
+
+/** Shared status icon geometry (one GraphicsContext each, reused by every PlayerView). */
+let statusCtx: { heal: GraphicsContext; loot: GraphicsContext; extract: GraphicsContext } | null = null;
+function statusContexts() {
+  if (statusCtx) return statusCtx;
+  const heal = new GraphicsContext()
+    .circle(0, 0, 9).fill({ color: 0x1a1a1a, alpha: 0.85 })
+    .rect(-2, -6, 4, 12).fill(0x5ee35a)
+    .rect(-6, -2, 12, 4).fill(0x5ee35a);
+  const loot = new GraphicsContext()
+    .roundRect(-14, -6, 28, 12, 6).fill({ color: 0x1a1a1a, alpha: 0.85 })
+    .circle(-7, 0, 2.6).fill(0xffd43b)
+    .circle(0, 0, 2.6).fill(0xffd43b)
+    .circle(7, 0, 2.6).fill(0xffd43b);
+  const extract = new GraphicsContext().circle(0, 0, PLAYER.RADIUS + 10).stroke({ width: 3, color: COLORS.extractOpen, alpha: 0.9 });
+  statusCtx = { heal, loot, extract };
+  return statusCtx;
+}
+
 export class PlayerView {
   readonly root = new Container();
-  /** Rotates with aim: weapon + body. */
+  /** Rotates with aim: backpack, weapon and body. */
   private readonly body = new Container();
   private readonly ring = new Graphics();
   private readonly weapon: Sprite;
   private readonly sprite: Sprite;
+  private readonly backpack = new Sprite(Texture.EMPTY);
   private readonly label = new Container();
   private readonly name: Text;
   private readonly bars = new Graphics();
+  /** Above the head: heal / loot status; around the feet: extract ring. */
+  private readonly status = new Graphics(statusContexts().heal);
+  private readonly extractRing = new Graphics(statusContexts().extract);
   readonly buffer = new SnapshotBuffer();
 
   private weaponId = "";
   private barsKey = "";
   private colorIndex = -1;
+  private bpLevel = -1;
+  private act = 0;
+  private rollStartedAt = -Infinity;
+  private statusKind: "" | "heal" | "loot" = "";
+  /** Fog alpha (0..1), eased by the renderer. */
+  alpha = 0;
 
   /** Last rendered position (used for effects anchoring, e.g. death bursts). */
   x = 0;
   y = 0;
+  sessionId: string;
 
   constructor(
     private readonly tex: Textures,
-    readonly sessionId: string,
+    private readonly icons: IconCache,
+    sessionId: string,
     readonly isSelf: boolean,
     nickname: string,
   ) {
+    this.sessionId = sessionId;
     this.weapon = new Sprite(tex.pistol);
     this.weapon.anchor.set(0, 0.5);
     this.sprite = new Sprite(tex.player);
     this.sprite.anchor.set(0.5);
     this.sprite.width = PLAYER_SPRITE_SIZE;
     this.sprite.height = PLAYER_SPRITE_SIZE;
-    // The gun goes under the body so the arms/hands sit on top of its grip.
-    this.body.addChild(this.weapon, this.sprite);
+    this.backpack.anchor.set(0.5);
+    // Top of the icon toward the head (+x), sitting on the back (−x).
+    this.backpack.rotation = Math.PI / 2;
+    this.backpack.visible = false;
+    // The gun goes under the body so the arms/hands sit on top of its grip; the pack under both.
+    this.body.addChild(this.backpack, this.weapon, this.sprite);
 
     this.name = new Text({
       text: nickname,
@@ -88,8 +199,25 @@ export class PlayerView {
     this.name.position.set(0, -PLAYER.RADIUS - 16);
     this.label.addChild(this.name, this.bars);
     this.label.visible = !isSelf;
+    this.status.position.set(0, -PLAYER.RADIUS - 44);
+    this.status.visible = false;
+    this.extractRing.visible = false;
 
-    this.root.addChild(this.ring, this.body, this.label);
+    this.root.addChild(this.extractRing, this.ring, this.body, this.label, this.status);
+  }
+
+  /** Reuse a pooled view for another (or the same, re-added) player. */
+  reset(sessionId: string, nickname: string) {
+    this.sessionId = sessionId;
+    this.setNickname(nickname);
+    this.buffer.clear();
+    this.barsKey = "";
+    this.act = 0;
+    this.rollStartedAt = -Infinity;
+    this.setStatus("");
+    this.extractRing.visible = false;
+    this.alpha = 0;
+    this.root.alpha = 0;
   }
 
   setColor(index: number) {
@@ -120,6 +248,30 @@ export class PlayerView {
     this.weapon.position.set(WEAPONS[weapon].muzzle - len, 0);
   }
 
+  /** Backpack level 0..3 (Player.bp); the icon loads lazily, so this retries until it has one. */
+  setBackpack(level: number) {
+    const lvl = Math.max(0, Math.min(3, Math.floor(level)));
+    if (lvl === this.bpLevel && (lvl === 0 || this.backpack.texture !== Texture.EMPTY)) return;
+    if (lvl === 0) {
+      this.bpLevel = 0;
+      this.backpack.visible = false;
+      return;
+    }
+    const t = this.icons.get(`backpack_${lvl}`);
+    if (!t || t === Texture.EMPTY) {
+      this.backpack.visible = false;
+      return;
+    }
+    this.bpLevel = lvl;
+    this.backpack.texture = t;
+    const w = BACKPACK_W[lvl as 1 | 2 | 3];
+    // Rotated 90°: the icon's width runs along the body's y axis.
+    this.backpack.width = w;
+    this.backpack.height = (w * (t.height || 1)) / (t.width || 1);
+    this.backpack.position.set(-PLAYER.RADIUS * 0.55 - w * 0.25, 0);
+    this.backpack.visible = true;
+  }
+
   setBars(hp: number, armor: number, armorDur: number, armorMax: number) {
     const key = `${Math.ceil(hp)}|${armor}|${Math.ceil(armorDur)}`;
     if (key === this.barsKey) return;
@@ -143,51 +295,54 @@ export class PlayerView {
     this.label.visible = v && !this.isSelf;
   }
 
-  place(x: number, y: number, aim: number) {
+  private setStatus(kind: "" | "heal" | "loot") {
+    if (kind === this.statusKind) return;
+    this.statusKind = kind;
+    if (!kind) {
+      this.status.visible = false;
+      return;
+    }
+    this.status.context = statusContexts()[kind];
+    this.status.visible = true;
+  }
+
+  /**
+   * ACT flags of this frame (remote: Player.act; self: derived from the predicted roll and own
+   * timers). The roll start is remembered when the flag first appears so the spin plays once.
+   */
+  setAct(act: number, nowMs: number) {
+    if (act & ACT.ROLL && !(this.act & ACT.ROLL)) this.rollStartedAt = nowMs;
+    this.act = act;
+    this.setStatus(act & ACT.HEAL ? "heal" : act & ACT.LOOT ? "loot" : "");
+    this.extractRing.visible = (act & ACT.EXTRACT) !== 0;
+    if (this.status.visible) {
+      this.status.y = -PLAYER.RADIUS - 44 + Math.sin(nowMs / 160) * 2;
+    }
+    if (this.extractRing.visible) {
+      const p = (nowMs % 1200) / 1200;
+      this.extractRing.scale.set(0.9 + 0.25 * p);
+      this.extractRing.alpha = 1 - p;
+    }
+  }
+
+  place(x: number, y: number, aim: number, nowMs = 0) {
     this.x = x;
     this.y = y;
     this.root.position.set(x, y);
-    this.body.rotation = aim;
-  }
-
-  destroy() {
-    this.root.destroy({ children: true });
-  }
-}
-
-export class ChestView {
-  readonly root = new Container();
-  private readonly glow = new Graphics();
-  private readonly sprite: Sprite;
-  private opened: boolean | null = null;
-  private readonly phase = Math.random() * Math.PI * 2;
-
-  constructor(
-    tex: Textures,
-    readonly rarity: number,
-  ) {
-    const r = Math.max(0, Math.min(3, rarity)) as 0 | 1 | 2 | 3;
-    this.sprite = new Sprite(tex[CHEST_SPRITES[r]]);
-    this.sprite.anchor.set(0.5);
-    fitWidth(this.sprite, CHEST_SIZE[r]);
-    const glowR = CHEST_SIZE[r] * 0.62;
-    this.glow.circle(0, 0, glowR).fill({ color: RARITY_COLORS[r], alpha: 0.22 });
-    this.glow.circle(0, 0, glowR).stroke({ width: 3, color: RARITY_COLORS[r], alpha: 0.7 });
-    this.root.addChild(this.glow, this.sprite);
-  }
-
-  update(chest: Pick<Chest, "x" | "y" | "opened">, nowMs: number) {
-    this.root.position.set(chest.x, chest.y);
-    if (chest.opened !== this.opened) {
-      this.opened = chest.opened;
-      this.glow.visible = !chest.opened;
-      this.sprite.tint = chest.opened ? 0x6a6a6a : 0xffffff;
-      this.sprite.alpha = chest.opened ? 0.85 : 1;
+    let rot = aim;
+    let squash = 1;
+    const sinceRoll = nowMs - this.rollStartedAt;
+    if (this.act & ACT.ROLL || sinceRoll < ROLL_ANIM_MS) {
+      rot += rollSpin(sinceRoll);
+      squash = 0.88;
     }
-    if (!chest.opened) {
-      const p = 0.5 + 0.5 * Math.sin(nowMs / 400 + this.phase);
-      this.glow.alpha = 0.55 + 0.45 * p;
-      this.glow.scale.set(0.95 + 0.08 * p);
+    this.body.rotation = rot;
+    this.body.scale.set(squash);
+    // Reload: the gun dips and swings toward the body while the mag is changed.
+    if (this.act & ACT.RELOAD) {
+      this.weapon.rotation = -0.65 + Math.sin(nowMs / 140) * 0.08;
+    } else if (this.weapon.rotation !== 0) {
+      this.weapon.rotation = 0;
     }
   }
 
@@ -196,69 +351,57 @@ export class ChestView {
   }
 }
 
-/** Glow color for an item: weapons by rarity, armor by level, consumables neutral. */
-export function itemRarity(item: Pick<GroundItem, "kind" | "rarity" | "armor">): number {
-  if (item.kind === "weapon") return item.rarity;
-  if (item.kind === "armor") return Math.max(0, Math.min(3, item.armor - 1));
-  return 0;
-}
+/* ---------------------------------------------------------------------------- ground items */
+
+const GROUND_ICON_W: Record<string, number> = { armor: 32, backpack: 34, ammo: 26, med: 26, junk: 28 };
 
 export class ItemView {
   readonly root = new Container();
   private readonly glow = new Graphics();
-  private readonly icon = new Container();
+  private readonly icon: Sprite;
   private readonly phase = Math.random() * Math.PI * 2;
   private key = "";
+  private loaded = false;
+  /** Fog alpha (0..1), eased by the renderer. */
+  alpha = 0;
 
-  constructor(private readonly tex: Textures) {
+  constructor(
+    private readonly tex: Textures,
+    private readonly icons: IconCache,
+  ) {
+    this.icon = new Sprite(Texture.EMPTY);
+    this.icon.anchor.set(0.5);
     this.root.addChild(this.glow, this.icon);
   }
 
   /** Rebuild only when what the item is changes (state reuses the instance for qty updates). */
-  sync(item: GroundItem) {
-    const key = `${item.kind}|${item.weapon}|${item.rarity}|${item.armor}|${item.ammoType}`;
-    if (key === this.key) return;
-    this.key = key;
-    for (const c of this.icon.removeChildren()) c.destroy();
-
-    const rarity = itemRarity(item);
-    const color = RARITY_COLORS[rarity as 0 | 1 | 2 | 3] ?? RARITY_COLORS[0];
-    const R = item.kind === "weapon" ? 26 : 19;
-    this.glow.clear();
-    this.glow.circle(0, 0, R).fill({ color, alpha: 0.2 });
-    this.glow.circle(0, 0, R).stroke({ width: 2.5, color, alpha: 0.85 });
-
-    let s: Sprite;
-    switch (item.kind) {
-      case "weapon": {
-        const w = isWeaponId(item.weapon) ? item.weapon : "pistol";
-        s = new Sprite(this.tex[w]);
-        fitWidth(s, WEAPON_GROUND_LENGTH[w]);
-        s.rotation = -0.35;
-        break;
-      }
-      case "armor": {
-        const lvl = Math.max(1, Math.min(3, item.armor)) as 1 | 2 | 3;
-        s = new Sprite(this.tex[`armor_${lvl}`]);
-        fitWidth(s, 32);
-        break;
-      }
-      case "ammo":
-        s = new Sprite(this.tex.ammo);
-        s.tint = AMMO_TINT[item.ammoType] ?? 0xffffff;
-        fitWidth(s, 26);
-        break;
-      case "medkit":
-        s = new Sprite(this.tex.medkit);
-        fitWidth(s, 28);
-        break;
-      default:
-        s = new Sprite(this.tex.bandage);
-        fitWidth(s, 22);
-        break;
+  sync(item: { def: string; rarity: number }) {
+    const key = `${item.def}|${item.rarity}`;
+    if (key === this.key && this.loaded) return;
+    if (key !== this.key) {
+      this.key = key;
+      this.loaded = false;
+      const d = itemDef(item.def);
+      const rarity = d?.cat === "weapon" ? item.rarity : (d?.rarity ?? 0);
+      const color = RARITY_COLORS[rarity as 0 | 1 | 2 | 3] ?? RARITY_COLORS[0];
+      const R = d?.cat === "weapon" ? 26 : 19;
+      this.glow.clear();
+      this.glow.circle(0, 0, R).fill({ color, alpha: 0.2 });
+      this.glow.circle(0, 0, R).stroke({ width: 2.5, color, alpha: 0.85 });
     }
-    s.anchor.set(0.5);
-    this.icon.addChild(s);
+    const d = itemDef(item.def);
+    const t = d ? iconTexture(this.tex, this.icons, d.icon) : null;
+    if (!t) return;
+    this.loaded = true;
+    this.icon.texture = t;
+    this.icon.tint = d?.ammo ? (AMMO_TINT[d.ammo] ?? 0xffffff) : 0xffffff;
+    if (d?.weapon) {
+      fitWidth(this.icon, WEAPON_GROUND_LENGTH[d.weapon]);
+      this.icon.rotation = -0.35;
+    } else {
+      fitWidth(this.icon, GROUND_ICON_W[d?.cat ?? "junk"] ?? 26);
+      this.icon.rotation = 0;
+    }
   }
 
   update(x: number, y: number, nowMs: number) {
@@ -268,6 +411,274 @@ export class ItemView {
 
   destroy() {
     this.root.destroy({ children: true });
+  }
+}
+
+/* ---------------------------------------------------------------------------- corpses */
+
+export class CorpseView {
+  readonly root = new Container();
+  private readonly ring = new Graphics();
+  private readonly sprite = new Sprite(Texture.EMPTY);
+  private readonly name: Text;
+  private colorIndex = -1;
+  private stateKey = "";
+  /** Fog alpha (0..1), eased by the renderer. */
+  alpha = 0;
+
+  constructor(private readonly icons: IconCache) {
+    this.sprite.anchor.set(0.5);
+    this.name = new Text({
+      text: "",
+      style: { fontFamily: LABEL_FONT, fontSize: 11, fontWeight: "700", fill: 0xd0d0d0, stroke: { color: 0x111111, width: 3 } },
+      resolution: 2,
+    });
+    this.name.anchor.set(0.5, 0);
+    this.name.position.set(0, 30);
+    this.root.addChild(this.ring, this.sprite, this.name);
+  }
+
+  sync(c: { x: number; y: number; label: string; color: number; rot: number; opened: boolean; empty: boolean }) {
+    this.root.position.set(c.x, c.y);
+    if (this.sprite.texture === Texture.EMPTY) {
+      const t = this.icons.get("corpse");
+      if (t && t !== Texture.EMPTY) {
+        this.sprite.texture = t;
+        fitWidth(this.sprite, 64);
+      }
+    }
+    // The sprite's head points up (−y): turn it to face the death aim.
+    this.sprite.rotation = c.rot + Math.PI / 2;
+    if (c.color !== this.colorIndex) {
+      this.colorIndex = c.color;
+      this.ring.clear();
+      this.ring.ellipse(0, 0, 34, 26).fill({ color: playerColor(c.color), alpha: 0.18 });
+    }
+    if (this.name.text !== c.label) this.name.text = c.label;
+    const key = `${c.opened}|${c.empty}`;
+    if (key !== this.stateKey) {
+      this.stateKey = key;
+      // Searched bodies read "done" at a glance; emptied ones fade into the ground.
+      this.sprite.tint = c.empty ? 0x5a5a5a : c.opened ? 0xb0b0b0 : 0xffffff;
+      this.name.alpha = c.empty ? 0.45 : 0.85;
+    }
+  }
+
+  destroy() {
+    this.root.destroy({ children: true });
+  }
+}
+
+/* ---------------------------------------------------------------------------- containers */
+
+/** Static container look by MapData tier (0 = small cache .. 4 = legendary). */
+export function containerSprite(tier: number): { sprite: SpriteName; size: number; color: number } {
+  const t = Math.max(0, Math.min(4, Math.floor(tier)));
+  if (t === 0) return { sprite: "crate", size: 44, color: RARITY_COLORS[0] };
+  const r = (t - 1) as 0 | 1 | 2 | 3;
+  const sprites = ["chest_common", "chest_rare", "chest_epic", "chest_legendary"] as const;
+  return { sprite: sprites[r], size: CHEST_SIZE[r], color: RARITY_COLORS[r] };
+}
+
+interface ContainerMarker {
+  root: Container;
+  glow: Graphics;
+  sprite: Sprite;
+  state: number;
+  phase: number;
+}
+
+/**
+ * Markers for MapData.containers (~400 on Steppe), coloured by tier and dimmed by
+ * BattleState.containerState. They are part of the static map (memory under the fog, never
+ * faded). Views are created lazily per 1024 px chunk the first time it comes into view, and whole
+ * chunks are toggled, so the per-frame cost is the handful of visible chunks only.
+ */
+export class ContainerLayer {
+  readonly root = new Container();
+  private readonly chunks = new Map<number, { root: Container; markers: Array<[number, ContainerMarker]> }>();
+  private readonly byChunk = new Map<number, number[]>();
+  private readonly cols: number;
+  private visible: number[] = [];
+  private readonly scratch: number[] = [];
+
+  constructor(
+    private readonly containers: readonly ContainerSpot[],
+    private readonly tex: Textures,
+    mapWidth: number,
+  ) {
+    this.cols = Math.max(1, Math.ceil(mapWidth / WORLD.CHUNK));
+    containers.forEach((c, i) => {
+      const k = this.chunkKey(c.x, c.y);
+      let l = this.byChunk.get(k);
+      if (!l) this.byChunk.set(k, (l = []));
+      l.push(i);
+    });
+  }
+
+  private chunkKey(x: number, y: number): number {
+    return Math.floor(y / WORLD.CHUNK) * this.cols + Math.floor(x / WORLD.CHUNK);
+  }
+
+  private build(key: number) {
+    const root = new Container();
+    const markers: Array<[number, ContainerMarker]> = [];
+    for (const i of this.byChunk.get(key) ?? []) {
+      const c = this.containers[i]!;
+      const look = containerSprite(c.tier);
+      const sprite = new Sprite(this.tex[look.sprite]);
+      sprite.anchor.set(0.5);
+      fitWidth(sprite, look.size);
+      const glow = new Graphics();
+      const gr = look.size * 0.62;
+      glow.circle(0, 0, gr).fill({ color: look.color, alpha: 0.22 });
+      glow.circle(0, 0, gr).stroke({ width: 3, color: look.color, alpha: 0.7 });
+      const m: ContainerMarker = { root: new Container(), glow, sprite, state: -1, phase: (i * 2.399) % (Math.PI * 2) };
+      m.root.position.set(c.x, c.y);
+      m.root.addChild(glow, sprite);
+      root.addChild(m.root);
+      markers.push([i, m]);
+    }
+    const chunk = { root, markers };
+    this.chunks.set(key, chunk);
+    this.root.addChild(root);
+    return chunk;
+  }
+
+  /** Show the chunks overlapping the view rect and animate their markers. */
+  update(x0: number, y0: number, x1: number, y1: number, containerState: ArrayLike<number>, nowMs: number) {
+    const C = WORLD.CHUNK;
+    const want = this.scratch;
+    want.length = 0;
+    const cx0 = Math.max(0, Math.floor(x0 / C)), cx1 = Math.min(this.cols - 1, Math.floor(x1 / C));
+    const cy0 = Math.max(0, Math.floor(y0 / C)), cy1 = Math.floor(y1 / C);
+    for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) {
+      const k = cy * this.cols + cx;
+      if (this.byChunk.has(k)) want.push(k);
+    }
+    for (const k of this.visible) if (!want.includes(k)) this.chunks.get(k)!.root.visible = false;
+    for (const k of want) {
+      const chunk = this.chunks.get(k) ?? this.build(k);
+      chunk.root.visible = true;
+      for (const [i, m] of chunk.markers) {
+        const st = containerState[i] ?? CONTAINER_STATE.UNTOUCHED;
+        if (st !== m.state) {
+          m.state = st;
+          m.glow.visible = st === CONTAINER_STATE.UNTOUCHED;
+          m.sprite.tint = st === CONTAINER_STATE.EMPTIED ? 0x585858 : st === CONTAINER_STATE.OPENED ? 0x9a9a9a : 0xffffff;
+          m.sprite.alpha = st === CONTAINER_STATE.EMPTIED ? 0.8 : 1;
+        }
+        if (st === CONTAINER_STATE.UNTOUCHED) {
+          const p = 0.5 + 0.5 * Math.sin(nowMs / 400 + m.phase);
+          m.glow.alpha = 0.55 + 0.45 * p;
+          m.glow.scale.set(0.95 + 0.08 * p);
+        }
+      }
+    }
+    this.visible = want.slice();
+  }
+
+  /** World position of container i (chest events). */
+  at(i: number): ContainerSpot | undefined {
+    return this.containers[i];
+  }
+
+  destroy() {
+    this.root.destroy({ children: true });
+    this.chunks.clear();
+  }
+}
+
+/* ---------------------------------------------------------------------------- damage arcs */
+
+export const DAMAGE_ARC = {
+  /** Screen px from the player centre to the arc. */
+  RADIUS: 92,
+  /** Arc width (radians) and life. */
+  SPAN: (70 * Math.PI) / 180,
+  LIFE_MS: 1100,
+  MAX: 8,
+} as const;
+
+/** Arc alpha over its life: instant in, linger, fade out; damage scales the peak. */
+export function damageArcAlpha(ageMs: number, damage: number): number {
+  if (ageMs < 0 || ageMs >= DAMAGE_ARC.LIFE_MS) return 0;
+  const peak = Math.min(1, 0.45 + damage / 40);
+  const fadeFrom = DAMAGE_ARC.LIFE_MS * 0.45;
+  return ageMs <= fadeFrom ? peak : peak * (1 - (ageMs - fadeFrom) / (DAMAGE_ARC.LIFE_MS - fadeFrom));
+}
+
+/**
+ * Red arcs around the local player pointing at whoever hit them (HitMsg.fa, the target's copy
+ * only, quantised to 2π/64 by the server). A plug-in system drawing into the screen layer: one
+ * shared arc geometry, pooled Graphics, no per-frame tessellation.
+ */
+export class DamageArcSystem implements GameSystem {
+  readonly id = "damage-arc";
+  private root: Container | null = null;
+  private ctx: GraphicsContext | null = null;
+  private arcs: Array<{ g: Graphics; angle: number; born: number; dmg: number }> = [];
+  private pool: Graphics[] = [];
+
+  init(c: GameContext) {
+    this.root = new Container();
+    this.root.label = "damage-arcs";
+    c.layers.screen.addChild(this.root);
+    const R = DAMAGE_ARC.RADIUS, h = DAMAGE_ARC.SPAN / 2;
+    // Pointing along +x; each arc is a rotated Graphics sharing this context.
+    this.ctx = new GraphicsContext()
+      .arc(0, 0, R, -h, h)
+      .stroke({ width: 10, color: 0xff2d2d, alpha: 0.35, cap: "round" })
+      .arc(0, 0, R, -h * 0.7, h * 0.7)
+      .stroke({ width: 5, color: 0xff5a4a, alpha: 0.95, cap: "round" });
+  }
+
+  onEvents(ev: EventsMsg, c: GameContext) {
+    if (!ev.hits || !this.root || !this.ctx) return;
+    const me = c.room.sessionId;
+    const now = performance.now();
+    for (const h of ev.hits) {
+      if (h.t !== me || typeof h.fa !== "number" || !(h.d > 0)) continue;
+      const g = this.pool.pop() ?? new Graphics(this.ctx);
+      if (!g.parent) this.root.addChild(g);
+      g.visible = true;
+      g.rotation = h.fa;
+      this.arcs.push({ g, angle: h.fa, born: now, dmg: h.d });
+      if (this.arcs.length > DAMAGE_ARC.MAX) this.release(this.arcs.shift()!);
+    }
+  }
+
+  frame(_dt: number, c: GameContext) {
+    if (!this.root || this.arcs.length === 0) return;
+    const now = performance.now();
+    const p = c.selfPos();
+    const s = c.toScreen(p.x, p.y);
+    this.root.position.set(s.x, s.y);
+    let w = 0;
+    for (const a of this.arcs) {
+      const alpha = damageArcAlpha(now - a.born, a.dmg);
+      if (alpha <= 0) {
+        this.release(a);
+        continue;
+      }
+      a.g.alpha = alpha;
+      this.arcs[w++] = a;
+    }
+    this.arcs.length = w;
+  }
+
+  private release(a: { g: Graphics }) {
+    a.g.visible = false;
+    this.pool.push(a.g);
+  }
+
+  dispose() {
+    this.root?.destroy({ children: true });
+    this.root = null;
+    this.ctx?.destroy();
+    this.ctx = null;
+    this.arcs = [];
+    this.pool = [];
   }
 }
 

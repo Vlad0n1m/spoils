@@ -1,4 +1,5 @@
-import { Room, type Client } from "@colyseus/core";
+import { Room, ServerError, type Client } from "@colyseus/core";
+import { StateView } from "@colyseus/schema";
 import {
   C2S,
   MATCH,
@@ -7,13 +8,38 @@ import {
   type BattleState,
   type JoinTicket,
   type JoinedMsg,
-  type MatchSettlementPayload,
+  type MatchEndReport,
+  type MatchSummaryMsg,
 } from "@extract/shared";
 import { CLOSE } from "./close-codes.js";
+import { raidOptions, registerInventoryHandlers } from "./inventory-handlers.js";
 import { authenticate, isLaunchKey, releasePendingSeatsOf } from "./room-auth.js";
-import { postSettlement } from "../net/settle.js";
-import { Match } from "../sim/match.js";
+import { reportEnd, reportExit } from "../net/web-api.js";
+import { buildBatches } from "../sim/audience.js";
+import { Match, expectedMapHash, warmMatchMap } from "../sim/match.js";
 import type { MatchEvent, RosterEntry } from "../sim/types.js";
+import { ViewSync } from "../sim/views.js";
+import { TickStats, fmtTickSummary, perfLogEnabled } from "./tick-stats.js";
+
+// Process boot (map-boot, WP-M2): this module is imported once by index.ts before the server
+// listens, so the static map runtime (MapData, indexes, walk grid, region graph) is built here and
+// never inside a room creation or a tick.
+const bootMap = warmMatchMap();
+if (bootMap) console.log(`[game-server] map ${bootMap.map.id} ${bootMap.hash} ready (${bootMap.buildMs.toFixed(0)} ms, ${bootMap.regions.count} regions)`);
+
+/**
+ * BattleJoinOptions.mapHash must equal the server's mapHash of the match map: a client whose
+ * generator output differs (another JS engine drifting, a stale bundle) would render walls the
+ * server does not have and rubber-band through prediction. Refused before any seat is reserved.
+ */
+export function checkJoinMapHash(options: unknown): void {
+  const expected = expectedMapHash();
+  if (expected === null) return; // legacy test map: seed-dependent, no single hash to compare
+  const got = (options as { mapHash?: unknown } | null)?.mapHash;
+  if (got !== expected) {
+    throw new ServerError(409, `map_mismatch: client map ${typeof got === "string" && got ? got.slice(0, 16) : "(none)"} != server ${expected}; reload the game`);
+  }
+}
 
 interface CreateOptions {
   roster: RosterEntry[];
@@ -28,22 +54,30 @@ const SETTLE_WAIT_MS = 5_000;
 
 /**
  * Thin network wrapper around sim/Match: messages become intents, drained sim events become
- * broadcasts or personal sends. All game rules live in sim/.
+ * per-client `ev` batches or personal sends. All game rules live in sim/.
+ *
+ * Tick order (fog memo §2.4): match.step → syncViews → broadcastPatch → dispatch. Patches are sent
+ * by the tick itself (patchRate = null), so a newly visible shooter's Player entry reaches the
+ * client in the same tick, before the ShotMsg that references it.
  */
 export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> {
   override autoDispose = false;
-  override patchRate = SERVER_TICK_MS;
+  /** Tick timing samples, only with BATTLE_PERF_LOG=1. */
+  private perf: TickStats | null = perfLogEnabled() ? new TickStats() : null;
+  // null = no automatic patch interval (Colyseus' typings say number; the setter accepts null).
+  override patchRate = null as unknown as number;
   private match!: Match;
+  private views!: ViewSync;
   /** userId → client currently controlling that player (a reconnect replaces the old one). */
   private readonly owners = new Map<string, Client>();
+  /** rosterIndex → connected client: all sim routing is by roster index. */
+  private readonly byRoster = new Map<number, Client>();
   private finishing = false;
+  private summary: MatchSummaryMsg | null = null;
 
-  /**
-   * Colyseus starts the patch interval before onCreate and never stops it when onCreate throws, so
-   * every refused create would leak a 20 Hz timer for good. Stop it, then refuse.
-   */
+  /** Refuse a create without leaving timers behind (Colyseus starts the room clock before onCreate). */
   private abortCreate(reason: string): never {
-    this.patchRate = 0;
+    this.patchRate = null as unknown as number;
     this.clock.clear();
     this.clock.stop();
     throw new Error(reason);
@@ -51,7 +85,9 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
 
   /** Runs before Colyseus finds, creates or reserves anything: no valid ticket, no seat. */
   static override async onAuth(_token: string, options: unknown): Promise<JoinTicket> {
-    return authenticate(options);
+    const ticket = authenticate(options);
+    checkJoinMapHash(options);
+    return ticket;
   }
 
   override onCreate(opts: CreateOptions) {
@@ -59,7 +95,8 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     if (!isLaunchKey(opts?.launchKey)) this.abortCreate("battle: not launched by matchmaking");
     const roster = sanitizeRoster(opts?.roster);
     if (!roster) this.abortCreate("battle: invalid roster");
-    this.match = new Match({ roster });
+    this.match = new Match({ roster, ...raidOptions(opts, roster) });
+    this.views = new ViewSync(this.match);
     this.setState(this.match.state);
     // Double the humans: a reconnecting player may join before their stale socket is dropped.
     this.maxClients = Math.max(1, roster.filter((r) => !r.isBot).length * 2);
@@ -73,7 +110,9 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     this.onMessage(C2S.RELOAD, (client) => this.match.reload(client.sessionId));
     this.onMessage(C2S.SWITCH, (client, raw: unknown) => {
       const slot = (raw as { slot?: unknown } | null)?.slot;
-      if (slot === 0 || slot === 1) this.match.switchSlot(client.sessionId, slot);
+      // SwitchMsg is { slot: "w1" | "w2" }; the v1 numeric form is still accepted.
+      const key = slot === "w1" || slot === 0 ? "w1" : slot === "w2" || slot === 1 ? "w2" : null;
+      if (key) this.match.switchSlot(client.sessionId, key);
     });
     this.onMessage(C2S.HEAL, (client, raw: unknown) => {
       const kind = (raw as { kind?: unknown } | null)?.kind;
@@ -83,6 +122,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
       const t = (raw as { t?: unknown } | null)?.t;
       if (typeof t === "number" && Number.isFinite(t)) client.send(S2C.PONG, { t });
     });
+    registerInventoryHandlers(this, () => this.match);
     // Unknown messages are ignored instead of logged: clients are untrusted.
     this.onMessage("*", () => {});
 
@@ -117,79 +157,117 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
       return;
     }
     this.owners.set(ticket.userId, client);
+    this.byRoster.set(rt.rosterIndex, client);
     if (prev && prev !== client) prev.leave(CLOSE.JOINED_ELSEWHERE, "joined_elsewhere");
 
-    const joined: JoinedMsg = { sessionId: client.sessionId, matchId: this.match.state.matchId };
+    // Fresh view on every (re)connect: own self entry first, then what this player may see.
+    client.view = new StateView();
+    this.views.attach(rt.rosterIndex, client.view);
+
+    const joined: JoinedMsg = { sessionId: client.sessionId, matchId: this.match.state.matchId, selfKey: rt.selfKey };
     client.send(S2C.JOINED, joined);
     // A player who reconnects after their exit still gets their result.
     if (rt.outcome) client.send(S2C.OUTCOME, rt.outcome);
-    if (this.match.settlement && this.finishing) client.send(S2C.SETTLED, this.match.settlement);
+    if (this.summary && this.finishing) client.send(S2C.SETTLED, this.summary);
   }
 
   override onLeave(client: Client) {
     const ticket = client.auth as JoinTicket | undefined;
     if (!ticket || this.owners.get(ticket.userId) !== client) return;
     this.owners.delete(ticket.userId);
+    const rt = this.match.runtime(client.sessionId);
+    if (rt && this.byRoster.get(rt.rosterIndex) === client) {
+      this.byRoster.delete(rt.rosterIndex);
+      this.views.detach(rt.rosterIndex, client.view);
+    }
     this.match.detach(client.sessionId);
   }
 
   private tick(dtMs: number) {
-    if (this.finishing) return;
-    try {
-      this.match.step(dtMs);
-    } catch (e) {
-      // One bad tick must not take down the room (and every player's items with it).
-      console.error(`[battle ${this.match.state.matchId}] step failed:`, e);
+    const t0 = this.perf ? performance.now() : 0;
+    if (!this.finishing) {
+      try {
+        this.match.step(dtMs);
+      } catch (e) {
+        // One bad tick must not take down the room (and every player's items with it).
+        console.error(`[battle ${this.match.state.matchId}] step failed:`, e);
+      }
     }
-    for (const ev of this.match.drainEvents()) this.dispatch(ev);
-  }
-
-  private dispatch(ev: MatchEvent) {
-    switch (ev.type) {
-      case "shot":
-        this.broadcast(S2C.SHOT, ev.msg);
-        break;
-      case "hit":
-        this.broadcast(S2C.HIT, ev.msg);
-        break;
-      case "kill":
-        this.broadcast(S2C.KILL, ev.msg);
-        break;
-      case "chest":
-        this.broadcast(S2C.CHEST, ev.msg);
-        break;
-      case "outcome":
-        this.clients.find((c) => c.sessionId === ev.to)?.send(S2C.OUTCOME, ev.msg);
-        break;
-      case "ended":
-        void this.finish(ev.settlement);
-        break;
+    const t1 = this.perf ? performance.now() : 0;
+    const events = this.match.drainEvents();
+    this.syncViews(events);
+    this.broadcastPatch();
+    this.dispatch(events);
+    if (this.perf) {
+      this.perf.add(t1 - t0, performance.now() - t0);
+      // One line per ~30 s of ticks.
+      if (this.perf.size >= 30_000 / SERVER_TICK_MS) {
+        const s = this.perf.flush();
+        if (s) console.log(`[battle ${this.match.state.matchId}] perf ${fmtTickSummary(s)} (${this.clients.length} clients)`);
+      }
     }
   }
 
-  private async finish(settlement: MatchSettlementPayload) {
+  /**
+   * StateViews follow the sim (views.ts): players = each client's published vision row, items and
+   * corpses = its AOI ring, loot entries = its search sessions (`view` events).
+   */
+  private syncViews(events: readonly MatchEvent[]) {
+    for (const ev of events) if (ev.type === "view") this.views.applyLoot(ev.to, ev.op, ev.key);
+    this.views.sync();
+  }
+
+  /**
+   * One `ev` batch per client (audience.ts: clipped shots, hit / chest audiences, per-listener
+   * sounds), then the personal sends and web reports.
+   */
+  private dispatch(events: readonly MatchEvent[]) {
+    const batches = buildBatches(this.match, events, [...this.byRoster.keys()]);
+    for (const [r, batch] of batches) this.byRoster.get(r)?.send(S2C.EV, batch);
+    for (const ev of events) {
+      switch (ev.type) {
+        case "outcome":
+          this.byRoster.get(ev.to)?.send(S2C.OUTCOME, ev.msg);
+          break;
+        case "invErr":
+          this.byRoster.get(ev.to)?.send(S2C.INV_ERR, ev.msg);
+          break;
+        case "exit":
+          void reportExit(ev.report);
+          break;
+        case "ended":
+          void this.finish(ev.report, ev.summary);
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  private async finish(report: MatchEndReport, summary: MatchSummaryMsg) {
     if (this.finishing) return;
     this.finishing = true;
-    const post = postSettlement(settlement);
-    await Promise.race([post, new Promise((r) => setTimeout(r, SETTLE_WAIT_MS))]);
-    this.broadcast(S2C.SETTLED, settlement);
+    this.summary = summary;
+    await Promise.race([reportEnd(report), new Promise((r) => setTimeout(r, SETTLE_WAIT_MS))]);
+    this.broadcast(S2C.SETTLED, summary);
     this.clock.setTimeout(() => void this.disconnect(), MATCH.DISPOSE_AFTER_END_MS);
   }
 }
 
-function sanitizeRoster(raw: unknown): RosterEntry[] | null {
+export function sanitizeRoster(raw: unknown): RosterEntry[] | null {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MATCH.MAX_PLAYERS) return null;
   const out: RosterEntry[] = [];
   const seen = new Set<string>();
   for (const r of raw) {
     if (!r || typeof r !== "object") return null;
-    const { userId, nickname, isBot } = r as Record<string, unknown>;
+    const { userId, nickname, isBot, loadoutId } = r as Record<string, unknown>;
     if (typeof nickname !== "string" || typeof isBot !== "boolean") return null;
     if (!isBot) {
       if (typeof userId !== "string" || !userId || seen.has(userId)) return null;
       seen.add(userId);
     }
-    out.push({ userId: isBot ? null : (userId as string), nickname: nickname.slice(0, 24), isBot });
+    const lid = typeof loadoutId === "string" && loadoutId.length <= 64 && !isBot ? loadoutId : "";
+    out.push({ userId: isBot ? null : (userId as string), nickname: nickname.slice(0, 24), isBot, loadoutId: lid });
   }
   return out;
 }

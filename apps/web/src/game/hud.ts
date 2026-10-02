@@ -1,132 +1,258 @@
 /**
  * Builds the HudSnapshot (src/game/types.ts) from the synced state, and the store React reads it
  * through. Pure: no Pixi, no DOM, no React.
+ *
+ * v2: the public Player (state.players, LOS-filtered) carries only hp / alive / position; the
+ * inventory, timers, kills and extract mask come from the owner-only SelfState
+ * (state.self.get(selfKey)). Player counts come from BattleState.aliveCount / totalPlayers because
+ * state.players now only holds the players this client can see.
  */
 
 import {
   ARMOR,
-  hasLineOfSight,
+  CONTAINER_STATE,
   HEAL,
+  ITEM_FLAG,
   MATCH,
   PLAYER,
+  POCKET_SLOTS,
+  BACKPACK_SLOTS,
   RARITY_NAMES,
+  ROLL,
+  INPUT_DT_MS,
+  SEARCH,
+  SOLID,
   WEAPONS,
+  bpLevelOf,
+  containerOpenMs,
+  countOf,
+  hasLineOfSight,
+  itemDef,
+  junkCredits,
+  storageKeys,
   type BattleState,
   type CollisionIndex,
+  type ContainerSpot,
   type Extract,
   type HealKind,
+  type InvItem,
+  type MapData,
   type Player,
-  type WeaponId,
-  armorIsUpgrade,
+  type SelfState,
+  type SlotStore,
 } from "@extract/shared";
+import { containerTitle } from "../lib/items-ui";
 import type { ExtractStatus } from "./entities";
-import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "./types";
+import type { HudExtract, HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "./types";
 
 export function extractStatus(e: Pick<Extract, "openAt" | "closeAt">, clockMs: number): ExtractStatus {
   if (e.closeAt > 0 && clockMs >= e.closeAt) return "closed";
   return clockMs >= e.openAt ? "open" : "waiting";
 }
 
-function weaponDef(w: string) {
-  return w in WEAPONS ? WEAPONS[w as WeaponId] : null;
-}
+const EMPTY_SLOT: HudSlot = { weapon: "", rarity: 0, mag: 0, magSize: 0, free: false, broken: false };
 
-function hudSlot(p: Player, i: number): HudSlot {
-  const s = p.slots.at(i);
-  const def = s ? weaponDef(s.weapon) : null;
-  if (!s || !def) return { weapon: "", rarity: 0, mag: 0, magSize: 0, free: false };
-  return { weapon: def.id, rarity: s.rarity, mag: s.mag, magSize: def.magSize, free: s.free };
-}
-
-export function buildHudSelf(p: Player, clockMs: number): HudSelf {
-  const active: 0 | 1 = p.active === 1 ? 1 : 0;
-  const slots: [HudSlot, HudSlot] = [hudSlot(p, 0), hudSlot(p, 1)];
-  const activeDef = weaponDef(slots[active].weapon);
-  const armorLevel = p.armor >= 1 && p.armor <= 3 ? (p.armor as 1 | 2 | 3) : 0;
-
-  let reloading: HudSelf["reloading"] = null;
-  if (p.reloadUntil > clockMs) {
-    const dur = activeDef?.reloadMs ?? 0;
-    reloading = { startMs: p.reloadUntil - dur, untilMs: p.reloadUntil };
-  }
-  let healing: HudSelf["healing"] = null;
-  if (p.healUntil > clockMs && (p.healKind === "bandage" || p.healKind === "medkit")) {
-    const kind = p.healKind as HealKind;
-    healing = { kind, startMs: p.healUntil - HEAL[kind].MS, untilMs: p.healUntil };
-  }
-  const extracting =
-    p.extractStartedAt > 0 && p.alive && p.extractedAt === 0
-      ? { startedAtMs: p.extractStartedAt, channelMs: MATCH.EXTRACT_CHANNEL_MS }
-      : null;
-
+function hudSlot(it: Pick<InvItem, "def" | "rarity" | "mag" | "flags"> | undefined): HudSlot {
+  const w = it ? itemDef(it.def)?.weapon : undefined;
+  if (!it || !w) return EMPTY_SLOT;
   return {
-    alive: p.alive,
-    hp: p.hp,
-    maxHp: PLAYER.MAX_HP,
-    armor: armorLevel,
-    armorDur: armorLevel ? p.armorDur : 0,
-    armorMax: armorLevel ? ARMOR[armorLevel].durability : 0,
-    slots,
-    active,
-    ammo: { light: p.ammoLight, shell: p.ammoShell, heavy: p.ammoHeavy },
-    bandages: p.bandages,
-    medkits: p.medkits,
-    reloading,
-    healing,
-    extracting,
-    kills: p.kills,
-    diedAt: p.diedAt,
-    extractedAt: p.extractedAt,
+    weapon: w,
+    rarity: it.rarity,
+    mag: it.mag,
+    magSize: WEAPONS[w].magSize,
+    free: (it.flags & ITEM_FLAG.FREE) !== 0,
+    broken: (it.flags & ITEM_FLAG.BROKEN) !== 0,
   };
 }
 
-/** F only takes armor that beats what is worn — the same shared rule the server applies. */
-export { armorIsUpgrade };
+/** The SelfState fields the HUD reads (a decoded SelfState satisfies it; tests pass plain objects). */
+export type HudSelfState = Pick<
+  SelfState,
+  | "active" | "reloadUntil" | "healUntil" | "healKind" | "searching" | "searchReadyAt"
+  | "extractStartedAt" | "extractedAt" | "kills" | "extractMask"
+> & { slots: SlotStore<InvItem> };
+
+/** Locally predicted movement state (Predictor) the HUD shows. */
+export interface HudMovement {
+  /** Remaining roll cooldown (Predictor.rollCooldownMs). */
+  rollCooldownMs: number;
+  rolling: boolean;
+  walking: boolean;
+}
+
+const ROLL_CD_MS = ROLL.COOLDOWN_TICKS * INPUT_DT_MS;
+/** readyAtMs is quantised so the slice does not change on every push while the clock estimate jitters. */
+const ROLL_READY_QUANT_MS = 100;
+
+/** Title of a search target from its loot key ("c<idx>" container, "k<corpseId>" corpse). */
+export function searchTitle(key: string, map: Pick<MapData, "containers"> | null, state: Pick<BattleState, "corpses"> | null): string {
+  if (key.startsWith("c")) {
+    const spot = map?.containers[Number(key.slice(1))];
+    return spot ? containerTitle(spot.kind) : "Container";
+  }
+  if (key.startsWith("k")) {
+    const label = state?.corpses.get(key.slice(1))?.label;
+    return label ? `${label}'s body` : "Body";
+  }
+  return "";
+}
+
+/** Open delay of a search target (the same function the server times it with). */
+export function searchOpenMs(key: string, map: Pick<MapData, "containers"> | null): number {
+  if (key.startsWith("c")) {
+    const spot = map?.containers[Number(key.slice(1))];
+    return spot ? containerOpenMs(spot) : SEARCH.OPEN_MS.tier[1]!;
+  }
+  return SEARCH.OPEN_MS.corpse;
+}
+
+export interface HudSelfInput {
+  me: Pick<Player, "alive" | "hp" | "diedAt"> | null;
+  self: HudSelfState;
+  clockMs: number;
+  move?: HudMovement | null;
+  map?: Pick<MapData, "containers"> | null;
+  state?: Pick<BattleState, "corpses"> | null;
+}
+
+export function buildHudSelf({ me, self, clockMs, move = null, map = null, state = null }: HudSelfInput): HudSelf {
+  const s = self.slots;
+  const active: 0 | 1 = self.active === "w2" ? 1 : 0;
+  const slots: [HudSlot, HudSlot] = [hudSlot(s.get("w1")), hudSlot(s.get("w2"))];
+  const activeW = slots[active].weapon;
+
+  const armorIt = s.get("armor");
+  const armorLevel = armorIt ? (itemDef(armorIt.def)?.armorLevel ?? 0) : 0;
+
+  let reloading: HudSelf["reloading"] = null;
+  if (self.reloadUntil > clockMs) {
+    const dur = activeW ? WEAPONS[activeW].reloadMs : 0;
+    reloading = { startMs: self.reloadUntil - dur, untilMs: self.reloadUntil };
+  }
+  let healing: HudSelf["healing"] = null;
+  if (self.healUntil > clockMs && (self.healKind === "bandage" || self.healKind === "medkit")) {
+    const kind = self.healKind as HealKind;
+    healing = { kind, startMs: self.healUntil - HEAL[kind].MS, untilMs: self.healUntil };
+  }
+  const alive = me ? me.alive : false;
+  const extracting =
+    self.extractStartedAt > 0 && alive && self.extractedAt === 0
+      ? { startedAtMs: self.extractStartedAt, channelMs: MATCH.EXTRACT_CHANNEL_MS }
+      : null;
+
+  const cd = Math.max(0, move?.rollCooldownMs ?? 0);
+  const readyAtMs = cd > 0 ? Math.ceil((clockMs + cd) / ROLL_READY_QUANT_MS) * ROLL_READY_QUANT_MS : 0;
+
+  let search: HudSelf["search"] = null;
+  if (self.searching) {
+    const readyAtMs = self.searchReadyAt;
+    search = {
+      key: self.searching,
+      title: searchTitle(self.searching, map, state),
+      startMs: readyAtMs - searchOpenMs(self.searching, map),
+      readyAtMs,
+    };
+  }
+
+  const bpLevel = bpLevelOf(s);
+  const keys = storageKeys(s);
+  let used = 0;
+  const carried: InvItem[] = [];
+  for (const k of keys) {
+    const it = s.get(k);
+    if (!it) continue;
+    used++;
+    if (!(it.flags & ITEM_FLAG.FREE)) carried.push(it);
+  }
+
+  return {
+    alive,
+    hp: me?.hp ?? 0,
+    maxHp: PLAYER.MAX_HP,
+    armor: armorLevel,
+    armorDur: armorLevel && armorIt ? armorIt.dur : 0,
+    armorMax: armorLevel ? ARMOR[armorLevel].durability : 0,
+    slots,
+    active,
+    ammo: { light: countOf(s, "ammo_light"), shell: countOf(s, "ammo_shell"), heavy: countOf(s, "ammo_heavy") },
+    bandages: countOf(s, "bandage"),
+    medkits: countOf(s, "medkit"),
+    reloading,
+    healing,
+    extracting,
+    kills: self.kills,
+    diedAt: me?.diedAt ?? 0,
+    extractedAt: self.extractedAt,
+    roll: { readyAtMs, cdStartMs: readyAtMs ? readyAtMs - ROLL_CD_MS : 0, rolling: move?.rolling ?? false },
+    walking: move?.walking ?? false,
+    search,
+    bpLevel,
+    storageUsed: used,
+    storageCap: POCKET_SLOTS + (BACKPACK_SLOTS[bpLevel] ?? 0),
+    creditsEstimate: junkCredits(carried),
+    extractMask: self.extractMask || 0xff,
+  };
+}
+
+/** Is state extract `e` allowed by the mask? Index = position of its id in MapData.extracts. */
+export function extractAllowed(map: Pick<MapData, "extracts"> | null, mask: number, id: string): boolean {
+  if (!map || mask === 0xff || mask === 0) return true;
+  const i = map.extracts.findIndex((x) => x.id === id);
+  return i < 0 || i > 7 ? true : (mask & (1 << i)) !== 0;
+}
+
+function itemLabel(def: string, rarity: number, qty: number): string {
+  const d = itemDef(def);
+  if (!d) return def;
+  if (d.cat === "weapon") return `${d.name} (${RARITY_NAMES[rarity] ?? "common"})`;
+  return qty > 1 ? `${d.name} ×${qty}` : d.name;
+}
+
+export interface InteractInput {
+  state: Pick<BattleState, "containerState" | "corpses" | "items">;
+  map: Pick<MapData, "containers"> | null;
+  x: number;
+  y: number;
+  /** Map collision index for the line-of-sight check (null before the map is built). */
+  idx?: CollisionIndex | null;
+}
 
 /**
- * Hint for F, mirroring the server's choice (inventory.interact): nearest unopened chest first,
- * otherwise the nearest weapon / armor upgrade on the ground within PLAYER.INTERACT_RADIUS. Only
- * targets in line of sight count when the collision index is known. Ties go to the later entry,
- * like the server's `<=` scan.
+ * Hint for F, mirroring the server's choice (Match.interact): the nearest searchable container
+ * (not emptied) or corpse (not empty) within SEARCH.OPEN_RANGE wins; otherwise the nearest ground
+ * item within PLAYER.INTERACT_RADIUS. Only targets in line of sight (MOVE mask, as the server)
+ * count when the collision index is known. Ties go to the later entry, like the server's scan.
  */
-export function interactHint(
-  state: BattleState,
-  x: number,
-  y: number,
-  me: Pick<Player, "armor" | "armorDur">,
-  idx: CollisionIndex | null = null,
-): string | null {
-  const R = PLAYER.INTERACT_RADIUS;
-  const visible = (tx: number, ty: number) => !idx || hasLineOfSight(idx, x, y, tx, ty);
-  let chestD: number = R;
-  let chestRarity = -1;
-  state.chests.forEach((c) => {
-    if (c.opened) return;
-    const d = Math.hypot(c.x - x, c.y - y);
-    if (d > chestD || !visible(c.x, c.y)) return;
-    chestD = d;
-    chestRarity = c.rarity;
-  });
-  if (chestRarity >= 0) return `F — open ${RARITY_NAMES[chestRarity] ?? "common"} chest`;
-
-  let bestD: number = R;
+export function interactHint({ state, map, x, y, idx = null }: InteractInput): string | null {
+  const visible = (tx: number, ty: number) => !idx || hasLineOfSight(idx, x, y, tx, ty, SOLID.MOVE);
+  const R = SEARCH.OPEN_RANGE;
+  let bestD = R * R;
   let hint: string | null = null;
-  state.items.forEach((it) => {
-    if (it.kind !== "weapon" && it.kind !== "armor") return;
-    if (it.kind === "armor" && !armorIsUpgrade(me, it.armor, it.armorDur)) return;
-    const d = Math.hypot(it.x - x, it.y - y);
-    if (d > bestD || !visible(it.x, it.y)) return;
-    if (it.kind === "weapon") {
-      const def = weaponDef(it.weapon);
-      if (!def) return;
-      hint = `F — pick up ${def.name} (${RARITY_NAMES[it.rarity] ?? "common"})`;
-    } else {
-      const lvl = it.armor as 1 | 2 | 3;
-      const max = ARMOR[lvl]?.durability;
-      if (!max) return;
-      hint = `F — pick up Armor L${lvl} (${Math.ceil(it.armorDur)}/${max})`;
-    }
+  const containers: readonly ContainerSpot[] = map?.containers ?? [];
+  for (let i = 0; i < containers.length; i++) {
+    const c = containers[i]!;
+    const dx = c.x - x, dy = c.y - y;
+    const d = dx * dx + dy * dy;
+    if (d > bestD) continue;
+    if ((state.containerState[i] ?? 0) === CONTAINER_STATE.EMPTIED || !visible(c.x, c.y)) continue;
     bestD = d;
+    hint = `F — search ${containerTitle(c.kind)}`;
+  }
+  state.corpses.forEach((k) => {
+    if (k.empty) return;
+    const d = (k.x - x) ** 2 + (k.y - y) ** 2;
+    if (d > bestD || !visible(k.x, k.y)) return;
+    bestD = d;
+    hint = `F — search ${k.label ? `${k.label}'s body` : "body"}`;
+  });
+  if (hint) return hint;
+
+  bestD = PLAYER.INTERACT_RADIUS * PLAYER.INTERACT_RADIUS;
+  state.items.forEach((it) => {
+    const d = (it.x - x) ** 2 + (it.y - y) ** 2;
+    if (d > bestD || !itemDef(it.def) || !visible(it.x, it.y)) return;
+    bestD = d;
+    hint = `F — pick up ${itemLabel(it.def, it.rarity, it.qty)}`;
   });
   return hint;
 }
@@ -138,15 +264,9 @@ export interface PlayerCounts {
   total: number;
 }
 
-/** Players still on the map (alive, not extracted) and the roster size. */
-export function countPlayers(state: BattleState): PlayerCounts {
-  let alive = 0;
-  let total = 0;
-  state.players.forEach((p) => {
-    total++;
-    if (p.alive && p.extractedAt === 0) alive++;
-  });
-  return { alive, total };
+/** Players still on the map and the roster size, as the server counts them. */
+export function countPlayers(state: Pick<BattleState, "aliveCount" | "totalPlayers">): PlayerCounts {
+  return { alive: state.aliveCount, total: state.totalPlayers };
 }
 
 /**
@@ -166,7 +286,8 @@ export function stickyCounts(
 
 export interface HudInput {
   state: BattleState;
-  selfId: string;
+  sessionId: string;
+  selfKey: string | null;
   /** Local (predicted) position, or the last known one after death / extraction. */
   selfPos: { x: number; y: number } | null;
   clockMs: number;
@@ -174,38 +295,40 @@ export interface HudInput {
   pingMs: number | null;
   /** Map collision index, for the interact hint's line-of-sight check (null before the map is built). */
   idx?: CollisionIndex | null;
+  map?: MapData | null;
+  move?: HudMovement | null;
 }
 
-export function buildHud({ state, selfId, selfPos, clockMs, killFeed, pingMs, idx = null }: HudInput): HudSnapshot {
-  const me = state.players.get(selfId) ?? null;
-  const self = me ? buildHudSelf(me, clockMs) : null;
-  const onMap = !!me && me.alive && me.extractedAt === 0;
+export function buildHud({
+  state, sessionId, selfKey, selfPos, clockMs, killFeed, pingMs, idx = null, map = null, move = null,
+}: HudInput): HudSnapshot {
+  const me = state.players.get(sessionId) ?? null;
+  const priv = selfKey ? (state.self.get(selfKey) ?? null) : null;
+  // Before the public entry arrives (join) there is nothing to show yet: the loader stays up.
+  const self = priv && (me || priv.extractedAt > 0) ? buildHudSelf({ me, self: priv, clockMs, move, map, state }) : null;
+  const onMap = !!self && self.alive && self.extractedAt === 0;
+  const mask = self?.extractMask ?? 0xff;
 
   const { alive: aliveCount, total: totalPlayers } = countPlayers(state);
 
-  let nearestExtract: HudSnapshot["nearestExtract"] = null;
   let extractOpenAtMs = Infinity;
-  if (selfPos) {
-    let best = Infinity;
-    state.extracts.forEach((e) => {
-      extractOpenAtMs = Math.min(extractOpenAtMs, e.openAt);
-      const status = extractStatus(e, clockMs);
-      if (status === "closed") return;
-      const dx = e.x - selfPos.x;
-      const dy = e.y - selfPos.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < best) {
-        best = dist;
-        nearestExtract = { dx, dy, dist, open: status === "open" };
-      }
-    });
-  } else {
-    state.extracts.forEach((e) => {
-      extractOpenAtMs = Math.min(extractOpenAtMs, e.openAt);
-    });
-  }
+  const extracts: HudExtract[] = [];
+  state.extracts.forEach((e) => {
+    extractOpenAtMs = Math.min(extractOpenAtMs, e.openAt);
+    if (!selfPos || !extractAllowed(map, mask, e.id)) return;
+    const status = extractStatus(e, clockMs);
+    if (status === "closed") return;
+    const dx = e.x - selfPos.x;
+    const dy = e.y - selfPos.y;
+    const name = map?.extracts.find((x) => x.id === e.id)?.name ?? e.id;
+    extracts.push({ id: e.id, name, dx, dy, dist: Math.hypot(dx, dy), open: status === "open" });
+  });
+  extracts.sort((a, b) => a.dist - b.dist);
+  const n0 = extracts[0];
+  const nearestExtract: HudSnapshot["nearestExtract"] = n0 ? { dx: n0.dx, dy: n0.dy, dist: n0.dist, open: n0.open } : null;
 
   const phase = state.phase === "open" || state.phase === "ended" ? state.phase : "drop";
+  const canInteract = onMap && selfPos && phase !== "ended" && !priv?.searching;
   return {
     phase,
     clockMs,
@@ -215,7 +338,8 @@ export function buildHud({ state, selfId, selfPos, clockMs, killFeed, pingMs, id
     aliveCount,
     totalPlayers,
     nearestExtract: onMap ? nearestExtract : null,
-    interactHint: onMap && me && selfPos && phase !== "ended" ? interactHint(state, selfPos.x, selfPos.y, me, idx) : null,
+    extracts: onMap ? extracts : [],
+    interactHint: canInteract ? interactHint({ state, map, x: selfPos!.x, y: selfPos!.y, idx }) : null,
     killFeed,
     pingMs,
   };

@@ -1,19 +1,49 @@
 "use client";
 
-import { useEffect, useState } from "react";
+/**
+ * End-of-raid overlay v2: extracted gear (to the stash), the junk auto-sell receipt (CR lines,
+ * coin tick per line), dog tags, broken items (lost to the pool) and items left in your body,
+ * kills and time. Driven by S2C.OUTCOME (OutcomeMsg) and S2C.SETTLED (MatchSummaryMsg); the web
+ * API's final credits (after applyExit: autosell mult, dog-tag repeat rule) can be passed later
+ * through `finalCredits`, and the receipt re-totals itself.
+ */
+
+import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
-import {
-  BREAK_CHANCE_ON_DEATH,
-  type ItemRef,
-  type MatchSettlementPayload,
-  type OutcomeMsg,
-} from "@extract/shared";
-import { fmtClock } from "@/lib/items-ui";
+import { BREAK_CHANCE_ON_DEATH, type MatchSummaryMsg, type OutcomeMsg, type SoldLine } from "@extract/shared";
+import { playUi } from "@/game/audio/ui-sounds";
+import { buildReceipt, fmtClock } from "@/lib/items-ui";
 import type { RoomExit } from "@/lib/room-exit";
-import { ItemTile } from "./item-tile";
+import { DogTagRow, ItemStrip, SellReceipt } from "./inventory/outcome-receipt";
 
 /** Delay before the result card appears, so the player sees the moment of death / extraction. */
 const CONTENT_DELAY_MS = 900;
+
+export interface FinalCredits {
+  /** CR actually credited by applyExit. */
+  credits: number;
+  /** Autosell multiplier applied. */
+  mult: number;
+  /** Final receipt lines, when the API returns them. */
+  lines?: SoldLine[];
+}
+
+export interface MatchOutcomeOverlayProps {
+  visible: boolean;
+  /** This player's personal result (S2C.OUTCOME). */
+  outcome: OutcomeMsg | null;
+  /** End-of-match scoreboard (S2C.SETTLED). */
+  settlement: MatchSummaryMsg | null;
+  raidEnded: boolean;
+  disconnected: boolean;
+  /** Why the room dropped us, when it was a kick (e.g. joined from another tab). */
+  kick?: RoomExit | null;
+  /** Final numbers from the web API after settlement; null/undefined = show the server estimate. */
+  finalCredits?: FinalCredits | null;
+  /** Coin sound per receipt line; defaults to the shared UI coin sound. Pass a no-op to mute. */
+  onCoin?: () => void;
+  onContinue: () => void;
+}
 
 export function MatchOutcomeOverlay({
   visible,
@@ -22,18 +52,10 @@ export function MatchOutcomeOverlay({
   raidEnded,
   disconnected,
   kick = null,
+  finalCredits = null,
+  onCoin = defaultCoin,
   onContinue,
-}: {
-  visible: boolean;
-  /** This player's personal result (S2C.OUTCOME). */
-  outcome: OutcomeMsg | null;
-  settlement: MatchSettlementPayload | null;
-  raidEnded: boolean;
-  disconnected: boolean;
-  /** Why the room dropped us, when it was a kick (e.g. joined from another tab). */
-  kick?: RoomExit | null;
-  onContinue: () => void;
-}) {
+}: MatchOutcomeOverlayProps) {
   const [dim, setDim] = useState(false);
   const [showContent, setShowContent] = useState(false);
 
@@ -68,10 +90,17 @@ export function MatchOutcomeOverlay({
         aria-hidden
       />
       {showContent && (
-        <div className="relative flex min-h-[100dvh] flex-1 items-center justify-center overflow-y-auto p-4 sm:p-8">
-          <div className="w-full max-w-lg animate-outcome-enter">
+        // m-auto instead of items-center: a receipt taller than the screen must scroll from its top.
+        <div className="relative flex min-h-0 flex-1 overflow-y-auto p-4 sm:p-8">
+          <div className="m-auto w-full max-w-xl animate-outcome-enter">
             {outcome ? (
-              <ResultCard outcome={outcome} settlement={settlement} onContinue={onContinue} />
+              <ResultCard
+                outcome={outcome}
+                settlement={settlement}
+                finalCredits={finalCredits}
+                onCoin={onCoin}
+                onContinue={onContinue}
+              />
             ) : (
               <WaitingCard raidEnded={raidEnded} disconnected={disconnected} kick={kick} onContinue={onContinue} />
             )}
@@ -80,6 +109,10 @@ export function MatchOutcomeOverlay({
       )}
     </div>
   );
+}
+
+function defaultCoin() {
+  playUi("coin");
 }
 
 const EXIT_STYLE = {
@@ -91,15 +124,23 @@ const EXIT_STYLE = {
 function ResultCard({
   outcome,
   settlement,
+  finalCredits,
+  onCoin,
   onContinue,
 }: {
   outcome: OutcomeMsg;
-  settlement: MatchSettlementPayload | null;
+  settlement: MatchSummaryMsg | null;
+  finalCredits: FinalCredits | null;
+  onCoin: () => void;
   onContinue: () => void;
 }) {
   const style = EXIT_STYLE[outcome.exit];
   const humans = settlement?.participants.filter((p) => !p.isBot) ?? [];
   const raidersOut = settlement?.participants.filter((p) => p.exitType === "extract").length ?? 0;
+  const receipt = useMemo(
+    () => buildReceipt(outcome.extracted, outcome.sold, outcome.guest ? null : finalCredits),
+    [outcome.extracted, outcome.sold, outcome.guest, finalCredits],
+  );
 
   return (
     <section className="toon-panel overflow-hidden bg-[#161b28]/95 p-0" aria-live="polite">
@@ -111,11 +152,16 @@ function ResultCard({
 
         <div className="mt-6 space-y-5">
           {outcome.exit === "extract" && (
-            <ItemSection
-              title="Brought out"
-              items={outcome.extracted}
-              empty="Nothing valuable this time — the free kit doesn't count. Loot chests for weapons and armor."
-            />
+            <>
+              <ItemStrip
+                title={outcome.guest ? "Brought out (not kept as guest)" : "To your stash"}
+                items={receipt.kept}
+                tone={outcome.guest ? "dim" : "normal"}
+                empty="No gear this time — the free kit never counts. Search bodies and crates for weapons and armor."
+              />
+              <SellReceipt receipt={receipt} guest={outcome.guest} onCoin={onCoin} />
+              <DogTagRow names={receipt.dogTags} />
+            </>
           )}
 
           {outcome.exit === "dead" && (
@@ -126,23 +172,28 @@ function ResultCard({
                 </p>
               ) : (
                 <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                  <ItemSection title="Dropped for others" items={outcome.dropped} empty="Nothing dropped." />
-                  <ItemSection title="Broke" items={outcome.lost} empty="Nothing broke." dim />
+                  <ItemStrip title="Broken — lost" items={outcome.lost} tone="broken" empty="Nothing broke. Lucky!" />
+                  <ItemStrip
+                    title="Left in your body"
+                    items={outcome.dropped}
+                    empty="Nothing left behind."
+                    note="Anyone who searches your body can take these."
+                  />
                 </div>
               )}
               <p className="font-body rounded-xl border-2 border-black/60 bg-black/30 px-3 py-2 text-sm leading-relaxed text-white/70">
-                On death every item has a {Math.round(BREAK_CHANCE_ON_DEATH * 100)}% chance to break; the rest drops by
-                your body for anyone to loot. The free pistol never drops.
+                On death each weapon, armor and backpack has a {Math.round(BREAK_CHANCE_ON_DEATH * 100)}% chance to
+                break. Everything else stays in your body, along with your dog tag. The free kit never drops.
               </p>
             </>
           )}
 
           {outcome.exit === "timeout" && (
-            <ItemSection
+            <ItemStrip
               title="Lost on the map"
               items={outcome.lost}
+              tone="dim"
               empty="You only carried the free kit, so nothing was lost."
-              dim
             />
           )}
         </div>
@@ -170,38 +221,9 @@ function ResultCard({
 }
 
 function subtitle(o: OutcomeMsg): string {
-  if (o.exit === "extract") return "Everything you carried is yours to keep.";
+  if (o.exit === "extract") return o.guest ? "You made it out! Register to keep what you find." : "Everything you carried is yours to keep.";
   if (o.exit === "dead") return o.killedBy ? `Killed by ${o.killedBy}` : "You died.";
   return "You were still on the map when the raid ended. Everything you carried is lost.";
-}
-
-function ItemSection({
-  title,
-  items,
-  empty,
-  dim,
-}: {
-  title: string;
-  items: ItemRef[];
-  empty: string;
-  dim?: boolean;
-}) {
-  return (
-    <div>
-      <h3 className="text-sm uppercase tracking-[0.18em] text-white/55">{title}</h3>
-      {items.length === 0 ? (
-        <p className="font-body mt-2 text-base leading-relaxed text-white/65">{empty}</p>
-      ) : (
-        <ul className="mt-3 flex flex-wrap gap-3">
-          {items.map((it) => (
-            <li key={it.uid}>
-              <ItemTile item={it} dim={dim} />
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
 }
 
 function Stat({ label, value, title }: { label: string; value: string; title?: string }) {

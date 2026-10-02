@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import type { JoinTicket } from "@extract/shared";
 import { stageForUser, type PlayStage } from "./play-stage";
 
-const ticketA: JoinTicket = { userId: "user-a", nickname: "Alice", issuedAt: 1, sig: "sig" };
+const ticketA: JoinTicket = { userId: "user-a", nickname: "Alice", issuedAt: 1, loadoutId: "", sig: "sig" };
 
 describe("stageForUser", () => {
   it("keeps the lobby for anyone", () => {

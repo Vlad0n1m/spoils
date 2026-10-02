@@ -1,11 +1,12 @@
 "use client";
 
+import { AudioSettingsButton } from "./audio-settings";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 import { BREAK_CHANCE_ON_DEATH, HEAL, WEAPONS, type WeaponId } from "@extract/shared";
 import { deepEqual, shallowEqual, type HudStore } from "@/game/hud";
 import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "@/game/types";
-import { fmtClock, isWeaponId, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
+import { fmtClock, fmtCr, isWeaponId, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
 
 /** Kill feed lines stay this long (match clock). */
 const KILL_FEED_TTL_MS = 7_000;
@@ -104,6 +105,10 @@ export const Hud = memo(function Hud({
       )}
 
       <PingBadge store={store} />
+      {/* Volume / mute / sound-ring toggle; sits right above the controls chip. */}
+      <div className="absolute bottom-14 right-3 hidden md:block">
+        <AudioSettingsButton direction="up" align="right" />
+      </div>
       <ControlsHelp onLeave={onLeave} />
     </div>
   );
@@ -180,6 +185,9 @@ function compassSlice(s: HudSnapshot) {
     deg: Math.round((Math.atan2(t.dy, t.dx) * 180) / Math.PI),
     meters: Math.max(0, Math.round(t.dist / PX_PER_METER)),
     open: t.open,
+    // Before the extract phase the top timer already counts down: "(closed)" would read as broken.
+    early: !t.open && s.phase === "drop",
+    name: s.extracts[0]?.name ?? "",
   };
 }
 
@@ -211,7 +219,8 @@ function ExtractCompass({ store }: { store: HudStore }) {
         </svg>
       </span>
       <span className="toon-text-thin whitespace-nowrap">
-        {target.open ? "Extract" : "Extract (closed)"} <span className="tabular-nums text-white">{meters} m</span>
+        {target.name || "Extract"}
+        {target.open ? "" : target.early ? "" : " (closed)"} <span className="tabular-nums text-white">{meters} m</span>
       </span>
     </div>
   );
@@ -364,6 +373,10 @@ function actionSlice(s: HudSnapshot) {
       color: "#4ade80",
     };
   }
+  // Open delay of a search; the search panel takes over once the container is open.
+  if (self.search && s.clockMs < self.search.readyAtMs) {
+    return { label: "Opening", start: self.search.startMs, until: self.search.readyAtMs, color: "#60a5fa" };
+  }
   return null;
 }
 
@@ -424,18 +437,97 @@ function ActionProgressView({
  */
 function bottomBarSlice(s: HudSnapshot): HudSelf | null {
   if (!s.self) return null;
-  return { ...s.self, reloading: null, healing: null, extracting: null };
+  // Roll / walk / search have their own leaves; leaving them out keeps the weapon cards still.
+  return {
+    ...s.self,
+    reloading: null,
+    healing: null,
+    extracting: null,
+    search: null,
+    walking: false,
+    roll: NO_ROLL,
+  };
 }
+
+const NO_ROLL: HudSelf["roll"] = { readyAtMs: 0, cdStartMs: 0, rolling: false };
 
 function BottomBar({ store }: { store: HudStore }) {
   const self = useHud(store, bottomBarSlice, deepEqual);
   if (!self) return null;
   return (
     <div className="flex items-end gap-2 md:gap-3">
+      <MovePanel store={store} />
       <VitalsPanel self={self} />
       <WeaponSlotCard slot={self.slots[0]} index={0} active={self.active === 0} reserve={reserveFor(self, self.slots[0])} />
       <WeaponSlotCard slot={self.slots[1]} index={1} active={self.active === 1} reserve={reserveFor(self, self.slots[1])} />
       <MedsPanel self={self} />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------- movement */
+
+const PIE_R = 15;
+const PIE_C = 2 * Math.PI * PIE_R;
+
+/** Roll cooldown + quiet walk: changes only when a roll starts / ends or Shift toggles. */
+function moveSlice(s: HudSnapshot) {
+  const self = s.self;
+  if (!self) return null;
+  return { readyAtMs: self.roll.readyAtMs, cdStartMs: self.roll.cdStartMs, walking: self.walking };
+}
+
+/**
+ * Space (dodge roll) cooldown pie and the Shift quiet-walk indicator. The pie animates on rAF
+ * through refs from the store's extrapolated clock, so a 5 s cooldown costs no React renders.
+ */
+function MovePanel({ store }: { store: HudStore }) {
+  const m = useHud(store, moveSlice, shallowEqual);
+  const arcRef = useRef<SVGCircleElement | null>(null);
+  const keyRef = useRef<HTMLSpanElement | null>(null);
+  const readyAt = m?.readyAtMs ?? 0;
+  const start = m?.cdStartMs ?? 0;
+  const progress = (clockMs: number) => (readyAt <= 0 ? 1 : clamp01((clockMs - start) / Math.max(1, readyAt - start)));
+  useClockFrames(store, (clockMs) => {
+    const p = progress(clockMs);
+    arcRef.current?.setAttribute("stroke-dashoffset", String(PIE_C * (1 - p)));
+    if (keyRef.current) keyRef.current.style.opacity = p >= 1 ? "1" : "0.45";
+  });
+  if (!m) return null;
+  const p0 = progress(store.clockNow());
+  return (
+    <div className="toon-panel flex flex-col items-center gap-1.5 p-2" aria-label="Movement">
+      <div className="relative h-10 w-10" title="Space — dodge roll (5 s cooldown)">
+        <svg viewBox="0 0 40 40" className="h-full w-full -rotate-90" aria-hidden>
+          <circle cx="20" cy="20" r={PIE_R + 3} fill="rgba(0,0,0,0.6)" stroke="#000" strokeWidth="2" />
+          <circle
+            ref={arcRef}
+            cx="20"
+            cy="20"
+            r={PIE_R}
+            fill="none"
+            stroke="#CCFF00"
+            strokeWidth="6"
+            strokeDasharray={PIE_C}
+            strokeDashoffset={PIE_C * (1 - p0)}
+          />
+        </svg>
+        <span ref={keyRef} className="toon-text-thin absolute inset-0 grid place-items-center text-[0.6rem] tracking-wide" style={{ opacity: p0 >= 1 ? 1 : 0.45 }}>
+          ROLL
+        </span>
+      </div>
+      <span
+        className={clsx(
+          "flex items-center gap-1 rounded-full border-2 border-black px-1.5 py-0.5 text-[0.6rem] tracking-wide transition-colors",
+          m.walking ? "bg-sky-300 text-black" : "bg-black/50 text-white/45",
+        )}
+        title="Shift — quiet walk (half speed, short footstep range)"
+      >
+        <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden>
+          <path d="M5 2c1.2 0 2 1.3 2 3s-.8 3-2 3-2-1.3-2-3 .8-3 2-3zm6 5c1.2 0 2 1.3 2 3s-.8 3-2 3-2-1.3-2-3 .8-3 2-3zM4 10h2v3H4zm6 4h2v1h-2z" fill="currentColor" />
+        </svg>
+        QUIET
+      </span>
     </div>
   );
 }
@@ -532,9 +624,9 @@ function WeaponSlotCard({
       <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>
       <span
         className="toon-text-thin absolute right-1.5 top-1.5 text-[0.6rem] uppercase tracking-wider"
-        style={{ color: slot.free ? "#d4d4d8" : color }}
+        style={{ color: slot.broken ? "#f87171" : slot.free ? "#d4d4d8" : color }}
       >
-        {slot.free ? "Free" : rarityName(slot.rarity)}
+        {slot.broken ? "Broken" : slot.free ? "Free" : rarityName(slot.rarity)}
       </span>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={weaponIcon(weapon)} alt={def.name} className="mt-5 h-11 w-20 object-contain drop-shadow-[0_2px_0_rgba(0,0,0,0.6)]" draggable={false} />
@@ -551,6 +643,15 @@ function MedsPanel({ self }: { self: HudSelf }) {
     <div className="toon-panel flex flex-col gap-1.5 p-2">
       <MedRow icon="/sprites/bandage.png" count={self.bandages} max={HEAL.bandage.MAX_CARRY} keyHint="3" label="Bandage +25 HP" />
       <MedRow icon="/sprites/medkit.png" count={self.medkits} max={HEAL.medkit.MAX_CARRY} keyHint="4" label="Medkit +75 HP" />
+      <div
+        className="flex items-center justify-between gap-2 border-t-2 border-black/50 pt-1 text-[0.65rem] tabular-nums text-white/75"
+        title="Storage slots used (pockets + backpack) and the junk value you carry if you extract"
+      >
+        <span>
+          {self.storageUsed}/{self.storageCap}
+        </span>
+        {self.creditsEstimate > 0 && <span className="text-amber-300">≈{fmtCr(self.creditsEstimate)}</span>}
+      </div>
     </div>
   );
 }
@@ -602,7 +703,12 @@ const CONTROLS: Array<[string, string]> = [
   ["Mouse", "Aim"],
   ["LMB", "Shoot"],
   ["R", "Reload"],
-  ["F", "Open chest / pick up"],
+  ["F", "Search / pick up"],
+  ["Space", "Dodge roll"],
+  ["Shift", "Quiet walk"],
+  ["Tab", "Inventory"],
+  ["T", "Take all"],
+  ["M", "Map"],
   ["1 / 2", "Switch weapon"],
   ["3", "Bandage"],
   ["4", "Medkit"],

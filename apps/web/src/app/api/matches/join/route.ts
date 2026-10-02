@@ -1,22 +1,15 @@
-import { NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
-import { ROOMS } from "@extract/shared";
-import { signJoinTicket } from "@/lib/join-ticket";
+import { db } from "@/db/client";
+import { lockAndIssueTicket } from "@/lib/lobby/join";
+import { apiError, caller, json } from "@/lib/lobby/route-helpers";
 
 export const dynamic = "force-dynamic";
 
-/** Colyseus matchmaking room name registered by the game server. */
-const MATCHMAKING_ROOM = ROOMS.MATCHMAKING;
-
 /**
- * Issues a signed join ticket for the demo raid. No stake is debited in this phase: everyone drops
- * with the free kit, so the ticket only proves who the player is.
+ * Raid tab "Play": locks the saved loadout (Loadout tab draft) and issues a join ticket carrying
+ * its loadoutId. Guests, and players with an empty loadout, drop with the free kit (loadoutId "").
  */
 export async function POST() {
-  const session = await getSession();
-  if (!session.userId || !session.nickname) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  }
-  const ticket = signJoinTicket({ userId: session.userId, nickname: session.nickname });
-  return NextResponse.json({ ticket, roomName: MATCHMAKING_ROOM });
+  const r = await lockAndIssueTicket(db, await caller());
+  if (!r.ok) return apiError(r.status, r.error, r.message, { key: r.key, matchId: r.matchId });
+  return json({ ticket: r.ticket, roomName: r.roomName, loadoutId: r.loadoutId, entries: r.entries, pruned: r.pruned });
 }

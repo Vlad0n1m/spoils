@@ -4,9 +4,11 @@ import { createRequire } from "node:module";
 import { matchMaker, type Room } from "@colyseus/core";
 import { ROOMS, type JoinTicket } from "@extract/shared";
 import { signJoinTicket } from "../auth/ticket.js";
-import { BattleRoom } from "./battle-room.js";
+import { BattleRoom, sanitizeRoster } from "./battle-room.js";
 import { MatchmakingRoom } from "./matchmaking-room.js";
+import { parseInvDrop, parseInvMove } from "./inventory-handlers.js";
 import { LAUNCH_KEY, isLaunchKey } from "./room-auth.js";
+import { expectedMapHash } from "../sim/match.js";
 
 /**
  * The matchmaker as POST /matchmake/* drives it (no WebSocket needed): every check here must hold
@@ -69,12 +71,24 @@ test("launch key: only the exact process secret passes", () => {
   assert.equal(isLaunchKey({ toString: () => LAUNCH_KEY }), false);
 });
 
-test("a refused battle create stops the patch timer Colyseus started for it", () => {
-  const room = new BattleRoom() as unknown as BattleRoom & { __init(): void; patchRate: number };
+test("battle patches are tick-driven (patchRate null) and a refused create throws before any state", () => {
+  const room = new BattleRoom() as unknown as BattleRoom & { __init(): void; patchRate: number | null };
   room.__init();
-  assert.ok(room.patchRate > 0);
+  assert.equal(room.patchRate, null, "no automatic patch interval: tick() sends patches after syncViews");
   assert.throws(() => room.onCreate({ roster, launchKey: "nope" } as never), /not launched by matchmaking/);
-  assert.equal(room.patchRate, 0);
+  assert.equal(room.patchRate, null);
+  assert.equal((room as unknown as { state?: unknown }).state, undefined);
+});
+
+test("roster sanitizing keeps a human's loadoutId and never gives one to a bot", () => {
+  const r = sanitizeRoster([
+    { userId: "alice", nickname: "Alice", isBot: false, loadoutId: "L-1" },
+    { userId: null, nickname: "Bot", isBot: true, loadoutId: "L-evil" },
+    { userId: "bob", nickname: "Bob", isBot: false },
+  ])!;
+  assert.deepEqual(r.map((e) => e.loadoutId), ["L-1", "", ""]);
+  assert.equal(sanitizeRoster([{ userId: "a", nickname: "A", isBot: false }, { userId: "a", nickname: "B", isBot: false }]), null);
+  assert.equal(sanitizeRoster([]), null);
 });
 
 test("a client cannot create a battle or choose its roster", async () => {
@@ -84,11 +98,11 @@ test("a client cannot create a battle or choose its roster", async () => {
   await assert.rejects(matchMaker.joinOrCreate(ROOMS.BATTLE, { roster }, {} as never), /onAuth|invalid_ticket/);
   // A valid ticket still cannot create one: onCreate demands the launch key.
   await assert.rejects(
-    matchMaker.create(ROOMS.BATTLE, { roster, ticket: ticket("alice") }, {} as never),
+    matchMaker.create(ROOMS.BATTLE, { roster, ticket: ticket("alice"), mapHash: expectedMapHash() }, {} as never),
     /not launched by matchmaking/,
   );
   await assert.rejects(
-    matchMaker.create(ROOMS.BATTLE, { roster, ticket: ticket("alice"), launchKey: "guess" }, {} as never),
+    matchMaker.create(ROOMS.BATTLE, { roster, ticket: ticket("alice"), launchKey: "guess", mapHash: expectedMapHash() }, {} as never),
     /not launched by matchmaking/,
   );
   assert.equal((await matchMaker.query({ name: ROOMS.BATTLE })).length, before);
@@ -101,17 +115,28 @@ test("battle seats: only roster players with a ticket, one pending seat each", a
   await assert.rejects(matchMaker.joinById(roomId, {}, {} as never), /onAuth|invalid_ticket/);
   await assert.rejects(matchMaker.joinOrCreate(ROOMS.BATTLE, {}, {} as never), /onAuth|invalid_ticket/);
   // Valid ticket, wrong roster: no seat in this room.
-  await assert.rejects(matchMaker.joinById(roomId, { ticket: ticket("mallory") }, {} as never), /already full/);
+  await assert.rejects(matchMaker.joinById(roomId, { ticket: ticket("mallory"), mapHash: expectedMapHash() }, {} as never), /already full/);
   assert.equal((await listing(roomId))?.clients, 0);
 
   // The roster player may retry as often as needed: each new reservation replaces the pending one.
   for (let i = 0; i < 5; i++) {
-    const res = await matchMaker.joinById(roomId, { ticket: ticket("alice") }, {} as never);
+    const res = await matchMaker.joinById(roomId, { ticket: ticket("alice"), mapHash: expectedMapHash() }, {} as never);
     assert.equal(res.room.roomId, roomId);
   }
   const l = await listing(roomId);
   assert.equal(l?.clients, 1);
   assert.equal(l?.locked, false);
+});
+
+test("battle join: a missing or different mapHash is refused before any seat (WP-M2)", async () => {
+  const roomId = await launchBattle();
+  const hash = expectedMapHash();
+  assert.match(hash ?? "", /^[0-9a-f]{8}$/, "the default (Steppe) map has a single golden hash");
+  await assert.rejects(matchMaker.joinById(roomId, { ticket: ticket("alice") }, {} as never), /map_mismatch/);
+  await assert.rejects(matchMaker.joinById(roomId, { ticket: ticket("alice"), mapHash: "deadbeef" }, {} as never), /map_mismatch/);
+  assert.equal((await listing(roomId))?.clients, 0, "no seat was reserved");
+  const res = await matchMaker.joinById(roomId, { ticket: ticket("alice"), mapHash: hash }, {} as never);
+  assert.equal(res.room.roomId, roomId);
 });
 
 test("queue seats: a ticket is required and one user cannot fill the queue", async () => {
@@ -130,4 +155,17 @@ test("queue seats: a ticket is required and one user cannot fill the queue", asy
   const carol = await matchMaker.joinOrCreate(ROOMS.MATCHMAKING, { ticket: ticket("carol") }, {} as never);
   assert.equal(carol.room.roomId, first.room.roomId);
   assert.equal((await listing(first.room.roomId))?.clients, 2);
+});
+
+test("inventory message shapes are validated before they reach the sim", () => {
+  assert.deepEqual(parseInvMove({ from: "self", key: "p0", uid: "", def: "ammo_light", to: "p2", qty: 5 }),
+    { from: "self", key: "p0", uid: "", def: "ammo_light", to: "p2", qty: 5 });
+  assert.equal(parseInvMove({ from: "ground", key: "p0", uid: "", def: "x" }), null);
+  assert.equal(parseInvMove({ from: "self", key: "p0", uid: "", def: "x", to: "b16" }), null);
+  assert.equal(parseInvMove({ from: "self", key: "p0", uid: "", def: "x", qty: 0 }), null);
+  assert.equal(parseInvMove({ from: "self", key: "p0", uid: "u".repeat(65), def: "x" }), null);
+  assert.equal(parseInvMove(null), null);
+  assert.deepEqual(parseInvDrop({ key: "w1", uid: "a", def: "rifle" }), { key: "w1", uid: "a", def: "rifle" });
+  assert.equal(parseInvDrop({ key: "constructor", uid: "", def: "x" }), null);
+  assert.equal(parseInvDrop({ key: "p1", uid: "", def: "x", qty: 1.5 }), null);
 });

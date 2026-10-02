@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MATCH, SERVER_TICK_MS, mulberry32, type ItemRef } from "@extract/shared";
+import { CONTAINER_STATE, ITEM_FLAG, MATCH, SERVER_TICK_MS, mulberry32, type LoadoutSnapshot } from "@extract/shared";
 import { BOT_PEACE_MS } from "./bot.js";
-import { dropRef } from "./inventory.js";
-import { Match } from "./match.js";
+import { groundUniques } from "./inventory.js";
+import { LEGACY_MATCH_PLAYERS as MATCH_PLAYERS, Match, matchMap } from "./match.js";
 import { counterUid } from "./test-utils.js";
 import type { MatchEvent, RosterEntry } from "./types.js";
 
@@ -12,7 +12,7 @@ function bots(n: number): RosterEntry[] {
 }
 
 function idleHumanRoster(): RosterEntry[] {
-  return [{ userId: "human-1", nickname: "Idle", isBot: false }, ...bots(MATCH.MAX_PLAYERS - 1)];
+  return [{ userId: "human-1", nickname: "Idle", isBot: false }, ...bots(MATCH_PLAYERS - 1)];
 }
 
 type Timed = MatchEvent & { at: number };
@@ -34,131 +34,93 @@ function countByType(events: Timed[]): Record<string, number> {
   return counts;
 }
 
-/** A ref matches the ledger entry it came from; armor may only have lost durability since. */
-function assertRefMatchesLedger(m: Match, r: ItemRef, where: string) {
-  const l = m.ledger.get(r.uid);
-  assert.ok(l, `${where}: unknown item ${r.uid}`);
-  const { dur, ...rest } = r;
-  const { dur: ldur, ...lrest } = l;
-  assert.deepEqual(rest, lrest, `${where}: ${r.uid} differs from the ledger`);
-  if (r.kind === "armor") {
-    assert.equal(typeof dur, "number", `${where}: armor ${r.uid} without dur`);
-    assert.ok(dur! >= 0 && dur! <= ldur!, `${where}: armor ${r.uid} dur ${dur} outside 0..${ldur}`);
-  } else {
-    assert.equal(dur, undefined, `${where}: weapon ${r.uid} with dur`);
-  }
-}
-
 /**
- * Item conservation: every valuable uid created in the match ends in exactly one place of the
- * settlement — extracted or lost by a participant, or leftOnMap — and leftOnMap is exactly what
- * lies on the ground plus what sits in unopened chests. Dropped items of the dead end up in
- * exactly one of someone's extracted / lost, or leftOnMap.
+ * Uid conservation over the v2 ledger: every unique that entered the match (loadout, pool, demo
+ * mint) leaves through exactly one report entry — someone's extracted / lost / destroyed, or the
+ * end report's leftOnMap — and the ledger's resolution agrees with where it was reported.
+ * leftOnMap is exactly the ground uniques plus what still sits in unopened containers.
  */
 function assertConservation(m: Match) {
-  const s = m.settlement!;
+  assert.ok(m.ended);
+  const r = m.report!;
+  assert.deepEqual(m.ledgerGaps(), [], "every known uid is resolved");
   const where = new Map<string, string[]>();
-  const put = (uid: string, place: string) => where.set(uid, [...(where.get(uid) ?? []), place]);
-  for (const p of s.participants) {
-    p.extracted.forEach((r) => put(r.uid, `extracted:${p.nickname}`));
-    p.lost.forEach((r) => put(r.uid, `lost:${p.nickname}`));
+  const put = (uid: string, at: string) => where.set(uid, [...(where.get(uid) ?? []), at]);
+  for (const rep of m.exitReports) {
+    for (const it of rep.extracted) if (it.uid) put(it.uid, "extract");
+    for (const it of rep.lost) if (it.uid) put(it.uid, "lost");
+    for (const it of rep.destroyed) if (it.uid) put(it.uid, "destroyed");
   }
-  s.leftOnMap.forEach((r) => put(r.uid, "leftOnMap"));
-
-  for (const uid of m.ledger.keys()) {
-    const places = where.get(uid) ?? [];
-    assert.equal(places.length, 1, `item ${uid} is in ${places.length} places: ${places.join(", ")}`);
+  for (const it of r.leftOnMap) put(it.uid, "left");
+  for (const [uid, info] of m.ledger.known) {
+    const at = where.get(uid) ?? [];
+    assert.equal(at.length, 1, `uid ${uid} (${info.def}) reported ${at.length}×: ${at.join(", ")}`);
+    assert.equal(m.ledger.resolved.get(uid), at[0], `uid ${uid}: ledger vs report`);
   }
-  for (const uid of where.keys()) assert.ok(m.ledger.has(uid), `unknown item ${uid}`);
-
-  for (const p of s.participants) {
-    for (const r of p.extracted) assertRefMatchesLedger(m, r, `extracted:${p.nickname}`);
-    for (const r of p.lost) assertRefMatchesLedger(m, r, `lost:${p.nickname}`);
+  for (const uid of where.keys()) assert.ok(m.ledger.known.has(uid), `unknown uid ${uid} in a report`);
+  // Reports never carry FREE items or uid-less uniques.
+  for (const rep of m.exitReports) {
+    for (const it of [...rep.extracted, ...rep.lost]) assert.ok(!(it.def === "pistol" && !it.uid), "FREE pistol reported");
   }
-  for (const r of s.leftOnMap) assertRefMatchesLedger(m, r, "leftOnMap");
-
-  // leftOnMap is exactly the valuable ground items plus unopened chest contents.
-  const onMap = new Map<string, ItemRef>();
-  for (const it of m.state.items.values()) {
-    if (it.kind === "weapon" || it.kind === "armor") {
-      assert.ok(it.uid, `ground ${it.kind} ${it.id} without uid`);
-      onMap.set(it.uid, it.kind === "armor"
-        ? { uid: it.uid, kind: "armor", type: "armor", rarity: Math.max(0, it.armor - 1), level: it.armor, dur: it.armorDur }
-        : { uid: it.uid, kind: "weapon", type: it.weapon, rarity: it.rarity });
-    }
-  }
-  for (const contents of m.chestContents.values()) {
-    for (const d of contents) {
-      const ref = dropRef(d);
-      if (ref) onMap.set(ref.uid, ref);
-    }
-  }
-  assert.deepEqual(
-    [...s.leftOnMap].sort((a, b) => a.uid.localeCompare(b.uid)),
-    [...onMap.values()].sort((a, b) => a.uid.localeCompare(b.uid)),
-    "leftOnMap = ground + unopened chests",
-  );
-
-  // Dropped on death: picked up and then extracted / lost by someone, or still on the map.
-  for (const rt of m.allRuntimes()) {
-    for (const r of rt.dropped) {
-      const places = (where.get(r.uid) ?? []).filter((w) => /^(extracted|lost):|^leftOnMap$/.test(w));
-      assert.equal(places.length, 1, `dropped ${r.uid} of ${rt.nickname} ends in ${places.length} places`);
-    }
-  }
+  const onMap = [...groundUniques(m), ...m.containers.leftInside()].map((i) => i.uid).sort();
+  assert.deepEqual(r.leftOnMap.map((i) => i.uid).sort(), onMap, "leftOnMap = ground + unopened containers");
+  assert.equal(m.exitReports.length, m.allRuntimes().length, "one exit report per participant");
+  // Demo mode: every minted uid is known (and only demo mints are listed).
+  for (const it of r.minted) assert.equal(m.ledger.known.get(it.uid)?.origin, "minted");
 }
 
-/** No bot fires during the peace window unless it was hit first (and then only shortly after). */
-function assertPeace(events: Timed[]) {
-  const lastHit = new Map<string, number>();
+/** No bot fires during the peace window unless it was hit first. */
+function assertPeace(m: Match, events: Timed[]) {
+  const lastHit = new Map<number, number>();
   for (const e of events) {
     if (e.at >= BOT_PEACE_MS) break;
-    if (e.type === "hit") lastHit.set(e.msg.t, e.at);
-    if (e.type === "shot" && e.msg.s.startsWith("bot")) {
-      const hit = lastHit.get(e.msg.s);
-      assert.ok(hit !== undefined, `${e.msg.s} fired at ${e.at} ms without being hit first`);
+    if (e.type === "hit") lastHit.set(e.target, e.at);
+    if (e.type === "shot" && m.rosterRuntime(e.src)!.isBot) {
+      assert.ok(lastHit.has(e.src), `${e.msg.s} fired at ${e.at} ms without being hit first`);
     }
   }
 }
 
+// These whole-match bot tests are tuned for the small legacy map (MatchOptions.mapId "legacy");
+// the Steppe soak lives in map-boot.test.ts until the bots WP retunes bots for 24,576 px.
 for (const seed of [1, 7, 2024]) {
-  test(`bots-only match (seed ${seed}) plays to the end and conserves every item`, () => {
-    const m = new Match({
-      roster: bots(MATCH.MAX_PLAYERS),
-      rng: mulberry32(seed),
-      newUid: counterUid,
-      now: () => 1_700_000_000_000,
-    });
-    assert.ok(m.state.chests.size > 0 && m.state.extracts.size > 0 && m.state.items.size > 0);
+  test(`bots-only match (seed ${seed}) plays to the end and conserves every uid`, () => {
+    const m = new Match({ mapId: "legacy", roster: bots(MATCH_PLAYERS), rng: mulberry32(seed), newUid: counterUid, now: () => 1_700_000_000_000, strictLedger: true });
+    assert.ok(m.map.containers.length > 0 && m.state.extracts.size > 0 && m.state.items.size > 0);
+    assert.equal(m.state.containerState.length, m.map.containers.length);
+    assert.equal(m.state.totalPlayers, MATCH_PLAYERS);
     const closing = [...m.state.extracts.values()].filter((e) => e.closeAt > 0).length;
     assert.equal(closing, Math.floor(m.state.extracts.size * MATCH.EXTRACT_CLOSE_EARLY_FRACTION));
     const spawns = new Set([...m.state.players.values()].map((p) => `${p.x},${p.y}`));
-    assert.equal(spawns.size, MATCH.MAX_PLAYERS, "distinct spawns");
+    assert.equal(spawns.size, MATCH_PLAYERS, "distinct spawns");
     const colors = new Set([...m.state.players.values()].map((p) => p.color));
-    assert.equal(colors.size, MATCH.MAX_PLAYERS, "distinct colors");
+    assert.equal(colors.size, MATCH_PLAYERS, "distinct colors");
+    assert.equal(m.state.self.size, MATCH_PLAYERS);
 
     const events = playOut(m);
     const counts = countByType(events);
-    assert.ok(m.ended, "match ended");
     assert.equal(m.state.phase, "ended");
-    const s = m.settlement!;
-    assert.equal(s.participants.length, MATCH.MAX_PLAYERS);
-    for (const p of s.participants) {
+    assert.equal(m.state.aliveCount, 0);
+    const r = m.report!;
+    assert.equal(r.participants.length, MATCH_PLAYERS);
+    for (const p of r.participants) {
       assert.ok(["extract", "dead", "timeout"].includes(p.exitType));
       assert.equal(p.isBot, true);
       assert.equal(p.userId, null);
-      if (p.exitType !== "extract") assert.equal(p.extracted.length, 0);
     }
-    assert.ok([...m.state.players.values()].every((p) => !p.alive), "nobody left on the map");
     assert.equal(counts.outcome ?? 0, 0, "bots get no OUTCOME messages");
+    assert.equal(counts.exit ?? 0, 0, "bot exits are not posted");
     assert.ok((counts.shot ?? 0) > 0, "bots fight");
-    assert.ok((counts.chest ?? 0) > 0, "bots loot chests");
-    const exits = s.participants.map((p) => p.exitType);
+    assert.ok((counts.chest ?? 0) > 0, "bots loot containers");
+    assert.ok((counts.sound ?? 0) > 0, "the sim emits sounds");
+    const opened = [...m.state.containerState].filter((v) => v !== CONTAINER_STATE.UNTOUCHED).length;
+    assert.equal(opened, counts.chest);
+    const exits = r.participants.map((p) => p.exitType);
     console.log(
       `seed ${seed}: clock=${m.clock} shots=${counts.shot ?? 0} hits=${counts.hit ?? 0} kills=${counts.kill ?? 0} ` +
       `chests=${counts.chest ?? 0} extract=${exits.filter((e) => e === "extract").length} ` +
       `dead=${exits.filter((e) => e === "dead").length} timeout=${exits.filter((e) => e === "timeout").length} ` +
-      `leftOnMap=${s.leftOnMap.length}`,
+      `known=${m.ledger.known.size} leftOnMap=${r.leftOnMap.length}`,
     );
     assert.ok(exits.some((e) => e !== "timeout"), "bots kill or extract");
     assert.equal(events.filter((e) => e.type === "shot" && e.at < BOT_PEACE_MS).length, 0, "nobody shoots in peace");
@@ -166,69 +128,93 @@ for (const seed of [1, 7, 2024]) {
   });
 }
 
-test("a match with an idle (never connected) human runs until the human dies or time runs out", () => {
-  const m = new Match({ roster: idleHumanRoster(), rng: mulberry32(99), newUid: counterUid });
-  assertPeace(playOut(m));
+test("container contents are deterministic per (matchSeed, idx), whatever the open order", () => {
+  const a = new Match({ mapId: "legacy", roster: bots(2), rng: mulberry32(3), mapSeed: 99, newUid: counterUid, botBrains: false, strictLedger: true });
+  const b = new Match({ mapId: "legacy", roster: bots(2), rng: mulberry32(4), mapSeed: 99, newUid: counterUid, botBrains: false, strictLedger: true });
+  const n = a.map.containers.length;
+  const strip = (items: ReturnType<Match["containers"]["roll"]>) => items.map((i) => `${i.def}x${i.qty}r${i.rarity}`);
+  const fwd = Array.from({ length: n }, (_, i) => strip(a.containers.roll(i)));
+  const rev = Array.from({ length: n }, (_, k) => n - 1 - k).map((i) => [i, strip(b.containers.roll(i))] as const);
+  for (const [i, items] of rev) assert.deepEqual(items, fwd[i], `container ${i}`);
+  assert.ok(fwd.some((x) => x.length > 0));
+});
+
+test("live mode: loadouts and pool items are tracked, nothing is minted, FREE kit fills the gaps", () => {
+  const map = matchMap(5, "legacy");
+  const snap: LoadoutSnapshot = {
+    loadoutId: "L1", userId: "u1", level: 4,
+    entries: [
+      { key: "w1", uid: "item-rifle", def: "rifle", qty: 1, rarity: 2, dur: 90 },
+      { key: "bp", uid: "item-bp", def: "backpack_1", qty: 1, rarity: 0, dur: 100 },
+      { key: "b0", uid: "", def: "ammo_light", qty: 60, rarity: 0, dur: 0 },
+    ],
+  };
+  const m = new Match({
+    roster: [{ userId: "u1", nickname: "Live", isBot: false, loadoutId: "L1" }, ...bots(5)],
+    rng: mulberry32(11), mapSeed: 5, map, newUid: counterUid, mode: "live", strictLedger: true,
+    loadouts: [snap],
+    containerLoot: { "0": [{ uid: "pool-1", def: "sniper", qty: 1, rarity: 1, dur: 72 }], boss: [] },
+  });
+  const rt = m.allRuntimes()[0]!;
+  const s = rt.self.slots;
+  assert.equal(s.get("w1")!.uid, "item-rifle");
+  assert.equal(s.get("w1")!.dur, 90);
+  assert.equal(s.get("w2")!.def, "pistol", "FREE pistol fills the empty weapon slot");
+  assert.equal(s.get("w2")!.flags & ITEM_FLAG.FREE, ITEM_FLAG.FREE);
+  assert.equal(s.get("b0")!.qty, 60);
+  assert.equal(rt.pub.bp, 1);
+  assert.equal(rt.level, 4);
+  assert.equal(m.ledger.known.get("item-rifle")?.origin, "loadout");
+  assert.equal(m.ledger.known.get("pool-1")?.origin, "pool");
+  const events = playOut(m);
   assert.ok(m.ended);
-  const human = m.settlement!.participants[0]!;
+  assert.deepEqual(m.report!.minted, []);
+  assert.ok([...m.ledger.known.values()].every((k) => k.origin !== "minted"), "live mode never mints");
+  assert.ok(events.some((e) => e.type === "exit" && e.report.userId === "u1"));
+  assertConservation(m);
+  // Container 0 was either opened (pool item spilled / taken) or reported as left inside.
+  if (m.state.containerState[0] === CONTAINER_STATE.UNTOUCHED) {
+    assert.ok(m.report!.leftOnMap.some((i) => i.uid === "pool-1"));
+  }
+});
+
+test("a match with an idle (never connected) human runs until the human dies or time runs out", () => {
+  const m = new Match({ mapId: "legacy", roster: idleHumanRoster(), rng: mulberry32(99), newUid: counterUid, strictLedger: true });
+  assertPeace(m, playOut(m));
+  const human = m.report!.participants[0]!;
   assert.equal(human.userId, "human-1");
   assert.ok(human.exitType === "dead" || human.exitType === "timeout");
   assertConservation(m);
 });
 
-test("an idle human + 15 bots: the human is alive at 30 s in 10/10 seeded matches", () => {
+test("an idle human + bots: the human is alive at 30 s in 10/10 seeded matches", () => {
   let alive = 0;
   for (let seed = 1; seed <= 10; seed++) {
-    const m = new Match({ roster: idleHumanRoster(), rng: mulberry32(seed * 7919), newUid: counterUid });
-    const humanId = m.allRuntimes()[0]!.id;
+    const m = new Match({ mapId: "legacy", roster: idleHumanRoster(), rng: mulberry32(seed * 7919), newUid: counterUid, strictLedger: true });
+    const human = m.allRuntimes()[0]!;
     const early = playOut(m, 30_000);
     assert.ok(m.clock >= 30_000);
-    if (m.player(humanId)?.alive) alive++;
+    if (human.pub.alive) alive++;
     const events = [...early, ...playOut(m)];
-    assertPeace(events);
-    assert.ok(m.ended);
+    assertPeace(m, events);
     assertConservation(m);
   }
   console.log(`idle human alive at 30 s: ${alive}/10`);
   assert.equal(alive, 10);
 });
 
-test("spawn fairness: humans get the spots farthest from every other player", () => {
-  for (const humansN of [1, 2, 4]) {
-    for (let seed = 1; seed <= 6; seed++) {
-      const roster: RosterEntry[] = [
-        ...Array.from({ length: humansN }, (_, i) => ({ userId: `u${i}`, nickname: `H${i}`, isBot: false })),
-        ...bots(MATCH.MAX_PLAYERS - humansN),
-      ];
-      const m = new Match({ roster, rng: mulberry32(seed), newUid: counterUid });
-      const ps = m.allRuntimes().map((rt) => m.player(rt.id)!);
-      assert.equal(new Set(ps.map((p) => `${p.x},${p.y}`)).size, ps.length, "distinct spawns");
-      const nearest = ps.map((p) => Math.min(...ps.filter((o) => o !== p).map((o) => Math.hypot(o.x - p.x, o.y - p.y))));
-      const humanWorst = Math.min(...nearest.slice(0, humansN));
-      const botBest = Math.max(...nearest.slice(humansN));
-      assert.ok(humanWorst >= botBest, `${humansN} humans, seed ${seed}: human ${humanWorst} < bot ${botBest}`);
-      if (humansN === 1) {
-        // At least as good as the most isolated spot with every spot occupied.
-        const spots = m.map.spawnSpots;
-        const isolated = Math.max(...spots.map((s) =>
-          Math.min(...spots.filter((o) => o !== s).map((o) => Math.hypot(o.x - s.x, o.y - s.y)))));
-        assert.ok(humanWorst >= isolated - 1e-6);
-      }
-    }
-  }
-});
+// Spawn fairness (side-aware since WP-M2) is tested in map-boot.test.ts.
 
 test("bots-only matches over 10 seeds last long enough and show extraction", () => {
   const lengths: number[] = [];
   let extracts = 0;
   const lines: string[] = [];
   for (let seed = 1; seed <= 10; seed++) {
-    const m = new Match({ roster: bots(MATCH.MAX_PLAYERS), rng: mulberry32(seed), newUid: counterUid });
+    const m = new Match({ mapId: "legacy", roster: bots(MATCH_PLAYERS), rng: mulberry32(seed), newUid: counterUid, strictLedger: true });
     const events = playOut(m);
-    assert.ok(m.ended);
-    assertPeace(events);
+    assertPeace(m, events);
     assertConservation(m);
-    const n = m.settlement!.participants.filter((p) => p.exitType === "extract").length;
+    const n = m.report!.participants.filter((p) => p.exitType === "extract").length;
     extracts += n;
     lengths.push(m.clock);
     lines.push(`${seed}:${(m.clock / 60_000).toFixed(2)}m/${n}ex`);
@@ -237,7 +223,7 @@ test("bots-only matches over 10 seeds last long enough and show extraction", () 
   const median = (lengths[4]! + lengths[5]!) / 2;
   const avgExtracts = extracts / 10;
   console.log(`bots-only x10: median ${(median / 60_000).toFixed(2)} min, avg extracts ${avgExtracts.toFixed(1)} [${lines.join(" ")}]`);
-  // Tuning target: median >= 4 min and >= 4 extracts on average; asserted with some slack.
+  // Extracts open at 3:00, so a match lasts at least that long whenever anyone extracts.
   assert.ok(median >= 3.5 * 60_000, `median match length ${median} ms`);
   assert.ok(avgExtracts >= 3, `avg extracts ${avgExtracts}`);
 });

@@ -1,21 +1,26 @@
 /**
- * Shooting, server-side bullets, damage and death. Bullets are never synced: clients draw tracers
- * from the SHOT message and the state (hp, alive) is the truth about hits.
+ * Shooting, server-side bullets and damage. Bullets are never synced: clients draw tracers from
+ * the ShotMsg in their `ev` batch, and the state (hp, alive) is the truth about hits.
  */
 
 import {
   PLAYER,
   RARITY_DAMAGE_MULT,
-  WEAPONS,
+  SoundKind,
   applyDamage,
+  itemDef,
   raycastSolids,
   segmentCircleT,
-  type Player,
+  weaponVariant,
   type WeaponId,
 } from "@extract/shared";
-import { cancelHeal, cancelReload, startReload } from "./actions.js";
-import { ammoOf, armorRef, dropOnDeath } from "./inventory.js";
+import { cancelHeal, startReload } from "./actions.js";
+import { activeWeapon, ammoCount, syncPublic, weaponDefOf } from "./bag.js";
+import { closeSearch } from "./containers.js";
+import { killPlayer } from "./death.js";
+import { toPlain } from "./items.js";
 import type { Match } from "./match.js";
+import { emitSound } from "./sound.js";
 import type { PlayerRuntime } from "./types.js";
 
 /**
@@ -25,34 +30,44 @@ import type { PlayerRuntime } from "./types.js";
 export const PRESS_BUFFER_MS = 150;
 
 /**
- * Called once per applied input, after the trigger state was updated from that input, so shots
- * leave from the position and aim of the input that fired them.
+ * Called once per applied (non-roll) input, after the trigger state was updated from that input,
+ * so shots leave from the position and aim of the input that fired them.
  */
-export function tryFire(m: Match, rt: PlayerRuntime, p: Player): void {
+export function tryFire(m: Match, rt: PlayerRuntime): void {
   if (rt.pressPending && m.clock - rt.pressAt > PRESS_BUFFER_MS) rt.pressPending = false;
-  const slot = p.slots[p.active];
-  if (!slot?.weapon) return;
-  const def = WEAPONS[slot.weapon as WeaponId];
+  const w = activeWeapon(rt);
+  const def = weaponDefOf(w);
+  if (!w || !def) return;
   const wants = def.auto ? rt.triggerHeld : rt.pressPending;
-  if (!wants || p.reloadUntil > 0) return;
+  const s = rt.self;
+  if (!wants || s.reloadUntil > 0) return;
+  // Firing closes an open search first (inventory memo §2.2), then the shot is processed.
+  closeSearch(m, rt, "fired");
 
-  if (slot.mag <= 0) {
+  if (w.mag <= 0) {
+    // Only a fresh press clicks (a held auto trigger would click 30 times a second).
+    const pressed = rt.pressPending;
     rt.pressPending = false;
-    if (ammoOf(p, def.ammo) > 0) {
-      cancelHeal(p);
-      startReload(m, rt, p);
+    if (ammoCount(rt, def.ammo) > 0) {
+      cancelHeal(rt);
+      startReload(m, rt);
+    } else if (pressed) {
+      emitSound(m, rt, SoundKind.dryFire, rt.pub.x, rt.pub.y);
     }
     return;
   }
   if (m.clock < rt.nextFireAt) return;
 
-  cancelHeal(p);
+  cancelHeal(rt);
   rt.pressPending = false;
   // Strictly clock + interval: ticks quantize shots, and the rule is "never faster than the interval".
   rt.nextFireAt = m.clock + def.fireIntervalMs;
-  slot.mag -= 1;
+  rt.lastShotAt = m.clock;
+  rt.stats.shotsFired++;
+  w.mag -= 1;
 
-  const damage = def.damage * RARITY_DAMAGE_MULT[slot.rarity as 0 | 1 | 2 | 3];
+  const p = rt.pub;
+  const damage = def.damage * RARITY_DAMAGE_MULT[Math.max(0, Math.min(3, w.rarity)) as 0 | 1 | 2 | 3];
   const angles: number[] = [];
   for (let i = 0; i < def.pellets; i++) {
     const a = p.aim + (m.rng() * 2 - 1) * def.spread;
@@ -73,6 +88,7 @@ export function tryFire(m: Match, rt: PlayerRuntime, p: Player): void {
   }
   m.emit({
     type: "shot",
+    src: rt.rosterIndex,
     msg: {
       s: rt.id,
       w: def.id,
@@ -83,8 +99,9 @@ export function tryFire(m: Match, rt: PlayerRuntime, p: Player): void {
       cy: p.y,
     },
   });
+  emitSound(m, rt, SoundKind.shot, p.x, p.y, weaponVariant(def.id));
 
-  if (slot.mag <= 0 && ammoOf(p, def.ammo) > 0) startReload(m, rt, p);
+  if (w.mag <= 0 && ammoCount(rt, def.ammo) > 0) startReload(m, rt);
 }
 
 export function stepBullets(m: Match, dtMs: number): void {
@@ -97,15 +114,15 @@ export function stepBullets(m: Match, dtMs: number): void {
     const tWall = raycastSolids(m.idx, b.x, b.y, b.x + sx, b.y + sy);
 
     let hitT = Infinity;
-    let hitPlayer: Player | null = null;
-    for (const p of m.state.players.values()) {
-      if (!p.alive || p.sessionId === b.owner.id) continue;
-      const t = segmentCircleT(b.x, b.y, sx, sy, p.x, p.y, R);
-      if (t < hitT) { hitT = t; hitPlayer = p; }
+    let hit: PlayerRuntime | null = null;
+    for (const rt of m.allRuntimes()) {
+      if (!rt.pub.alive || rt === b.owner) continue;
+      const t = segmentCircleT(b.x, b.y, sx, sy, rt.pub.x, rt.pub.y, R);
+      if (t < hitT) { hitT = t; hit = rt; }
     }
 
-    if (hitPlayer && hitT <= tWall) {
-      damagePlayer(m, hitPlayer, b.damage, b.owner, b.weapon, b.x + sx * hitT, b.y + sy * hitT);
+    if (hit && hitT <= tWall) {
+      damagePlayer(m, hit, b.damage, b.owner, b.weapon, b.x + sx * hitT, b.y + sy * hitT);
       continue;
     }
     if (tWall !== Infinity) continue;
@@ -119,85 +136,52 @@ export function stepBullets(m: Match, dtMs: number): void {
 
 export function damagePlayer(
   m: Match,
-  p: Player,
+  rt: PlayerRuntime,
   raw: number,
   attacker: PlayerRuntime | null,
   weapon: WeaponId | "",
   hx: number,
   hy: number,
 ): void {
+  const p = rt.pub;
   if (!p.alive) return;
-  const rt = m.runtime(p.sessionId);
-  if (!rt) return;
-  const { hpLoss, armorUsed } = applyDamage(raw, p.armor, p.armorDur);
+  const s = rt.self;
+  const armor = s.slots.get("armor");
+  const level = armor ? (itemDef(armor.def)?.armorLevel ?? 0) : 0;
+  const { hpLoss, armorUsed } = applyDamage(raw, level, armor ? armor.dur : 0);
   p.hp = Math.max(0, round2(p.hp - hpLoss));
-  if (armorUsed > 0) {
-    p.armorDur = round2(p.armorDur - armorUsed);
-    if (p.armorDur <= 0) {
-      // Armor worn down to nothing is destroyed for good: it counts as lost by its wearer.
-      if (p.armorUid) rt.lost.push(armorRef(p.armorUid, p.armor, 0));
-      p.armor = 0;
-      p.armorDur = 0;
-      p.armorUid = "";
+  if (armor && armorUsed > 0) {
+    armor.dur = round2(armor.dur - armorUsed);
+    if (armor.dur <= 0) {
+      // Armor worn down to nothing is destroyed for good (PlayerExitReport.destroyed).
+      const gone = { ...toPlain(armor), dur: 0 };
+      s.slots.delete("armor");
+      rt.destroyed.push(gone);
+      m.ledger.resolve(gone, "destroyed");
     }
   }
   if (attacker && attacker !== rt) {
     rt.lastHitBy = attacker;
     rt.lastHitAt = m.clock;
+    attacker.stats.dmgDealt += hpLoss;
   }
   // Taking damage restarts the extraction channel.
-  if (p.extractId) p.extractStartedAt = m.clock;
+  if (s.extractId) s.extractStartedAt = m.clock;
 
   m.emit({
     type: "hit",
+    src: attacker?.rosterIndex ?? -1,
+    target: rt.rosterIndex,
     msg: { t: rt.id, s: attacker?.id ?? "", x: hx, y: hy, d: round2(hpLoss), ar: armorUsed > 0 },
+    fa: attacker && attacker !== rt ? Math.atan2(attacker.pub.y - p.y, attacker.pub.x - p.x) : undefined,
   });
-  if (p.hp <= 0) killPlayer(m, rt, p, attacker, weapon);
-}
-
-export function killPlayer(
-  m: Match,
-  rt: PlayerRuntime,
-  p: Player,
-  killer: PlayerRuntime | null,
-  weapon: WeaponId | "",
-): void {
-  if (!p.alive) return;
-  p.alive = false;
-  p.hp = 0;
-  p.diedAt = m.clock;
-  p.extractStartedAt = 0;
-  p.extractId = "";
-  cancelReload(p);
-  cancelHeal(p);
-  rt.exit = "dead";
-  rt.queue.length = 0;
-  rt.triggerHeld = false;
-  rt.pressPending = false;
-
-  const killerPlayer = killer ? m.state.players.get(killer.id) : undefined;
-  if (killer && killerPlayer && killer !== rt) {
-    killerPlayer.kills = Math.min(255, killerPlayer.kills + 1);
-    rt.killedBy = killer.nickname;
-    // A bullet still in flight can kill after its shooter already extracted or died: keep their
-    // frozen result in line with the settlement (which reads state kills) and resend it.
-    if (killer.outcome) {
-      killer.outcome = { ...killer.outcome, kills: killerPlayer.kills };
-      if (!killer.isBot) m.emit({ type: "outcome", to: killer.id, msg: killer.outcome });
-    }
+  emitSound(m, rt, SoundKind.hurt, p.x, p.y);
+  syncPublic(rt);
+  if (p.hp <= 0) {
+    killPlayer(m, rt, attacker, weapon);
+    // The thud of the body: shorter range than the death cry, heard as a separate cue.
+    emitSound(m, rt, SoundKind.bodyFall, p.x, p.y);
   }
-  dropOnDeath(m, rt, p);
-  m.emit({
-    type: "kill",
-    msg: {
-      victim: rt.nickname,
-      victimId: rt.id,
-      killer: killer && killer !== rt ? killer.nickname : "",
-      killerId: killer && killer !== rt ? killer.id : "",
-      weapon,
-    },
-  });
-  m.finishPlayer(rt, "dead");
 }
 
 function round2(v: number): number {
