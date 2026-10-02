@@ -1,49 +1,37 @@
-export type Phase = "lockin" | "open" | "ended";
-
-export type ExitType = "extract" | "dead" | "timeout";
+import type { ExitType, ItemRef } from "./protocol.js";
 
 export interface MatchSettlementParticipant {
+  /** null for bots. */
   userId: string | null;
+  nickname: string;
   isBot: boolean;
-  entryCents: string;
-  payoutCents: string;
-  deltaCents: string;
   exitType: ExitType;
-  exitOrder: number | null;
+  kills: number;
+  extracted: ItemRef[];
+  lost: ItemRef[];
 }
 
+/** Game server → web API (HMAC-signed) when a match ends. */
 export interface MatchSettlementPayload {
   matchId: string;
-  entryTierCents: string;
+  mapSeed: number;
   startedAt: number;
   endedAt: number;
   participants: MatchSettlementParticipant[];
 }
 
-/** HMAC from game server when a human extracts — credit balance immediately; final settle trues up the delta. */
-export interface MatchExtractInstantPayload {
-  matchId: string;
-  userId: string;
-  payoutCents: string;
-}
-
-/** Sent to one client right after death or extract (before match `settled`). Extract payout uses extractors count *so far*; final totals may change if more players extract. */
-export interface PlayerOutcomePayload {
-  matchId: string;
-  userId: string;
-  entryCents: string;
-  payoutCents: string;
-  deltaCents: string;
-  exitType: ExitType;
-  exitOrder: number | null;
-  provisional: boolean;
-  totalExtractorsSoFar: number;
-}
-
-export interface MatchmakingJoinTicket {
+/**
+ * Issued by the web API (POST /api/matches/join) and verified by the game server in onAuth.
+ * `sig` = hex HMAC-SHA256 over `${userId}.${nickname}.${issuedAt}` with GAME_SERVER_HMAC_SECRET.
+ */
+export interface JoinTicket {
   userId: string;
   nickname: string;
-  entryTierCents: string;
   issuedAt: number;
-  signature: string;
+  sig: string;
+}
+
+/** Payload string that a JoinTicket signature covers. */
+export function joinTicketPayload(t: Pick<JoinTicket, "userId" | "nickname" | "issuedAt">): string {
+  return `${t.userId}.${t.nickname}.${t.issuedAt}`;
 }
