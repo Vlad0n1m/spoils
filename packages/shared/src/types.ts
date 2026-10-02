@@ -18,6 +18,11 @@ export interface MatchSettlementPayload {
   startedAt: number;
   endedAt: number;
   participants: MatchSettlementParticipant[];
+  /**
+   * Valuable items still on the map at the end: on the ground (dropped by the dead, swapped out)
+   * or inside unopened chests. In the economy they go to the lost pool (docs/GAME_DESIGN.md §5, §7).
+   */
+  leftOnMap: ItemRef[];
 }
 
 /**

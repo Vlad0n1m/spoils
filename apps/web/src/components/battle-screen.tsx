@@ -5,12 +5,14 @@ import type { Room } from "colyseus.js";
 import {
   BattleState,
   MATCH,
+  ROOMS,
   S2C,
   type JoinTicket,
   type MatchSettlementPayload,
   type OutcomeMsg,
 } from "@extract/shared";
 import { getColyseusClient } from "@/lib/colyseus";
+import { describeRoomExit, errorCodeAndReason, type RoomExit } from "@/lib/room-exit";
 import type { GameRendererApi, HudSnapshot, RendererOptions } from "@/game/types";
 import { Hud } from "./hud";
 import { MatchOutcomeOverlay } from "./match-outcome-overlay";
@@ -40,8 +42,9 @@ interface BattleCallbacks {
   onHud: (s: HudSnapshot) => void;
   onOutcome: (o: OutcomeMsg) => void;
   onSettled: (p: MatchSettlementPayload) => void;
-  onDisconnect: () => void;
-  onError: (message: string) => void;
+  /** The room closed on us; `exit` explains a kick (e.g. JOINED_ELSEWHERE), null = plain close. */
+  onDisconnect: (exit: RoomExit | null) => void;
+  onError: (exit: RoomExit) => void;
 }
 
 /**
@@ -62,10 +65,15 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
         return;
       }
       room = joined;
+      if (joined.name && joined.name !== ROOMS.BATTLE) {
+        // A stale or wrong room id: never feed a non-battle state to the renderer.
+        void joined.leave().catch(() => {});
+        throw new Error(`unexpected_room_${joined.name}`);
+      }
       joined.onMessage(S2C.OUTCOME, (msg: OutcomeMsg) => cb.onOutcome(msg));
       joined.onMessage(S2C.SETTLED, (msg: MatchSettlementPayload) => cb.onSettled(msg));
-      joined.onLeave(() => {
-        if (!disposed) cb.onDisconnect();
+      joined.onLeave((code, reason) => {
+        if (!disposed) cb.onDisconnect(describeRoomExit(code, reason));
       });
 
       // Dynamic import keeps Pixi out of the server bundle and out of the lobby's first load.
@@ -76,7 +84,15 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
       renderer = new Renderer({ mountEl, room: joined, onHud: cb.onHud });
       await renderer.start();
     } catch (e) {
-      if (!disposed) cb.onError(e instanceof Error ? e.message : "battle_join_failed");
+      if (disposed) return;
+      const { code, reason } = errorCodeAndReason(e);
+      cb.onError(
+        describeRoomExit(code, reason) ?? {
+          title: "Couldn't join the raid",
+          message: reason || "battle_join_failed",
+          action: "back",
+        },
+      );
     }
   })();
 
@@ -94,10 +110,11 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
   const sessionRef = useRef<{ dispose: () => void } | null>(null);
   const disposeTimerRef = useRef<number | undefined>(undefined);
   const [hud, setHud] = useState<HudSnapshot>(EMPTY_HUD);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<RoomExit | null>(null);
   const [outcome, setOutcome] = useState<OutcomeMsg | null>(null);
   const [settlement, setSettlement] = useState<MatchSettlementPayload | null>(null);
   const [disconnected, setDisconnected] = useState(false);
+  const [kick, setKick] = useState<RoomExit | null>(null);
 
   useEffect(() => {
     // StrictMode runs cleanup + effect back to back: the deferred dispose is cancelled by the
@@ -108,7 +125,10 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
         onHud: setHud,
         onOutcome: setOutcome,
         onSettled: setSettlement,
-        onDisconnect: () => setDisconnected(true),
+        onDisconnect: (exit) => {
+          setKick(exit);
+          setDisconnected(true);
+        },
         onError: setErr,
       });
     }
@@ -136,9 +156,9 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
       {err ? (
         <div className="absolute inset-0 grid place-items-center bg-black/70 p-4">
           <div className="toon-panel w-full max-w-md bg-[#161b28]/95 p-8 text-center">
-            <h2 className="toon-text text-3xl tracking-wide text-rose-400">Couldn&apos;t join the raid</h2>
-            <p className="mt-4 break-words font-mono text-sm text-white/60" role="alert">
-              {err}
+            <h2 className="toon-text text-3xl tracking-wide text-rose-400">{err.title}</h2>
+            <p className="font-body mt-4 break-words text-base leading-relaxed text-white/70" role="alert">
+              {err.message}
             </p>
             <button type="button" onClick={onLeave} className="toon-btn mt-8 min-h-12 w-full text-lg tracking-wide">
               Back to lobby
@@ -165,6 +185,7 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
         settlement={settlement}
         raidEnded={hud.phase === "ended" || settlement !== null}
         disconnected={disconnected}
+        kick={kick}
         onContinue={onLeave}
       />
     </div>

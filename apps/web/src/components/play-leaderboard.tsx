@@ -46,7 +46,7 @@ export function PlayLeaderboard() {
       <Reveal as="h2" delay={40} className="toon-text text-3xl tracking-wide text-white md:text-4xl">
         Recent raids
       </Reveal>
-      <p className="mt-3 text-sm leading-relaxed text-white/55">Who made it out — and with what.</p>
+      <p className="font-body mt-3 text-base leading-relaxed text-white/65">Who made it out — and with what.</p>
 
       {rows === null ? (
         <ul className="mt-6 space-y-2" aria-hidden>
@@ -55,7 +55,7 @@ export function PlayLeaderboard() {
           ))}
         </ul>
       ) : rows.length === 0 ? (
-        <p className="mt-6 rounded-2xl border-2 border-dashed border-white/15 px-4 py-8 text-center text-sm text-white/50">
+        <p className="font-body mt-6 rounded-2xl border-2 border-dashed border-white/15 px-4 py-8 text-center text-base text-white/60">
           No raids yet. Be the first to extract.
         </p>
       ) : (
@@ -81,7 +81,7 @@ export function PlayLeaderboard() {
                 <span className="w-16 text-right text-sm tabular-nums text-white/75">
                   {r.kills} {r.kills === 1 ? "kill" : "kills"}
                 </span>
-                <span className="w-20 text-right text-xs text-white/40">{timeAgo(r.endedAt)}</span>
+                <span className="font-body w-20 text-right text-xs text-white/50">{timeAgo(r.endedAt)}</span>
               </li>
             );
           })}

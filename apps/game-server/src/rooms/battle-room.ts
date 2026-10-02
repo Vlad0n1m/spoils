@@ -1,4 +1,4 @@
-import { Room, ServerError, type Client } from "@colyseus/core";
+import { Room, type Client } from "@colyseus/core";
 import {
   C2S,
   MATCH,
@@ -9,14 +9,16 @@ import {
   type JoinedMsg,
   type MatchSettlementPayload,
 } from "@extract/shared";
-import { verifyJoinTicket } from "../auth/ticket.js";
 import { CLOSE } from "./close-codes.js";
+import { authenticate, isLaunchKey, releasePendingSeatsOf } from "./room-auth.js";
 import { postSettlement } from "../net/settle.js";
 import { Match } from "../sim/match.js";
 import type { MatchEvent, RosterEntry } from "../sim/types.js";
 
 interface CreateOptions {
   roster: RosterEntry[];
+  /** Must equal LAUNCH_KEY: only MatchmakingRoom may create battles. */
+  launchKey: string;
 }
 
 /** Most samples accepted in one INPUT message (clients may batch after a hitch). */
@@ -36,9 +38,27 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
   private readonly owners = new Map<string, Client>();
   private finishing = false;
 
+  /**
+   * Colyseus starts the patch interval before onCreate and never stops it when onCreate throws, so
+   * every refused create would leak a 20 Hz timer for good. Stop it, then refuse.
+   */
+  private abortCreate(reason: string): never {
+    this.patchRate = 0;
+    this.clock.clear();
+    this.clock.stop();
+    throw new Error(reason);
+  }
+
+  /** Runs before Colyseus finds, creates or reserves anything: no valid ticket, no seat. */
+  static override async onAuth(_token: string, options: unknown): Promise<JoinTicket> {
+    return authenticate(options);
+  }
+
   override onCreate(opts: CreateOptions) {
+    // Colyseus forwards client options of /matchmake/* to onCreate: never take a roster from them.
+    if (!isLaunchKey(opts?.launchKey)) this.abortCreate("battle: not launched by matchmaking");
     const roster = sanitizeRoster(opts?.roster);
-    if (!roster) throw new Error("battle: invalid roster");
+    if (!roster) this.abortCreate("battle: invalid roster");
     this.match = new Match({ roster });
     this.setState(this.match.state);
     // Double the humans: a reconnecting player may join before their stale socket is dropped.
@@ -69,12 +89,24 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     this.setSimulationInterval((dt) => this.tick(dt), SERVER_TICK_MS);
   }
 
-  override onAuth(_client: Client, options: { ticket?: unknown }) {
-    const ticket = verifyJoinTicket(options?.ticket);
-    if (!ticket) throw new ServerError(401, "invalid_ticket");
-    const inRoster = this.match.allRuntimes().some((rt) => !rt.isBot && rt.userId === ticket.userId);
-    if (!inRoster) throw new ServerError(403, "not_in_roster");
-    return ticket;
+  /**
+   * Seats count toward maxClients from the HTTP reservation on, so only players of this roster may
+   * hold one (and only one pending each); anyone else would lock the room against its players.
+   */
+  protected override async _reserveSeat(
+    sessionId: string,
+    joinOptions?: unknown,
+    authData?: unknown,
+    seconds?: number,
+    allowReconnection = false,
+    devModeReconnection?: boolean,
+  ): Promise<boolean> {
+    if (!allowReconnection) {
+      const userId = (authData as JoinTicket | undefined)?.userId;
+      if (!userId || !this.match.allRuntimes().some((rt) => !rt.isBot && rt.userId === userId)) return false;
+      await releasePendingSeatsOf(this, userId);
+    }
+    return super._reserveSeat(sessionId, joinOptions, authData, seconds, allowReconnection, devModeReconnection);
   }
 
   override onJoin(client: Client, _options: unknown, ticket: JoinTicket) {

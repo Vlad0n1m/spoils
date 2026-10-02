@@ -17,10 +17,10 @@ import {
   ARMOR,
   C2S,
   generateMap,
+  HEAL,
   getCollisionIndex,
   INPUT_DT_MS,
   MATCH,
-  PLAYER,
   RARITY_COLORS,
   S2C,
   WEAPONS,
@@ -42,10 +42,11 @@ import {
 import { COLORS, destroyTextures, loadTextures, type Textures } from "./assets";
 import { Effects } from "./effects";
 import { ChestView, ExtractView, ItemView, PlayerView } from "./entities";
-import { buildHud, extractStatus } from "./hud";
+import { buildHud, extractStatus, stickyCounts, type PlayerCounts } from "./hud";
 import { InputController } from "./input";
 import { Minimap } from "./minimap";
-import { decayFactor, Predictor } from "./prediction";
+import { canStartHeal, decayFactor, inputCancelsHeal, Predictor } from "./prediction";
+import { DelayQueue, shotCentre } from "./shots";
 import type { GameRendererApi, HudSnapshot, KillFeedEntry, RendererOptions } from "./types";
 import { WorldView, type ViewRect } from "./world";
 
@@ -79,6 +80,8 @@ export class GameRenderer implements GameRendererApi {
   private tex: Textures | null = null;
   private started = false;
   private stopped = false;
+  /** room.onLeave fired (or the socket is gone): nothing may be sent any more. */
+  private left = false;
 
   private readonly world = new Container();
   private readonly groundSlot = new Container();
@@ -98,6 +101,8 @@ export class GameRenderer implements GameRendererApi {
   private idx: CollisionIndex | null = null;
   private minimap: Minimap | null = null;
   private effects: Effects | null = null;
+  /** Other players' shots / hits, waiting to be shown on the interpolated (past) timeline. */
+  private readonly remoteFx = new DelayQueue();
   private input: InputController | null = null;
 
   private players = new Map<string, Tracked<Player, PlayerView>>();
@@ -120,6 +125,8 @@ export class GameRenderer implements GameRendererApi {
   private corrY = 0;
   private inputAcc = 0;
   private aim = 0;
+  /** Fire state of the last input sent (semi-auto weapons fire on a press). */
+  private prevFire = false;
   /** Local player's rendered position (what the camera follows and aim is measured from). */
   private selfRender: { x: number; y: number } | null = null;
   private camX = WORLD.WIDTH / 2;
@@ -135,6 +142,8 @@ export class GameRenderer implements GameRendererApi {
   private pingMs: number | null = null;
   private killFeed: Array<KillFeedEntry & { receivedAt: number }> = [];
   private killSeq = 0;
+  /** Last player counts taken while the raid was running (the end of the match clears "alive"). */
+  private counts: PlayerCounts | null = null;
 
   constructor(private readonly opts: RendererOptions) {}
 
@@ -153,6 +162,7 @@ export class GameRenderer implements GameRendererApi {
   async start(): Promise<void> {
     if (this.started || this.stopped) return;
     this.started = true;
+    this.watchLeave();
 
     const app = new Application();
     await app.init({
@@ -202,12 +212,18 @@ export class GameRenderer implements GameRendererApi {
     this.input = new InputController(app.canvas, {
       interact: () => this.sendIntent(C2S.INTERACT, {}),
       reload: () => this.sendIntent(C2S.RELOAD, {}),
-      selectSlot: (slot) => this.sendIntent(C2S.SWITCH, { slot }),
+      selectSlot: (slot) => this.switchSlot(slot),
       toggleSlot: () => {
         const me = this.state?.players.get(this.selfId);
-        if (me) this.sendIntent(C2S.SWITCH, { slot: me.active === 1 ? 0 : 1 });
+        if (me) this.switchSlot(me.active === 1 ? 0 : 1);
       },
-      heal: (kind) => this.sendIntent(C2S.HEAL, { kind }),
+      heal: (kind) => {
+        const me = this.state?.players.get(this.selfId);
+        if (!this.sendIntent(C2S.HEAL, { kind }) || !me || !this.predictor.isInitialized) return;
+        // Predict the slow-down now instead of one round trip later (the server applies the
+        // intent before the next input). Same checks as the server's startHeal().
+        if (canStartHeal(me, kind) && !this.predictor.healingAhead()) this.predictor.predictHealStart(HEAL[kind].MS);
+      },
     });
     this.input.attach();
 
@@ -216,6 +232,7 @@ export class GameRenderer implements GameRendererApi {
 
     this.sendPing();
     this.pingTimer = setInterval(() => this.sendPing(), PING_INTERVAL_MS);
+    this.disposers.push(() => this.stopPing());
 
     this.lastFrameAt = performance.now();
     app.ticker.add(this.tick);
@@ -236,10 +253,7 @@ export class GameRenderer implements GameRendererApi {
         /* the room may already be gone */
       }
     }
-    if (this.pingTimer !== null) {
-      clearInterval(this.pingTimer);
-      this.pingTimer = null;
-    }
+    this.stopPing();
     this.input?.detach();
     this.input = null;
 
@@ -255,6 +269,7 @@ export class GameRenderer implements GameRendererApi {
     this.minimap = null;
     this.effects?.destroy();
     this.effects = null;
+    this.remoteFx.clear();
 
     if (this.app) {
       this.app.ticker.remove(this.tick);
@@ -269,22 +284,75 @@ export class GameRenderer implements GameRendererApi {
     this.idx = null;
   }
 
-  private sendIntent(type: string, payload: object) {
-    if (this.stopped) return;
-    const me = this.state?.players.get(this.selfId);
-    if (!me || !me.alive || me.extractedAt > 0) return;
+  // ---------------------------------------------------------------------------------------
+  // Outgoing messages. Every room.send goes through send(): once the room has closed the
+  // browser would log "WebSocket is already in CLOSING or CLOSED state" for each attempt.
+
+  private watchLeave() {
+    const room = this.opts.room;
+    const onLeave = () => {
+      this.left = true;
+      this.stopPing();
+    };
+    room.onLeave(onLeave);
+    this.disposers.push(() => room.onLeave.remove(onLeave));
+  }
+
+  /** The socket can still carry messages. */
+  private canSend(): boolean {
+    if (this.stopped || this.left) return false;
+    try {
+      if (!this.opts.room.connection?.isOpen) return false;
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
+  /** The local player can still act: room open, raid running, player alive and on the map. */
+  private canAct(): boolean {
+    if (!this.canSend()) return false;
+    const state = this.state;
+    if (!state || state.phase === "ended") return false;
+    const me = state.players.get(this.selfId);
+    return !!me && me.alive && me.extractedAt === 0;
+  }
+
+  private send(type: string, payload: object): boolean {
+    if (!this.canSend()) return false;
     try {
       this.opts.room.send(type, payload);
+      return true;
     } catch {
-      /* socket closing */
+      return false;
     }
   }
 
+  private sendIntent(type: string, payload: object): boolean {
+    return this.canAct() && this.send(type, payload);
+  }
+
+  /** SWITCH intent; a real switch cancels a running heal on the server, so predict that too. */
+  private switchSlot(slot: number) {
+    const me = this.state?.players.get(this.selfId);
+    if (!this.sendIntent(C2S.SWITCH, { slot }) || !me) return;
+    if (slot !== me.active && me.slots.at(slot)?.weapon) this.predictor.predictHealCancel();
+  }
+
   private sendPing() {
-    try {
-      this.opts.room.send(C2S.PING, { t: performance.now() });
-    } catch {
-      /* socket closing */
+    // Pings only matter for the HUD while playing; after death / extraction / the end of the
+    // raid the room is about to close, so stop instead of writing into a dying socket.
+    if (!this.canAct()) {
+      if (!this.canSend() || this.state?.phase === "ended") this.stopPing();
+      return;
+    }
+    this.send(C2S.PING, { t: performance.now() });
+  }
+
+  private stopPing() {
+    if (this.pingTimer !== null) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
     }
   }
 
@@ -422,8 +490,10 @@ export class GameRenderer implements GameRendererApi {
 
     const me = state.players.get(this.selfId);
     if (!me) return;
-    if (!me.alive || me.extractedAt > 0 || !this.idx) {
+    const timing = { clockMs: state.clockMs, healUntil: me.healUntil };
+    if (!me.alive || me.extractedAt > 0 || !this.idx || state.phase === "ended" || this.left) {
       // Not controllable (or the map is not built yet): follow the server directly.
+      this.predictor.setTiming(timing);
       this.predictor.reset(me.x, me.y);
       this.prevPredX = me.x;
       this.prevPredY = me.y;
@@ -432,12 +502,20 @@ export class GameRenderer implements GameRendererApi {
       return;
     }
     if (!this.predictor.isInitialized) {
-      this.predictor.reset(me.x, me.y);
+      this.predictor.reconcile(me.x, me.y, me.lastSeq, timing);
       this.prevPredX = me.x;
       this.prevPredY = me.y;
       return;
     }
-    const { dx, dy } = this.predictor.reconcile(me.x, me.y, me.lastSeq);
+    const { dx, dy, resynced } = this.predictor.reconcile(me.x, me.y, me.lastSeq, timing);
+    if (resynced) {
+      // Reconnect: the server restarted the input sequence. Jump to it and keep going.
+      this.prevPredX = this.predictor.x;
+      this.prevPredY = this.predictor.y;
+      this.corrX = 0;
+      this.corrY = 0;
+      return;
+    }
     if (dx === 0 && dy === 0) return;
     // Shift the current interpolation segment with the correction…
     this.prevPredX += dx;
@@ -456,30 +534,51 @@ export class GameRenderer implements GameRendererApi {
   private onShot(m: ShotMsg) {
     if (!this.effects || !Array.isArray(m.a) || !(m.w in WEAPONS)) return;
     const now = performance.now();
-    let x = m.x;
-    let y = m.y;
+    const w = m.w as WeaponId;
+    const muzzle = WEAPONS[w].muzzle;
     const isSelf = m.s === this.selfId;
     if (isSelf && this.selfRender && m.a.length) {
       // Our own shots start at the gun we see (the predicted position), not where the
       // server had us one round trip ago.
       const a = m.a.reduce((s, v) => s + v, 0) / m.a.length;
-      const muzzle = WEAPONS[m.w as WeaponId].muzzle;
-      x = this.selfRender.x + Math.cos(a) * muzzle;
-      y = this.selfRender.y + Math.sin(a) * muzzle;
+      const { x: cx, y: cy } = this.selfRender;
+      const x = cx + Math.cos(a) * muzzle;
+      const y = cy + Math.sin(a) * muzzle;
+      this.effects.shot(this.idx, m.s, w, cx, cy, x, y, m.a, true, now);
+      return;
     }
-    this.effects.shot(this.idx, m.s, m.w, x, y, m.a, isSelf, now);
+    // Walls are raycast from the shooter's centre, like the server's bullets.
+    const c = shotCentre(m, muzzle);
+    const play = (t: number) => this.effects?.shot(this.idx, m.s, w, c.x, c.y, m.x, m.y, m.a, isSelf, t);
+    // Other players are drawn INTERP_DELAY_MS in the past: show their shots on the same timeline.
+    if (isSelf) play(now);
+    else this.remoteFx.push(now + INTERP_DELAY_MS, play);
   }
 
+  /**
+   * Each part of a hit is shown on the timeline of the body it belongs to: the tracer cut on the
+   * shooter's (our shots are drawn at once, remote ones INTERP_DELAY_MS late), the burst and the
+   * damage number on the target's.
+   */
   private onHit(m: HitMsg) {
     if (!this.effects) return;
     const now = performance.now();
-    this.effects.hit(m.s, m.x, m.y, !!m.ar, now);
-    if (m.t === this.selfId) {
-      if (m.d > 0) this.effects.damageNumber(m.x, m.y, m.d, COLORS.damageTaken, now);
-      this.effects.hurtFlash(m.d);
-    } else if (m.s === this.selfId && m.d > 0) {
-      this.effects.damageNumber(m.x, m.y, m.d, m.ar ? COLORS.hitArmor : COLORS.damageDealt, now);
-    }
+    const at = (remote: boolean, fn: (t: number) => void) => {
+      if (remote) this.remoteFx.push(now + INTERP_DELAY_MS, fn);
+      else fn(now);
+    };
+    at(m.s !== this.selfId, () => this.effects?.stopTracer(m.s, m.x, m.y));
+    at(m.t !== this.selfId, (t) => {
+      const fx = this.effects;
+      if (!fx) return;
+      fx.hitBurst(m.x, m.y, !!m.ar, t);
+      if (m.t === this.selfId) {
+        if (m.d > 0) fx.damageNumber(m.x, m.y, m.d, COLORS.damageTaken, t);
+        fx.hurtFlash(m.d);
+      } else if (m.s === this.selfId && m.d > 0) {
+        fx.damageNumber(m.x, m.y, m.d, m.ar ? COLORS.hitArmor : COLORS.damageDealt, t);
+      }
+    });
   }
 
   private onKill(m: KillMsg) {
@@ -527,14 +626,20 @@ export class GameRenderer implements GameRendererApi {
 
     const clock = this.clockNow(now);
     const me = state.players.get(this.selfId) ?? null;
-    const controllable = !!me && me.alive && me.extractedAt === 0 && state.phase !== "ended" && !!this.idx;
+    const controllable = !!this.idx && this.canAct();
 
-    // Fixed-rate input loop. Bursts are capped so a hidden tab does not dump a backlog.
-    this.inputAcc = Math.min(this.inputAcc + dt, INPUT_DT_MS * 3);
-    while (this.inputAcc >= INPUT_DT_MS) {
-      this.inputAcc -= INPUT_DT_MS;
-      if (controllable && me) this.sendInput(me, clock);
-      else this.input?.sampleFire();
+    // Fixed-rate input loop, only while the player can act. Bursts are capped so a hidden tab
+    // does not dump a backlog.
+    if (controllable) {
+      this.inputAcc = Math.min(this.inputAcc + dt, INPUT_DT_MS * 3);
+      while (this.inputAcc >= INPUT_DT_MS) {
+        this.inputAcc -= INPUT_DT_MS;
+        if (!this.sendInput()) break;
+      }
+    } else {
+      this.inputAcc = 0;
+      // Drop a click made while out of control so it does not fire on the first input later.
+      this.input?.sampleFire();
     }
 
     // Local player: predicted position, smoothed between input steps, plus decaying correction.
@@ -549,7 +654,7 @@ export class GameRenderer implements GameRendererApi {
       const y = this.prevPredY + (this.predictor.y - this.prevPredY) * k + this.corrY;
       this.selfRender = { x, y };
       this.updateAim(w, h);
-    } else if (me && me.alive && me.extractedAt === 0) {
+    } else if (me && me.alive && me.extractedAt === 0 && !this.left) {
       // Map not built yet or the match is over: show the server position as is.
       this.selfRender = { x: me.x, y: me.y };
     }
@@ -559,6 +664,7 @@ export class GameRenderer implements GameRendererApi {
       this.camX = this.selfRender.x;
       this.camY = this.selfRender.y;
     }
+    this.remoteFx.flush(now);
     const shake = this.effects?.update(now, dt, w, h) ?? { x: 0, y: 0 };
     this.world.scale.set(this.zoom);
     this.world.position.set(w / 2 - this.camX * this.zoom + shake.x, h / 2 - this.camY * this.zoom + shake.y);
@@ -655,30 +761,36 @@ export class GameRenderer implements GameRendererApi {
     this.minimap = new Minimap(map);
     this.app.stage.addChild(this.minimap.root);
     // Prediction was waiting for the collision index: start it from the server position.
-    const me = this.state?.players.get(this.selfId);
-    if (me) {
+    const state = this.state;
+    const me = state?.players.get(this.selfId);
+    if (state && me) {
+      this.predictor.setTiming({ clockMs: state.clockMs, healUntil: me.healUntil });
       this.predictor.reset(me.x, me.y);
       this.prevPredX = me.x;
       this.prevPredY = me.y;
     }
   }
 
-  private sendInput(me: Player, clock: number) {
+  /** Sends one input sample and predicts it. Returns false when nothing could be sent. */
+  private sendInput(): boolean {
     const input = this.input;
-    if (!input) return;
+    if (!input) return false;
     const { mx, my } = input.movement();
     const fire = input.sampleFire();
     const seq = this.predictor.nextSeq();
     const sample: InputSample = { seq, mx, my, aim: this.aim, fire };
-    try {
-      this.opts.room.send(C2S.INPUT, sample);
-    } catch {
-      return;
-    }
-    const healing = me.healUntil > clock && me.healKind !== "";
+    if (!this.send(C2S.INPUT, sample)) return false;
+    // Same rule as the server (healSpeedMult): slowed while healUntil > 0 at the clock the
+    // server will apply this input; re-derived on every reconcile from the newest heal timer.
+    const speedMult = this.predictor.nextSpeedMult(seq);
     this.prevPredX = this.predictor.x;
     this.prevPredY = this.predictor.y;
-    this.predictor.apply({ seq, mx, my, speedMult: healing ? PLAYER.HEAL_SPEED_MULT : 1 });
+    this.predictor.apply({ seq, mx, my, speedMult });
+    // A shot cancels the heal on the server right after this input: later inputs are full speed.
+    const me = this.state?.players.get(this.selfId);
+    if (me && inputCancelsHeal(me, fire, this.prevFire)) this.predictor.predictHealCancel();
+    this.prevFire = fire;
+    return true;
   }
 
   /** Aim from the rendered player position to the cursor, in world space (shake excluded). */
@@ -693,14 +805,17 @@ export class GameRenderer implements GameRendererApi {
 
   private emitHud(state: BattleState, clock: number, now: number) {
     while (this.killFeed.length && now - this.killFeed[0]!.receivedAt > KILL_FEED_TTL_MS) this.killFeed.shift();
-    const snapshot: HudSnapshot = buildHud({
+    let snapshot: HudSnapshot = buildHud({
       state,
       selfId: this.selfId,
       selfPos: this.selfRender,
       clockMs: clock,
       killFeed: this.killFeed.map(({ receivedAt: _r, ...e }) => e),
       pingMs: this.pingMs,
+      idx: this.idx,
     });
+    this.counts = stickyCounts(this.counts, snapshot);
+    snapshot = { ...snapshot, aliveCount: this.counts.alive, totalPlayers: this.counts.total };
     try {
       this.opts.onHud(snapshot);
     } catch (err) {

@@ -14,6 +14,8 @@ const itemRefSchema = z.object({
   type: z.string().min(1).max(32),
   rarity: z.number().int().min(0).max(3),
   level: z.number().int().min(0).max(3).optional(),
+  /** Remaining armor durability (armor only); fractional after partial absorbs. */
+  dur: z.number().finite().min(0).max(10_000).optional(),
 });
 
 const participantSchema = z.object({
@@ -23,8 +25,8 @@ const participantSchema = z.object({
   isBot: z.boolean(),
   exitType: z.enum(["extract", "dead", "timeout"]),
   kills: z.number().int().min(0),
-  extracted: z.array(itemRefSchema).max(16),
-  lost: z.array(itemRefSchema).max(16),
+  extracted: z.array(itemRefSchema).max(32),
+  lost: z.array(itemRefSchema).max(32),
 });
 
 const bodySchema = z.object({
@@ -33,6 +35,12 @@ const bodySchema = z.object({
   startedAt: z.number().finite(),
   endedAt: z.number().finite(),
   participants: z.array(participantSchema).max(64),
+  /**
+   * Valuables still on the map at the end (ground + unopened chests) — they go to the lost pool.
+   * Required: a payload without it comes from an outdated game server and must not be stored.
+   * Generous bound: every chest roll on a big map plus everything dropped by the dead.
+   */
+  leftOnMap: z.array(itemRefSchema).max(4096),
 }) satisfies z.ZodType<MatchSettlementPayload>;
 
 const MAX_TIMESTAMP_SKEW_MS = 60_000;

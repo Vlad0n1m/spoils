@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MATCH } from "@extract/shared";
+import { Chest, MATCH } from "@extract/shared";
 import { damagePlayer } from "./combat.js";
+import { newArmorDrop, newWeaponDrop, spawnGroundItem } from "./inventory.js";
 import { addExtract, giveWeapon, ids, pl, place, run, testMatch } from "./test-utils.js";
 
 const CH = MATCH.EXTRACT_CHANNEL_MS;
@@ -32,6 +33,9 @@ test("standing in an open extract for the channel time extracts with all valuabl
   assert.ok(out && out.type === "outcome");
   assert.equal(out.msg.exit, "extract");
   assert.deepEqual(out.msg.extracted.map((r) => r.uid).sort(), ["arm", uid].sort());
+  assert.deepEqual(out.msg.extracted.find((r) => r.uid === "arm"),
+    { uid: "arm", kind: "armor", type: "armor", rarity: 1, level: 2, dur: 40 });
+  assert.equal(out.msg.extracted.find((r) => r.uid === uid)!.dur, undefined);
   assert.equal(out.msg.lost.length, 0);
   assert.equal(m.runtime(a!)!.exit, "extract");
 });
@@ -128,4 +132,41 @@ test("the match ends early once no human is left on the map", () => {
   assert.equal(s.participants[1]!.exitType, "timeout");
   assert.equal(s.participants[1]!.userId, null);
   assert.equal(s.participants[1]!.isBot, true);
+});
+
+test("settlement lists valuables left on the map: ground items and unopened chests, armor with durability", () => {
+  const m = testMatch(1);
+  const [a] = ids(m);
+  const ground = newWeaponDrop(m, "shotgun", 2);
+  spawnGroundItem(m, ground, 1200, 1200);
+  const worn = newArmorDrop(m, 2);
+  if (worn.kind === "armor") worn.dur = 33.5;
+  spawnGroundItem(m, worn, 1250, 1200);
+  spawnGroundItem(m, { kind: "ammo", ammo: "light", qty: 30 }, 1300, 1200);
+  const chest = new Chest();
+  chest.id = "c0";
+  chest.x = 2500;
+  chest.y = 2500;
+  m.state.chests.set(chest.id, chest);
+  const inChest = newArmorDrop(m, 3);
+  m.chestContents.set(chest.id, [inChest, { kind: "medkit", qty: 1 }]);
+  const carried = giveWeapon(m, a!, 1, "rifle", 1);
+
+  const p = pl(m, a!);
+  p.hp = 1;
+  damagePlayer(m, p, 50, null, "", 0, 0);
+  m.step(50);
+  assert.ok(m.ended);
+  const s = m.settlement!;
+  const left = [...s.leftOnMap].sort((x, y) => x.uid.localeCompare(y.uid));
+  const expected = [
+    { uid: (ground as { uid: string }).uid, kind: "weapon", type: "shotgun", rarity: 2 },
+    { uid: (worn as { uid: string }).uid, kind: "armor", type: "armor", rarity: 1, level: 2, dur: 33.5 },
+    { uid: (inChest as { uid: string }).uid, kind: "armor", type: "armor", rarity: 2, level: 3, dur: 180 },
+  ];
+  // The dead player's rifle either broke (lost) or lies next to the body (left on the map).
+  const rifleDropped = m.runtime(a!)!.dropped.some((r) => r.uid === carried);
+  if (rifleDropped) expected.push({ uid: carried, kind: "weapon", type: "rifle", rarity: 1 });
+  else assert.deepEqual(s.participants[0]!.lost.map((r) => r.uid), [carried]);
+  assert.deepEqual(left, expected.sort((x, y) => x.uid.localeCompare(y.uid)));
 });

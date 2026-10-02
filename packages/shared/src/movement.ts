@@ -39,6 +39,14 @@ export function sanitizeInput(raw: unknown): InputSample | null {
   };
 }
 
+/**
+ * Movement multiplier while healing: an input is slowed iff the heal channel is still running at
+ * the server clock the input is applied at (a finished or cancelled heal resets healUntil to 0).
+ */
+export function healSpeedMult(healUntil: number, atClockMs: number): number {
+  return healUntil > 0 && atClockMs < healUntil ? PLAYER.HEAL_SPEED_MULT : 1;
+}
+
 /** Apply one input's movement for INPUT_DT_MS. `speedMult` covers slow-downs (e.g. healing). */
 export function applyMovement(
   idx: CollisionIndex,

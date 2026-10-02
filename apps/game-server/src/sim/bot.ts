@@ -2,7 +2,9 @@
  * Bots drive their player through exactly the same pipeline as humans: they enqueue InputSamples
  * at INPUT_HZ (movement, aim, trigger) and call the same interact / reload / switch / heal intents.
  * They get no extra powers — no wall hacks beyond line of sight, no perfect aim — and are tuned to
- * be beatable: reaction delay, aim error growing with distance, trigger pulses and bursts.
+ * be beatable: reaction delay, aim error growing with distance and target speed, a slow trigger
+ * finger and bursts. For the first BOT_PEACE_MS they only loot (and answer fire), and each bot has
+ * its own moment to head for extraction so the core loop is visible in every match.
  */
 
 import {
@@ -24,10 +26,41 @@ import type { Match } from "./match.js";
 import { navGridFor, type Pt } from "./nav.js";
 import type { PlayerRuntime } from "./types.js";
 
+/** Opening window: bots loot and do not start fights (they still answer an attacker). */
+export const BOT_PEACE_MS = 30_000;
+/** During the peace window a bot shoots back only at someone who hit it this recently. */
+export const BOT_RETALIATE_MS = 3_000;
+/** Bots do not see further than this (line of sight required as well). */
+export const BOT_VIEW_RANGE = 800;
+/** A human standing still inside a bush is invisible to bots beyond this distance. */
+export const BOT_BUSH_SIGHT = 250;
+/** "Standing still": has not moved for this long. */
+const STILL_MS = 400;
+/** Reaction delay to a newly seen enemy. */
+const REACT_MIN_MS = 450;
+const REACT_MAX_MS = 800;
+/** Aim error half-width: base + per 1000 px of distance + extra for a target moving at full speed. */
+const AIM_ERR_BASE = 0.1;
+const AIM_ERR_PER_1000PX = 0.12;
+const AIM_ERR_MOVING = 0.1;
+/** Semi-auto bots never press faster than this, whatever the weapon allows. */
+const MIN_PRESS_INTERVAL_MS = 420;
+/** Each bot heads for extraction somewhere in this window (earlier with loot or when hurt). */
+const EXTRACT_AFTER_MIN_MS = 150_000;
+const EXTRACT_AFTER_MAX_MS = 330_000;
+
+/** Least aggressive bots start fights only this close. */
+const PICK_FIGHT_MIN = 300;
+/** A bot on its way out only starts a fight this close. */
+const PICK_FIGHT_EXTRACTING = 300;
+/** The most aggressive bots start fights this far. */
+const PICK_FIGHT_MAX = 700;
+
 const THINK_MS = 100;
-const VIEW_RANGE = 950;
 const GOAL_REEVAL_MS = 1200;
 const GOAL_TIMEOUT_MS = 20_000;
+/** Crossing the map and channeling takes longer than a loot run. */
+const EXTRACT_GOAL_TIMEOUT_MS = 75_000;
 const LOOT_RANGE = 1800;
 const HEAL_BELOW_HP = 55;
 const FLEE_BELOW_HP = 35;
@@ -41,6 +74,21 @@ type Goal =
   | { kind: "extract"; id: string; x: number; y: number; r: number }
   | { kind: "wander"; id: string; x: number; y: number };
 
+
+/**
+ * Fair sight for bots: within BOT_VIEW_RANGE and line of sight. A human standing still inside a
+ * bush is hidden beyond BOT_BUSH_SIGHT; bots get no such cover (a bot in a bush is still visible).
+ */
+export function botCanSee(m: Match, viewer: Player, o: Player): boolean {
+  const d = Math.hypot(o.x - viewer.x, o.y - viewer.y);
+  if (d > BOT_VIEW_RANGE) return false;
+  if (d > BOT_BUSH_SIGHT && !o.isBot) {
+    const ort = m.runtime(o.sessionId);
+    const still = !ort || m.clock - ort.movedAt >= STILL_MS;
+    if (still && m.map.bushes.some((b) => Math.hypot(o.x - b.x, o.y - b.y) < b.r)) return false;
+  }
+  return hasLineOfSight(m.idx, viewer.x, viewer.y, o.x, o.y);
+}
 
 export class BotBrain {
   private seq = 0;
@@ -67,6 +115,8 @@ export class BotBrain {
   private replanMinAt = 0;
 
   private enemyId = "";
+  private enemySeen: { x: number; y: number; at: number } | null = null;
+  private enemySpeed = 0;
   private reactAt = 0;
   private aimErr = 0;
   private aimErrUntil = 0;
@@ -82,11 +132,17 @@ export class BotBrain {
   private detourAngle = 0;
   private wantMove = false;
 
-  /** Per-bot skill: < 1 is sharper. Scales aim error and reaction time. */
+  /** Per-bot skill: < 1 is sharper. Scales aim error. */
   private readonly sloppiness: number;
+  /** Match clock after which this bot wants out. */
+  private readonly extractAfter: number;
+  /** How far away this bot starts a fight on its own (attackers are answered at any visible range). */
+  private readonly pickFightRange: number;
 
   constructor(private readonly m: Match, private readonly rt: PlayerRuntime) {
-    this.sloppiness = 0.8 + m.rng() * 0.6;
+    this.sloppiness = 0.85 + m.rng() * 0.4;
+    this.extractAfter = EXTRACT_AFTER_MIN_MS + m.rng() * (EXTRACT_AFTER_MAX_MS - EXTRACT_AFTER_MIN_MS);
+    this.pickFightRange = PICK_FIGHT_MIN + m.rng() * (PICK_FIGHT_MAX - PICK_FIGHT_MIN);
   }
 
   update(dtMs: number): void {
@@ -111,16 +167,16 @@ export class BotBrain {
       const def = WEAPONS[slot.weapon as WeaponId];
       const clock = this.m.clock;
       if (def.auto) {
-        // Bursts instead of a perfect laser: hold 0.3–0.7 s, pause 0.2–0.45 s.
+        // Bursts instead of a perfect laser: hold 0.25–0.5 s, pause 0.4–0.8 s.
         if (clock >= this.pauseUntil && clock < this.burstUntil) fire = true;
         else if (clock >= this.burstUntil && clock >= this.pauseUntil) {
-          this.burstUntil = clock + this.rand(300, 700);
-          this.pauseUntil = this.burstUntil + this.rand(200, 450);
+          this.burstUntil = clock + this.rand(250, 500);
+          this.pauseUntil = this.burstUntil + this.rand(400, 800);
           fire = true;
         }
       } else if (!this.lastFire && clock >= this.nextPressAt) {
         fire = true;
-        this.nextPressAt = clock + def.fireIntervalMs + this.rand(60, 260) * this.sloppiness;
+        this.nextPressAt = clock + Math.max(def.fireIntervalMs, MIN_PRESS_INTERVAL_MS) + this.rand(40, 220) * this.sloppiness;
       }
     }
     this.lastFire = fire;
@@ -141,6 +197,7 @@ export class BotBrain {
       return;
     }
     this.enemyId = "";
+    this.enemySeen = null;
 
     if (p.hp < HEAL_BELOW_HP && p.healUntil === 0 && p.reloadUntil === 0) {
       const kind = (p.hp <= 40 && p.medkits > 0) || p.bandages === 0 ? "medkit" : "bandage";
@@ -196,16 +253,38 @@ export class BotBrain {
     this.aim = Math.atan2(this.my, this.mx);
   }
 
+  /** The player who hit this bot within BOT_RETALIATE_MS, if still alive. */
+  private recentAttacker(): Player | null {
+    const by = this.rt.lastHitBy;
+    if (!by || this.m.clock - this.rt.lastHitAt > BOT_RETALIATE_MS) return null;
+    const o = this.m.player(by.id);
+    return o?.alive ? o : null;
+  }
+
+  private canSee(p: Player, o: Player): boolean {
+    return botCanSee(this.m, p, o);
+  }
+
   private findEnemy(p: Player): Player | null {
+    const attacker = this.recentAttacker();
+    // Peace: nobody starts a fight; only answer whoever is shooting at us.
+    if (this.m.clock < BOT_PEACE_MS) return attacker && this.canSee(p, attacker) ? attacker : null;
+
     let best: Player | null = null;
-    let bestD = VIEW_RANGE;
+    let bestD = Infinity;
+    const leaving = this.goal?.kind === "extract";
     for (const o of this.m.state.players.values()) {
       if (!o.alive || o.sessionId === p.sessionId) continue;
       let d = Math.hypot(o.x - p.x, o.y - p.y);
-      if (d > VIEW_RANGE) continue;
-      // Stick to the current target unless someone is much closer.
+      // Starting a fight (vs. answering one or keeping the current target) has a shorter reach.
+      const reach = o === attacker || o.sessionId === this.enemyId
+        ? BOT_VIEW_RANGE
+        : leaving ? PICK_FIGHT_EXTRACTING : this.pickFightRange;
+      if (d > reach) continue;
+      // Stick to the current target unless someone is much closer; answer an attacker first.
       if (o.sessionId === this.enemyId) d *= 0.7;
-      if (d < bestD && hasLineOfSight(this.m.idx, p.x, p.y, o.x, o.y)) {
+      if (o === attacker) d *= 0.5;
+      if (d < bestD && this.canSee(p, o)) {
         best = o;
         bestD = d;
       }
@@ -221,10 +300,19 @@ export class BotBrain {
     const angle = Math.atan2(dy, dx);
     if (e.sessionId !== this.enemyId) {
       this.enemyId = e.sessionId;
-      this.reactAt = clock + this.rand(300, 600) * this.sloppiness;
+      this.enemySeen = null;
+      this.enemySpeed = 0;
+      this.reactAt = clock + this.rand(REACT_MIN_MS, REACT_MAX_MS);
     }
+    // Target speed from what the bot saw (smoothed), not from hidden state.
+    if (this.enemySeen && clock > this.enemySeen.at) {
+      const v = Math.hypot(e.x - this.enemySeen.x, e.y - this.enemySeen.y) / ((clock - this.enemySeen.at) / 1000);
+      this.enemySpeed = this.enemySpeed * 0.5 + Math.min(v, PLAYER.SPEED * 1.5) * 0.5;
+    }
+    this.enemySeen = { x: e.x, y: e.y, at: clock };
     if (clock >= this.aimErrUntil) {
-      const spread = (0.04 + dist * 0.00012) * this.sloppiness;
+      const moving = Math.min(1, this.enemySpeed / PLAYER.SPEED);
+      const spread = (AIM_ERR_BASE + (dist / 1000) * AIM_ERR_PER_1000PX + moving * AIM_ERR_MOVING) * this.sloppiness;
       this.aimErr = (this.m.rng() * 2 - 1) * spread;
       this.aimErrUntil = clock + this.rand(180, 380);
     }
@@ -232,7 +320,7 @@ export class BotBrain {
 
     const slot = p.slots[p.active];
     const def = slot?.weapon ? WEAPONS[slot.weapon as WeaponId] : WEAPONS.pistol;
-    const engage = def.range * 0.9;
+    const engage = Math.min(def.range * 0.9, BOT_VIEW_RANGE);
     this.wantFire = dist <= engage && clock >= this.reactAt;
 
     // Hold the extraction circle while fighting in it: leaving would reset the channel.
@@ -254,9 +342,14 @@ export class BotBrain {
       this.navigate(p, fx, fy);
       return;
     }
+    // On the way out: keep walking to the extract and shoot on the move.
+    if (g?.kind === "extract") {
+      this.followGoal(p);
+      return;
+    }
     if (dist > engage * 0.85) {
       // Only healthy bots go hunting; others keep doing their thing and shoot if it comes closer.
-      if (p.hp >= 60) this.navigate(p, e.x, e.y);
+      if (p.hp >= 70) this.navigate(p, e.x, e.y);
       else this.followGoal(p);
       return;
     }
@@ -318,12 +411,16 @@ export class BotBrain {
 
   private shouldExtract(p: Player): boolean {
     if (this.m.state.phase !== "open") return false;
-    if (this.m.clock > MATCH.DURATION_MS * 0.45 || p.hp < 35) return true;
-    return carriedRefs(p).some((r) => r.rarity >= 1);
+    const clock = this.m.clock;
+    if (clock >= this.extractAfter) return true;
+    // Hurt with nothing to heal: cash out.
+    if (p.hp < 35 && p.bandages + p.medkits === 0) return true;
+    // Good loot makes a bot leave up to 45 s earlier.
+    return clock >= this.extractAfter - 45_000 && carriedRefs(p).some((r) => r.rarity >= 1);
   }
 
   private goalValid(p: Player, g: Goal): boolean {
-    if (this.m.clock - this.goalSince > GOAL_TIMEOUT_MS) {
+    if (this.m.clock - this.goalSince > (g.kind === "extract" ? EXTRACT_GOAL_TIMEOUT_MS : GOAL_TIMEOUT_MS)) {
       this.blacklist.set(g.id, this.m.clock + 30_000);
       return false;
     }

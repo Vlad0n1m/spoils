@@ -88,7 +88,7 @@ export function RegisterForm() {
         <Reveal as="div" delay={0} className="lg:col-span-5">
           <p className="font-display text-xs uppercase tracking-[0.2em] text-zooa-lime/80">EXTRACT</p>
           <h1 className="mt-3 font-display text-3xl tracking-wide text-[#c4f07a] md:text-4xl">Create account</h1>
-          <p className="mt-4 max-w-[52ch] text-sm leading-relaxed text-white/55">
+          <p className="font-body mt-4 max-w-[52ch] text-base leading-relaxed text-white/65">
             Pick a nickname, secure password, and a real email. Your raider name is yours across raids.
           </p>
           <Link
@@ -139,10 +139,10 @@ export function RegisterForm() {
               />
             </label>
 
-            <p className="text-xs text-white/40">Password must be at least 8 characters.</p>
+            <p className="font-body text-xs text-white/50">Password must be at least 8 characters.</p>
 
             {error && (
-              <p className="text-sm text-rose-300/90" role="alert">
+              <p className="font-body text-sm font-semibold text-rose-300/90" role="alert">
                 {error}
               </p>
             )}

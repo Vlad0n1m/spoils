@@ -33,12 +33,13 @@ import {
   type OutcomeMsg,
   type Player as PlayerT,
   type Rng,
+  healSpeedMult,
 } from "@extract/shared";
 import { finishHealIfDue, finishReloadIfDue, startHeal, startReload, switchSlot } from "./actions.js";
 import { BotBrain } from "./bot.js";
 import { stepBullets, tryFire } from "./combat.js";
 import { stepExtraction, timeoutPlayer } from "./extraction.js";
-import { autoPickup, interact, rollChest, rollFloorLoot, spawnGroundItem } from "./inventory.js";
+import { autoPickup, interact, leftOnMapRefs, rollChest, rollFloorLoot, spawnGroundItem } from "./inventory.js";
 import type { Bullet, LootDrop, MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
 
 /**
@@ -186,13 +187,13 @@ export class Match {
   }
 
   private setupPlayers(roster: RosterEntry[], botBrains: boolean): void {
-    const spawns = shuffle(this.rng, [...this.map.spawnSpots]);
+    const spawns = assignSpawns(this.rng, this.map.spawnSpots, roster.map((r) => !r.isBot));
     const colors = shuffle(this.rng, Array.from({ length: Math.max(16, roster.length) }, (_, i) => i));
     roster.forEach((entry, i) => {
       const id = entry.isBot ? `bot${i}` : `pending${i}`;
-      const spawn = spawns[i % Math.max(1, spawns.length)] ?? { x: this.map.width / 2, y: this.map.height / 2 };
+      const spawn = spawns[i] ?? { x: this.map.width / 2, y: this.map.height / 2 };
       // More players than spawn spots only happens in tests; spread the extras out a little.
-      const lap = Math.floor(i / Math.max(1, spawns.length));
+      const lap = Math.floor(i / Math.max(1, this.map.spawnSpots.length));
       const p = new Player();
       p.sessionId = id;
       p.userId = entry.userId ?? "";
@@ -220,6 +221,9 @@ export class Match {
         pressPending: false,
         pressAt: 0,
         nextFireAt: 0,
+        movedAt: 0,
+        lastHitBy: null,
+        lastHitAt: -Infinity,
         reloadSlot: 0,
         exit: null,
         extracted: [],
@@ -354,8 +358,10 @@ export class Match {
     while (rt.queue.length > 0 && rt.allowanceMs + 1e-6 >= INPUT_DT_MS) {
       const input = rt.queue.shift()!;
       rt.allowanceMs -= INPUT_DT_MS;
-      const mult = p.healUntil > 0 ? PLAYER.HEAL_SPEED_MULT : 1;
+      // finishHealIfDue already ran this step, so this equals the client prediction's rule.
+      const mult = healSpeedMult(p.healUntil, this.clock);
       const pos = applyMovement(this.idx, p.x, p.y, input, mult);
+      if (pos.x !== p.x || pos.y !== p.y) rt.movedAt = this.clock;
       p.x = pos.x;
       p.y = pos.y;
       p.aim = input.aim;
@@ -395,7 +401,7 @@ export class Match {
     }
     this.bullets = [];
     this.state.phase = "ended";
-    this.settlement = {
+    const settlement: MatchSettlementPayload = {
       matchId: this.state.matchId,
       mapSeed: this.state.mapSeed,
       startedAt: this.state.startedAt,
@@ -409,8 +415,10 @@ export class Match {
         extracted: [...rt.extracted],
         lost: [...rt.lost],
       })),
+      leftOnMap: leftOnMapRefs(this),
     };
-    this.emit({ type: "ended", settlement: this.settlement });
+    this.settlement = settlement;
+    this.emit({ type: "ended", settlement });
   }
 }
 
@@ -431,6 +439,69 @@ export function giveFreeKit(p: PlayerT): void {
   p.armor = 0;
   p.armorDur = 0;
   p.armorUid = "";
+}
+
+/**
+ * Spawn spot per roster entry (same order). Humans are placed first, one at a time, on the spot
+ * that maximizes the minimum distance to every other assigned spawn (other humans and the bots
+ * that will fill in around them); bots then take the remaining spots farthest from the humans.
+ * More players than spots (tests only) wrap around.
+ */
+export function assignSpawns(
+  rng: Rng,
+  spots: ReadonlyArray<{ x: number; y: number }>,
+  isHuman: readonly boolean[],
+): Array<{ x: number; y: number }> {
+  const n = isHuman.length;
+  if (spots.length === 0) return [];
+  const pool = shuffle(rng, [...spots]);
+  if (n > pool.length) {
+    // Not enough spots for a fair layout: plain round robin over the shuffled spots.
+    return isHuman.map((_, i) => pool[i % pool.length]!);
+  }
+  const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
+  const humanCount = isHuman.filter(Boolean).length;
+  const botCount = n - humanCount;
+
+  /** Bots fill the free spots farthest from the humans (stable over the shuffled order). */
+  const fillBots = (humanSpots: number[], count: number): number[] => {
+    const taken = new Set(humanSpots);
+    const free = pool.map((_, i) => i).filter((i) => !taken.has(i));
+    const near = (i: number) => Math.min(Infinity, ...humanSpots.map((h) => dist(pool[i]!, pool[h]!)));
+    const score = new Map(free.map((i) => [i, near(i)]));
+    free.sort((a, b) => score.get(b)! - score.get(a)!);
+    return free.slice(0, count);
+  };
+  /** Smallest distance from any human spawn to any other assigned spawn. */
+  const worst = (humanSpots: number[], botSpots: number[]): number => {
+    let w = Infinity;
+    for (const h of humanSpots) {
+      for (const o of [...humanSpots, ...botSpots]) if (o !== h) w = Math.min(w, dist(pool[h]!, pool[o]!));
+    }
+    return w;
+  };
+
+  const humanSpots: number[] = [];
+  for (let k = 0; k < humanCount; k++) {
+    // Humans still to place count as occupants too: the bots of this layout stand in for them.
+    const restCount = botCount + (humanCount - k - 1);
+    let best = -1;
+    let bestScore = -Infinity;
+    for (let i = 0; i < pool.length; i++) {
+      if (humanSpots.includes(i)) continue;
+      const hs = [...humanSpots, i];
+      const score = worst(hs, fillBots(hs, restCount));
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    humanSpots.push(best);
+  }
+  const botSpots = shuffle(rng, fillBots(humanSpots, botCount));
+
+  const out: Array<{ x: number; y: number }> = [];
+  let h = 0;
+  let b = 0;
+  for (const human of isHuman) out.push(pool[human ? humanSpots[h++]! : botSpots[b++]!]!);
+  return out;
 }
 
 export function shuffle<T>(rng: Rng, arr: T[]): T[] {

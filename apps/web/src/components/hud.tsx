@@ -13,7 +13,8 @@ const KILL_FEED_MAX = 5;
 const FINAL_MINUTE_MS = 60_000;
 /** Rough px → meters for the compass; only has to feel consistent. */
 const PX_PER_METER = 40;
-const HELP_STORAGE_KEY = "extract:hud-help-open";
+/** New key: the panel is collapsed by default now, so an old stored "open" must not reopen it. */
+const HELP_STORAGE_KEY = "extract:hud-controls-open";
 
 /**
  * In-raid HUD. Pointer events are off for the whole layer so aiming/shooting on the canvas is
@@ -247,7 +248,7 @@ function ExtractRing({
       </div>
       <div className="toon-chip px-4 py-1.5 text-center text-sm tracking-wide">
         <span className="toon-text-thin text-zooa-lime">Extracting</span>
-        <span className="text-white/70"> — stay in the circle, damage restarts it</span>
+        <span className="font-body text-white/80"> — stay in the circle, damage restarts it</span>
       </div>
     </div>
   );
@@ -471,13 +472,23 @@ const CONTROLS: Array<[string, string]> = [
   ["4", "Medkit"],
 ];
 
+/**
+ * Controls cheat-sheet + "Leave raid". Collapsed to a small chip by default (the choice is
+ * remembered), hidden below 768 px where the bottom bar needs the whole width.
+ *
+ * Layout contract with the bottom HUD (BottomBar is ~40 rem wide and ~7.5 rem tall at md+):
+ * - the chip sits in the bottom-right corner and is narrow enough ("?" below lg, "? Controls"
+ *   at lg+) to fit beside the centered bar from 768 px / 1024 px up;
+ * - the open panel floats above the bar's height (bottom-36), so it never covers the meds or the
+ *   weapon slots however narrow the window is.
+ */
 function ControlsHelp({ onLeave }: { onLeave: () => void }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
 
   useEffect(() => {
     try {
-      if (localStorage.getItem(HELP_STORAGE_KEY) === "0") setOpen(false);
+      if (localStorage.getItem(HELP_STORAGE_KEY) === "1") setOpen(true);
     } catch {
       /* storage blocked: keep default */
     }
@@ -496,18 +507,21 @@ function ControlsHelp({ onLeave }: { onLeave: () => void }) {
   };
 
   return (
-    <div className="pointer-events-auto absolute bottom-3 right-3 flex flex-col items-end gap-2">
+    <div className="pointer-events-none absolute inset-0 hidden md:block">
       {open && (
-        <div className="toon-panel w-56 p-3 text-xs">
+        <div
+          id="hud-controls-panel"
+          className="toon-panel pointer-events-auto absolute bottom-36 right-3 w-60 p-3"
+        >
           <ul className="space-y-1.5">
             {CONTROLS.map(([k, v]) => (
               <li key={k} className="flex items-center justify-between gap-2">
-                <span className="text-white/75">{v}</span>
+                <span className="font-body text-sm font-semibold text-white/85">{v}</span>
                 <span className="toon-key">{k}</span>
               </li>
             ))}
           </ul>
-          <p className="mt-3 border-t-2 border-black/50 pt-2 text-[0.65rem] leading-snug text-white/55">
+          <p className="font-body mt-3 border-t-2 border-black/50 pt-2 text-xs leading-snug text-white/65">
             Dying breaks each item with a {Math.round(BREAK_CHANCE_ON_DEATH * 100)}% chance; the rest drops for others.
           </p>
           <button
@@ -526,9 +540,16 @@ function ControlsHelp({ onLeave }: { onLeave: () => void }) {
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className="toon-chip px-3 py-1.5 text-xs tracking-wide text-white transition hover:brightness-125"
+        aria-controls="hud-controls-panel"
+        aria-label={open ? "Hide controls" : "Show controls"}
+        title={open ? "Hide controls" : "Controls & leave raid"}
+        className="toon-chip pointer-events-auto absolute bottom-3 right-3 flex h-9 w-9 items-center justify-center gap-1.5 text-sm tracking-wide text-white transition hover:brightness-125 lg:w-auto lg:px-3"
       >
-        {open ? "Hide controls" : "Controls"}
+        <span className="optical-center">{open ? "×" : "?"}</span>
+        {/* Wrapper: .optical-center sets display and would override `hidden`. */}
+        <span className="hidden text-xs lg:inline">
+          <span className="optical-center">{open ? "Hide" : "Controls"}</span>
+        </span>
       </button>
     </div>
   );

@@ -1,23 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { FREE_KIT, MATCH, type JoinTicket } from "@extract/shared";
+import { useEffect, useState } from "react";
+import { FREE_KIT, MATCH, ROOMS, type JoinTicket } from "@extract/shared";
 import { useSession } from "@/lib/session-context";
 import { guestPlayUiEnabled } from "@/lib/client-env";
 import { parseJsonResponse } from "@/lib/parse-json-response";
 import { fmtClock } from "@/lib/items-ui";
+import { stageForUser, type PlayStage } from "@/lib/play-stage";
 import { MatchmakingPanel } from "./matchmaking-panel";
 import { BattleScreen } from "./battle-screen";
 import { PlayerInstructions } from "./play-instructions";
 import { PlayLeaderboard } from "./play-leaderboard";
 import { GuestPlayDialog } from "./guest-play-dialog";
 import { Reveal } from "./reveal";
-
-type Stage =
-  | { kind: "lobby" }
-  | { kind: "matchmaking"; ticket: JoinTicket; roomName: string; searchId: number }
-  | { kind: "battle"; ticket: JoinTicket; battleRoomId: string };
 
 interface JoinResponse {
   ticket?: JoinTicket;
@@ -31,7 +27,13 @@ const lobbyGrid =
 
 export function PlayClient() {
   const { user, loading, refresh } = useSession();
-  const [stage, setStage] = useState<Stage>({ kind: "lobby" });
+  const [rawStage, setStage] = useState<PlayStage>({ kind: "lobby" });
+  /** A search/raid holds the signed ticket of whoever started it; after a sign-out or account switch it is dropped. */
+  const stage = stageForUser(rawStage, user?.id);
+  const staleStage = stage !== rawStage;
+  useEffect(() => {
+    if (staleStage) setStage({ kind: "lobby" });
+  }, [staleStage]);
   const [joining, setJoining] = useState(false);
   const [joinErr, setJoinErr] = useState<string | null>(null);
   const [guestOpen, setGuestOpen] = useState(false);
@@ -48,8 +50,10 @@ export function PlayClient() {
         await refresh();
         throw new Error("Your session expired — sign in again.");
       }
-      if (!res.ok || !data.ticket || !data.roomName) throw new Error(data.error ?? "join_failed");
-      setStage({ kind: "matchmaking", ticket: data.ticket, roomName: data.roomName, searchId: Date.now() });
+      if (!res.ok || !data.ticket) throw new Error(data.error ?? "join_failed");
+      // The API names the queue; fall back to the shared contract if an older API omits it.
+      const roomName = data.roomName || ROOMS.MATCHMAKING;
+      setStage({ kind: "matchmaking", ticket: data.ticket, roomName, searchId: Date.now() });
     } catch (e) {
       setJoinErr(e instanceof Error ? e.message : "join_failed");
     } finally {
@@ -69,6 +73,11 @@ export function PlayClient() {
         ticket={stage.ticket}
         roomName={stage.roomName}
         onCancel={() => setStage({ kind: "lobby" })}
+        onRetry={() => {
+          // Fresh ticket + remount (new searchId); a failed join lands back in the lobby with the error.
+          setStage({ kind: "lobby" });
+          void startRaid();
+        }}
         onBattleReady={(battleRoomId) => setStage({ kind: "battle", ticket: stage.ticket, battleRoomId })}
       />
     );
@@ -160,7 +169,7 @@ function RaidCard({
       </ul>
 
       {error && (
-        <p className="mt-5 text-sm text-rose-300" role="alert">
+        <p className="font-body mt-5 text-sm font-semibold text-rose-300" role="alert">
           {error}
         </p>
       )}
@@ -175,7 +184,7 @@ function RaidCard({
           <span className="optical-center">{joining ? "Joining…" : "Play raid (demo)"}</span>
         </button>
         {isGuest && (
-          <p className="max-w-[32ch] text-xs leading-relaxed text-white/50">
+          <p className="font-body max-w-[34ch] text-sm leading-relaxed text-white/60">
             Playing as a guest.{" "}
             <Link href="/auth/register?next=/play" className="text-zooa-lime underline-offset-4 hover:underline">
               Register
@@ -197,7 +206,7 @@ function KitTile({ icon, label, note }: { icon: string; label: string; note: str
       </span>
       <span>
         <span className="block text-sm tracking-wide text-white">{label}</span>
-        <span className="mt-1 block text-[0.7rem] text-white/50">{note}</span>
+        <span className="font-body mt-0.5 block text-xs text-white/60">{note}</span>
       </span>
     </li>
   );
@@ -213,7 +222,7 @@ function SignInCard({ loading, onGuest }: { loading: boolean; onGuest: () => voi
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/sprites/player.png" alt="" className="mx-auto h-24 w-24 animate-float-sm" draggable={false} />
       <h1 className="toon-text mt-4 text-balance text-4xl tracking-wide text-zooa-lime md:text-5xl">Ready to drop?</h1>
-      <p className="mx-auto mt-4 max-w-[44ch] text-sm leading-relaxed text-white/60">
+      <p className="font-body mx-auto mt-4 max-w-[44ch] text-base leading-relaxed text-white/70">
         Pick a name to jump into a demo raid, or sign in to keep your raider.
       </p>
       <div className="mt-8 flex flex-wrap items-center justify-center gap-3">

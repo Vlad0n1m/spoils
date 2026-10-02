@@ -38,7 +38,7 @@ export function PlayerInstructions() {
       <Reveal as="h2" delay={0} className="toon-text text-3xl tracking-wide text-zooa-lime md:text-4xl">
         How to play
       </Reveal>
-      <p className="mt-3 text-sm leading-relaxed text-white/60">
+      <p className="font-body mt-3 text-base leading-relaxed text-white/70">
         Top-down extraction shooter: loot up, survive, get out alive.
       </p>
       <ol className="mt-6 list-none space-y-4 border-t-[3px] border-black/50 pt-6">
@@ -52,7 +52,7 @@ export function PlayerInstructions() {
               </span>
               <div className="min-w-0">
                 <h3 className="text-lg tracking-wide text-white">{s.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-white/60">{s.body}</p>
+                <p className="font-body mt-1.5 text-[0.95rem] leading-relaxed text-white/70">{s.body}</p>
               </div>
             </Reveal>
           </li>

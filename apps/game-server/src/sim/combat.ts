@@ -79,6 +79,8 @@ export function tryFire(m: Match, rt: PlayerRuntime, p: Player): void {
       x: p.x + Math.cos(p.aim) * def.muzzle,
       y: p.y + Math.sin(p.aim) * def.muzzle,
       a: angles,
+      cx: p.x,
+      cy: p.y,
     },
   });
 
@@ -133,11 +135,15 @@ export function damagePlayer(
     p.armorDur = round2(p.armorDur - armorUsed);
     if (p.armorDur <= 0) {
       // Armor worn down to nothing is destroyed for good: it counts as lost by its wearer.
-      if (p.armorUid) rt.lost.push(armorRef(p.armorUid, p.armor));
+      if (p.armorUid) rt.lost.push(armorRef(p.armorUid, p.armor, 0));
       p.armor = 0;
       p.armorDur = 0;
       p.armorUid = "";
     }
+  }
+  if (attacker && attacker !== rt) {
+    rt.lastHitBy = attacker;
+    rt.lastHitAt = m.clock;
   }
   // Taking damage restarts the extraction channel.
   if (p.extractId) p.extractStartedAt = m.clock;
@@ -173,6 +179,12 @@ export function killPlayer(
   if (killer && killerPlayer && killer !== rt) {
     killerPlayer.kills = Math.min(255, killerPlayer.kills + 1);
     rt.killedBy = killer.nickname;
+    // A bullet still in flight can kill after its shooter already extracted or died: keep their
+    // frozen result in line with the settlement (which reads state kills) and resend it.
+    if (killer.outcome) {
+      killer.outcome = { ...killer.outcome, kills: killerPlayer.kills };
+      if (!killer.isBot) m.emit({ type: "outcome", to: killer.id, msg: killer.outcome });
+    }
   }
   dropOnDeath(m, rt, p);
   m.emit({

@@ -132,7 +132,7 @@ function Hero() {
           >
             <span className="optical-center">Play raid (demo)</span>
           </Link>
-          <p className="text-sm tracking-wide text-white/70">Free demo · no wallet needed · bots fill the lobby</p>
+          <p className="font-body text-sm font-semibold text-white/75">Free demo · no wallet needed · bots fill the lobby</p>
         </Reveal>
       </div>
     </section>
@@ -179,7 +179,7 @@ function HowItWorks() {
               <span className="toon-key absolute left-3 top-3 h-8 min-w-8 bg-zooa-lime text-base">{i + 1}</span>
               <Sprite name={h.sprite} className="h-28 w-28" />
               <h3 className="mt-4 text-xl tracking-wide text-zooa-lime">{h.title}</h3>
-              <p className="mt-3 text-sm leading-relaxed text-white/65">{h.body}</p>
+              <p className="font-body mt-3 text-[0.95rem] leading-relaxed text-white/75">{h.body}</p>
             </Reveal>
           ))}
         </div>
@@ -203,12 +203,12 @@ function LootSection() {
           <Reveal as="h2" className="toon-text text-5xl tracking-wide text-white md:text-6xl">
             Loot that matters
           </Reveal>
-          <Reveal as="p" delay={80} className="mt-6 max-w-[48ch] text-base leading-relaxed text-white/70">
+          <Reveal as="p" delay={80} className="font-body mt-6 max-w-[52ch] text-lg leading-relaxed text-white/80">
             Four rarities, each hitting harder than the last. Gear only counts once you get it out — and if you
             go down, every item rolls a coin: {Math.round(BREAK_CHANCE_ON_DEATH * 100)}% it breaks for good,
             otherwise it drops by your body for the next raider to grab.
           </Reveal>
-          <Reveal as="p" delay={140} className="mt-4 max-w-[48ch] text-base leading-relaxed text-white/70">
+          <Reveal as="p" delay={140} className="font-body mt-4 max-w-[52ch] text-lg leading-relaxed text-white/80">
             Still on the map when the {Math.round(MATCH.DURATION_MS / 60_000)}-minute clock runs out? Everything
             you carry is lost.
           </Reveal>
@@ -248,7 +248,7 @@ function ComingSoon() {
         <h2 className="mt-4 text-balance text-4xl leading-[1.05] tracking-tight md:text-6xl">
           Coming soon: a real item economy
         </h2>
-        <p className="mt-6 max-w-[56ch] text-base leading-relaxed text-black/75 md:text-lg">
+        <p className="font-body mt-6 max-w-[56ch] text-base font-semibold leading-relaxed text-black/75 md:text-lg">
           Your own stash, a player-to-player marketplace and items with real value, powered by iDos. This demo
           is free: nothing costs money and nothing is paid out.
         </p>
@@ -271,7 +271,7 @@ function Footer() {
         </Link>
         <div className="flex w-full items-center justify-between border-t-[3px] border-black pt-6 text-sm text-white/50">
           <span className="toon-text-thin text-lg tracking-wide text-zooa-lime">EXTRACT</span>
-          <span>Demo build</span>
+          <span className="font-body">Demo build</span>
         </div>
       </div>
     </footer>

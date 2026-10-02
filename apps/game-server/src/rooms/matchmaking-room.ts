@@ -1,8 +1,8 @@
-import { Room, ServerError, matchMaker, type Client } from "@colyseus/core";
+import { Room, matchMaker, type Client } from "@colyseus/core";
 import { ArraySchema, Schema, type } from "@colyseus/schema";
-import { MATCH, type JoinTicket } from "@extract/shared";
-import { verifyJoinTicket } from "../auth/ticket.js";
+import { MATCH, MM_BATTLE_READY, ROOMS, type BattleReadyMsg, type JoinTicket } from "@extract/shared";
 import { CLOSE } from "./close-codes.js";
+import { LAUNCH_KEY, authenticate, releasePendingSeatsOf } from "./room-auth.js";
 import type { RosterEntry } from "../sim/types.js";
 import { botNames } from "../sim/names.js";
 
@@ -42,10 +42,26 @@ export class MatchmakingRoom extends Room<MmState, unknown, unknown, JoinTicket>
     this.setState(new MmState());
   }
 
-  override onAuth(_client: Client, options: { ticket?: unknown }) {
-    const ticket = verifyJoinTicket(options?.ticket);
-    if (!ticket) throw new ServerError(401, "invalid_ticket");
-    return ticket;
+  /** Runs before Colyseus finds, creates or reserves anything: no valid ticket, no seat. */
+  static override async onAuth(_token: string, options: unknown): Promise<JoinTicket> {
+    return authenticate(options);
+  }
+
+  /** One pending seat per user, so a single ticket cannot fill (and lock) the queue. */
+  protected override async _reserveSeat(
+    sessionId: string,
+    joinOptions?: unknown,
+    authData?: unknown,
+    seconds?: number,
+    allowReconnection = false,
+    devModeReconnection?: boolean,
+  ): Promise<boolean> {
+    if (!allowReconnection) {
+      const userId = (authData as JoinTicket | undefined)?.userId;
+      if (!userId) return false;
+      await releasePendingSeatsOf(this, userId);
+    }
+    return super._reserveSeat(sessionId, joinOptions, authData, seconds, allowReconnection, devModeReconnection);
   }
 
   override onJoin(client: Client, _options: unknown, ticket: JoinTicket) {
@@ -109,10 +125,13 @@ export class MatchmakingRoom extends Room<MmState, unknown, unknown, JoinTicket>
     }));
 
     try {
-      const battle = await matchMaker.createRoom("battle", { roster: [...humans, ...bots] });
+      const battle = await matchMaker.createRoom(ROOMS.BATTLE, {
+        roster: [...humans, ...bots],
+        launchKey: LAUNCH_KEY,
+      });
       this.state.battleRoomId = battle.roomId;
       this.state.status = "started";
-      this.broadcast("battle_ready", { battleRoomId: battle.roomId });
+      this.broadcast(MM_BATTLE_READY, { battleRoomId: battle.roomId } satisfies BattleReadyMsg);
     } catch (e) {
       console.error("[mm] failed to create battle room:", e);
       for (const c of this.clients) c.leave(CLOSE.LAUNCH_FAILED, "launch_failed");

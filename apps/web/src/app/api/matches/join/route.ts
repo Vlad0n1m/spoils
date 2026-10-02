@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
+import { ROOMS } from "@extract/shared";
 import { signJoinTicket } from "@/lib/join-ticket";
 
 export const dynamic = "force-dynamic";
 
 /** Colyseus matchmaking room name registered by the game server. */
-const MATCHMAKING_ROOM = "mm";
+const MATCHMAKING_ROOM = ROOMS.MATCHMAKING;
 
 /**
  * Issues a signed join ticket for the demo raid. No stake is debited in this phase: everyone drops

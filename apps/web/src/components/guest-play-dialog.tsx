@@ -50,7 +50,7 @@ export function GuestPlayDialog({
       <form onSubmit={submit} className="toon-panel w-full max-w-md space-y-5 bg-[#161b28] p-6 md:p-8">
         <div>
           <h2 className="toon-text text-3xl tracking-wide text-zooa-lime">Play as guest</h2>
-          <p className="mt-3 text-sm leading-relaxed text-white/60">
+          <p className="font-body mt-3 text-base leading-relaxed text-white/70">
             Pick a nickname and drop into a demo raid. Guest results are not tied to an account.
           </p>
         </div>
@@ -66,7 +66,7 @@ export function GuestPlayDialog({
           required
         />
         {error && (
-          <p className="text-sm text-rose-300" role="alert">
+          <p className="font-body text-sm font-semibold text-rose-300" role="alert">
             {error}
           </p>
         )}
