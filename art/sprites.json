@@ -134,6 +134,173 @@
       "size": 256,
       "tile": true,
       "prompt": "Plain brown packed dirt ground with small pebbles and subtle cracks, NO grass at all, evenly lit, matching the dirt patches in the reference image."
+    },
+    {
+      "id": "junk_apple",
+      "size": 128,
+      "prompt": "A shiny red apple with a small green leaf."
+    },
+    {
+      "id": "junk_canned",
+      "size": 128,
+      "prompt": "A dented tin can of stewed meat with a simple label without text."
+    },
+    {
+      "id": "junk_water",
+      "size": 128,
+      "prompt": "A plastic water bottle with a blue cap, half full."
+    },
+    {
+      "id": "junk_bolts",
+      "size": 128,
+      "prompt": "A small pile of steel nuts and bolts."
+    },
+    {
+      "id": "junk_wires",
+      "size": 128,
+      "prompt": "A coiled bundle of colorful electrical wires."
+    },
+    {
+      "id": "junk_circuit",
+      "size": 128,
+      "prompt": "A green computer circuit board with chips and gold contacts."
+    },
+    {
+      "id": "junk_gpu",
+      "size": 160,
+      "prompt": "A graphics card (GPU) with two fans, dark gray with a glowing accent."
+    },
+    {
+      "id": "junk_hdd",
+      "size": 128,
+      "prompt": "A computer hard drive, silver metal casing."
+    },
+    {
+      "id": "junk_battery",
+      "size": 128,
+      "prompt": "A big rectangular battery with red and black terminals."
+    },
+    {
+      "id": "junk_fuel",
+      "size": 160,
+      "prompt": "A red metal fuel jerrycan."
+    },
+    {
+      "id": "junk_toolbox",
+      "size": 160,
+      "prompt": "A red metal toolbox with a handle, closed."
+    },
+    {
+      "id": "junk_goldchain",
+      "size": 128,
+      "prompt": "A thick shiny gold chain necklace lying in a loose coil."
+    },
+    {
+      "id": "junk_coldwallet",
+      "size": 128,
+      "prompt": "A small hardware crypto wallet device, black with a tiny screen showing a purple-to-teal gradient, no text."
+    },
+    {
+      "id": "junk_pills",
+      "size": 128,
+      "prompt": "A white pill bottle with a few pills spilled next to it."
+    },
+    {
+      "id": "junk_dogtag",
+      "size": 128,
+      "prompt": "Military dog tags on a ball chain."
+    },
+    {
+      "id": "junk_keycard",
+      "size": 128,
+      "prompt": "A plastic access keycard, purple with a magnetic stripe, no text."
+    },
+    {
+      "id": "backpack_1",
+      "size": 160,
+      "prompt": "A small olive sling bag / daypack, simple."
+    },
+    {
+      "id": "backpack_2",
+      "size": 192,
+      "prompt": "A medium tactical backpack, tan, with MOLLE straps and side pouches."
+    },
+    {
+      "id": "backpack_3",
+      "size": 224,
+      "prompt": "A large military raid backpack, dark green, bulky with many pouches and a bedroll on top."
+    },
+    {
+      "id": "corpse",
+      "size": 256,
+      "prompt": "A defeated soldier lying flat on the ground on his back seen from above, arms spread, gray helmet, gray uniform, small backpack, no blood, cartoon style, clearly lifeless (closed X eyes not needed since helmet covers face).",
+      "view": "Seen STRICTLY from directly above (bird's-eye, 90 degrees top-down)."
+    },
+    {
+      "id": "car_wreck",
+      "size": 320,
+      "prompt": "A rusty abandoned sedan car wreck seen from above, broken windshield, faded blue paint."
+    },
+    {
+      "id": "shipping_container",
+      "size": 320,
+      "prompt": "A long corrugated steel shipping container seen from directly above, rusty orange, rectangular roof with ridges.",
+      "view": "Seen STRICTLY from directly above (bird's-eye, 90 degrees top-down)."
+    },
+    {
+      "id": "barrel",
+      "size": 128,
+      "prompt": "A rusty metal oil barrel seen from above (circular top with rim)."
+    },
+    {
+      "id": "sandbags",
+      "size": 224,
+      "prompt": "A curved wall of stacked sandbags seen from above."
+    },
+    {
+      "id": "fence",
+      "size": 256,
+      "prompt": "A straight segment of chain-link fence with metal posts seen from above, horizontal.",
+      "view": "Seen STRICTLY from directly above (bird's-eye, 90 degrees top-down)."
+    },
+    {
+      "id": "watchtower",
+      "size": 288,
+      "prompt": "A wooden military watchtower seen from directly above: square plank roof with a small ladder hatch."
+    },
+    {
+      "id": "log_pile",
+      "size": 224,
+      "prompt": "A pile of cut wooden logs seen from above."
+    },
+    {
+      "id": "puddle",
+      "size": 192,
+      "prompt": "A shallow rain puddle on the ground reflecting a bit of sky, irregular shape, slightly transparent blue."
+    },
+    {
+      "id": "asphalt_tile",
+      "size": 256,
+      "prompt": "Cracked dark gray asphalt road surface with faint wear, no road markings.",
+      "tile": true
+    },
+    {
+      "id": "concrete_tile",
+      "size": 256,
+      "prompt": "Light gray concrete floor slabs with subtle seams and stains, industrial.",
+      "tile": true
+    },
+    {
+      "id": "wood_floor_tile",
+      "size": 256,
+      "prompt": "Worn wooden floor planks, warm brown, indoor floor.",
+      "tile": true
+    },
+    {
+      "id": "forest_tile",
+      "size": 256,
+      "prompt": "Dark forest floor: moss, fallen pine needles and small leaves, deep green and brown.",
+      "tile": true
     }
   ]
 }
