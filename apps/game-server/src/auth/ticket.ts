@@ -12,6 +12,8 @@ const MAX_USER_ID_LEN = 128;
 const MAX_NICKNAME_LEN = 24;
 /** Loadout ids are DB uuids; "" = free kit. Anything else cannot be a real loadout. */
 const LOADOUT_ID_RE = /^(?:[0-9a-zA-Z-]{1,64})?$/;
+/** WORLD v6 matchId / entryId: a uuid, or "" / absent (legacy tickets). */
+const OPT_UUID_RE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i;
 
 let warnedNoSecret = false;
 
@@ -41,6 +43,11 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
   // "" = free kit. Missing is read as "" (the signature still has to cover it).
   const loadoutId = t.loadoutId === undefined ? "" : t.loadoutId;
   if (typeof loadoutId !== "string" || !LOADOUT_ID_RE.test(loadoutId)) return null;
+  // WORLD v6: the shard and the entry the web minted at /api/world/join (both signed).
+  const matchId = t.matchId === undefined ? "" : t.matchId;
+  const entryId = t.entryId === undefined ? "" : t.entryId;
+  if (typeof matchId !== "string" || !OPT_UUID_RE.test(matchId)) return null;
+  if (typeof entryId !== "string" || !OPT_UUID_RE.test(entryId)) return null;
   if (typeof userId !== "string" || userId.length < 1 || userId.length > MAX_USER_ID_LEN) return null;
   if (typeof nickname !== "string") return null;
   const nickLen = [...nickname].length;
@@ -52,20 +59,25 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
   if (now - issuedAt > JOIN_TICKET_TTL_MS) return null;
 
   const expected = createHmac("sha256", secret)
-    .update(joinTicketPayload({ userId, nickname, issuedAt, loadoutId }))
+    .update(joinTicketPayload({ userId, nickname, issuedAt, loadoutId, matchId, entryId }))
     .digest();
   const given = Buffer.from(sig, "hex");
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
 
-  return { userId, nickname, issuedAt, loadoutId, sig: sig.toLowerCase() };
+  const out: JoinTicket = { userId, nickname, issuedAt, loadoutId, sig: sig.toLowerCase() };
+  if (matchId) out.matchId = matchId.toLowerCase();
+  if (entryId) out.entryId = entryId.toLowerCase();
+  return out;
 }
 
 /** Test helper and the format the web API uses (apps/web/src/lib/join-ticket.ts). */
 export function signJoinTicket(
-  who: { userId: string; nickname: string; issuedAt: number; loadoutId?: string },
+  who: { userId: string; nickname: string; issuedAt: number; loadoutId?: string; matchId?: string; entryId?: string },
   secret: string,
 ): JoinTicket {
-  const t = { ...who, loadoutId: who.loadoutId ?? "" };
+  const t: Omit<JoinTicket, "sig"> = { ...who, loadoutId: who.loadoutId ?? "" };
+  if (!t.matchId) delete t.matchId;
+  if (!t.entryId) delete t.entryId;
   const sig = createHmac("sha256", secret).update(joinTicketPayload(t)).digest("hex");
   return { ...t, sig };
 }

@@ -93,3 +93,29 @@ test("without a secret every ticket is rejected", () => {
     assert.equal(verifyJoinTicket(t, NOW), null);
   });
 });
+
+test("WORLD v6: matchId / entryId are covered by the signature; legacy tickets still verify", () => {
+  withSecret(SECRET, () => {
+    const matchId = "0b9d2c1e-7f43-4a51-9c3e-2f1d8a6b5c40";
+    const entryId = "6f1c7e2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+    const t = signJoinTicket({ userId: "user-1", nickname: "Neo", issuedAt: NOW, matchId, entryId }, SECRET);
+    assert.deepEqual(verifyJoinTicket(t, NOW), t);
+    assert.equal(verifyJoinTicket(JSON.stringify(t), NOW)?.entryId, entryId);
+    // Swapping the map or the entry breaks the signature; so does dropping either.
+    assert.equal(verifyJoinTicket({ ...t, matchId: "1b9d2c1e-7f43-4a51-9c3e-2f1d8a6b5c40" }, NOW), null);
+    assert.equal(verifyJoinTicket({ ...t, entryId: "7f1c7e2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b" }, NOW), null);
+    const { entryId: _e, ...noEntry } = t;
+    assert.equal(verifyJoinTicket(noEntry, NOW), null);
+    // Malformed ids are refused before the signature check.
+    assert.equal(verifyJoinTicket({ ...t, matchId: "not-a-uuid" }, NOW), null);
+    assert.equal(verifyJoinTicket({ ...t, entryId: 7 }, NOW), null);
+    // A legacy ticket (no world fields) verifies and carries none.
+    const legacy = ticket();
+    const v = verifyJoinTicket(legacy, NOW)!;
+    assert.equal(v.matchId, undefined);
+    assert.equal(v.entryId, undefined);
+    // Upper-case ids verify (the web's casing is signed) and come out lower-case (shard lookup).
+    const up = signJoinTicket({ userId: "user-1", nickname: "Neo", issuedAt: NOW, matchId: matchId.toUpperCase(), entryId }, SECRET);
+    assert.equal(verifyJoinTicket(up, NOW)?.matchId, matchId);
+  });
+});

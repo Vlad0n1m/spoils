@@ -1,27 +1,37 @@
 /**
  * Game server → web API calls, HMAC-signed over `${ts}.${body}` (headers in shared HEADERS).
- * Flow (critique "Settlement and loadout flow"): process boot → POST /api/raids/void-orphans,
- * MatchmakingRoom.launch → POST /api/raids/start, each human leaving the map → POST /api/raids/exit,
- * match end → POST /api/raids/end.
+ * Flow (WORLD v6): process boot → POST /api/raids/void-orphans; WorldDirectory opens a shard →
+ * POST /api/raids/open; BattleRoom.onAuth admits an entry → POST /api/raids/enter; each entry
+ * leaving the map → POST /api/raids/exit; the event boss dies → POST /api/world/event; the wipe →
+ * POST /api/raids/end.
  *
- * Every call is idempotent on the web side (raids row per matchId, raid_exits per (match, user),
- * raids.status for the end), so retrying the exact same body is always safe. A 409 means the raid
- * was voided: stop retrying. Nothing here throws: a missing or broken web API never stalls a room.
- * With WEB_API_BASE_URL / GAME_SERVER_HMAC_SECRET unset nothing is posted (local dev, demo).
+ * Every call is idempotent on the web side (raids row per matchId, raid_entries / raid_exits per
+ * entryId, raids.status for the end), so retrying the exact same body is always safe. A 409 means
+ * the raid was voided (or the entry is unknown): stop retrying. Nothing here throws: a missing or
+ * broken web API never stalls a room. With WEB_API_BASE_URL / GAME_SERVER_HMAC_SECRET unset nothing
+ * is posted (local dev, demo).
  */
 
 import { setTimeout as delay } from "node:timers/promises";
 import { createHmac, randomUUID } from "node:crypto";
 import {
   HEADERS,
+  type EntryRejectReason,
+  type EntryRequest,
+  type EntryResponse,
   type GameServerBoot,
+  type LoadoutSnapshot,
   type MatchEndReport,
   type PlayerExitReport,
-  type RaidStartRequest,
-  type RaidStartResponse,
+  type ShardOpenRequest,
+  type ShardOpenResponse,
   type SoldLine,
+  type WorldEventReport,
+  type XpKey,
+  type XpLine,
 } from "@extract/shared";
 import { getWebApiBaseUrl } from "./web-api-base.js";
+import { sanitizeSnapshot, sanitizeUniques } from "./sanitize.js";
 
 const DEFAULT_ATTEMPTS = 5;
 const BACKOFF_MS = 400;
@@ -46,6 +56,11 @@ export interface ExitPostOptions extends PostOptions {
   retryWindowMs?: number;
   /** First pause between those slow rounds; doubles up to EXIT_SLOW_BACKOFF_MAX_MS. */
   slowBackoffMs?: number;
+}
+
+/** The web API is configured (WEB_API_BASE_URL and GAME_SERVER_HMAC_SECRET both set). */
+export function webApiConfigured(): boolean {
+  return !!getWebApiBaseUrl() && !!process.env.GAME_SERVER_HMAC_SECRET;
 }
 
 /**
@@ -97,9 +112,10 @@ export async function postSigned<T = unknown>(path: string, body: unknown, opts:
 // ---------------------------------------------------------------- boot (void-orphans)
 
 /**
- * Identity of this game-server process. serverId is stable per deployment (env GAME_SERVER_ID);
- * instanceId is new on every boot and goes into every RaidStartRequest, so the web can tell the
- * raids of a crashed previous process (same serverId, other instanceId) from live ones.
+ * Identity of this game-server process. serverId is stable per deployment (env GAME_SERVER_ID,
+ * required in production: env.ts); instanceId is new on every boot and goes into every
+ * ShardOpenRequest, so the web can tell the shards of a crashed previous process (same serverId,
+ * other instanceId) from live ones.
  */
 export const SERVER_INSTANCE: Readonly<GameServerBoot> = Object.freeze({
   serverId: (process.env.GAME_SERVER_ID?.trim() || "default").slice(0, 64),
@@ -133,54 +149,128 @@ export async function announceBoot(boot: GameServerBoot = SERVER_INSTANCE, opts:
   return voided;
 }
 
-// ---------------------------------------------------------------- raids/start
+// ---------------------------------------------------------------- WORLD v6: raids/open, raids/enter, world/event
 
-/** raids/start: 1 attempt + 3 retries, short timeouts (players wait in the queue meanwhile). */
-const START_ATTEMPTS = 4;
-const START_TIMEOUT_MS = 5_000;
+/** raids/open result: the response, "rejected" (4xx: retrying will not help), or null (retry later). */
+export type ShardOpenOutcome = ShardOpenResponse | "rejected" | null;
 
 /**
- * POST /api/raids/start. Returns the response, or null when the API is not configured, unreachable
- * after the retries, or refused the request: the caller then falls back to demo mode. The web side
- * stores its response per matchId, so a retry after a lost reply gets the same allocation back.
+ * POST /api/raids/open (5 fast attempts). The directory keeps retrying a null every 10 s until the
+ * wipe; until it lands /api/world/join finds no running row, so nobody enters the shard.
  */
-export async function startRaid(req: RaidStartRequest, opts: PostOptions = {}): Promise<RaidStartResponse | null> {
-  const r = await postSigned<unknown>("/api/raids/start", req, {
-    attempts: START_ATTEMPTS,
-    timeoutMs: START_TIMEOUT_MS,
+export async function openShard(req: ShardOpenRequest, opts: PostOptions = {}): Promise<ShardOpenOutcome> {
+  const r = await postSigned<unknown>("/api/raids/open", req, opts);
+  if (r.status === "rejected") {
+    console.error(`[web-api] raids/open ${req.matchId} refused: ${r.code} ${r.body}`);
+    return "rejected";
+  }
+  if (r.status !== "ok") return null;
+  const b = r.body as Partial<ShardOpenResponse> | null;
+  if (!b || (b.status !== "opened" && b.status !== "exists")) {
+    console.error(`[web-api] raids/open ${req.matchId}: malformed reply`);
+    return null;
+  }
+  return { status: b.status, autosellMult: typeof b.autosellMult === "number" && Number.isFinite(b.autosellMult) ? b.autosellMult : 1 };
+}
+
+/** raids/enter: 2 attempts × 4 s, 1 s backoff (the player waits on the join meanwhile). */
+const ENTER_ATTEMPTS = 2;
+const ENTER_TIMEOUT_MS = 4_000;
+const ENTER_BACKOFF_MS = 1_000;
+/** Most pool items one entry may carry in (D17 caps it far lower) and boss bag items (D19). */
+export const MAX_ENTRY_POOL = 32;
+export const MAX_BOSS_FILL = 4;
+const REJECT_REASONS: readonly EntryRejectReason[] = ["not_locked", "wrong_user", "expired", "already_active", "entry_limit", "shard_closed"];
+
+/**
+ * Shape check of the web's EntryResponse against the request: the snapshot must be the ticket's
+ * loadout of the ticket's user, uids unique across snapshot / pool / boss bag, at most
+ * MAX_ENTRY_POOL pool and MAX_BOSS_FILL boss items. null = malformed.
+ */
+export function parseEntryResponse(body: unknown, req: Pick<EntryRequest, "userId" | "loadoutId">): EntryResponse | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as Record<string, unknown>;
+  const level = Number.isInteger(b.level) && (b.level as number) >= 0 && (b.level as number) <= 1000 ? (b.level as number) : 0;
+  const autosellMult = typeof b.autosellMult === "number" && Number.isFinite(b.autosellMult) ? b.autosellMult : 1;
+  const guest = b.guest === true;
+  if (b.status === "rejected") {
+    const reason = REJECT_REASONS.includes(b.reason as EntryRejectReason) ? (b.reason as EntryRejectReason) : undefined;
+    return { status: "rejected", ...(reason ? { reason } : {}), snapshot: null, level, guest, pool: [], bossFill: [], autosellMult };
+  }
+  if (b.status !== "accepted") return null;
+  const seen = new Set<string>();
+  let snapshot: LoadoutSnapshot | null = null;
+  if (b.snapshot !== null && b.snapshot !== undefined) {
+    snapshot = sanitizeSnapshot(b.snapshot, req.userId, req.loadoutId, seen);
+    // An accepted loadout the server cannot place would sit in_raid on the web with nobody carrying it.
+    if (!snapshot) return null;
+  }
+  // snapshot null = free kit (also a locked loadout entering a demo shard: it stays in the stash).
+  return {
+    status: "accepted",
+    snapshot,
+    level,
+    guest,
+    pool: sanitizeUniques(b.pool, MAX_ENTRY_POOL, seen),
+    bossFill: sanitizeUniques(b.bossFill, MAX_BOSS_FILL, seen),
+    autosellMult,
+  };
+}
+
+/**
+ * POST /api/raids/enter. Returns the (sanitized) response, a rejection included, or null when the
+ * API is not configured, unreachable, busy, refused the body or replied garbage: the admission then
+ * answers web_unavailable. The web stores its response per entryId, so the player's next PLAY (same
+ * entryId) gets a committed entry back (D6).
+ */
+export async function enterRaid(req: EntryRequest, opts: PostOptions = {}): Promise<EntryResponse | null> {
+  const r = await postSigned<unknown>("/api/raids/enter", req, {
+    attempts: ENTER_ATTEMPTS,
+    timeoutMs: ENTER_TIMEOUT_MS,
+    backoffMs: ENTER_BACKOFF_MS,
     ...opts,
   });
   if (r.status !== "ok") {
-    if (r.status === "rejected") console.error(`[web-api] raids/start ${req.matchId} refused: ${r.code} ${r.body}`);
+    if (r.status === "rejected") console.error(`[web-api] raids/enter ${req.matchId}/${req.entryId} refused: ${r.code} ${r.body}`);
     return null;
   }
-  const b = r.body as Partial<RaidStartResponse> | null;
-  if (!b || typeof b !== "object" || !Array.isArray(b.accepted) || !Array.isArray(b.rejected)) {
-    console.error(`[web-api] raids/start ${req.matchId}: malformed reply`);
-    return null;
-  }
-  return {
-    accepted: b.accepted,
-    rejected: b.rejected,
-    containerLoot: b.containerLoot && typeof b.containerLoot === "object" ? b.containerLoot : {},
-    autosellMult: typeof b.autosellMult === "number" && Number.isFinite(b.autosellMult) ? b.autosellMult : 1,
-  };
+  const res = parseEntryResponse(r.body, req);
+  if (!res) console.error(`[web-api] raids/enter ${req.matchId}/${req.entryId}: malformed reply`);
+  return res;
+}
+
+/** POST /api/world/event, fire-and-forget (3 attempts; 404 unknown_match → dropped). Never throws. */
+export async function reportWorldEvent(req: WorldEventReport, opts: PostOptions = {}): Promise<boolean> {
+  const r = await postSigned("/api/world/event", req, { attempts: 3, ...opts });
+  if (r.status === "rejected") console.error(`[web-api] world/event ${req.matchId} ${req.kind} refused: ${r.code} ${r.body}`);
+  return r.status === "ok";
 }
 
 // ---------------------------------------------------------------- raids/exit, raids/end
 
-/** The part of the web's exit reply the game shows: final CR and the autosell receipt. */
+/**
+ * The part of the web's exit reply the game shows: final CR, the autosell receipt and (WORLD v6)
+ * the XP of this exit with its lines, the level after it and whether it went up.
+ */
 export interface ExitSettled {
   credits: number;
   sold: SoldLine[];
   guest: boolean;
+  xp?: number;
+  xpLines?: XpLine[];
+  level?: number;
+  levelUp?: boolean;
 }
+
+const XP_KEYS: readonly XpKey[] = ["extract", "haul", "containers", "npc", "guard", "boss", "pvp", "first_extract", "daily_cap"];
+const MAX_XP_LINES = 16;
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /** Shape check of the web's exit reply (ours, but a version skew must not crash a room). */
 export function parseExitSettled(body: unknown): ExitSettled | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
-  if (typeof b.credits !== "number" || !Number.isFinite(b.credits) || !Array.isArray(b.sold)) return null;
+  if (!finite(b.credits) || !Array.isArray(b.sold)) return null;
   const sold: SoldLine[] = [];
   for (const l of b.sold.slice(0, 64)) {
     const r = l as Record<string, unknown> | null;
@@ -189,12 +279,34 @@ export function parseExitSettled(body: unknown): ExitSettled | null {
     if (typeof r.label === "string" && r.label) line.label = r.label.slice(0, 32);
     sold.push(line);
   }
-  return { credits: b.credits, sold, guest: b.guest === true };
+  const out: ExitSettled = { credits: b.credits, sold, guest: b.guest === true };
+  if (finite(b.xp)) out.xp = Math.trunc(b.xp);
+  if (Array.isArray(b.xpLines)) {
+    const lines: XpLine[] = [];
+    for (const l of b.xpLines.slice(0, MAX_XP_LINES)) {
+      const r = l as Record<string, unknown> | null;
+      if (!r || !XP_KEYS.includes(r.key as XpKey) || !finite(r.qty) || !finite(r.xp)) continue;
+      lines.push({ key: r.key as XpKey, qty: r.qty, xp: r.xp });
+    }
+    out.xpLines = lines;
+  }
+  if (Number.isInteger(b.level) && (b.level as number) >= 0 && (b.level as number) <= 1000) out.level = b.level as number;
+  if (typeof b.levelUp === "boolean") out.levelUp = b.levelUp;
+  return out;
 }
 
-type ExitListener = (userId: string, r: ExitSettled) => void;
-/** Battle rooms listen for their own matchId (inventory-handlers.ts) to refresh OUTCOME. */
+/** `key` = the report's entryId (world) or userId (legacy roster matches). */
+type ExitListener = (key: string, r: ExitSettled) => void;
+/**
+ * Battle rooms listen for their own matchId (inventory-handlers.ts) to refresh OUTCOME. World
+ * receipts are keyed by entryId: one user may have several entries in one match.
+ */
 const exitListeners = new Map<string, ExitListener>();
+
+/** The key an exit receipt is routed by: entryId when set (world), else userId. */
+export function exitKeyOf(report: Pick<PlayerExitReport, "entryId" | "userId">): string {
+  return report.entryId || report.userId;
+}
 
 export function onExitSettled(matchId: string, fn: ExitListener): void {
   exitListeners.set(matchId, fn);
@@ -247,7 +359,7 @@ async function postExitDurable(report: PlayerExitReport, opts: ExitPostOptions):
     if (r.status !== "failed") return r;
     if (Date.now() + wait > until) {
       unsettledExits.add(report.matchId);
-      console.error(`[web-api] raids/exit ${report.matchId}/${report.userId} gave up: the end report will not be sent`);
+      console.error(`[web-api] raids/exit ${report.matchId}/${exitKeyOf(report)} gave up: the end report will not be sent`);
       return r;
     }
     await delay(wait);
@@ -262,13 +374,13 @@ async function postExit(report: PlayerExitReport, opts: PostOptions): Promise<Po
     const fn = exitListeners.get(report.matchId);
     if (settled && fn) {
       try {
-        fn(report.userId, settled);
+        fn(exitKeyOf(report), settled);
       } catch (e) {
         console.error(`[web-api] exit listener ${report.matchId} failed:`, e);
       }
     }
   } else if (r.status === "rejected") {
-    console.error(`[web-api] raids/exit ${report.matchId}/${report.userId} refused: ${r.code} ${r.body}`);
+    console.error(`[web-api] raids/exit ${report.matchId}/${exitKeyOf(report)} refused: ${r.code} ${r.body}`);
   }
   return r;
 }

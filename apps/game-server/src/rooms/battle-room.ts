@@ -1,26 +1,32 @@
 import { Room, ServerError, type Client } from "@colyseus/core";
 import { StateView } from "@colyseus/schema";
 import {
+  BOSS_KINDS,
   C2S,
+  CLOSE_CODES,
   MATCH,
   S2C,
   SERVER_TICK_MS,
+  WORLD,
+  WORLD_JOIN_ERR,
   type BattleState,
+  type BossKind,
   type JoinTicket,
   type JoinedMsg,
   type MatchEndReport,
   type MatchSummaryMsg,
 } from "@extract/shared";
-import { CLOSE } from "./close-codes.js";
-import { raidOptions, registerInventoryHandlers } from "./inventory-handlers.js";
+import { registerInventoryHandlers } from "./inventory-handlers.js";
 import { IntentLimiter } from "./intent-limit.js";
 import { authenticate, isLaunchKey, releasePendingSeatsOf } from "./room-auth.js";
-import { reportEnd, reportExit } from "../net/web-api.js";
+import { offExitSettled, reportEnd, reportExit, reportWorldEvent } from "../net/web-api.js";
 import { buildBatches } from "../sim/audience.js";
 import { withNpcSettlement } from "../sim/items.js";
 import { Match, expectedMapHash, warmMatchMap } from "../sim/match.js";
-import type { MatchEvent, RosterEntry } from "../sim/types.js";
+import type { MatchEvent } from "../sim/types.js";
 import { ViewSync } from "../sim/views.js";
+import { worldNow } from "../world/clock.js";
+import { worldDirectory, type ShardRoom, type WorldCreateOptions } from "../world/directory.js";
 import { TickStats, fmtTickSummary, perfLogEnabled } from "./tick-stats.js";
 
 // Process boot (map-boot, WP-M2): this module is imported once by index.ts before the server
@@ -39,14 +45,47 @@ export function checkJoinMapHash(options: unknown): void {
   if (expected === null) return; // legacy test map: seed-dependent, no single hash to compare
   const got = (options as { mapHash?: unknown } | null)?.mapHash;
   if (got !== expected) {
-    throw new ServerError(409, `map_mismatch: client map ${typeof got === "string" && got ? got.slice(0, 16) : "(none)"} != server ${expected}; reload the game`);
+    throw new ServerError(409, `${WORLD_JOIN_ERR.MAP_MISMATCH}:${expected}`);
   }
 }
 
 interface CreateOptions {
-  roster: RosterEntry[];
-  /** Must equal LAUNCH_KEY: only MatchmakingRoom may create battles. */
+  /** Must equal LAUNCH_KEY: only the WorldDirectory may create battles. */
   launchKey: string;
+  world: WorldCreateOptions;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const u32 = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 0xffffffff;
+
+/**
+ * The world part of a battle's create options, or null. Create options are plain JSON (and
+ * Colyseus forwards client options of /matchmake/* to onCreate), so they are checked again here
+ * even though only the directory can pass the launch key.
+ */
+export function sanitizeWorld(raw: unknown): WorldCreateOptions | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.matchId !== "string" || !UUID_RE.test(o.matchId)) return null;
+  if (!Number.isInteger(o.cycleId) || (o.cycleId as number) < 0 || (o.cycleId as number) > 0x7fffffff) return null;
+  if (!Number.isInteger(o.shard) || (o.shard as number) < 0 || (o.shard as number) > 64) return null;
+  if (!Number.isSafeInteger(o.cycleStartsAt) || (o.cycleStartsAt as number) < 0) return null;
+  if (typeof o.entryCloseMs !== "number" || !Number.isFinite(o.entryCloseMs) || o.entryCloseMs < 0 || o.entryCloseMs > WORLD.CYCLE_MS) return null;
+  if (!u32(o.matchSeed) || !u32(o.lootSeed) || !u32(o.envSeed)) return null;
+  if (o.bossEvent !== null && !(BOSS_KINDS as readonly unknown[]).includes(o.bossEvent)) return null;
+  if (o.mode !== "live" && o.mode !== "demo") return null;
+  return {
+    matchId: o.matchId.toLowerCase(),
+    cycleId: o.cycleId as number,
+    shard: o.shard as number,
+    cycleStartsAt: o.cycleStartsAt as number,
+    entryCloseMs: o.entryCloseMs,
+    matchSeed: o.matchSeed,
+    lootSeed: o.lootSeed,
+    envSeed: o.envSeed,
+    bossEvent: (o.bossEvent as BossKind | null) ?? null,
+    mode: o.mode,
+  };
 }
 
 /** Most samples accepted in one INPUT message (clients may batch after a hitch). */
@@ -55,28 +94,37 @@ const MAX_INPUT_BATCH = 15;
 const SETTLE_WAIT_MS = 5_000;
 
 /**
- * Thin network wrapper around sim/Match: messages become intents, drained sim events become
- * per-client `ev` batches or personal sends. All game rules live in sim/.
+ * One world shard (WORLD v6, spec §3.3): a thin network wrapper around sim/Match. Messages become
+ * intents, drained sim events become per-client `ev` batches, personal sends and web reports. All
+ * game rules live in sim/. Created only by the WorldDirectory (launch key); clients reach it only
+ * through joinById, whose static onAuth runs the admission before any seat is reserved.
  *
  * Tick order (fog memo §2.4): match.step → syncViews → broadcastPatch → dispatch. Patches are sent
  * by the tick itself (patchRate = null), so a newly visible shooter's Player entry reaches the
  * client in the same tick, before the ShotMsg that references it.
  */
-export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> {
+export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> implements ShardRoom {
   override autoDispose = false;
+  // maxClients stays Infinity (D3 / B5): capacity is the directory's, so no seat count can lock the room.
   /** Tick timing samples, only with BATTLE_PERF_LOG=1. */
   private perf: TickStats | null = perfLogEnabled() ? new TickStats() : null;
   // null = no automatic patch interval (Colyseus' typings say number; the setter accepts null).
   override patchRate = null as unknown as number;
-  private match!: Match;
+  /** The shard's Match (the directory reads it for admission). */
+  match!: Match;
   private views!: ViewSync;
-  /** userId → client currently controlling that player (a reconnect replaces the old one). */
+  /** userId → client currently controlling that user's runtime (a reconnect replaces the old one). */
   private readonly owners = new Map<string, Client>();
-  /** rosterIndex → connected client: all sim routing is by roster index. */
+  /** rosterIndex → connected client: all sim routing is by runtime index. */
   private readonly byRoster = new Map<number, Client>();
   private readonly intents = new IntentLimiter();
   private finishing = false;
   private summary: MatchSummaryMsg | null = null;
+  private disposedFlag = false;
+
+  get disposed(): boolean {
+    return this.disposedFlag;
+  }
 
   /** Refuse a create without leaving timers behind (Colyseus starts the room clock before onCreate). */
   private abortCreate(reason: string): never {
@@ -86,24 +134,41 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     throw new Error(reason);
   }
 
-  /** Runs before Colyseus finds, creates or reserves anything: no valid ticket, no seat. */
+  /**
+   * Runs before Colyseus reserves anything (joinById → callOnAuth → reserveSeatFor): no valid
+   * ticket or map, no seat. The admission puts the raider on the map, so the seat reservation that
+   * follows finds a living runtime (D4 / D6).
+   */
   static override async onAuth(_token: string, options: unknown): Promise<JoinTicket> {
     const ticket = authenticate(options);
     checkJoinMapHash(options);
+    await worldDirectory.admit(ticket);
     return ticket;
   }
 
   override onCreate(opts: CreateOptions) {
-    // Colyseus forwards client options of /matchmake/* to onCreate: never take a roster from them.
-    if (!isLaunchKey(opts?.launchKey)) this.abortCreate("battle: not launched by matchmaking");
-    const roster = sanitizeRoster(opts?.roster);
-    if (!roster) this.abortCreate("battle: invalid roster");
-    this.match = new Match({ roster, ...raidOptions(opts, roster) });
+    if (!isLaunchKey(opts?.launchKey)) this.abortCreate("battle: not launched by the world directory");
+    const world = sanitizeWorld(opts?.world);
+    if (!world) this.abortCreate("battle: invalid world options");
+    this.match = new Match({
+      roster: [],
+      matchId: world.matchId,
+      mapSeed: world.matchSeed,
+      lootSeed: world.lootSeed,
+      envSeed: world.envSeed,
+      mode: world.mode,
+      now: worldNow,
+      world: {
+        cycleId: world.cycleId,
+        shard: world.shard,
+        cycleStartsAt: world.cycleStartsAt,
+        entryCloseMs: world.entryCloseMs,
+        bossEvent: world.bossEvent,
+      },
+    });
     this.views = new ViewSync(this.match);
     this.setState(this.match.state);
-    // Double the humans: a reconnecting player may join before their stale socket is dropped.
-    this.maxClients = Math.max(1, roster.length * 2);
-    this.setMetadata({ matchId: this.match.state.matchId });
+    this.setMetadata({ matchId: world.matchId, cycleId: world.cycleId });
 
     this.onMessage(C2S.INPUT, (client, raw: unknown) => {
       const samples = Array.isArray(raw) ? raw.slice(-MAX_INPUT_BATCH) : [raw];
@@ -142,8 +207,9 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
   }
 
   /**
-   * Seats count toward maxClients from the HTTP reservation on, so only players of this roster may
-   * hold one (and only one pending each); anyone else would lock the room against its players.
+   * A seat counts from the HTTP reservation on, so only a user whose current runtime stands on this
+   * map may hold one (the admission in onAuth just put it there, or it is a rejoin), and only one
+   * pending seat each.
    */
   protected override async _reserveSeat(
     sessionId: string,
@@ -155,7 +221,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
   ): Promise<boolean> {
     if (!allowReconnection) {
       const userId = (authData as JoinTicket | undefined)?.userId;
-      if (!userId || !this.match.allRuntimes().some((rt) => !rt.isNpc && rt.userId === userId)) return false;
+      if (!userId || !this.match?.currentOf(userId)?.pub.alive) return false;
       await releasePendingSeatsOf(this, userId);
     }
     return super._reserveSeat(sessionId, joinOptions, authData, seconds, allowReconnection, devModeReconnection);
@@ -165,34 +231,61 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     const prev = this.owners.get(ticket.userId);
     const rt = this.match.attachHuman(ticket.userId, client.sessionId);
     if (!rt) {
-      client.leave(CLOSE.NOT_IN_ROSTER, "not_in_roster");
+      // The runtime died / extracted between the reservation and the WebSocket join.
+      client.leave(CLOSE_CODES.NOT_IN_WORLD, "not_in_world");
       return;
     }
     this.owners.set(ticket.userId, client);
+    const old = this.byRoster.get(rt.rosterIndex);
+    if (old && old !== client) this.views.detach(rt.rosterIndex, old.view);
     this.byRoster.set(rt.rosterIndex, client);
-    if (prev && prev !== client) prev.leave(CLOSE.JOINED_ELSEWHERE, "joined_elsewhere");
+    if (prev && prev !== client) prev.leave(CLOSE_CODES.JOINED_ELSEWHERE, "joined_elsewhere");
 
     // Fresh view on every (re)connect: own self entry first, then what this player may see.
     client.view = new StateView();
     this.views.attach(rt.rosterIndex, client.view);
 
-    const joined: JoinedMsg = { sessionId: client.sessionId, matchId: this.match.state.matchId, selfKey: rt.selfKey };
+    const joined: JoinedMsg = {
+      sessionId: client.sessionId,
+      matchId: this.match.state.matchId,
+      selfKey: rt.selfKey,
+      entryId: rt.entryId,
+      cycleId: this.match.world?.cycleId ?? 0,
+    };
     client.send(S2C.JOINED, joined);
-    // A player who reconnects after their exit still gets their result.
     if (rt.outcome) client.send(S2C.OUTCOME, rt.outcome);
     if (this.summary && this.finishing) client.send(S2C.SETTLED, this.summary);
   }
 
   override onLeave(client: Client) {
-    const ticket = client.auth as JoinTicket | undefined;
-    if (!ticket || this.owners.get(ticket.userId) !== client) return;
-    this.owners.delete(ticket.userId);
-    const rt = this.match.runtime(client.sessionId);
-    if (rt && this.byRoster.get(rt.rosterIndex) === client) {
-      this.byRoster.delete(rt.rosterIndex);
-      this.views.detach(rt.rosterIndex, client.view);
+    // Every runtime this client was routed to (a user's earlier entry keeps its old client until it leaves).
+    for (const [r, c] of this.byRoster) {
+      if (c !== client) continue;
+      this.byRoster.delete(r);
+      this.views.detach(r, client.view);
     }
+    const ticket = client.auth as JoinTicket | undefined;
+    if (ticket && this.owners.get(ticket.userId) === client) this.owners.delete(ticket.userId);
+    // Only a runtime still keyed by this client's sessionId (a reconnect re-keys it to the new one).
     this.match.detach(client.sessionId);
+  }
+
+  override onDispose() {
+    this.disposedFlag = true;
+    if (this.match) offExitSettled(this.match.state.matchId);
+  }
+
+  /** The wipe (directory timer at wipeAt; Match.step is the backstop): MIA for everyone, lock, end report. */
+  wipe(): void {
+    if (!this.match || this.disposedFlag) return;
+    this.match.wipe();
+    void this.lock();
+  }
+
+  /** Hard stop of a room that outlived its wipe (the directory logs it). */
+  async forceDispose(): Promise<void> {
+    if (this.disposedFlag) return;
+    await this.disconnect(CLOSE_CODES.WIPED);
   }
 
   private tick(dtMs: number) {
@@ -247,6 +340,17 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
         case "exit":
           void reportExit(ev.report);
           break;
+        case "world":
+          // Lobby "killed by" line and the News feed (fire-and-forget).
+          void reportWorldEvent({
+            matchId: this.match.state.matchId,
+            cycleId: this.match.world?.cycleId ?? 0,
+            kind: ev.kind,
+            boss: ev.boss,
+            by: ev.by.slice(0, 64),
+            atMs: Math.min(WORLD.CYCLE_MS, this.match.clock),
+          });
+          break;
         case "ended":
           void this.finish(ev.report, ev.summary);
           break;
@@ -260,30 +364,11 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     if (this.finishing) return;
     this.finishing = true;
     this.summary = summary;
+    void this.lock();
     // NPCs have no exit report: anything one still lists rides on the end report (leftOnMap).
     const full = withNpcSettlement(report, this.match.allRuntimes());
     await Promise.race([reportEnd(full), new Promise((r) => setTimeout(r, SETTLE_WAIT_MS))]);
     this.broadcast(S2C.SETTLED, summary);
-    this.clock.setTimeout(() => void this.disconnect(), MATCH.DISPOSE_AFTER_END_MS);
+    this.clock.setTimeout(() => void this.disconnect(CLOSE_CODES.WIPED), MATCH.DISPOSE_AFTER_END_MS);
   }
-}
-
-/**
- * The battle roster: humans only (NPC MODEL v5), 1..MATCH.MAX_HUMANS distinct userIds. A roster
- * with a bot entry (`isBot: true`) is refused as a whole: NPCs are never roster players.
- */
-export function sanitizeRoster(raw: unknown): RosterEntry[] | null {
-  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MATCH.MAX_HUMANS) return null;
-  const out: RosterEntry[] = [];
-  const seen = new Set<string>();
-  for (const r of raw) {
-    if (!r || typeof r !== "object") return null;
-    const { userId, nickname, isBot, loadoutId } = r as Record<string, unknown>;
-    if (typeof nickname !== "string" || (isBot !== undefined && isBot !== false)) return null;
-    if (typeof userId !== "string" || !userId || seen.has(userId)) return null;
-    seen.add(userId);
-    const lid = typeof loadoutId === "string" && loadoutId.length <= 64 ? loadoutId : "";
-    out.push({ userId, nickname: nickname.slice(0, 24), loadoutId: lid });
-  }
-  return out;
 }
