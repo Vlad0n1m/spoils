@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { GIVEAWAY, GIVEAWAY_KIT, itemDef, mulberry32, pickWeighted, type Rng } from "@extract/shared";
-import { itemEvents, items } from "../../db/schema";
+import { itemEvents, items, moneyLedger } from "../../db/schema";
 import { credit } from "../economy/ledger";
 import { giveawayLockRaids } from "../economy/config";
 import type { Db, Tx } from "./db";
@@ -37,9 +37,14 @@ export function rollStarterKit(rng: Rng): StarterRoll {
 }
 
 export type StarterResult =
-  | { status: "claimed"; itemIds: string[]; kit: StarterRoll; credits: number; bound: boolean }
+  | { status: "claimed"; itemIds: string[]; kit: StarterRoll; credits: number; bound: boolean; paidMinor: string }
   | { status: "already" }
-  | { status: "no_user" };
+  | { status: "no_user" }
+  | { status: "sold_out" }
+  | { status: "insufficient_funds"; priceMinor: string };
+
+/** House account of the market money journal (lib/market/market.ts HOUSE_ACCOUNT). */
+const HOUSE = "house";
 
 /** Tradable giveaway kits issued so far (3 non-bound giveaway items per kit; items are never deleted). */
 async function tradableKitsIssued(tx: Tx): Promise<number> {
@@ -52,33 +57,45 @@ async function tradableKitsIssued(tx: Tx): Promise<number> {
  * `starter_claimed_at` is set by a guarded UPDATE … WHERE starter_claimed_at IS NULL, so two
  * concurrent clicks give one kit. Plus GIVEAWAY_KIT.cr credits.
  *
- * v5 review (sybil kits → SOL): the kit is TRADABLE (`giveaway` origin, lock_raids 10 / demo 1, then
- * listable) only while fewer than GIVEAWAY.KITS tradable kits exist and the account deposited at
- * least GIVEAWAY.MIN_DEPOSIT_MINOR (confirmed / swept); a transaction-scoped advisory lock keeps the
- * cap exact under concurrent claims. Otherwise the same kit is BOUND: playable, never listable,
- * destroyed instead of entering the lost pool, 0 risk units — an alt farm gains nothing sellable.
+ * `paid: false` (default): the kit is BOUND and free: playable, never listable, destroyed instead of
+ * entering the lost pool, 0 risk units. `paid: true`: the kit is TRADABLE (`giveaway` origin,
+ * lock_raids 10 / demo 1, then listable) for GIVEAWAY.KIT_PRICE_MINOR from the market balance to the
+ * house, while fewer than GIVEAWAY.KITS tradable kits exist (a transaction-scoped advisory lock keeps
+ * the cap exact). Sold out or short of money → nothing is claimed, so the player can pick again.
  */
 export async function claimStarter(
   db: Db,
   userId: string,
-  opts: { rng?: Rng; lockRaids?: number; kitCap?: number } = {},
+  opts: { paid?: boolean; rng?: Rng; lockRaids?: number; kitCap?: number; priceMinor?: bigint } = {},
 ): Promise<StarterResult> {
+  const price = opts.priceMinor ?? BigInt(GIVEAWAY.KIT_PRICE_MINOR);
   return db.transaction(async (tx) => {
-    const exists = await tx.execute(sql`select 1 from users where id = ${userId}`);
-    if (!exists.rows[0]) return { status: "no_user" } as const;
+    const u = await tx.execute<{ balance_cents: string; claimed: boolean }>(
+      sql`select balance_cents, starter_claimed_at is not null as claimed from users where id = ${userId} for update`,
+    );
+    const user = u.rows[0];
+    if (!user) return { status: "no_user" } as const;
+    if (user.claimed) return { status: "already" } as const;
+
+    const bound = !opts.paid;
+    if (opts.paid) {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('giveaway_kits'))`);
+      if ((await tradableKitsIssued(tx)) >= (opts.kitCap ?? GIVEAWAY.KITS)) return { status: "sold_out" } as const;
+      if (BigInt(user.balance_cents) < price) return { status: "insufficient_funds", priceMinor: price.toString() } as const;
+    }
     const stamp = await tx.execute(
       sql`update users set starter_claimed_at = now() where id = ${userId} and starter_claimed_at is null`,
     );
     if ((stamp.rowCount ?? 0) !== 1) return { status: "already" } as const;
+    if (opts.paid && price > 0n) {
+      await tx.execute(sql`update users set balance_cents = balance_cents - ${price} where id = ${userId}`);
+      await tx.insert(moneyLedger).values([
+        { account: userId, deltaMinor: -price, reason: "kit_buy", refId: "starter" },
+        { account: HOUSE, deltaMinor: price, reason: "kit_sale", refId: userId },
+      ]);
+    }
 
     const kit = rollStarterKit(opts.rng ?? mulberry32((Math.random() * 2 ** 32) >>> 0));
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('giveaway_kits'))`);
-    const dep = await tx.execute<{ minor: string }>(
-      sql`select coalesce(sum(amount_cents), 0)::text as minor from deposits where user_id = ${userId} and status in ('confirmed', 'swept')`,
-    );
-    const deposited = BigInt(dep.rows[0]?.minor ?? "0");
-    const tradable = deposited >= BigInt(GIVEAWAY.MIN_DEPOSIT_MINOR) && (await tradableKitsIssued(tx)) < (opts.kitCap ?? GIVEAWAY.KITS);
-    const bound = !tradable;
     const lockRaids = bound ? 0 : (opts.lockRaids ?? giveawayLockRaids());
     const rows = await tx
       .insert(items)
@@ -101,6 +118,6 @@ export async function claimStarter(
     );
     for (const s of kit.stacks) await addStack(tx, userId, s.def, s.qty);
     const c = await credit(tx, userId, GIVEAWAY_KIT.cr, "giveaway", "starter");
-    return { status: "claimed", itemIds: rows.map((r) => r.id), kit, credits: c.ok ? c.balance : 0, bound } as const;
+    return { status: "claimed", itemIds: rows.map((r) => r.id), kit, credits: c.ok ? c.balance : 0, bound, paidMinor: (opts.paid ? price : 0n).toString() } as const;
   });
 }

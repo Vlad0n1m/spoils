@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { GIVEAWAY_KIT, itemDef, levelForXp, xpToNext } from "@extract/shared";
+import { GIVEAWAY, GIVEAWAY_KIT, itemDef, levelForXp, xpToNext } from "@extract/shared";
 import type { StashItemDto, StashResponse } from "@/lib/lobby/api-types";
 import { describeItem, fmtCr } from "@/lib/items-ui";
 import { formatMinor } from "@/lib/market/config";
@@ -21,26 +21,26 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
   const stash = res.data!;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selling, setSelling] = useState<StashItemDto | null>(null);
-  const [claiming, setClaiming] = useState(false);
+  const [claiming, setClaiming] = useState<"free" | "paid" | null>(null);
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
   const selected = stash.uniques.find((u) => u.id === selectedId) ?? null;
 
-  const claim = async () => {
-    setClaiming(true);
+  const claim = async (paid: boolean) => {
+    setClaiming(paid ? "paid" : "free");
     setNote(null);
     try {
-      const r = await api<{ bound?: boolean }>("/api/stash/starter", { method: "POST" });
+      const r = await api<{ bound?: boolean }>("/api/stash/starter", { method: "POST", body: { paid } });
       await res.reload();
       setNote({
         ok: true,
         text: r?.bound
           ? "Starter kit added to your stash (bound: yours to use, not to sell). Equip it in the Loadout tab."
-          : "Starter kit added to your stash. Equip it in the Loadout tab.",
+          : "Tradable starter kit added to your stash. It unlocks for the market after you extract with it. Equip it in the Loadout tab.",
       });
     } catch (e) {
       setNote({ ok: false, text: e instanceof Error ? e.message : "Claim failed" });
     } finally {
-      setClaiming(false);
+      setClaiming(null);
     }
   };
 
@@ -91,14 +91,21 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
               <div className="min-w-0 flex-1">
                 <h2 className="text-2xl tracking-wide">Claim your starter kit</h2>
                 <p className="font-body text-sm">
-                  A weapon, armor, a backpack, ammo, meds and {fmtCr(GIVEAWAY_KIT.cr)}. Accounts with a deposit (while the
-                  giveaway lasts) get tradable items that unlock for the market after you extract with them; otherwise the
-                  kit is bound: yours to use, not to sell.
+                  A weapon, armor, a backpack, ammo, meds and {fmtCr(GIVEAWAY_KIT.cr)}. Free kit: yours to use, not to sell. Tradable
+                  kit ({formatMinor(GIVEAWAY.KIT_PRICE_MINOR)}, while the giveaway lasts): the same gear, sellable on the market
+                  after you extract with it. One kit per account.
                 </p>
               </div>
-              <button type="button" onClick={claim} disabled={claiming} className="toon-btn-ghost min-h-12 px-6 text-lg">
-                <span className="optical-center">{claiming ? "Claiming…" : "Claim"}</span>
-              </button>
+              <div className="flex w-full flex-wrap gap-3">
+                <button type="button" onClick={() => claim(false)} disabled={claiming !== null} className="toon-btn-ghost min-h-12 px-6 text-lg">
+                  <span className="optical-center">{claiming === "free" ? "Claiming…" : "Free kit"}</span>
+                </button>
+                <button type="button" onClick={() => claim(true)} disabled={claiming !== null} className="toon-btn-ghost min-h-12 px-6 text-lg">
+                  <span className="optical-center">
+                    {claiming === "paid" ? "Buying…" : `Tradable · ${formatMinor(GIVEAWAY.KIT_PRICE_MINOR)}`}
+                  </span>
+                </button>
+              </div>
             </div>
           </section>
         )}

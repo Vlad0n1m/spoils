@@ -1012,15 +1012,17 @@ export interface PricePoint {
 // ---------------------------------------------------------------- giveaway / starter kit
 
 /**
- * Giveaway (economy memo §15.6). v5 review: the SOL-tradable kit (lock_raids, then listable) goes
- * to at most KITS accounts, and only to an account that deposited at least MIN_DEPOSIT_MINOR
- * (= MIN_WALLET_SOL in balance_cents hundredths; custodial accounts have no external wallet whose
- * age MIN_WALLET_AGE_DAYS could check, so a real deposit is the sybil cost). Every other new
- * account gets the same kit BOUND (never listable, never enters the lost pool, 0 risk units):
- * everyone can play geared, nobody can farm sellable kits with alts.
+ * Giveaway (economy memo §15.6). The SOL-tradable kit (lock_raids, then listable) is SOLD for
+ * KIT_PRICE_MINOR to at most KITS accounts, paid from the market balance to the house. A deposit
+ * gate alone cost an alt nothing (the deposit can be withdrawn again), so a real payment is the
+ * sybil cost. Every account may instead take the same kit BOUND for free (never listable, never
+ * enters the lost pool, 0 risk units): everyone can play geared, nobody can farm sellable kits.
  */
 export const GIVEAWAY = {
   KITS: 1000,
+  /** Price of the tradable kit in balance_cents (5 = 0.05 SOL). */
+  KIT_PRICE_MINOR: 5,
+  /** @deprecated the deposit gate was replaced by KIT_PRICE_MINOR; kept for the econ sim. */
   MIN_DEPOSIT_MINOR: 5,
   /** Raids the item must be extracted in before it can be listed (demo: 1). */
   LOCK_RAIDS: 10,
