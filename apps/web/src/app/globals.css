@@ -141,3 +141,40 @@ button {
   -webkit-text-stroke: 0.08em #000;
   paint-order: stroke fill;
 }
+
+/*
+ * WORLD v6 main menu (spec §6.1). Side button: a chunky square tile in the toon language; it lifts on
+ * hover and presses like .toon-btn. Locked tiles carry a "SOON" ribbon across the bottom.
+ */
+.toon-tile {
+  @apply relative flex flex-col items-center justify-center gap-1.5 rounded-2xl border-[3px] border-black bg-[#1d2333]/90 text-white shadow-[0_4px_0_#000] transition-[transform,box-shadow,background-color] duration-150;
+}
+
+.toon-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 7px 0 #000;
+}
+
+.toon-tile:active {
+  transform: translateY(3px);
+  box-shadow: 0 2px 0 #000;
+}
+
+.toon-ribbon {
+  @apply pointer-events-none absolute inset-x-2 bottom-2 rounded-md border-2 border-black bg-white py-1 text-center text-[0.6rem] tracking-[0.2em] text-black shadow-[0_2px_0_#000];
+}
+
+/* Diagonal stripes for an armed PLAY ("READY ✓"); animated with animate-stripes. */
+.play-stripes {
+  background-image: repeating-linear-gradient(-45deg, rgba(0, 0, 0, 0.14) 0 10px, transparent 10px 20px);
+  background-size: 28px 28px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toon-tile,
+  .toon-tile:hover,
+  .toon-tile:active {
+    transition: none;
+    transform: none;
+  }
+}

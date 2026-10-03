@@ -1,22 +1,26 @@
-import { TopBar } from "@/components/top-bar";
-import { ZooaAmbientBg } from "@/components/zooa-ambient-bg";
-import { LobbyShell } from "@/components/lobby/lobby-shell";
-import { parseLobbyTab } from "@/lib/lobby/tabs";
+import { Suspense } from "react";
+import type { Metadata } from "next";
+import { MainMenu } from "@/components/menu/main-menu";
+import { BRAND } from "@/lib/brand";
+import { parseLobbyPanel } from "@/lib/lobby/panels";
 
 export const dynamic = "force-dynamic";
 
-/** Lobby: tabs Raid | Loadout | Stash | Market, selected by `?tab=` so every tab is linkable. */
+export const metadata: Metadata = {
+  title: `${BRAND.name} — ${BRAND.mapName}`,
+  description: "One always-live map, wiped every 45 minutes. Drop in, loot up, get out alive.",
+};
+
+/**
+ * WORLD v6 main menu (spec §6): full screen, panels selected by `?panel=&tab=&period=` (legacy
+ * `?tab=` links still land on the right panel).
+ */
 export default async function PlayPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const tab = parseLobbyTab((await searchParams).tab);
+  const initialPanel = parseLobbyPanel(await searchParams);
+  // useSearchParams lives inside: the boundary keeps any static render path legal.
   return (
-    <div className="relative flex min-h-[100dvh] flex-col overflow-hidden bg-[#090b08] text-white">
-      <ZooaAmbientBg />
-      <div className="relative z-10 flex min-h-0 flex-1 flex-col">
-        <TopBar />
-        <main className="relative flex-1">
-          <LobbyShell tab={tab} />
-        </main>
-      </div>
-    </div>
+    <Suspense fallback={<div className="h-[100dvh] bg-[#090b08]" aria-busy="true" />}>
+      <MainMenu initialPanel={initialPanel} />
+    </Suspense>
   );
 }

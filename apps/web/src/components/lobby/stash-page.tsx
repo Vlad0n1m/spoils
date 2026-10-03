@@ -8,14 +8,14 @@ import { describeItem, fmtCr } from "@/lib/items-ui";
 import { formatMinor } from "@/lib/market/config";
 import { ItemCard } from "./item-card";
 import { StashList, uniqueBadge } from "./stash-list";
-import { TraderJunker } from "./trader-junker";
+import { panelHref } from "@/lib/lobby/panels";
 import { ListDialog } from "./list-dialog";
 import { api, type Resource } from "./use-lobby";
 
 /**
  * Stash tab (inventory memo "stash-page"): wallet (CR + market balance), level, the starter-kit
  * claim, every unique with rarity / durability / state, ammo and med stacks, an item drawer with
- * the Sell action, and the junker shop.
+ * the Sell action. The junker moved to Shop · Traders (WORLD v6); a link points there.
  */
 export function StashPage({ res }: { res: Resource<StashResponse> }) {
   const stash = res.data!;
@@ -140,14 +140,16 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
           stash={stash}
           onSell={(u) => setSelling(u)}
         />
-        <TraderJunker
-          credits={stash.credits}
-          stacks={stash.stacks}
-          autosellMult={stash.autosellMult}
-          level={stash.level}
-          onBought={(r) => res.mutate((s) => ({ ...s, credits: r.credits, stacks: { ...s.stacks, [r.def]: r.qty } }))}
-          onBoundBought={() => void res.reload()}
-        />
+        <section className="toon-panel flex items-center gap-4 bg-[#161b28]/95 p-5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/sprites/ammo.png" alt="" className="h-12 w-12 shrink-0 object-contain" draggable={false} />
+          <div className="min-w-0">
+            <h2 className="toon-text-thin text-xl tracking-wide text-white">Need ammo or meds?</h2>
+            <Link href={panelHref({ panel: "shop", tab: "traders" })} className="font-body mt-1 inline-block text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline">
+              Buy them for CR in Shop · Traders →
+            </Link>
+          </div>
+        </section>
       </div>
 
       {selling && (
@@ -232,7 +234,7 @@ function ItemDrawer({ item, stash, onSell }: { item: StashItemDto | null; stash:
         </button>
         {blocker && <p className="font-body text-sm text-white/60">{blocker}</p>}
         {item.state === "in_stash" && (
-          <Link href="/play?tab=loadout" className="toon-btn-ghost min-h-11 text-sm">
+          <Link href={panelHref({ panel: "inventory", tab: "loadout" })} className="toon-btn-ghost min-h-11 text-sm">
             <span className="optical-center">Equip in loadout</span>
           </Link>
         )}

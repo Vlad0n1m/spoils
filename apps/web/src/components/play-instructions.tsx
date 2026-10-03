@@ -1,28 +1,40 @@
 "use client";
 
+import Link from "next/link";
 import {
   BACKPACK_SLOTS,
   BREAK_CHANCE_ON_DEATH,
   INPUT_DT_MS,
+  MARKET,
   MATCH,
   PLAYER,
   POCKET_SLOTS,
   ROLL,
+  WORLD,
+  XP,
+  xpToNext,
 } from "@extract/shared";
-import { Reveal } from "@/components/reveal";
-import { fmtClock } from "@/lib/items-ui";
+import { MARKET_CURRENCY } from "@/lib/market/config";
+import { BRAND } from "@/lib/brand";
 
-const RAID_MIN = Math.round(MATCH.DURATION_MS / 60_000);
+const min = (ms: number) => Math.round(ms / 60_000);
+const CYCLE_MIN = min(WORLD.CYCLE_MS);
+const CLOSE_MIN = min(WORLD.ENTRY_CLOSE_MS);
+const ARM_MIN = min(WORLD.EXTRACT_ARM_MS);
+const EARLY_MIN = min(WORLD.EXTRACT_EARLY_CLOSE_MS);
+const GROUND_MIN = min(WORLD.GROUND_EXPIRE_MS);
+const CORPSE_MIN = min(WORLD.CORPSE_EXPIRE_MS);
 const ROLL_CD_S = Math.round((ROLL.COOLDOWN_TICKS * INPUT_DT_MS) / 1000);
 const BAGS = BACKPACK_SLOTS.filter((n) => n > 0).join(" / ");
 const BREAK_PCT = Math.round(BREAK_CHANCE_ON_DEATH * 100);
+const CUR = MARKET_CURRENCY.code;
 
-/** v2 rules, short enough to read in the lobby. Numbers come from the shared constants. */
+/** World rules, short enough to read in the lobby. Every number comes from the shared constants. */
 const STEPS: { title: string; body: string; icon: string }[] = [
   {
     title: "Drop in",
     icon: "/sprites/pistol.png",
-    body: `A raid lasts ${RAID_MIN} minutes. You drop with your loadout, or with the free kit: a pistol, light ammo and a bandage. ${PLAYER.MAX_HP} HP. The free pistol never breaks and never drops.`,
+    body: `${BRAND.mapName} is always on. Drop in any time: the map wipes every ${CYCLE_MIN} minutes and entry closes ${CLOSE_MIN} minutes before the wipe. You drop with your loadout or the free kit (a pistol, light ammo and a bandage; the free pistol never breaks and never drops). ${PLAYER.MAX_HP} HP.`,
   },
   {
     title: "Search",
@@ -37,51 +49,180 @@ const STEPS: { title: string; body: string; icon: string }[] = [
   {
     title: "Locals",
     icon: "/sprites/boss.png",
-    body: `Everyone else in the raid is a real player — up to ${MATCH.MAX_HUMANS}, and nobody fills empty seats. The rest are NPCs: marauder squads hold the towns and road camps, and bosses sit in the top POIs with their guards. NPCs guard their post, fight whoever comes close and drop scarce loot; they never loot or extract.`,
+    body: `Everyone else on the map is a real player — up to ${WORLD.CAPACITY} at once, and nobody fills empty seats. The rest are NPCs: marauder squads hold the towns and road camps. Bosses are events: about one map in three, announced in the lobby, holding their spot with guards. NPCs fight whoever comes close and drop scarce loot; they never loot or extract.`,
   },
   {
     title: "Carry",
     icon: "/sprites/backpack_2.png",
-    body: `${POCKET_SLOTS} pockets plus a backpack (${BAGS} slots); ammo, meds and junk stack in a slot. Heal with 3 (bandage) or 4 (medkit), switch guns with 1 / 2. Junk you bring out is auto-sold for CR.`,
+    body: `${POCKET_SLOTS} pockets plus a backpack (${BAGS} slots); ammo, meds and junk stack in a slot. Heal with 3 (bandage) or 4 (medkit), switch guns with 1 / 2. Junk you bring out is sold automatically for CR.`,
   },
   {
     title: "Extract",
     icon: "/sprites/backpack.png",
-    body: `Extracts open at ${fmtClock(MATCH.EXTRACT_OPEN_AT_MS)}. Stand in one for ${MATCH.EXTRACT_CHANNEL_MS / 1000} s to get out with everything you carry; taking damage restarts the countdown, and some close early. Still on the map after ${RAID_MIN} minutes? You lose it all.`,
+    body: `Your extracts arm ${ARM_MIN} minutes after you drop in. Stand in one for ${MATCH.EXTRACT_CHANNEL_MS / 1000} s to get out with everything you carry; taking damage restarts the countdown, and some extracts close ${EARLY_MIN} minutes before the wipe. Extracted or dead, you can drop in again with a fresh loadout, up to ${WORLD.MAX_ENTRIES_PER_CYCLE} times per map.`,
   },
   {
     title: "Don't get caught",
     icon: "/sprites/corpse.png",
-    body: `Die and you leave a corpse with your gear. Each item on it has a ${BREAK_PCT}% chance to break; the rest is loot for whoever searches you.`,
+    body: `Die and you leave a body with your gear: each item on it has a ${BREAK_PCT}% chance to break, the rest is loot for whoever searches you. Still on the map when it wipes? You're caught in the wipe and lose everything you carry.`,
   },
 ];
 
+/** Info · How to play (WORLD v6 spec §6.3). */
 export function PlayerInstructions() {
   return (
-    <aside className="toon-panel bg-[#161b28]/95 p-6 md:p-8" aria-label="How to play">
-      <Reveal as="h2" delay={0} className="toon-text text-3xl tracking-wide text-zooa-lime md:text-4xl">
-        How to play
-      </Reveal>
-      <p className="font-body mt-3 text-base leading-relaxed text-white/70">
-        Top-down extraction shooter: loot up, survive, get out alive.
-      </p>
-      <ol className="mt-6 list-none space-y-4 border-t-[3px] border-black/50 pt-6">
+    <section aria-label="How to play">
+      <p className="font-body text-base leading-relaxed text-white/75">Top-down extraction shooter: drop in, loot up, get out alive.</p>
+      <ol className="mt-5 list-none space-y-4">
         {STEPS.map((s, i) => (
-          <li key={s.title}>
-            <Reveal as="div" delay={80 + i * 50} className="flex gap-4">
-              <span className="relative grid h-14 w-14 shrink-0 place-items-center rounded-2xl border-[3px] border-black bg-white/[0.07] shadow-[0_3px_0_#000]">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={s.icon} alt="" className="h-11 w-11 object-contain" draggable={false} />
-                <span className="toon-key absolute -left-2 -top-2 h-5 min-w-5 bg-zooa-lime text-[0.65rem]">{i + 1}</span>
-              </span>
-              <div className="min-w-0">
-                <h3 className="text-lg tracking-wide text-white">{s.title}</h3>
-                <p className="font-body mt-1.5 text-[0.95rem] leading-relaxed text-white/70">{s.body}</p>
-              </div>
-            </Reveal>
+          <li key={s.title} className="flex gap-4">
+            <span className="relative grid h-14 w-14 shrink-0 place-items-center rounded-2xl border-[3px] border-black bg-white/[0.07] shadow-[0_3px_0_#000]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={s.icon} alt="" className="h-11 w-11 object-contain" draggable={false} />
+              <span className="toon-key absolute -left-2 -top-2 h-5 min-w-5 bg-zooa-lime text-[0.65rem]">{i + 1}</span>
+            </span>
+            <div className="min-w-0">
+              <h3 className="text-lg tracking-wide text-white">{s.title}</h3>
+              <p className="font-body mt-1.5 text-[0.95rem] leading-relaxed text-white/75">{s.body}</p>
+            </div>
           </li>
         ))}
       </ol>
-    </aside>
+      <p className="font-body mt-6 rounded-xl border-2 border-black bg-amber-300 px-3 py-2 text-sm font-bold text-black">
+        Items left on the ground vanish after {GROUND_MIN} min, bodies after {CORPSE_MIN} min — valuables go to the treasury.
+      </p>
+    </section>
+  );
+}
+
+const XP_ROWS: Array<[string, string]> = [
+  ["Extract", `${XP.EXTRACT_BASE} + ${XP.EXTRACT_PER_MIN} per minute on the map (up to ${XP.EXTRACT_MAX_MIN} min), after ${min(XP.MIN_ONMAP_MS)}+ minutes on the map`],
+  ["Haul", `1 per ${XP.HAUL_CR_PER_XP} CR of junk sold (up to ${XP.HAUL_MAX}), same ${min(XP.MIN_ONMAP_MS)}-minute rule`],
+  ["Container searched", `${XP.CONTAINER} each (up to ${XP.CONTAINER_MAX} containers per drop)`],
+  ["Marauder", `${XP.NPC}`],
+  ["Guard", `${XP.GUARD}`],
+  ["Boss", `${XP.BOSS}`],
+  ["Raider", `${XP.PVP} (at most ${XP.PVP_PAIR_PER_DAY} per opponent a day)`],
+  ["First extract of the day", `doubles that drop (up to +${XP.FIRST_EXTRACT_MAX})`],
+];
+
+function Block({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="toon-panel bg-[#161b28]/95 p-4 md:p-5">
+      <h3 className="toon-text-thin text-xl tracking-wide text-white">{title}</h3>
+      <div className="font-body mt-3 text-[0.95rem] leading-relaxed text-white/75">{children}</div>
+    </section>
+  );
+}
+
+/** Info · Rules (WORLD v6 spec §6.3): currencies, risk, XP table, boards, ground expiry. */
+export function RulesSection() {
+  return (
+    <div className="flex flex-col gap-4">
+      <Block title="Two currencies">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+          <dt className="font-bold text-amber-300">CR</dt>
+          <dd>Earned from junk you bring out (sold automatically). Spent at the traders on ammo, meds and bound gear. Credits never convert to {CUR}.</dd>
+          <dt className="font-bold text-sol-400">{CUR}</dt>
+          <dd>
+            Your market wallet: buy and sell gear with other raiders ({MARKET.FEE_BPS / 100}% fee on sales). Selling unlocks at level{" "}
+            {MARKET.SELL_UNLOCK_LEVEL}. The game never pays {CUR} out by itself.
+          </dd>
+        </dl>
+      </Block>
+      <Block title="Risk">
+        <p>
+          Gear you bring is at risk: die and each item has a {BREAK_PCT}% chance to break; the rest stays on your body. Lost
+          gear goes to the lost pool and comes back onto the map — in containers and on marauders — when raiders drop in
+          with real gear. A free kit risks nothing and brings nothing back.
+        </p>
+        <p className="mt-2">
+          Items left on the ground vanish after {GROUND_MIN} min, bodies after {CORPSE_MIN} min — valuables go to the treasury.
+        </p>
+      </Block>
+      <Block title="Experience">
+        <table className="w-full text-left text-sm">
+          <tbody>
+            {XP_ROWS.map(([k, v]) => (
+              <tr key={k} className="border-t border-white/10 first:border-t-0">
+                <th scope="row" className="py-1.5 pr-3 align-top font-bold text-white">
+                  {k}
+                </th>
+                <td className="py-1.5">{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mt-3 text-sm">
+          No XP for time alive or for dropping in. After {XP.DAILY_SOFT_CAP.toLocaleString("en-US")} XP a day from extracts, hauls,
+          containers, marauders and guards, those lines give a quarter. Caught in the wipe: kill XP only. Level 2 takes{" "}
+          {xpToNext(1)} XP, and each next level {xpToNext(2) - xpToNext(1)} more.
+        </p>
+      </Block>
+      <Block title="Leaderboards">
+        <p>Level (all time), Raider kills and NPC kills, for this map, this week or all time. Guests aren&apos;t ranked. No prizes: the boards are for bragging.</p>
+      </Block>
+      <Link href="/economy" className="font-body self-start rounded-lg px-1 text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline">
+        Live economy stats →
+      </Link>
+    </div>
+  );
+}
+
+const KEYS: Array<[string[], string]> = [
+  [["W", "A", "S", "D"], "Move"],
+  [["Mouse"], "Aim · left button fires"],
+  [["R"], "Reload"],
+  [["F"], "Search / interact"],
+  [["T"], "Take all"],
+  [["Tab"], "Inventory"],
+  [["Space"], `Roll (${ROLL_CD_S} s cooldown)`],
+  [["Shift"], "Walk quietly"],
+  [["1", "2"], "Switch weapon"],
+  [["3"], "Bandage"],
+  [["4"], "Medkit"],
+  [["M"], "Full map"],
+  [["Esc"], "Close a panel"],
+];
+
+const MENU_KEYS: Array<[string, string]> = [
+  ["I", "Inventory"],
+  ["B", "Shop"],
+  ["L", "Leaderboards"],
+  ["N", "News"],
+  ["H", "Info"],
+];
+
+/** Info · Controls (WORLD v6 spec §6.3). */
+export function ControlsSection() {
+  return (
+    <div className="flex flex-col gap-4">
+      <Block title="In a raid">
+        <ul className="divide-y divide-white/10">
+          {KEYS.map(([keys, what]) => (
+            <li key={what} className="flex min-h-10 items-center justify-between gap-3 py-1.5">
+              <span>{what}</span>
+              <span className="flex shrink-0 gap-1">
+                {keys.map((k) => (
+                  <kbd key={k} className="toon-key px-1.5 font-sans text-[0.7rem]">
+                    {k}
+                  </kbd>
+                ))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </Block>
+      <Block title="In the menu">
+        <ul className="divide-y divide-white/10">
+          {MENU_KEYS.map(([k, what]) => (
+            <li key={k} className="flex min-h-10 items-center justify-between gap-3 py-1.5">
+              <span>{what}</span>
+              <kbd className="toon-key px-1.5 font-sans text-[0.7rem]">{k}</kbd>
+            </li>
+          ))}
+        </ul>
+      </Block>
+    </div>
   );
 }
