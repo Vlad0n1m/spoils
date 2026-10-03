@@ -43,6 +43,57 @@ export default {
           "0%, 100%": { textShadow: "0 0 18px rgba(212,160,23,0.35)", opacity: "0.9" },
           "50%": { textShadow: "0 0 36px rgba(212,160,23,0.6)", opacity: "1" },
         },
+        // ---- WORLD v6 main menu (spec §6.7): transform / opacity / filter only.
+        "hero-idle": {
+          "0%, 100%": { transform: "translateY(0) scaleY(1)" },
+          "50%": { transform: "translateY(-4px) scaleY(1.01)" },
+        },
+        "banner-drop": {
+          "0%": { opacity: "0", transform: "translateY(-16px)" },
+          "60%": { opacity: "1", transform: "translateY(2px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        "shake-once": {
+          "0%, 100%": { transform: "translateX(0)" },
+          "20%": { transform: "translateX(-3px)" },
+          "40%": { transform: "translateX(3px)" },
+          "60%": { transform: "translateX(-2px)" },
+          "80%": { transform: "translateX(2px)" },
+        },
+        "xp-fill": {
+          "0%, 100%": { filter: "brightness(1)" },
+          "50%": { filter: "brightness(1.7)" },
+        },
+        "drawer-in-left": {
+          "0%": { opacity: "0", transform: "translateX(-24px)" },
+          "100%": { opacity: "1", transform: "translateX(0)" },
+        },
+        "drawer-in-right": {
+          "0%": { opacity: "0", transform: "translateX(24px)" },
+          "100%": { opacity: "1", transform: "translateX(0)" },
+        },
+        "sheet-up": {
+          "0%": { opacity: "0", transform: "translateY(24px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        "panel-in": {
+          "0%": { opacity: "0", transform: "scale(0.98)" },
+          "100%": { opacity: "1", transform: "scale(1)" },
+        },
+        "pop-in": {
+          "0%": { opacity: "0", transform: "scale(0.6)" },
+          "70%": { opacity: "1", transform: "scale(1.06)" },
+          "100%": { opacity: "1", transform: "scale(1)" },
+        },
+        stripes: {
+          "0%": { backgroundPosition: "0 0" },
+          "100%": { backgroundPosition: "28px 0" },
+        },
+        // Opacity-only glow (compositor): PLAY and the hero ring pulse without repainting shadows.
+        "soft-glow": {
+          "0%, 100%": { opacity: "0.35" },
+          "50%": { opacity: "0.85" },
+        },
       },
       animation: {
         "outcome-enter": "outcome-enter 0.55s ease-out both",
@@ -53,6 +104,17 @@ export default {
         twinkle: "twinkle 5s ease-in-out infinite",
         "fade-up": "fade-up 0.8s cubic-bezier(0.16,1,0.3,1) both",
         "text-breathe": "text-breathe 4s ease-in-out infinite",
+        "hero-idle": "hero-idle 4s ease-in-out infinite",
+        "banner-drop": "banner-drop 0.3s cubic-bezier(0.16,1,0.3,1) both",
+        "shake-once": "shake-once 0.4s ease-in-out 0.3s 1",
+        "xp-fill": "xp-fill 0.9s ease-out 1",
+        "drawer-in-left": "drawer-in-left 0.22s cubic-bezier(0.16,1,0.3,1) both",
+        "drawer-in-right": "drawer-in-right 0.22s cubic-bezier(0.16,1,0.3,1) both",
+        "sheet-up": "sheet-up 0.22s cubic-bezier(0.16,1,0.3,1) both",
+        "panel-in": "panel-in 0.18s cubic-bezier(0.16,1,0.3,1) both",
+        "pop-in": "pop-in 0.45s cubic-bezier(0.16,1,0.3,1) both",
+        stripes: "stripes 1.2s linear infinite",
+        "soft-glow": "soft-glow 3.2s ease-in-out infinite",
       },
       colors: {
         ink: {

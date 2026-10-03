@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { StashItemDto, StashResponse } from "@/lib/lobby/api-types";
 import { fmtCr } from "@/lib/items-ui";
 import { formatMinor } from "@/lib/market/config";
+import { panelHref } from "@/lib/lobby/panels";
 import { ItemCard } from "./item-card";
 import { ListDialog } from "./list-dialog";
 import { MarketTable, RecentTrades } from "./market-table";
@@ -12,7 +13,7 @@ import { MyListings } from "./my-listings";
 import type { Resource } from "./use-lobby";
 
 /**
- * Market tab: the lot board, plus (registered users) wallet, a quick "sell from stash" picker,
+ * Shop · Market: the lot board, plus (registered users) wallet, a quick "sell from stash" picker,
  * the user's lots and recent sales. Guests and signed-out visitors can browse.
  */
 export function MarketTab({ stash, sessionLoading = false }: { stash: Resource<StashResponse> | null; sessionLoading?: boolean }) {
@@ -78,7 +79,7 @@ export function MarketTab({ stash, sessionLoading = false }: { stash: Resource<S
             <p className="font-body mt-3 text-sm text-white/65">
               Register to buy and sell weapons, armor and backpacks with other raiders.
             </p>
-            <Link href="/auth/register?next=/play?tab=market" className="toon-btn mt-4 min-h-12 w-full text-lg">
+            <Link href={`/auth/register?next=${encodeURIComponent(panelHref({ panel: "shop" }))}`} className="toon-btn mt-4 min-h-12 w-full text-lg">
               <span className="optical-center">Register</span>
             </Link>
           </section>

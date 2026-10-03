@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { EQUIP_KEYS, FREE_KIT, POCKET_SLOTS, itemDef, type LoadoutEntry } from "@extract/shared";
 import type { StashResponse } from "@/lib/lobby/api-types";
@@ -21,6 +20,7 @@ import {
   type StashView,
 } from "@/lib/lobby/loadout-model";
 import { describeItem } from "@/lib/items-ui";
+import { panelHref } from "@/lib/lobby/panels";
 import { ItemCard, EmptySlot } from "./item-card";
 import { StashList } from "./stash-list";
 import { api } from "./use-lobby";
@@ -34,10 +34,11 @@ type SaveState = "idle" | "saving" | "saved" | "error";
  * Loadout tab (inventory memo "loadout-board"): stash on the left, the raid doll in the middle
  * (2 weapons, armor, backpack, 4 pockets, backpack grid sized by the equipped pack), summary on
  * the right. Click a stash item to auto-place it with the shared planPlace; click a slot to send
- * it back. The draft autosaves; POST /api/matches/join (Raid tab → Play) locks it for the raid.
- * While gear is locked or in a raid the board is read-only.
+ * it back. The draft autosaves; PLAY in the main menu (POST /api/world/join) locks it for the raid.
+ * While gear is locked or in a raid the board is read-only. `onDone` closes the Inventory panel
+ * ("Save & close" flushes a pending autosave first).
  */
-export function LoadoutBoard({ stash, reload }: { stash: StashResponse; reload: () => Promise<void> }) {
+export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; reload: () => Promise<void>; onDone?: () => void }) {
   const view: StashView = useMemo(() => ({ uniques: stash.uniques, stacks: stash.stacks }), [stash]);
   const locked = stash.active;
   const [entries, setEntries] = useState<LoadoutEntry[]>(() =>
@@ -88,8 +89,7 @@ export function LoadoutBoard({ stash, reload }: { stash: StashResponse; reload: 
     [],
   );
 
-  const router = useRouter();
-  const deploy = async () => {
+  const saveAndClose = async () => {
     setBusy(true);
     try {
       if (pending.current) {
@@ -98,7 +98,8 @@ export function LoadoutBoard({ stash, reload }: { stash: StashResponse; reload: 
         await api("/api/loadout/draft", { method: "PUT", body });
         setSave("saved");
       }
-      router.push("/play?tab=raid");
+      setBusy(false);
+      onDone?.();
     } catch (e) {
       setToast(e instanceof Error ? e.message : "Could not save the loadout");
       setBusy(false);
@@ -210,7 +211,7 @@ export function LoadoutBoard({ stash, reload }: { stash: StashResponse; reload: 
               <>
                 Your stash is empty.{" "}
                 {!stash.starterClaimed && (
-                  <Link href="/play?tab=stash" className="text-zooa-lime underline-offset-4 hover:underline">
+                  <Link href={panelHref({ panel: "inventory", tab: "stash" })} className="text-zooa-lime underline-offset-4 hover:underline">
                     Claim the starter kit
                   </Link>
                 )}
@@ -262,7 +263,7 @@ export function LoadoutBoard({ stash, reload }: { stash: StashResponse; reload: 
         <h2 className="toon-text-thin text-2xl tracking-wide text-white">Summary</h2>
         {locked ? (
           <div className="rounded-2xl border-2 border-black bg-amber-300 p-4 text-black">
-            <p className="text-sm tracking-wide">{locked.status === "in_raid" ? "Gear is in a raid" : "Locked for matchmaking"}</p>
+            <p className="text-sm tracking-wide">{locked.status === "in_raid" ? "Gear is in a raid" : "Locked for your next drop"}</p>
             <p className="font-body mt-1 text-sm">
               {locked.status === "in_raid"
                 ? "It comes back to your stash when you extract (or is lost if you die)."
@@ -275,7 +276,7 @@ export function LoadoutBoard({ stash, reload }: { stash: StashResponse; reload: 
             )}
           </div>
         ) : v.ok ? (
-          <p className="font-body rounded-xl border-2 border-black bg-zooa-lime/90 px-3 py-2 text-sm font-semibold text-black">Ready to deploy.</p>
+          <p className="font-body rounded-xl border-2 border-black bg-zooa-lime/90 px-3 py-2 text-sm font-semibold text-black">Ready to drop in.</p>
         ) : (
           <p className="font-body rounded-xl border-2 border-black bg-rose-300 px-3 py-2 text-sm font-semibold text-black" role="alert">
             {LOADOUT_ERR_TEXT[v.code]}
@@ -302,14 +303,16 @@ export function LoadoutBoard({ stash, reload }: { stash: StashResponse; reload: 
               <span className="optical-center">Clear</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={deploy}
-            disabled={busy || (!v.ok && !readOnly)}
-            className="toon-btn min-h-14 text-xl tracking-wide"
-          >
-            <span className="optical-center">{locked?.status === "in_raid" ? "Back to raid" : "Deploy →"}</span>
-          </button>
+          {onDone && (
+            <button
+              type="button"
+              onClick={saveAndClose}
+              disabled={busy || (!v.ok && !readOnly)}
+              className="toon-btn min-h-14 text-xl tracking-wide"
+            >
+              <span className="optical-center">{readOnly ? "Close" : busy ? "Saving…" : "Save & close"}</span>
+            </button>
+          )}
         </div>
       </aside>
     </div>
