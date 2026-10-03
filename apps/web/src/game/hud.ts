@@ -13,8 +13,10 @@ import {
   CONTAINER_STATE,
   HEAL,
   ITEM_FLAG,
+  BOSSES,
   MATCH,
   PLAYER,
+  WORLD,
   POCKET_SLOTS,
   BACKPACK_SLOTS,
   RARITY_NAMES,
@@ -25,12 +27,14 @@ import {
   WEAPONS,
   bpLevelOf,
   containerOpenMs,
+  extractOpenAtFor,
   countOf,
   hasLineOfSight,
   itemDef,
   junkCredits,
   storageKeys,
   type BattleState,
+  type BossKind,
   type CollisionIndex,
   type ContainerSpot,
   type Extract,
@@ -43,12 +47,75 @@ import {
 } from "@extract/shared";
 import { containerTitle } from "../lib/items-ui";
 import type { ExtractStatus } from "./entities";
-import type { HudExtract, HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "./types";
+import type { HudBoss, HudExtract, HudSelf, HudSlot, HudSnapshot, KillFeedEntry, WipeWarn } from "./types";
 import { bodyTitle, type KillTally } from "./npc-labels";
 
 export function extractStatus(e: Pick<Extract, "openAt" | "closeAt">, clockMs: number): ExtractStatus {
   if (e.closeAt > 0 && clockMs >= e.closeAt) return "closed";
   return clockMs >= e.openAt ? "open" : "waiting";
+}
+
+/**
+ * WORLD v6 (D8): status of extract `e` for THIS player — the map-level openAt / closeAt from the
+ * state plus the personal arm (SelfState.extractArmAt, `enteredAt + EXTRACT_ARM_MS`).
+ */
+export function personalExtractStatus(
+  e: Pick<Extract, "openAt" | "closeAt">,
+  self: { extractArmAt?: number } | null | undefined,
+  clockMs: number,
+): ExtractStatus {
+  return extractStatus({ openAt: extractOpenAtFor(e, self), closeAt: e.closeAt }, clockMs);
+}
+
+/**
+ * The HUD phase for this player: "drop" until their own extracts arm (D8), "open" after, "ended"
+ * once the map wiped. Legacy matches (armAt 0) follow BattleState.phase.
+ */
+export function hudPhase(statePhase: string, clockMs: number, armAt: number): HudSnapshot["phase"] {
+  if (statePhase === "ended") return "ended";
+  if (statePhase === "drop" || clockMs < armAt) return "drop";
+  return "open";
+}
+
+/** A wipe warning banner stays this long after its threshold is crossed. */
+export const WIPE_WARN_SHOW_MS = 8_000;
+/** The top timer turns urgent in the last 5 minutes before the wipe. */
+export const WIPE_URGENT_MS = 5 * 60_000;
+
+/**
+ * The wipe warning (D2) just crossed at `leftMs` before the wipe: 600 / 300 / 60 (seconds) for
+ * WIPE_WARN_SHOW_MS after WORLD.WARN_AT_MS, else 0. Derived from the clock, no server message.
+ */
+export function wipeWarnAt(leftMs: number): WipeWarn {
+  for (const t of WORLD.WARN_AT_MS) {
+    if (leftMs <= t && leftMs > t - WIPE_WARN_SHOW_MS) return (t / 1000) as WipeWarn;
+  }
+  return 0;
+}
+
+/** "Wipe in 10:00 — head for an extract". */
+export function wipeWarnText(w: Exclude<WipeWarn, 0>): string {
+  const m = Math.floor(w / 60);
+  const s = w % 60;
+  return `Wipe in ${m}:${String(s).padStart(2, "0")} — head for an extract`;
+}
+
+const isBossKind = (k: string): k is BossKind => Object.prototype.hasOwnProperty.call(BOSSES, k);
+
+/** The map's event boss from BattleState (D13), null on a map without one. */
+export function hudBoss(state: Pick<BattleState, "bossKind" | "bossZone" | "bossState">): HudBoss | null {
+  if (!state.bossKind || !isBossKind(state.bossKind)) return null;
+  if (state.bossState !== 1 && state.bossState !== 2) return null;
+  return { kind: state.bossKind, zone: state.bossZone, state: state.bossState };
+}
+
+/** Boss toast: "BOSS EVENT · Foreman holds the Grain Elevator" / "Foreman is down". */
+export function bossToastText(b: HudBoss): { title: string; sub: string } {
+  const name = BOSSES[b.kind].name;
+  if (b.state === 2) return { title: `${name} is down`, sub: "The boss of this map was taken down" };
+  const zone = b.zone.trim();
+  const where = zone ? ` holds ${/^the\s/i.test(zone) ? "" : "the "}${zone}` : " is on this map";
+  return { title: "BOSS EVENT", sub: `${name}${where}` };
 }
 
 const EMPTY_SLOT: HudSlot = { weapon: "", rarity: 0, mag: 0, magSize: 0, free: false, broken: false };
@@ -319,7 +386,7 @@ export function buildHud({
   state.extracts.forEach((e) => {
     extractOpenAtMs = Math.min(extractOpenAtMs, e.openAt);
     if (!selfPos || !extractAllowed(map, mask, e.id)) return;
-    const status = extractStatus(e, clockMs);
+    const status = personalExtractStatus(e, priv, clockMs);
     if (status === "closed") return;
     const dx = e.x - selfPos.x;
     const dy = e.y - selfPos.y;
@@ -330,13 +397,20 @@ export function buildHud({
   const n0 = extracts[0];
   const nearestExtract: HudSnapshot["nearestExtract"] = n0 ? { dx: n0.dx, dy: n0.dy, dist: n0.dist, open: n0.open } : null;
 
-  const phase = state.phase === "open" || state.phase === "ended" ? state.phase : "drop";
+  const armAt = priv?.extractArmAt ?? 0;
+  const phase = hudPhase(state.phase, clockMs, armAt);
   const canInteract = onMap && selfPos && phase !== "ended" && !priv?.searching;
+  const durationMs = state.durationMs || MATCH.DURATION_MS;
+  // World maps only (entryCloseMs > 0): legacy roster matches have no wipe.
+  const world = state.entryCloseMs > 0;
   return {
     phase,
     clockMs,
-    durationMs: state.durationMs || MATCH.DURATION_MS,
-    extractOpenAtMs: Number.isFinite(extractOpenAtMs) ? extractOpenAtMs : MATCH.EXTRACT_OPEN_AT_MS,
+    durationMs,
+    extractOpenAtMs: armAt || (Number.isFinite(extractOpenAtMs) ? extractOpenAtMs : MATCH.EXTRACT_OPEN_AT_MS),
+    wipeWarn: world && phase !== "ended" ? wipeWarnAt(durationMs - clockMs) : 0,
+    boss: hudBoss(state),
+    enteredAtMs: priv?.enteredAt ?? 0,
     self,
     aliveCount,
     totalPlayers,

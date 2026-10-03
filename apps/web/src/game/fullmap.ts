@@ -13,11 +13,11 @@
  */
 
 import { Container, Graphics, Sprite, Text, type TextStyleOptions } from "pixi.js";
-import { BOSSES, MAPS, zoneAt, type BossSpot, type ExtractSpot, type LootTier, type MapData, type MapSide, type Zone, type ZoneKind } from "@extract/shared";
+import { BOSSES, MAPS, extractOpenAtFor, zoneAt, type BossKind, type BossSpot, type ExtractSpot, type LootTier, type MapData, type MapSide, type Zone, type ZoneKind } from "@extract/shared";
 import { COLORS } from "./assets";
 import type { GameContext, GameSystem } from "./systems";
 import { acquireOverview, releaseOverview } from "./minimap";
-import { BOSS_COLOR, turfLine } from "./boss";
+import { BOSS_COLOR, bossSpotShown, liveBossTurf, turfLine, type EventBossState } from "./boss";
 import { skullContext } from "./boss-icons";
 
 const FONT = "ui-rounded, 'Trebuchet MS', system-ui, sans-serif";
@@ -58,6 +58,43 @@ export function allowedFromMask(map: Pick<MapData, "extracts">, mask: number): b
 export function formatClock(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** "3:00" countdown (ceil to whole seconds). */
+function formatLeft(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+export type FullMapExtractStatus = "waiting" | "open" | "closed";
+
+/**
+ * How the full map shows one of YOUR extracts (WORLD v6): open / close times from the synced
+ * BattleState extract (`st`: openAt, closeAt — not the map's static closesAtMs) and your personal
+ * arm (`armAt` = SelfState.extractArmAt, extractOpenAtFor). Without `st` the map spot's closesAtMs
+ * is used. `suffix` follows the name: " · opens in 1:20", " · closes in 4:10", " · closed".
+ */
+export function fullMapExtractView(
+  spot: Pick<ExtractSpot, "closesAtMs">,
+  st: { openAt: number; closeAt: number } | undefined,
+  armAt: number,
+  clockMs: number,
+): { status: FullMapExtractStatus; suffix: string } {
+  const openAt = extractOpenAtFor({ openAt: st ? st.openAt : 0 }, { extractArmAt: armAt });
+  const closeAt = st ? st.closeAt : (spot.closesAtMs ?? 0);
+  if (closeAt > 0 && clockMs >= closeAt) return { status: "closed", suffix: " · closed" };
+  if (clockMs < openAt) return { status: "waiting", suffix: ` · opens in ${formatLeft(openAt - clockMs)}` };
+  return { status: "open", suffix: closeAt > 0 ? ` · closes in ${formatLeft(closeAt - clockMs)}` : "" };
+}
+
+/** Live data the full map reads from the synced state (WORLD v6). */
+export interface FullMapLive {
+  /** BattleState.extracts entry by id (openAt / closeAt), undefined when unknown. */
+  extract(id: string): { openAt: number; closeAt: number } | undefined;
+  /** SelfState.extractArmAt (0 = legacy). */
+  armAt: number;
+  /** BattleState boss fields: only the live event boss gets a skull. */
+  boss: EventBossState | null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -170,11 +207,11 @@ export class ZoneToast {
     this.root.eventMode = "none";
   }
 
-  show(z: Zone, nowMs: number) {
+  /** `boss` = the zone's boss turf to announce (default z.boss); WORLD v6 passes only a live event boss. */
+  show(z: Zone, nowMs: number, boss: BossKind | null = z.boss ?? null) {
     this.title.text = z.name;
     this.sub.text = zoneSubtitle(z).toUpperCase();
     this.sub.style.fill = TIER_COLORS[z.tier];
-    const boss = z.boss ?? null;
     this.turf.visible = !!boss;
     this.skull.visible = !!boss;
     if (boss) {
@@ -220,7 +257,8 @@ interface ExtractMark {
   e: ExtractSpot;
   g: Graphics;
   label: Text;
-  allowed: boolean | null;
+  /** Last drawn look ("open" / "waiting" / "closed"), null = not drawn yet. */
+  look: string | null;
 }
 
 export class FullMapOverlay {
@@ -265,7 +303,7 @@ export class FullMapOverlay {
       const label = new Text({ text: e.name, style: labelStyle(0xffffff, 13) });
       label.anchor.set(0.5, 0);
       this.labels.addChild(g, label);
-      this.extracts.push({ e, g, label, allowed: null });
+      this.extracts.push({ e, g, label, look: null });
     }
     for (const b of map.bosses ?? []) {
       const g = new Graphics(skullContext(BOSS_COLOR, 12));
@@ -359,7 +397,8 @@ export class FullMapOverlay {
 
   /**
    * Per frame while open. `allowed` = per-extract flags (allowedFromMask), `side` = spawn side,
-   * `self` = your position/aim (null when dead), `clockMs` = match clock (closing extracts).
+   * `self` = your position/aim (null when dead), `clockMs` = match clock (closing extracts),
+   * `live` = synced extract times, your personal arm and the event boss (WORLD v6).
    */
   update(
     self: { x: number; y: number; aim: number } | null,
@@ -367,6 +406,7 @@ export class FullMapOverlay {
     side: MapSide | null,
     clockMs: number,
     nowMs: number,
+    live: FullMapLive | null = null,
   ) {
     if (!this.root.visible) return;
     const k = this.size / Math.max(this.map.width, this.map.height);
@@ -386,24 +426,32 @@ export class FullMapOverlay {
     }
     this.extracts.forEach((m, i) => {
       const ok = allowed ? !!allowed[i] : true;
-      const closed = m.e.closesAtMs !== undefined && clockMs >= m.e.closesAtMs;
-      const state = ok && !closed;
-      if (m.allowed !== state) {
-        m.allowed = state;
-        const color = state ? COLORS.extractOpen : COLORS.extractClosed;
+      const view = fullMapExtractView(m.e, live?.extract(m.e.id), live?.armAt ?? 0, clockMs);
+      const look = ok ? view.status : "closed";
+      if (m.look !== look) {
+        m.look = look;
+        const lit = look !== "closed";
+        const color = look === "open" ? COLORS.extractOpen : look === "waiting" ? COLORS.extractWaiting : COLORS.extractClosed;
         m.g.clear();
-        m.g.circle(0, 0, 11).fill({ color, alpha: state ? 0.45 : 0.25 }).stroke({ width: 3, color, alpha: state ? 1 : 0.6 });
-        if (!state) m.g.moveTo(-6, -6).lineTo(6, 6).moveTo(6, -6).lineTo(-6, 6).stroke({ width: 3, color: 0x1a1a1a, alpha: 0.8 });
-        m.label.style.fill = state ? 0xffffff : 0x8a9099;
+        m.g.circle(0, 0, 11).fill({ color, alpha: lit ? 0.45 : 0.25 }).stroke({ width: 3, color, alpha: lit ? 1 : 0.6 });
+        if (!lit) m.g.moveTo(-6, -6).lineTo(6, 6).moveTo(6, -6).lineTo(-6, 6).stroke({ width: 3, color: 0x1a1a1a, alpha: 0.8 });
+        m.label.style.fill = look === "open" ? 0xffffff : look === "waiting" ? 0xffe8a3 : 0x8a9099;
       }
       // Only your own extracts are named (a closed one stays named, greyed, "· closed"); the
       // others are just a grey ×, so their names never crowd the POI labels near the map edge.
       m.label.visible = ok;
-      const closes = m.e.closesAtMs !== undefined && !closed ? ` · until ${formatClock(m.e.closesAtMs)}` : closed ? " · closed" : "";
-      const text = `${m.e.name}${ok ? closes : ""}`;
+      const text = `${m.e.name}${ok ? view.suffix : ""}`;
       if (m.label.text !== text) m.label.text = text;
-      m.g.scale.set(state ? 1 + 0.12 * Math.sin(nowMs / 220) : 1);
+      m.g.scale.set(look === "open" ? 1 + 0.12 * Math.sin(nowMs / 220) : 1);
     });
+    // WORLD v6: only the live event boss's spot keeps its skull.
+    const bosses = this.map.bosses ?? [];
+    for (let i = 0; i < this.bossMarks.length; i++) {
+      const m = this.bossMarks[i]!;
+      const shown = bossSpotShown(bosses, i, live?.boss ?? null);
+      m.g.visible = shown;
+      m.label.visible = shown;
+    }
     this.me.visible = !!self;
     if (self) {
       this.me.position.set(self.x * k, self.y * k);
@@ -496,9 +544,10 @@ export function createMapOverlaySystem(opts: MapOverlaySystemOptions = {}): Game
       const self = ctx.self();
       const alive = !!me && me.alive && (!self || self.extractedAt === 0);
       const pos = ctx.selfPos();
+      const state = ctx.state();
       if (alive && tracker && toast) {
         const z = tracker.update(pos.x, pos.y, now);
-        if (z) toast.show(z, now);
+        if (z) toast.show(z, now, liveBossTurf(z.boss ?? null, state));
       }
       toast?.frame(now);
       if (overlay?.isOpen) {
@@ -508,6 +557,11 @@ export function createMapOverlaySystem(opts: MapOverlaySystemOptions = {}): Game
           self ? (self.side as MapSide) : null,
           ctx.clockMs(),
           now,
+          {
+            extract: (id) => state?.extracts.get(id),
+            armAt: self?.extractArmAt ?? 0,
+            boss: state,
+          },
         );
       }
     },

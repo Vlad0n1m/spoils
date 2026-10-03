@@ -234,3 +234,34 @@ export function pickBarBoss<T extends { x: number; y: number }>(bosses: readonly
   }
   return best;
 }
+
+/** The BattleState fields that say which boss spot is live on a WORLD v6 map (D12 / D13). */
+export type EventBossState = { bossKind: string; bossState: number; entryCloseMs: number };
+
+/** Is `kind` this map's event boss and still alive? */
+export function eventBossAlive(state: Pick<EventBossState, "bossKind" | "bossState"> | null | undefined, kind: string | null | undefined): boolean {
+  return !!state && !!kind && state.bossKind === kind && state.bossState === 1;
+}
+
+/**
+ * Which of `bosses` (MapData.bosses) to mark with a skull / treat as boss turf. WORLD v6: only the
+ * event boss's spot (the first spot of `state.bossKind`, as the server picks it) while it is alive;
+ * every other boss spot stays empty all map. Legacy matches (entryCloseMs 0) or no state yet: all.
+ */
+export function bossSpotsShown(bosses: readonly Pick<BossSpot, "kind">[], state: EventBossState | null | undefined): boolean[] {
+  return bosses.map((_, i) => bossSpotShown(bosses, i, state));
+}
+
+/** bossSpotsShown for one index, allocation-free (per-frame callers). */
+export function bossSpotShown(bosses: readonly Pick<BossSpot, "kind">[], i: number, state: EventBossState | null | undefined): boolean {
+  if (!state || !(state.entryCloseMs > 0)) return true;
+  if (!eventBossAlive(state, state.bossKind) || bosses[i]?.kind !== state.bossKind) return false;
+  for (let j = 0; j < i; j++) if (bosses[j]!.kind === state.bossKind) return false;
+  return true;
+}
+
+/** Boss turf at a point, limited to the live event boss on a world map (tension swell, zone toast). */
+export function liveBossTurf(kind: BossKind | null, state: EventBossState | null | undefined): BossKind | null {
+  if (!kind || !state || !(state.entryCloseMs > 0)) return kind;
+  return eventBossAlive(state, kind) ? kind : null;
+}

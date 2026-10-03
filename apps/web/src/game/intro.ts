@@ -5,7 +5,8 @@
  *   DEPLOYING
  *   Grain Elevator                         ← zone at the spawn (or "Outskirts of …" / the map edge)
  *   STEPPE OUTSKIRTS · 21:40 · RAIN        ← map name, in-game time, weather (sampleEnv)
- *   EXTRACTS OPEN IN 3:00                  ← live countdown to the first allowed extract
+ *   EXTRACTS OPEN IN 3:00                  ← live countdown to the first allowed extract (personal arm)
+ *   WIPE IN 31:12                          ← WORLD v6: live countdown to the map wipe
  *
  * and, at the start of a fresh raid, the camera eases from a wider zoom onto the player (CameraRig,
  * skipped under reduced motion). The card never blocks input; any key or click fades it early.
@@ -18,6 +19,7 @@ import {
   MAPS,
   MATCH,
   envConfigOf,
+  extractOpenAtFor,
   sampleEnv,
   zoneAt,
   type BattleState,
@@ -46,8 +48,10 @@ export const INTRO = {
   ZOOM_FROM: 0.86,
   ZOOM_TAU_MS: 420,
   ZOOM_MAX_CLOCK_MS: 20_000,
-  /** Joining later than this (a reconnect) says "BACK IN THE RAID" instead of "DEPLOYING". */
+  /** Legacy matches: joining later than this (a reconnect) says "BACK IN THE RAID" instead of "DEPLOYING". */
   REJOIN_AFTER_MS: 60_000,
+  /** WORLD v6: a connection within this long of the entry's own start (SelfState.enteredAt) is a fresh drop-in. */
+  FRESH_ENTRY_MS: 5_000,
   /** "Outskirts of X" when the spawn is this close to a zone. */
   NEAR_ZONE_PX: 1400,
   /** Card centre, as a fraction of the screen height (the zone toast sits at 0.16). */
@@ -85,6 +89,20 @@ export function extractsLine(remainingMs: number): string {
   return remainingMs > 0 ? `Extracts open in ${formatCountdown(remainingMs)}` : "Extracts open";
 }
 
+/** WORLD v6: "Wipe in 31:12" ("Wiping" at 0). */
+export function wipeLine(remainingMs: number): string {
+  return remainingMs > 0 ? `Wipe in ${formatCountdown(remainingMs)}` : "Wiping";
+}
+
+/**
+ * Fresh drop-in or a reconnect? WORLD v6: by the entry's own start (`clockMs − enteredAtMs <
+ * FRESH_ENTRY_MS`); legacy matches (enteredAtMs undefined): by the raid clock.
+ */
+export function isFreshEntry(clockMs: number, enteredAtMs?: number): boolean {
+  if (enteredAtMs === undefined) return clockMs <= INTRO.REJOIN_AFTER_MS;
+  return clockMs - enteredAtMs < INTRO.FRESH_ENTRY_MS;
+}
+
 function rectDist(z: Zone, x: number, y: number): number {
   const dx = Math.max(z.rect.x - x, 0, x - (z.rect.x + z.rect.w));
   const dy = Math.max(z.rect.y - y, 0, y - (z.rect.y + z.rect.h));
@@ -117,8 +135,18 @@ export function spawnPlace(
 /**
  * Earliest open time among the extracts this player may use (SelfState.extractMask bit i =
  * map.extracts[i]); every extract when the mask is empty, the rule time when none is known.
+ * WORLD v6: never before the player's own arm (`armAt` = SelfState.extractArmAt, extractOpenAtFor).
  */
 export function firstExtractOpenAt(
+  map: Pick<MapData, "extracts"> | null,
+  extracts: { get(id: string): { openAt: number } | undefined; forEach(cb: (e: { openAt: number }) => void): void },
+  mask: number,
+  armAt = 0,
+): number {
+  return extractOpenAtFor({ openAt: firstMapOpenAt(map, extracts, mask) }, { extractArmAt: armAt });
+}
+
+function firstMapOpenAt(
   map: Pick<MapData, "extracts"> | null,
   extracts: { get(id: string): { openAt: number } | undefined; forEach(cb: (e: { openAt: number }) => void): void },
   mask: number,
@@ -141,14 +169,24 @@ export interface TitleCardText {
   sub: string;
 }
 
-/** Card strings (upper-casing is done here so tests see what the player sees). */
-export function titleCardText(i: { mapId: string; place: string; todMin: number | null; weather: WeatherKind | null; clockMs?: number }): TitleCardText {
+/**
+ * Card strings (upper-casing is done here so tests see what the player sees). `enteredAtMs`
+ * (WORLD v6, SelfState.enteredAt) decides fresh drop-in vs reconnect; without it the raid clock does.
+ */
+export function titleCardText(i: {
+  mapId: string;
+  place: string;
+  todMin: number | null;
+  weather: WeatherKind | null;
+  clockMs?: number;
+  enteredAtMs?: number;
+}): TitleCardText {
   const mapName = MAPS[i.mapId as keyof typeof MAPS]?.name ?? (i.mapId === "legacy" ? "Proving Grounds" : "Unknown sector");
   const parts = [mapName];
   if (i.todMin !== null && Number.isFinite(i.todMin)) parts.push(formatTod(i.todMin));
   if (i.weather) parts.push(WEATHER_LABEL[i.weather] ?? i.weather);
   // A reconnect mid-raid is not a drop-in.
-  const kicker = (i.clockMs ?? 0) > INTRO.REJOIN_AFTER_MS ? "BACK IN THE RAID" : "DEPLOYING";
+  const kicker = isFreshEntry(i.clockMs ?? 0, i.enteredAtMs) ? "DEPLOYING" : "BACK IN THE RAID";
   return { kicker, title: i.place, sub: parts.join(" · ").toUpperCase() };
 }
 
@@ -190,6 +228,10 @@ class IntroSystem implements GameSystem {
   private title: Text | null = null;
   private sub: Text | null = null;
   private extracts: Text | null = null;
+  private wipe: Text | null = null;
+  /** Cycle clock of the wipe (state.durationMs) on a world map, 0 on a legacy match (no line). */
+  private wipeAt = 0;
+  private wipeS = -1;
   private shown = false;
   private done = false;
   private shownAt = 0;
@@ -197,6 +239,7 @@ class IntroSystem implements GameSystem {
   private openAt = 0;
   private countdownS = -1;
   private panelW = 0;
+  private panelH = 0;
   private accent = 0xc6f432;
   private listening = false;
   private readonly pose = { alpha: 0, slide: 0 };
@@ -219,12 +262,15 @@ class IntroSystem implements GameSystem {
     this.title = text(38, "900", 0xffffff, 1);
     this.sub = text(15, "800", 0xe8ecf2, 2);
     this.extracts = text(15, "900", 0xffd43b, 2);
-    for (const t of [this.kicker, this.title, this.sub, this.extracts]) t.anchor.set(0.5, 0);
+    this.wipe = text(13, "900", 0xff8787, 2);
+    for (const t of [this.kicker, this.title, this.sub, this.extracts, this.wipe]) t.anchor.set(0.5, 0);
     this.kicker.y = 0;
     this.title.y = 18;
     this.sub.y = 66;
     this.extracts.y = 98;
-    root.addChild(this.panel, this.kicker, this.title, this.sub, this.extracts);
+    this.wipe.y = 120;
+    this.wipe.visible = false;
+    root.addChild(this.panel, this.kicker, this.title, this.sub, this.extracts, this.wipe);
     ctx.layers.screen.addChild(root);
     this.root = root;
   }
@@ -255,6 +301,15 @@ class IntroSystem implements GameSystem {
       this.extracts!.style.fill = left > 0 ? 0xffd43b : 0x8ce99a;
       this.layoutPanel();
     }
+    if (this.wipeAt > 0) {
+      const wl = this.wipeAt - ctx.clockMs();
+      const ws = wl > 0 ? Math.ceil(wl / 1000) : 0;
+      if (ws !== this.wipeS) {
+        this.wipeS = ws;
+        this.wipe!.text = wipeLine(wl).toUpperCase();
+        this.layoutPanel();
+      }
+    }
   }
 
   /** First frame with a map, our own state and a live body: fill the card and start it. */
@@ -280,20 +335,26 @@ class IntroSystem implements GameSystem {
     } catch {
       /* no environment: the card just omits time and weather */
     }
-    const card = titleCardText({ mapId: state.mapId, place: place.name, todMin, weather, clockMs: clock });
+    // World maps (entryCloseMs > 0): fresh vs rejoin by the entry's own start, plus the wipe line.
+    const world = state.entryCloseMs > 0;
+    const card = titleCardText({ mapId: state.mapId, place: place.name, todMin, weather, clockMs: clock, enteredAtMs: world ? self.enteredAt : undefined });
+    const fresh = isFreshEntry(clock, world ? self.enteredAt : undefined);
     this.kicker!.text = card.kicker;
     this.title!.text = card.title;
     this.sub!.text = card.sub;
     this.accent = place.zone ? TIER_COLORS[place.zone.tier] : 0xc6f432;
     this.kicker!.style.fill = this.accent;
-    this.openAt = firstExtractOpenAt(map, state.extracts, self.extractMask);
+    this.openAt = firstExtractOpenAt(map, state.extracts, self.extractMask, self.extractArmAt);
     this.countdownS = -1;
+    this.wipeAt = world ? state.durationMs : 0;
+    this.wipeS = -1;
+    this.wipe!.visible = world;
     this.shown = true;
     this.shownAt = performance.now();
     this.listen(true);
 
     const rig = getCameraRig();
-    if (rig && clock < INTRO.ZOOM_MAX_CLOCK_MS && !reducedMotion()) {
+    if (rig && (world ? fresh : clock < INTRO.ZOOM_MAX_CLOCK_MS) && !reducedMotion()) {
       rig.snapZoom(INTRO.ZOOM_FROM);
       rig.zoomTo(1, INTRO.ZOOM_TAU_MS);
     }
@@ -302,11 +363,14 @@ class IntroSystem implements GameSystem {
 
   private layoutPanel(): void {
     const p = this.panel!;
-    const w = Math.ceil(Math.max(this.title!.width, this.sub!.width, this.extracts!.width, 220) + 56);
-    if (Math.abs(w - this.panelW) < 6) return;
+    const wipe = this.wipe!.visible;
+    const w = Math.ceil(Math.max(this.title!.width, this.sub!.width, this.extracts!.width, wipe ? this.wipe!.width : 0, 220) + 56);
+    const h = wipe ? 160 : 140;
+    if (Math.abs(w - this.panelW) < 6 && h === this.panelH) return;
     this.panelW = w;
+    this.panelH = h;
     p.clear();
-    p.roundRect(-w / 2, -14, w, 140, 14).fill({ color: 0x0c120a, alpha: 0.62 });
+    p.roundRect(-w / 2, -14, w, h, 14).fill({ color: 0x0c120a, alpha: 0.62 });
     p.rect(-w / 2 + 18, 90, w - 36, 2).fill({ color: this.accent, alpha: 0.85 });
   }
 
@@ -332,7 +396,7 @@ class IntroSystem implements GameSystem {
     this.listen(false);
     this.root?.destroy({ children: true });
     this.root = null;
-    this.panel = this.kicker = this.title = this.sub = this.extracts = null;
+    this.panel = this.kicker = this.title = this.sub = this.extracts = this.wipe = null;
     this.done = true;
   }
 }

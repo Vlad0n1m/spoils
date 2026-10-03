@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import { BREAK_CHANCE_ON_DEATH, type MatchSummaryMsg, type OutcomeMsg, type SoldLine } from "@extract/shared";
 import { playUi } from "@/game/audio/ui-sounds";
-import { buildReceipt, fmtClock } from "@/lib/items-ui";
+import { buildReceipt, fmtClock, xpLineText } from "@/lib/items-ui";
 import type { RoomExit } from "@/lib/room-exit";
 import { killedByLine, npcKillsLine, npcLabels, type KillTally } from "@/game/npc-labels";
 import { DogTagRow, ItemStrip, SellReceipt } from "./inventory/outcome-receipt";
@@ -46,6 +46,11 @@ export interface MatchOutcomeOverlayProps {
    * NPCs killed M (boss K)". Missing (e.g. after a reconnect) = the server's total under "Kills".
    */
   killTally?: KillTally | null;
+  /**
+   * WORLD v6: match clock when this entry started (SelfState.enteredAt); the stats then show the
+   * time on the map instead of the map clock. 0 / missing = legacy (the clock is the raid time).
+   */
+  enteredAtMs?: number;
   /** Coin sound per receipt line; defaults to the shared UI coin sound. Pass a no-op to mute. */
   onCoin?: () => void;
   onContinue: () => void;
@@ -60,6 +65,7 @@ export function MatchOutcomeOverlay({
   kick = null,
   finalCredits = null,
   killTally = null,
+  enteredAtMs = 0,
   onCoin = defaultCoin,
   onContinue,
 }: MatchOutcomeOverlayProps) {
@@ -106,6 +112,7 @@ export function MatchOutcomeOverlay({
                 settlement={settlement}
                 finalCredits={finalCredits}
                 killTally={killTally}
+                enteredAtMs={enteredAtMs}
                 onCoin={onCoin}
                 onContinue={onContinue}
               />
@@ -127,13 +134,15 @@ const EXIT_STYLE = {
   extract: { title: "Extracted!", color: "text-zooa-lime", band: "bg-zooa-lime" },
   dead: { title: "Eliminated", color: "text-rose-400", band: "bg-rose-500" },
   timeout: { title: "Time's up", color: "text-amber-300", band: "bg-amber-400" },
-} as const;
+  mia: { title: "Caught in the wipe", color: "text-amber-300", band: "bg-amber-400" },
+} as const satisfies Record<OutcomeMsg["exit"], { title: string; color: string; band: string }>;
 
 function ResultCard({
   outcome,
   settlement,
   finalCredits,
   killTally,
+  enteredAtMs,
   onCoin,
   onContinue,
 }: {
@@ -141,6 +150,7 @@ function ResultCard({
   settlement: MatchSummaryMsg | null;
   finalCredits: FinalCredits | null;
   killTally: KillTally | null;
+  enteredAtMs: number;
   onCoin: () => void;
   onContinue: () => void;
 }) {
@@ -201,7 +211,7 @@ function ResultCard({
             </>
           )}
 
-          {outcome.exit === "timeout" && (
+          {(outcome.exit === "timeout" || outcome.exit === "mia") && (
             <ItemStrip
               title="Lost on the map"
               items={outcome.lost}
@@ -209,6 +219,7 @@ function ResultCard({
               empty="You only carried the free kit, so nothing was lost."
             />
           )}
+          <XpBlock outcome={outcome} />
         </div>
 
         <dl
@@ -229,11 +240,19 @@ function ResultCard({
           ) : (
             <Stat label="Kills" value={String(outcome.kills)} />
           )}
-          <Stat label={outcome.exit === "extract" ? "Out at" : "Survived"} value={fmtClock(outcome.atMs)} />
+          {enteredAtMs > 0 ? (
+            <Stat
+              label="On the map"
+              value={fmtClock(Math.max(0, outcome.atMs - enteredAtMs))}
+              title="Time from your drop-in to the end of this run"
+            />
+          ) : (
+            <Stat label={outcome.exit === "extract" ? "Out at" : "Survived"} value={fmtClock(outcome.atMs)} />
+          )}
           <Stat
             label="Extracted"
             value={settlement ? `${raidersOut}/${humans.length}` : "…"}
-            title={settlement ? `${raidersOut} of ${humans.length} players got out` : "Raid still running"}
+            title={settlement ? `${raidersOut} of ${humans.length} raiders got out` : "The map is still running"}
           />
         </dl>
         {npc && (
@@ -253,7 +272,69 @@ function ResultCard({
 function subtitle(o: OutcomeMsg): string {
   if (o.exit === "extract") return o.guest ? "You made it out! Register to keep what you find." : "Everything you carried is yours to keep.";
   if (o.exit === "dead") return o.killedBy ? killedByLine(o.killedBy) : "You died.";
+  if (o.exit === "mia") return "You were still on the map when it wiped. Everything you carried is lost.";
   return "You were still on the map when the raid ended. Everything you carried is lost.";
+}
+
+/**
+ * XP of this exit (WORLD v6): granted by the web at settlement and re-sent in S2C.OUTCOME, so the
+ * first outcome may come without it ("Counting XP…"). Guests earn none.
+ */
+function XpBlock({ outcome }: { outcome: OutcomeMsg }) {
+  if (outcome.guest) {
+    return (
+      <p className="font-body rounded-xl border-2 border-black/60 bg-black/30 px-3 py-2 text-sm leading-relaxed text-white/70">
+        Register to earn XP and levels from your raids.
+      </p>
+    );
+  }
+  if (outcome.xp === undefined) {
+    return (
+      <p className="font-body flex items-center gap-2 text-sm text-white/55">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-black border-t-zooa-lime" aria-hidden />
+        Counting XP…
+      </p>
+    );
+  }
+  const lines = outcome.xpLines ?? [];
+  return (
+    <section className="rounded-xl border-[3px] border-black/60 bg-black/30 px-4 py-3" aria-label="Experience">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-xs uppercase tracking-[0.22em] text-white/55">Experience</h3>
+        <p className="toon-text-thin text-2xl tabular-nums text-sky-300">+{Math.max(0, Math.round(outcome.xp))} XP</p>
+      </div>
+      {lines.length > 0 ? (
+        <ul className="font-body mt-2 space-y-1 text-sm">
+          {lines.map((l, i) => {
+            const t = xpLineText(l);
+            return (
+              <li key={`${l.key}-${i}`} className="flex items-baseline justify-between gap-3">
+                <span className="text-white/80">
+                  {t.label}
+                  {t.detail && <span className="ml-2 text-white/45">{t.detail}</span>}
+                </span>
+                <span className={clsx("tabular-nums", l.xp < 0 ? "text-rose-300" : "text-white")}>{t.xp}</span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="font-body mt-1 text-sm text-white/55">
+          No XP this time — extract after 8 minutes on the map, search containers and take down NPCs.
+        </p>
+      )}
+      {outcome.level !== undefined && outcome.level > 0 && (
+        <p
+          className={clsx(
+            "toon-text mt-3 text-center tracking-[0.2em]",
+            outcome.levelUp ? "animate-outcome-enter text-3xl text-zooa-lime" : "text-lg text-white/70",
+          )}
+        >
+          {outcome.levelUp ? `LEVEL ${outcome.level}` : `Level ${outcome.level}`}
+        </p>
+      )}
+    </section>
+  );
 }
 
 /** "This raid: 31 NPCs, 9 taken down by players (boss 1 of 2)". */

@@ -47,6 +47,7 @@ import {
   type WeaponId,
 } from "@extract/shared";
 import type { GameContext, GameSystem } from "../systems";
+import { hudPhase } from "../hud";
 import { AMBIENCE, AmbientDirector, emptyEnvSource, rememberEnvSource, sameEnvSource } from "./ambience";
 import { AudioEngine, type PlayOpts, type Voice } from "./engine";
 import { Stride, footstepLayers, materialFromVariant, materialOfTerrain, type Layer } from "./footsteps";
@@ -337,7 +338,7 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
     this.ownSteps(next, pos.x, pos.y, now);
     this.lowHpTick(next, now);
     this.channelTick(next, now, clock);
-    this.phaseTick(state, ctx, pos.x, pos.y);
+    this.phaseTick(state, ctx, pos.x, pos.y, clock);
   }
 
   private syncMap(ctx: GameContext): boolean {
@@ -513,8 +514,9 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
     }
   }
 
-  private phaseTick(state: BattleState, ctx: GameContext, x: number, y: number): void {
-    const phase = state.phase;
+  private phaseTick(state: BattleState, ctx: GameContext, x: number, y: number, clock: number): void {
+    // WORLD v6 (D8): the sting fires when THIS player's extracts arm (SelfState.extractArmAt).
+    const phase = hudPhase(state.phase, clock, ctx.self()?.extractArmAt ?? 0);
     if (phase === this.prevPhase) return;
     const was = this.prevPhase;
     this.prevPhase = phase;

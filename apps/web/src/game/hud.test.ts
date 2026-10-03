@@ -16,13 +16,28 @@ import {
   Player,
   ROLL,
   SEARCH,
+  WORLD,
   SelfState,
   buildCollisionIndex,
   junkCredits,
   type ContainerSpot,
   type MapData,
 } from "@extract/shared";
-import { buildHud, buildHudSelf, extractAllowed, interactHint, searchOpenMs, stickyCounts } from "./hud";
+import {
+  WIPE_WARN_SHOW_MS,
+  bossToastText,
+  buildHud,
+  buildHudSelf,
+  extractAllowed,
+  hudBoss,
+  hudPhase,
+  interactHint,
+  personalExtractStatus,
+  searchOpenMs,
+  stickyCounts,
+  wipeWarnAt,
+  wipeWarnText,
+} from "./hud";
 
 describe("stickyCounts", () => {
   it("follows the live count while the raid runs", () => {
@@ -267,5 +282,102 @@ describe("extractAllowed", () => {
     assert.equal(extractAllowed(map, 0, "B"), true);
     assert.equal(extractAllowed(map, 0b01, "Z"), true);
     assert.equal(extractAllowed(null, 0b01, "B"), true);
+  });
+});
+
+describe("WORLD v6 HUD", () => {
+  const CLOSE = WORLD.CYCLE_MS - WORLD.EXTRACT_EARLY_CLOSE_MS;
+  /** A world map at minute 20: every extract open since 0, S2-style ones close at 40:00. */
+  function world(enteredAt: number) {
+    const state = new BattleState();
+    state.phase = "open";
+    state.durationMs = WORLD.CYCLE_MS;
+    state.entryCloseMs = WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS;
+    state.cycleId = 123;
+    state.aliveCount = 7;
+    state.totalPlayers = 15;
+    const me = Object.assign(new Player(), { sessionId: "me", x: 1000, y: 1000 });
+    state.players.set("me", me);
+    const self = selfWith({}, { enteredAt, extractArmAt: enteredAt + WORLD.EXTRACT_ARM_MS });
+    state.self.set("p30", self);
+    const ex = (id: string, x: number, closeAt: number) => Object.assign(new Extract(), { id, x, y: 1000, r: 100, openAt: 0, closeAt });
+    state.extracts.set("A", ex("A", 1200, 0));
+    state.extracts.set("B", ex("B", 3000, CLOSE));
+    const map = mapStub([], [
+      { id: "A", name: "Alpha", x: 1200, y: 1000, r: 100, side: 0, kind: "always" },
+      { id: "B", name: "Bravo", x: 3000, y: 1000, r: 100, side: 1, kind: "always" },
+    ]);
+    const hud = (clockMs: number) =>
+      buildHud({ state, sessionId: "me", selfKey: "p30", selfPos: { x: 1000, y: 1000 }, clockMs, killFeed: [], pingMs: null, map });
+    return { state, self, hud };
+  }
+
+  it("personal arm: a late entrant is in 'drop' with extracts waiting while the map is open", () => {
+    const enteredAt = 20 * 60_000;
+    const { hud } = world(enteredAt);
+    const h = hud(enteredAt + 60_000);
+    assert.equal(h.phase, "drop");
+    assert.equal(h.extractOpenAtMs, enteredAt + WORLD.EXTRACT_ARM_MS);
+    assert.ok(h.extracts.length === 2 && h.extracts.every((e) => !e.open));
+    assert.equal(h.nearestExtract?.open, false);
+    const armed = hud(enteredAt + WORLD.EXTRACT_ARM_MS);
+    assert.equal(armed.phase, "open");
+    assert.ok(armed.extracts.every((e) => e.open));
+    assert.equal(armed.enteredAtMs, enteredAt);
+    assert.equal(armed.durationMs, WORLD.CYCLE_MS);
+  });
+
+  it("closeAt comes from the state: B closes at 40:00 and leaves the list", () => {
+    const { hud } = world(60_000);
+    assert.deepEqual(hud(CLOSE - 1).extracts.map((e) => e.name), ["Alpha", "Bravo"]);
+    assert.deepEqual(hud(CLOSE).extracts.map((e) => e.name), ["Alpha"]);
+  });
+
+  it("hudPhase / personalExtractStatus edges", () => {
+    assert.equal(hudPhase("open", 1000, 0), "open");
+    assert.equal(hudPhase("open", 1000, 1001), "drop");
+    assert.equal(hudPhase("drop", 9e9, 0), "drop");
+    assert.equal(hudPhase("ended", 0, 9e9), "ended");
+    const e = { openAt: 0, closeAt: CLOSE };
+    assert.equal(personalExtractStatus(e, { extractArmAt: 5000 }, 4999), "waiting");
+    assert.equal(personalExtractStatus(e, { extractArmAt: 5000 }, 5000), "open");
+    assert.equal(personalExtractStatus(e, null, 0), "open");
+    assert.equal(personalExtractStatus(e, { extractArmAt: 5000 }, CLOSE), "closed");
+  });
+
+  it("wipe warnings at 10 / 5 / 1 minutes left, each for a few seconds", () => {
+    assert.equal(wipeWarnAt(600_001), 0);
+    assert.equal(wipeWarnAt(600_000), 600);
+    assert.equal(wipeWarnAt(600_000 - WIPE_WARN_SHOW_MS + 1), 600);
+    assert.equal(wipeWarnAt(600_000 - WIPE_WARN_SHOW_MS), 0);
+    assert.equal(wipeWarnAt(299_000), 300);
+    assert.equal(wipeWarnAt(59_500), 60);
+    assert.equal(wipeWarnAt(30_000), 0);
+    assert.equal(wipeWarnAt(0), 0);
+    assert.equal(wipeWarnText(600), "Wipe in 10:00 — head for an extract");
+    assert.equal(wipeWarnText(60), "Wipe in 1:00 — head for an extract");
+    const { hud, state } = world(60_000);
+    assert.equal(hud(WORLD.CYCLE_MS - 300_000 + 2_000).wipeWarn, 300);
+    assert.equal(hud(WORLD.CYCLE_MS - 400_000).wipeWarn, 0);
+    // Legacy matches have no wipe.
+    state.entryCloseMs = 0;
+    assert.equal(hud(WORLD.CYCLE_MS - 300_000 + 2_000).wipeWarn, 0);
+  });
+
+  it("boss event from the state and its toast text", () => {
+    const { hud, state } = world(60_000);
+    assert.equal(hud(120_000).boss, null);
+    state.bossKind = "foreman";
+    state.bossZone = "Grain Elevator";
+    state.bossState = 1;
+    assert.deepEqual(hud(120_000).boss, { kind: "foreman", zone: "Grain Elevator", state: 1 });
+    assert.deepEqual(bossToastText({ kind: "foreman", zone: "Grain Elevator", state: 1 }), {
+      title: "BOSS EVENT",
+      sub: "Foreman holds the Grain Elevator",
+    });
+    assert.equal(bossToastText({ kind: "foreman", zone: "Grain Elevator", state: 2 }).title, "Foreman is down");
+    assert.equal(bossToastText({ kind: "warden", zone: "The Depot", state: 1 }).sub, "Warden holds The Depot");
+    assert.equal(hudBoss({ bossKind: "nobody", bossZone: "", bossState: 1 }), null);
+    assert.equal(hudBoss({ bossKind: "foreman", bossZone: "", bossState: 0 }), null);
   });
 });

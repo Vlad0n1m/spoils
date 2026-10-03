@@ -19,6 +19,7 @@ import {
   easeBar,
   hpFraction,
   kindOfNpc,
+  liveBossTurf,
   npcRole,
   pickBarBoss,
   tensionKind,
@@ -218,7 +219,9 @@ class BossHudSystem implements GameSystem {
     const self = ctx.self();
     const alive = !!me && me.alive && (!self || self.extractedAt === 0);
     const pos = ctx.selfPos();
-    const want = tensionKind(alive ? bossTurfAt(map, pos.x, pos.y) : null, alive, this.dead);
+    // WORLD v6: only the live event boss's turf is tense (other boss spots stay empty all map).
+    const turf = alive ? liveBossTurf(bossTurfAt(map, pos.x, pos.y), ctx.state()) : null;
+    const want = tensionKind(turf, alive, this.dead);
     if (want !== this.tensionFor) {
       this.tensionFor = want;
       if (!want) this.stopTension(1.5);

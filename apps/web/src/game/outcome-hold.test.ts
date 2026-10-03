@@ -25,6 +25,8 @@ describe("outcome overlay hold", () => {
     assert.equal(cineExitOf({ alive: true, extractedAt: 0 }, "dead"), "death", "OUTCOME before the HUD patch");
     assert.equal(cineExitOf(null, "extract"), "extract");
     assert.equal(cineExitOf(null, "timeout"), null);
+    assert.equal(cineExitOf(null, "mia"), null, "caught in the wipe: no beat");
+    assert.equal(cineExitOf({ alive: true, extractedAt: 0 }, "mia"), null);
   });
 
   it("does not hold once the raid ended or the room is gone", () => {

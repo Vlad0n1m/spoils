@@ -4,13 +4,15 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { MATCH, type MapData, type Zone } from "@extract/shared";
+import { MATCH, WORLD, type MapData, type Zone } from "@extract/shared";
 import {
   INTRO,
   createIntroSystem,
   extractsLine,
   firstExtractOpenAt,
   formatCountdown,
+  isFreshEntry,
+  wipeLine,
   formatTod,
   spawnPlace,
   titleCardPose,
@@ -77,6 +79,33 @@ describe("firstExtractOpenAt", () => {
   it("uses every extract without a mask, the rule time without extracts", () => {
     assert.equal(firstExtractOpenAt(map, ext, 0), 150_000);
     assert.equal(firstExtractOpenAt(null, new Map(), 0), MATCH.EXTRACT_OPEN_AT_MS);
+  });
+  it("WORLD v6: never before the player's own arm (extractOpenAtFor)", () => {
+    const world = new Map([["N1", { openAt: 0 }], ["E1", { openAt: 0 }], ["S1", { openAt: 0 }]]);
+    // Entered at 20:00 → armed at 23:00, although the map's extracts are open since 0.
+    assert.equal(firstExtractOpenAt(map, world, 0b011, 20 * 60_000 + WORLD.EXTRACT_ARM_MS), 23 * 60_000);
+    assert.equal(firstExtractOpenAt(map, world, 0b011, 0), 0);
+    // A later map-level openAt still wins over an earlier arm.
+    assert.equal(firstExtractOpenAt(map, ext, 0b101, 60_000), 200_000);
+  });
+});
+
+describe("WORLD v6 lines", () => {
+  it("counts down to the wipe", () => {
+    assert.equal(wipeLine(31 * 60_000 + 12_000), "Wipe in 31:12");
+    assert.equal(wipeLine(0), "Wiping");
+  });
+  it("fresh drop-in vs reconnect by the entry's own start", () => {
+    const enteredAt = 20 * 60_000;
+    assert.equal(isFreshEntry(enteredAt + 1_000, enteredAt), true);
+    assert.equal(isFreshEntry(enteredAt + INTRO.FRESH_ENTRY_MS, enteredAt), false);
+    // A drop-in at minute 20 is fresh even though the map clock is far past REJOIN_AFTER_MS.
+    assert.equal(titleCardText({ mapId: "steppe", place: "x", todMin: 600, weather: "fog", clockMs: enteredAt + 800, enteredAtMs: enteredAt }).kicker, "DEPLOYING");
+    // A reload two minutes into the entry is a rejoin, even early in the map.
+    assert.equal(titleCardText({ mapId: "steppe", place: "x", todMin: 600, weather: "fog", clockMs: 150_000, enteredAtMs: 30_000 }).kicker, "BACK IN THE RAID");
+    // Legacy (no enteredAt): the raid clock decides.
+    assert.equal(isFreshEntry(5_000), true);
+    assert.equal(isFreshEntry(INTRO.REJOIN_AFTER_MS + 1), false);
   });
 });
 

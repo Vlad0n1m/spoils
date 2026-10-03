@@ -15,7 +15,7 @@
 import { CanvasSource, Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
 import { TERRAIN_KIND_MASK, type MapData, type Terrain } from "@extract/shared";
 import { COLORS } from "./assets";
-import { minimapBossHint } from "./boss";
+import { bossSpotShown, minimapBossHint, type EventBossState } from "./boss";
 import { skullContext } from "./boss-icons";
 import { TERRAIN_COLOR, groundKinds } from "./terrain-tiles";
 
@@ -231,7 +231,13 @@ export class Minimap {
    * Per frame. Moves the texture window, repositions ≤ 8 markers (a marker's Graphics is redrawn
    * only when its status/allowed changes), pulses open extracts with scale (no re-tessellation).
    */
-  update(extracts: readonly MinimapExtract[], self: { x: number; y: number; aim: number } | null, nowMs: number) {
+  update(
+    extracts: readonly MinimapExtract[],
+    self: { x: number; y: number; aim: number } | null,
+    nowMs: number,
+    /** WORLD v6: BattleState boss fields — only the live event boss gets a skull (null = every spot). */
+    boss: EventBossState | null = null,
+  ) {
     const map = this.map;
     const cx = self ? self.x : map.width / 2;
     const cy = self ? self.y : map.height / 2;
@@ -290,7 +296,7 @@ export class Minimap {
     for (let i = 0; i < this.skulls.length; i++) {
       const g = this.skulls[i]!;
       const spot = bosses[i];
-      const hint = spot ? minimapBossHint(win, spot, self, BASE) : null;
+      const hint = spot && bossSpotShown(bosses, i, boss) ? minimapBossHint(win, spot, self, BASE) : null;
       g.visible = !!hint;
       if (!hint) continue;
       g.position.set(hint.x, hint.y);
