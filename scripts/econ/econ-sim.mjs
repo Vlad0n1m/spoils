@@ -19,6 +19,15 @@
 //        [--free-kit-autosell M]   (free-kit raid junk sells at M ×; default FREE_KIT.AUTOSELL_MULT)
 //        [--comp C]   (lobby competition: junk / consumables × 1/(1+C(n−1)); default harness-calibrated)
 //        [--pvp-loot L]   (share of a PvP loser's haul the winner can take, × LOOT_IF_EXTRACT; default 0.5)
+//        [--kits N] [--give-days D]   (tradable giveaway kits: cap N, default GIVEAWAY.KITS, sold for
+//                                     GIVEAWAY.KIT_PRICE_MINOR only to arrivals before day D, default no limit)
+//        [--prim-day D] [--prim-target T] [--prim-fixed] [--prim-mult M]   (primary sales from day D, default 14;
+//                                     with T a weekly-batch thermostat: (T × DAU − tradable in circulation) / 7 a day,
+//                                     ≤ 15 % DAU; --prim-fixed sells at ref × M instead of max(ref, ref × idx))
+//        [--list-p P] [--buy-p P]   (order-book market: daily listing chance of a spare piece, default 0.3; daily
+//                                     shopping chance of a player with SOL, default 0.25)
+//        [--alt-deposit] [--alt-day D] [--alt-n N]   (altfarm alts pay for tradable kits; alts arrive on day D, N of them)
+//        [--dump-players FILE]   (per-player SOL start / end / earned from sales, raids, tradable items held)
 //
 // Every yield-*.json in --data is read; records are bucketed by strategy:kit (boss hunters also by
 // target). PvE buckets use single-human records only (lobby.humans === 1); multi-human lobby records
@@ -98,6 +107,9 @@ const PVP_LOOT_HAUL = Number(arg("pvp-loot", 0.5));
 // --rate-mult (raids per player-day), --lambda-mult (PvP encounter rates), --fight-cons CR (per PvP fight).
 // --primary-share S: primary sales per day as a share of DAU (design 0.08).
 const PRIMARY_SHARE = Number(arg("primary-share", 0.08));
+// --list-p / --buy-p: daily chance that a spare piece is listed / that a player with SOL shops for an upgrade.
+const MARKET_LIST_P = Number(arg("list-p", 0.3));
+const MARKET_BUY_P = Number(arg("buy-p", 0.25));
 const SENS = { junk: Number(arg("junk-mult", 1)), found: Number(arg("found-mult", 1)), rate: Number(arg("rate-mult", 1)), lambda: Number(arg("lambda-mult", 1)) };
 const QUEUE = {
   WINDOW_S: Number(arg("queue-window", MATCH.QUEUE_WINDOW_MS / 1000)),
@@ -331,7 +343,7 @@ const MIX = { rat: 0.3, poi: 0.4, boss: 0.15, full: 0.15 };
 const SCEN = {
   base: { mix: MIX, scale: 1 },
   ratheavy: { mix: { rat: 0.7, poi: 0.15, boss: 0.05, full: 0.1 }, scale: 1 },
-  altfarm: { mix: MIX, scale: 1, alts: { day: 10, n: 300 } },
+  altfarm: { mix: MIX, scale: 1, alts: { day: Number(arg("alt-day", 10)), n: Number(arg("alt-n", 300)) } },
   lowdau: { mix: MIX, dau: 150 },
   highdau: { mix: MIX, dau: 3000 },
   crash: { mix: MIX, scale: 1, crashDay: 30 },
@@ -385,10 +397,10 @@ function run(name) {
   const windowS = sc.windowS ?? QUEUE.WINDOW_S;
   const players = [];
   let nextId = 1;
-  let giveawayLeft = GIVEAWAY.KITS;
+  let giveawayLeft = Number(arg("kits", GIVEAWAY.KITS));
   let pool = [];
   for (let i = 0; i < 700; i++) { const it = seedPiece(i); it.dur = Math.round(55 + rnd() * 45); pool.push(it); }
-  const treasury = { items: [], revenue: 0, revenueToday: 0, taxAcc: 0, primarySold: 0, taxSold: 0, feeRev: 0, primRev: 0, taxRev: 0 };
+  const treasury = { items: [], revenue: 0, revenueToday: 0, taxAcc: 0, primarySold: 0, taxSold: 0, feeRev: 0, primRev: 0, taxRev: 0, kitRev: 0 };
   let overhang = [];
   let autosellMult = 1;
   let prevActive = new Set();
@@ -405,14 +417,19 @@ function run(name) {
     const p = {
       id: nextId++, joined: day, alt, type, life: alt ? 999 : Math.max(2, -Math.log(Math.max(1e-9, rnd())) * 14),
       rate: (alt ? 6 : Math.exp(Math.log(2.2) + 0.6 * (rnd() * 2 - 1))) * SENS.rate, cr: 1000, cons: 0, xp: 0, lvl: 1, items: [],
-      sol: alt ? 0 : chance(0.6) ? Math.round(rnd() * 3000) : 0, raids: 0, lastRaid: -99,
+      sol: alt ? (flag("alt-deposit") ? 5 : 0) : chance(0.6) ? Math.round(rnd() * 3000) : 0, raids: 0, lastRaid: -99,
     };
-    solStart += p.sol;
+    solStart += p.sol; p.sol0 = p.sol;
     // Giveaway (v5 review, web starter.ts): tradable for the first GIVEAWAY.KITS accounts that deposited
     // ≥ MIN_DEPOSIT_MINOR (here: players holding SOL; alts never deposit), BOUND for everyone else.
     // --no-giveaway-cap: every account gets a tradable kit (the old P3 lever, sybil-unsafe).
-    const tradable = !OPTS.giveawayCap || (!alt && giveawayLeft > 0 && p.sol >= (GIVEAWAY.MIN_DEPOSIT_MINOR ?? 0) && p.sol > 0);
-    if (tradable) { giveawayLeft--; tot.tradableKits++; p.items.push(...giveawayKit(false)); }
+    const tradable = !OPTS.giveawayCap || ((!alt || flag("alt-deposit")) && giveawayLeft > 0 && day < Number(arg("give-days", 9999)) && p.sol >= (GIVEAWAY.MIN_DEPOSIT_MINOR ?? 0) && p.sol > 0);
+    if (tradable) {
+      giveawayLeft--; tot.tradableKits++; if (alt) tot.altTradable += 3; p.items.push(...giveawayKit(false));
+      // The tradable kit is sold (web starter.ts): the price goes to the house.
+      const price = Math.min(p.sol, GIVEAWAY.KIT_PRICE_MINOR ?? 0);
+      p.sol -= price; treasury.revenue += price; treasury.kitRev += price;
+    }
     else { tot.boundKits++; p.items.push(...giveawayKit(true)); }
     return p;
   }
@@ -437,7 +454,7 @@ function run(name) {
     const activeSet = new Set(active);
     // Leaving players dump their stash on the market with p 0.35 (memo).
     for (const p of prevActive) if (!activeSet.has(p) && !p.alt && p.lvl >= MARKET.SELL_UNLOCK_LEVEL && chance(0.35)) {
-      const keep = []; for (const it of p.items) (it.lock > 0 || it.bound ? keep : overhang).push(it); p.items = keep;
+      const keep = []; for (const it of p.items) { if (it.lock > 0 || it.bound) keep.push(it); else overhang.push({ it, s: p }); } p.items = keep;
     }
     prevActive = activeSet;
     const dau = active.filter((p) => !p.alt).length;
@@ -450,7 +467,7 @@ function run(name) {
       raids: 0, junkCr: 0, tagCr: 0, consBought: 0, listFees: 0, found: 0, used: 0, extracts: 0, released: 0,
       capBoss: 0, capCont: 0, capCarrier: 0, bossKills: 0, geared: 0, altCr: 0, altRaids: 0, pvpDeaths: 0, npcDeaths: 0,
       fights: 0, lobbies: sizes.length, solo: sizes.filter((n) => n === 1).length, npcKills: 0, crKitBought: 0, crKitRaids: 0,
-      foundExt: 0, freeKitRaids: 0, pvpLootCr: 0,
+      foundExt: 0, freeKitRaids: 0, pvpLootCr: 0, p2p: 0,
     };
     treasury.revenueToday = 0;
 
@@ -637,51 +654,63 @@ function run(name) {
     }
     tot.lobbies += d.lobbies; tot.solo += d.solo; tot.humans += d.raids;
 
-    // Market (opens day 3): P2P from sellers lvl >= SELL_UNLOCK_LEVEL with a spare, overhang first; fee 5%.
+    // Market (opens day 3), an order book: every seller (lvl >= SELL_UNLOCK_LEVEL) lists each spare tradable
+    // piece (unlocked, not the best of its kind) with p MARKET_LIST_P at ref × idx ± 10 %; leavers' dumped stashes
+    // (overhang, seller still credited) undercut by 10 %; treasury lots ask max(ref, ref × idx). A buyer (p
+    // MARKET_BUY_P a day) takes the cheapest affordable lot that upgrades their best piece of that kind. Player
+    // lots pay the 5 % fee and the CR listing fee (charged on sale here); treasury lots pay the house in full.
     const tradable = active.reduce((a, p) => a + (p.alt ? 0 : p.items.filter((i) => !i.bound).length), 0);
     const perActive = tradable / Math.max(1, dau);
     const priceIdx = Math.pow(2 / Math.max(0.3, perActive), 0.8);
     let trades = 0, primary = 0;
     if (day >= 3) {
       if (startIdx === null) startIdx = priceIdx;
-      const sellers = active.filter((p) => !p.alt && p.lvl >= MARKET.SELL_UNLOCK_LEVEL);
-      const buyers = shuffle(active.filter((p) => !p.alt && p.sol > 0 && !p.items.some((i) => i.k === "w" && !i.bound)));
-      for (const b of buyers) {
-        if (!chance(0.25)) continue;
-        let it = null;
-        if (treasury.items.length) {
-          it = treasury.items.pop();
-          const price = Math.round(refPrice(it) * Math.max(1, priceIdx));
-          if (b.sol < price) { treasury.items.push(it); continue; }
-          b.sol -= price; treasury.revenueToday += price; treasury.taxRev += price; treasury.taxSold++;
-        } else {
-          let s = null;
-          if (overhang.length) it = overhang.pop();
-          else {
-            s = pick(sellers);
-            if (!s || s === b) continue;
-            it = s.items.filter((i) => i.lock <= 0 && !i.bound && s.items.filter((j) => j.k === i.k).length >= 2).sort((x, y) => x.r - y.r)[0];
-            if (!it) continue;
-            const fee = MARKET.LISTING_FEE_CR[Math.min(3, it.r)];
-            if (s.cr < fee) continue;
-            s.cr -= fee; d.listFees += fee;
+      const book = [];
+      for (const it of treasury.items) book.push({ it, s: null, price: Math.round(refPrice(it) * Math.max(1, priceIdx)) });
+      for (const o of overhang) book.push({ it: o.it, s: o.s, dump: true, price: Math.max(1, Math.round(refPrice(o.it) * priceIdx * 0.9)) });
+      for (const sl of active) {
+        if (sl.alt || sl.lvl < MARKET.SELL_UNLOCK_LEVEL) continue;
+        for (const k of ["w", "a", "b"]) {
+          const mine = sl.items.filter((i) => i.k === k).sort((x, y) => y.r - x.r || y.dur - x.dur);
+          for (const it of mine.slice(1)) {
+            if (it.bound || it.lock > 0 || !chance(MARKET_LIST_P)) continue;
+            book.push({ it, s: sl, price: Math.max(1, Math.round(refPrice(it) * priceIdx * (0.9 + 0.2 * rnd()))) });
           }
-          const price = Math.round(refPrice(it) * priceIdx);
-          if (b.sol < price) { if (s) s.items.push(it); else overhang.push(it); continue; }
-          if (s) s.items.splice(s.items.indexOf(it), 1);
-          b.sol -= price;
-          const fee = Math.ceil(price * MARKET.FEE_BPS / 10_000);
-          if (s) s.sol += price - fee;
-          treasury.revenueToday += fee; treasury.feeRev += fee;
         }
-        b.items.push(it); trades++;
       }
+      book.sort((x, y) => x.price - y.price);
+      for (const b of shuffle(active.filter((p) => !p.alt && p.sol > 0))) {
+        if (!chance(MARKET_BUY_P)) continue;
+        const bestR = (k) => b.items.reduce((m, i) => (i.k === k && i.r > m ? i.r : m), -1);
+        const l = book.find((x) => !x.sold && x.s !== b && x.it.r > bestR(x.it.k) && x.price <= b.sol);
+        if (!l) continue;
+        if (l.s && !l.dump) {
+          const cr = MARKET.LISTING_FEE_CR[Math.min(3, l.it.r)];
+          if (l.s.cr < cr) continue;
+          l.s.cr -= cr; d.listFees += cr;
+        }
+        l.sold = true;
+        b.sol -= l.price;
+        if (l.s) {
+          const fee = Math.ceil(l.price * MARKET.FEE_BPS / 10_000);
+          l.s.sol += l.price - fee;
+          l.s.solEarned = (l.s.solEarned ?? 0) + l.price - fee;
+          treasury.revenueToday += fee; treasury.feeRev += fee; d.p2p++;
+          if (!l.dump) l.s.items.splice(l.s.items.indexOf(l.it), 1);
+        } else {
+          treasury.revenueToday += l.price; treasury.taxRev += l.price; treasury.taxSold++;
+        }
+        b.items.push(l.it); trades++;
+      }
+      const soldSet = new Set(book.filter((x) => x.sold).map((x) => x.it));
+      treasury.items = treasury.items.filter((it) => !soldSet.has(it));
+      overhang = overhang.filter((o) => !soldSet.has(o.it));
       // Primary sales: daily from day 14 while items/active < 2.5, up to 8% DAU, ~10% top tier, price max(ref, ref × idx).
-      if (OPTS.primary && day >= 14 && perActive < 2.5) {
+      if (OPTS.primary && day >= Number(arg("prim-day", 14)) && perActive < (arg("prim-target") !== undefined ? 99 : 2.5)) {
         const rich = active.filter((p) => !p.alt && p.sol > 500);
-        const n = Math.min(rich.length, Math.round(dau * PRIMARY_SHARE));
+        const T = arg("prim-target"); const n = T !== undefined ? Math.min(rich.length, Math.max(0, Math.round((Number(T) * dau - tradable) / 7)), Math.round(dau * 0.15)) : Math.min(rich.length, Math.round(dau * PRIMARY_SHARE));
         for (let i = 0; i < n; i++) {
-          const b = pick(rich); const it = primaryItem(); const price = Math.round(refPrice(it) * Math.max(1, priceIdx));
+          const b = pick(rich); const it = primaryItem(); const price = Math.round(refPrice(it) * (flag("prim-fixed") ? Number(arg("prim-mult", 1)) : Math.max(1, priceIdx)));
           if (b.sol < price) continue;
           b.sol -= price; b.items.push(it); treasury.revenueToday += price; treasury.primRev += price; primary++;
         }
@@ -706,7 +735,7 @@ function run(name) {
       day, dau, raids: d.raids, lobbies: d.lobbies, medLobby: med(sizes), soloShare: +(d.solo / Math.max(1, d.lobbies)).toFixed(2),
       geared: +(d.geared / Math.max(1, d.raids)).toFixed(2), ext: +(d.extracts / Math.max(1, d.raids)).toFixed(2),
       itemsPerActive: +perActive.toFixed(2), priceIdx: +priceIdx.toFixed(2), priceVsStart: startIdx ? +(priceIdx / startIdx).toFixed(2) : null,
-      revenue: treasury.revenueToday, trades, primary, pool: pool.length, poolTop: pool.filter((i) => tierScore(i) === 2).length,
+      revenue: treasury.revenueToday, trades, p2p: d.p2p, primary, pool: pool.length, poolTop: pool.filter((i) => tierScore(i) === 2).length,
       released: d.released, capBoss: d.capBoss, capCont: d.capCont, capCarrier: d.capCarrier, bossKills: d.bossKills,
       crMed: med(crs), crP99: pctl(crs, 0.99), vetMed, mult: +autosellMult.toFixed(2),
       faucet: d.junkCr, tags: d.tagCr, sink, faucetSink: +(d.junkCr / Math.max(1, sink)).toFixed(2),
@@ -717,9 +746,10 @@ function run(name) {
     });
   }
   const solNow = players.reduce((a, p) => a + p.sol, 0) + treasury.revenue;
+  if (arg("dump-players")) writeFileSync(arg("dump-players"), JSON.stringify(players.filter((p) => !p.alt).map((p) => ({ type: p.type, sol0: p.sol0, sol: p.sol, raids: p.raids, lvl: p.lvl, items: p.items.filter((i) => !i.bound).map((i) => refPrice(i)), life: p.life, earned: p.solEarned ?? 0 }))));
   return {
     name, scale: +scale.toFixed(3), windowS, rows, tot,
-    treasury: { revenue: treasury.revenue, feeRev: treasury.feeRev, primRev: treasury.primRev, taxRev: treasury.taxRev, primarySold: treasury.primarySold, taxSold: treasury.taxSold },
+    treasury: { revenue: treasury.revenue, feeRev: treasury.feeRev, primRev: treasury.primRev, taxRev: treasury.taxRev, kitRev: treasury.kitRev, primarySold: treasury.primarySold, taxSold: treasury.taxSold },
     solConserved: solNow === solStart, poolEmptyMaxStreak,
     alts: sc.alts ? altStats(players, tot) : null,
   };
