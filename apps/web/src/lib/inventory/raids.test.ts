@@ -35,7 +35,6 @@ import {
 } from "@extract/shared";
 import {
   creditLedger,
-  deposits,
   itemEvents,
   items,
   loadouts,
@@ -67,7 +66,7 @@ import { enterRaid, openShard } from "./world";
 import { claimStarter } from "./starter";
 import { getStash } from "./stash";
 import { seedEconomy } from "../economy/seed";
-import { listings } from "../../db/schema";
+import { listings, moneyLedger } from "../../db/schema";
 import { closeTestDb, lockTestDb, makeItem, makeUser, openTestDb, resetDb } from "./test-db";
 import { LOADOUT_LOCK_TTL_MS } from "./db";
 
@@ -163,16 +162,25 @@ async function lockedPlayer() {
 
 beforeEach(() => resetDb(db));
 
-/** A confirmed deposit (the tradable-giveaway gate). */
-async function deposit(userId: string, minor: number): Promise<void> {
-  await db.insert(deposits).values({ userId, signature: randomUUID(), amountCents: BigInt(minor), status: "confirmed" });
+/** Market balance in balance_cents (the tradable kit is paid from it). */
+async function setBalance(userId: string, minor: bigint): Promise<void> {
+  await db.update(users).set({ balanceCents: minor }).where(eq(users.id, userId));
+}
+async function balance(userId: string): Promise<bigint> {
+  const [u] = await db.select({ b: users.balanceCents }).from(users).where(eq(users.id, userId));
+  return u!.b;
 }
 
 describe("starter kit", () => {
-  test("claims once, even concurrently", async () => {
+  const PRICE = BigInt(GIVEAWAY.KIT_PRICE_MINOR);
+
+  test("claims once, even concurrently; the tradable kit is paid once", async () => {
     const u = await makeUser(db);
-    await deposit(u, GIVEAWAY.MIN_DEPOSIT_MINOR);
-    const results = await Promise.all([claimStarter(db, u, { lockRaids: 1 }), claimStarter(db, u, { lockRaids: 1 })]);
+    await setBalance(u, PRICE * 3n);
+    const results = await Promise.all([
+      claimStarter(db, u, { paid: true, lockRaids: 1 }),
+      claimStarter(db, u, { paid: true, lockRaids: 1 }),
+    ]);
     assert.deepEqual(results.map((r) => r.status).sort(), ["already", "claimed"]);
     assert.equal((await claimStarter(db, u)).status, "already");
     const owned = await db.select().from(items).where(eq(items.ownerId, u));
@@ -180,32 +188,49 @@ describe("starter kit", () => {
     assert.ok(owned.every((i) => i.origin === "giveaway" && i.lockRaids === 1 && !i.bound && i.state === "in_stash"));
     assert.equal(await credits(u), 1000 + GIVEAWAY_KIT.cr);
     assert.ok((await stack(u, "bandage")) > 0);
+    assert.equal(await balance(u), PRICE * 2n, "charged exactly once");
+    const money = await db.select().from(moneyLedger);
+    assert.deepEqual(
+      money.map((m) => [m.account === u ? "user" : m.account, m.reason, m.deltaMinor]).sort(),
+      [["house", "kit_sale", PRICE], ["user", "kit_buy", -PRICE]].sort(),
+    );
     assert.equal((await claimStarter(db, randomUUID())).status, "no_user");
     await assertCreditsConserved();
   });
 
-  test("gates (v5 review): no deposit, or the tradable cap reached → the same kit BOUND (never listable, 0 risk)", async () => {
+  test("the free kit is BOUND (never listable, 0 risk) and costs nothing", async () => {
+    const u = await makeUser(db);
+    await setBalance(u, PRICE * 10n);
+    const r = await claimStarter(db, u, { lockRaids: 1 });
+    assert.ok(r.status === "claimed" && r.bound && r.paidMinor === "0");
+    const owned = await db.select().from(items).where(eq(items.ownerId, u));
+    assert.equal(owned.length, 3);
+    assert.ok(owned.every((i) => i.bound && i.lockRaids === 0 && i.origin === "giveaway"));
+    assert.equal(await credits(u), 1000 + GIVEAWAY_KIT.cr, "CR and stacks either way");
+    assert.equal(await balance(u), PRICE * 10n);
+    assert.equal((await db.select().from(moneyLedger)).length, 0);
+    await assertCreditsConserved();
+  });
+
+  test("short of money or sold out → nothing claimed, the free kit stays available", async () => {
     const poor = await makeUser(db);
-    const r1 = await claimStarter(db, poor, { lockRaids: 1 });
-    assert.ok(r1.status === "claimed" && r1.bound);
-    const o1 = await db.select().from(items).where(eq(items.ownerId, poor));
-    assert.equal(o1.length, 3);
-    assert.ok(o1.every((i) => i.bound && i.lockRaids === 0 && i.origin === "giveaway"));
-    assert.equal(await credits(poor), 1000 + GIVEAWAY_KIT.cr, "CR and stacks either way");
-    // Deposited, but the tradable cap is used up: bound too.
+    await setBalance(poor, PRICE - 1n);
+    const r1 = await claimStarter(db, poor, { paid: true, lockRaids: 1 });
+    assert.equal(r1.status, "insufficient_funds");
+    assert.equal((await db.select().from(items).where(eq(items.ownerId, poor))).length, 0);
+    assert.equal(await balance(poor), PRICE - 1n);
+    assert.equal((await claimStarter(db, poor, { lockRaids: 1 })).status, "claimed", "can still take the free kit");
+
     const a = await makeUser(db);
-    await deposit(a, GIVEAWAY.MIN_DEPOSIT_MINOR);
-    const ra = await claimStarter(db, a, { lockRaids: 1, kitCap: 1 });
-    assert.ok(ra.status === "claimed" && !ra.bound, "first gated claim is tradable");
+    await setBalance(a, PRICE);
+    const ra = await claimStarter(db, a, { paid: true, lockRaids: 1, kitCap: 1 });
+    assert.ok(ra.status === "claimed" && !ra.bound, "first paid claim is tradable");
     const b = await makeUser(db);
-    await deposit(b, GIVEAWAY.MIN_DEPOSIT_MINOR * 10);
+    await setBalance(b, PRICE * 10n);
+    assert.equal((await claimStarter(db, b, { paid: true, lockRaids: 1, kitCap: 1 })).status, "sold_out");
+    assert.equal(await balance(b), PRICE * 10n, "not charged");
     const rb = await claimStarter(db, b, { lockRaids: 1, kitCap: 1 });
-    assert.ok(rb.status === "claimed" && rb.bound, "cap reached");
-    // A pending deposit does not count.
-    const c = await makeUser(db);
-    await db.insert(deposits).values({ userId: c, signature: randomUUID(), amountCents: 500n, status: "pending" });
-    const rc = await claimStarter(db, c, { lockRaids: 1 });
-    assert.ok(rc.status === "claimed" && rc.bound);
+    assert.ok(rb.status === "claimed" && rb.bound);
     await assertCreditsConserved();
   });
 

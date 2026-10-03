@@ -18,6 +18,7 @@ const REASON: Record<string, { label: string; note: string }> = {
   autosell: { label: "Junk sold at extraction", note: "faucet" },
   giveaway: { label: "Starter kits", note: "faucet" },
   consumables: { label: "Junker: ammo & meds", note: "sink" },
+  bound: { label: "Trader gear (bound)", note: "sink" },
   listing_fee: { label: "Market listing fees", note: "sink" },
   admin: { label: "Admin adjustments", note: "—" },
 };
@@ -54,6 +55,8 @@ export default async function EconomyPage() {
           money. Gear lost in raids is not deleted: it goes to the lost pool and comes back as loot. Market trades between
           players settle in {stats?.currency ?? "the market currency"} with a seller fee.
         </p>
+
+        <HowItWorks currency={stats?.currency ?? "SOL"} />
 
         {!stats ? (
           <div className="toon-panel font-body mt-8 bg-[#161b28]/95 p-6 text-white/70">Economy data is unavailable right now.</div>
@@ -200,6 +203,90 @@ export default async function EconomyPage() {
         )}
       </main>
     </div>
+  );
+}
+
+/** The three economy rules and where each currency and item comes from and goes (static, mirrors docs §2 / §21). */
+const RULES: Array<{ title: string; body: string }> = [
+  {
+    title: "The game never pays out",
+    body: "Money moves only from player to player (market) and from player to the treasury (fees, treasury sales). There is no payout path from the treasury.",
+  },
+  {
+    title: "Raids never mint valuables",
+    body: "New gear enters only through starter kits and treasury sales. Every valuable item in a crate was lost by a player first.",
+  },
+  {
+    title: "Risk drives reward",
+    body: "The lost pool releases gear onto the map only up to what the raiders themselves brought in. A lobby of free kits finds junk only.",
+  },
+];
+
+function flows(currency: string): Array<{ name: string; tone: string; ins: string[]; outs: string[]; note: string }> {
+  return [
+    {
+      name: currency,
+      tone: "text-zooa-lime",
+      ins: ["Selling gear to other players (minus the 5% fee)"],
+      outs: ["Buying gear from players", "Treasury lots and starter kits"],
+      note: "Players can earn only what other players pay. The treasury only receives.",
+    },
+    {
+      name: "CR",
+      tone: "text-amber-300",
+      ins: ["Junk sold at extraction", "Dog tags", "Starting balance"],
+      outs: ["Ammo and meds", "Trader gear (bound)", "Market listing fees"],
+      note: "Credits never convert to money in either direction and cannot be transferred.",
+    },
+    {
+      name: "Gear",
+      tone: "text-sky-300",
+      ins: ["Starter kits", "Treasury sales", "The lost pool (recycled, never new)"],
+      outs: ["Breaks on death and wears out", "1% of everything lost goes to the treasury"],
+      note: "Trader gear bought for CR is bound: playable, never sellable, destroyed when lost.",
+    },
+  ];
+}
+
+function HowItWorks({ currency }: { currency: string }) {
+  return (
+    <section className="mt-8" aria-label="How the economy works">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        {RULES.map((r, i) => (
+          <div key={r.title} className="toon-panel bg-[#161b28]/95 p-5">
+            <p className="text-[0.65rem] uppercase tracking-[0.2em] text-white/50">Rule {i + 1}</p>
+            <h2 className="toon-text-thin mt-2 text-xl tracking-wide text-white">{r.title}</h2>
+            <p className="font-body mt-2 text-sm leading-relaxed text-white/65">{r.body}</p>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {flows(currency).map((f) => (
+          <div key={f.name} className="toon-panel bg-[#161b28]/95 p-5">
+            <h3 className={`toon-text-thin text-2xl tracking-wide ${f.tone}`}>{f.name}</h3>
+            <div className="font-body mt-3 grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-xs uppercase tracking-wider text-white/45">Comes from</p>
+                <ul className="mt-1.5 space-y-1 text-white/80">
+                  {f.ins.map((x) => (
+                    <li key={x}>{x}</li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wider text-white/45">Goes to</p>
+                <ul className="mt-1.5 space-y-1 text-white/80">
+                  {f.outs.map((x) => (
+                    <li key={x}>{x}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <p className="font-body mt-3 border-t border-white/10 pt-3 text-xs text-white/50">{f.note}</p>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
