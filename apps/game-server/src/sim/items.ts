@@ -105,8 +105,17 @@ export function isTrackedUnique(it: ItemLike): boolean {
 }
 
 export class Ledger {
+  /** Origin of the current life of every uid that ever entered the match. */
   readonly known = new Map<string, { origin: UidOrigin; def: string }>();
+  /** Resolution of the current life (absent = the uid is on the map now). */
   readonly resolved = new Map<string, UidResolution>();
+  /**
+   * WORLD v6: lives per uid (absent = 1). A uid that left (extract, pool, …) may come back in the
+   * same match — re-entry with an extracted item, a lost item released again — as a new life.
+   */
+  readonly lives = new Map<string, number>();
+  /** Closed earlier lives, in close order (conservation audits: one report entry per life). */
+  readonly pastLives: Array<{ uid: string; origin: UidOrigin; how: UidResolution }> = [];
   /** Demo-minted uniques, in mint order (MatchEndReport.minted). */
   readonly minted: SettledItem[] = [];
   /** Problems seen in non-strict mode (logged; tests run strict and throw instead). */
@@ -114,11 +123,31 @@ export class Ledger {
 
   constructor(readonly strict: boolean) {}
 
-  register(it: ItemLike, origin: UidOrigin): void {
-    if (!it.uid) return;
-    if (this.known.has(it.uid)) return this.fail(`uid ${it.uid} registered twice`);
+  /**
+   * A uid enters the match. A resolved uid starts a new life; a uid that is on the map right now
+   * is a duplication (anomaly): returns false and the caller must not put the item on the map.
+   */
+  register(it: ItemLike, origin: UidOrigin): boolean {
+    if (!it.uid) return true;
+    const prev = this.known.get(it.uid);
+    if (prev) {
+      const how = this.resolved.get(it.uid);
+      if (!how) {
+        this.fail(`uid ${it.uid} registered twice`);
+        return false;
+      }
+      this.pastLives.push({ uid: it.uid, origin: prev.origin, how });
+      this.resolved.delete(it.uid);
+      this.lives.set(it.uid, (this.lives.get(it.uid) ?? 1) + 1);
+    }
     this.known.set(it.uid, { origin, def: it.def });
     if (origin === "minted") this.minted.push(toSettled(it));
+    return true;
+  }
+
+  /** Lives of `uid` so far (0 = never seen). */
+  livesOf(uid: string): number {
+    return this.known.has(uid) ? (this.lives.get(uid) ?? 1) : 0;
   }
 
   resolve(it: ItemLike, how: UidResolution): void {

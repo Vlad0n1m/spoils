@@ -13,7 +13,7 @@ import { spawnGroundItem } from "./inventory.js";
 import { makeItem } from "./items.js";
 import type { Match } from "./match.js";
 import type { NpcBrain } from "./npc.js";
-import { addExtract, ids, npcOpts, npcsOf, rtOf, run, testMap, testMatch, testPost, type TestMapOpts, type Timed } from "./test-utils.js";
+import { WORLD_T0, addExtract, advance, enter, ids, jump, npcOpts, npcsOf, rtOf, run, testMap, testMatch, testPost, worldMatch, type TestMapOpts, type Timed } from "./test-utils.js";
 import type { PlayerRuntime } from "./types.js";
 
 /** One human + the given marauder posts on the open test arena (midday, clear). */
@@ -313,4 +313,23 @@ test("an NPC never opens a container, picks up an item or extracts (200 seeds, i
     }
   }
   assert.ok(fights > 100, `the NPCs fought in ${fights}/200 seeds`);
+});
+
+test("T13 peace per human (WORLD v6): a human entering at minute 20 next to a squad is not shot for 30 s, then is", () => {
+  const { m, wall } = worldMatch({ map: testMap(), envSeed: 2, ...npcOpts([testPost(0, 1500, 1500)]) });
+  const npc = npcsOf(m)[0]!;
+  jump(m, wall, 20 * 60_000);
+  assert.equal(m.clock, wall.t - WORLD_T0);
+  const h = enter(m, "late");
+  // Outside the low leash (500) and beyond NPC.PEACE_CLOSE_PX, inside sight and pistol range.
+  h.pub.x = h.prevX = 1500;
+  h.pub.y = h.prevY = 2160;
+  h.pub.hp = 1e6;
+  brain(m, npc).tune({ aim: Math.PI / 2, rollChance: 0 });
+  const calm = advance(m, wall, NPC.PEACE_MS - 1000);
+  assert.ok(m.vision.sees(npc.rosterIndex, h.rosterIndex), "it sees the human");
+  assert.equal(shotsOf(calm, [npc]).length, 0, "no fire inside the entrant's own peace window");
+  const ev = advance(m, wall, 6000);
+  assert.ok(m.clock - h.enteredAtMs > NPC.PEACE_MS);
+  assert.ok(shotsOf(ev, [npc]).length > 0, "fired at once the window is over");
 });

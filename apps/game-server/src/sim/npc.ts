@@ -487,6 +487,14 @@ export class NpcSystem {
   }
 }
 
+/**
+ * WORLD v6 (D10): is human `o` still inside their own NPC peace window (the first NPC.PEACE_MS
+ * after their entry)? Roster humans of legacy matches entered at 0 = the old global window.
+ */
+export function inPeace(m: Match, o: PlayerRuntime): boolean {
+  return m.clock - o.enteredAtMs < NPC.PEACE_MS;
+}
+
 /** (x, y) pulled back onto the circle of radius r around `a` when it lies outside. */
 function clampTo(a: Pt, x: number, y: number, r: number): Pt {
   const d = Math.hypot(x - a.x, y - a.y);
@@ -910,7 +918,8 @@ export class NpcBrain {
     const def = weaponDefOf(w);
     if (w && def && s.reloadUntil === 0 && w.mag < def.magSize * 0.6 && ammoCount(rt, def.ammo) > 0) this.m.reload(rt.id);
     this.processHeard();
-    if (clock < NPC.PEACE_MS) this.peaceWatch();
+    // Peace windows are per human (WORLD v6 D10): someone is still inside theirs.
+    if (clock < this.m.peaceUntil) this.peaceWatch();
 
     if (sq.alertUntil > clock && sq.alertAt) {
       const at = sq.alertAt;
@@ -1028,22 +1037,22 @@ export class NpcBrain {
   }
 
   /**
-   * The nearest visible human; never another NPC. Before NPC.PEACE_MS only a recent attacker or an
-   * intruder: a human inside this NPC's post (its leash around the anchor) or within
+   * The nearest visible human; never another NPC. A human inside their own peace window (the first
+   * NPC.PEACE_MS after their entry: inPeace; roster humans enter at 0) is a target only as a recent
+   * attacker or an intruder: inside this NPC's post (its leash around the anchor) or within
    * NPC.PEACE_CLOSE_PX of it — the peace window protects spawns, not looting next to a camp.
    */
   private findEnemy(): PlayerRuntime | null {
     const p = this.rt.pub;
     const attacker = this.recentAttacker();
-    const peace = this.m.clock < NPC.PEACE_MS;
-    if (peace && attacker && this.canSee(attacker)) return attacker;
+    if (attacker && inPeace(this.m, attacker) && this.canSee(attacker)) return attacker;
     let best: PlayerRuntime | null = null;
     let bestD = Infinity;
     for (const j of this.m.vision.row(this.rt.rosterIndex)) {
       const o = this.m.rosterRuntime(j);
       if (!o || !o.pub.alive || o.isNpc) continue;
       let d = Math.hypot(o.pub.x - p.x, o.pub.y - p.y);
-      if (peace && d > NPC.PEACE_CLOSE_PX && this.dAnchor(o.pub.x, o.pub.y) > this.info.leash) continue;
+      if (inPeace(this.m, o) && d > NPC.PEACE_CLOSE_PX && this.dAnchor(o.pub.x, o.pub.y) > this.info.leash) continue;
       if (o.id === this.enemyId) d *= 0.7;
       if (o === attacker) d *= 0.5;
       if (d < bestD) {
@@ -1054,12 +1063,12 @@ export class NpcBrain {
     return best;
   }
 
-  /** Peace window: a human in sight is watched (suspicious), never shot at. */
+  /** Peace window: a human in sight still inside their own window is watched (suspicious), never shot at. */
   private peaceWatch(): void {
     const p = this.rt.pub;
     for (const j of this.m.vision.row(this.rt.rosterIndex)) {
       const o = this.m.rosterRuntime(j);
-      if (!o || !o.pub.alive || o.isNpc) continue;
+      if (!o || !o.pub.alive || o.isNpc || !inPeace(this.m, o)) continue;
       this.suspicious = { x: o.pub.x, y: o.pub.y, until: this.m.clock + NPC.SUSPICIOUS_MS, step: false };
       this.look(Math.atan2(o.pub.y - p.y, o.pub.x - p.x), 600);
       return;

@@ -19,9 +19,13 @@ export function extractIsOpen(e: Extract, clock: number): boolean {
   return clock >= e.openAt && (e.closeAt === 0 || clock < e.closeAt);
 }
 
-/** May this player use extract `e`? NPCs never extract; extracts outside MapData (tests) are always allowed. */
+/**
+ * May this player use extract `e`? NPCs never extract; extracts outside MapData (tests) are always
+ * allowed. WORLD v6 (D8): a player's extracts arm SelfState.extractArmAt after their own entry
+ * (0 for legacy roster humans).
+ */
 export function extractAllowed(m: Match, rt: PlayerRuntime, e: Extract): boolean {
-  if (rt.isNpc) return false;
+  if (rt.isNpc || m.clock < rt.self.extractArmAt) return false;
   const bit = m.extractBit.get(e.id);
   return bit === undefined || (rt.self.extractMask & (1 << bit)) !== 0;
 }
@@ -88,12 +92,15 @@ export function extractPlayer(m: Match, rt: PlayerRuntime): void {
   m.finishPlayer(rt, "extract", { extracted });
 }
 
-/** Match over: whoever is still on the map loses everything they carry (GDD §6). */
-export function timeoutPlayer(m: Match, rt: PlayerRuntime): void {
+/**
+ * Match over: whoever is still on the map loses everything they carry (GDD §6). Legacy roster
+ * matches: "timeout"; WORLD v6 wipe: "mia" (D9, the same soft rule: everything to the pool, no wear).
+ */
+export function timeoutPlayer(m: Match, rt: PlayerRuntime, exit: "timeout" | "mia" = "timeout"): void {
   if (!rt.pub.alive) return;
   const lost = nonFree(rt);
   leaveMap(m, rt);
   clearSlots(rt);
   syncPublic(rt);
-  m.finishPlayer(rt, "timeout", { lost });
+  m.finishPlayer(rt, exit, { lost });
 }

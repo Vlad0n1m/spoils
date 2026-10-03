@@ -14,7 +14,7 @@
  * whose contents go through the searchers' loot entry k<id> (containers.ts).
  */
 
-import { BREAK_CHANCE_ON_DEATH, ITEM_FLAG, NPC, NPC_ROLE, SoundKind, type ItemLike, type WeaponId } from "@extract/shared";
+import { BREAK_CHANCE_ON_DEATH, DOG_TAG, ITEM_FLAG, NPC, NPC_ROLE, SoundKind, type ItemLike, type WeaponId } from "@extract/shared";
 import { cancelHeal, cancelReload } from "./actions.js";
 import { carriedItems, clearSlots, syncPublic } from "./bag.js";
 import { closeSearch } from "./containers.js";
@@ -51,12 +51,19 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
         if (p.role === NPC_ROLE.GUARD) killer.stats.guardKills++;
       }
       if (rt.isNpc) m.npcs.creditKill(rt);
+      // WORLD v6 (D22 / spec §3.4): who killed whom, for dog tag prices (SettledItem.by) and ranked
+      // PvP (PlayerExitReport.victims; guests included, the web filters).
+      if (!rt.isNpc && rt.userId) {
+        rt.killerUserId = killer.userId;
+        killer.victims.push(rt.userId);
+      }
     }
     // A bullet still in flight can kill after its shooter already extracted or died: keep their
     // frozen result in line and resend it.
     if (killer.exitReport) {
       killer.exitReport.kills = killer.self.kills;
       killer.exitReport.stats = { ...killer.stats };
+      if (killer.exitReport.victims) killer.exitReport.victims = [...killer.victims];
     }
     if (killer.outcome) {
       killer.outcome = { ...killer.outcome, kills: killer.self.kills };
@@ -79,6 +86,12 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
     },
   });
   emitSound(m, rt, SoundKind.death, p.x, p.y);
+  // WORLD v6 (D13): the event boss died → BattleState.bossState = killed, world event for the lobby.
+  if (m.world && p.role === NPC_ROLE.BOSS && m.state.bossState === 1) {
+    m.state.bossState = 2;
+    const kind = m.npcs.info(rt)?.kind;
+    if (kind) m.emit({ type: "world", kind: "boss_killed", boss: kind, by: by && !by.isNpc ? by.nickname : "" });
+  }
   syncPublic(rt);
   m.finishPlayer(rt, "dead", { lost, dropped });
 }
@@ -118,7 +131,8 @@ export function buildCorpse(m: Match, rt: PlayerRuntime): { lost: ItemLike[]; dr
   const noBreak = NPC.NO_BREAK && rt.isNpc;
   const { lost, dropped, remains } = deathSplit(carriedItems(rt).map((c) => c.item), m.rng, noBreak);
   clearSlots(rt);
-  if (!rt.isNpc) remains.push(makeItem("junk_dogtag", { label: rt.nickname, lvl: rt.level, ref: rt.selfKey }));
+  // Guests drop no tag (WORLD v6 D22, DOG_TAG.GUEST_TAG).
+  if (!rt.isNpc && (!rt.guest || DOG_TAG.GUEST_TAG)) remains.push(makeItem("junk_dogtag", { label: rt.nickname, lvl: rt.level, ref: rt.selfKey }));
   m.containers.addCorpse(rt, remains);
   return { lost, dropped };
 }

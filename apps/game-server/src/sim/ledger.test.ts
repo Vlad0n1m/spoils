@@ -39,7 +39,7 @@ import {
 } from "@extract/shared";
 import { currentTarget, invTakeAllOp, invTakeOp } from "./containers.js";
 import { extractAllowed, extractIsOpen } from "./extraction.js";
-import { toPlain } from "./items.js";
+import { Ledger, makeItem, toPlain } from "./items.js";
 import { Match } from "./match.js";
 import { navGridFor, type Pt } from "./nav.js";
 import { counterUid, legacyNpcPosts } from "./test-utils.js";
@@ -415,4 +415,31 @@ test("ledger invariant over 10 seeded matches: scripted looters vs marauder squa
   assert.ok(agg.extracted > 0 && agg.dead > 0);
   assert.ok(agg.looterExtracts > 0 && agg.extractedJunk > 0, "looters carried junk out");
   assert.ok(agg.carriers >= 5 * 4, "carrier uniques were in play");
+});
+
+test("WORLD v6 ledger lives: a resolved uid registered again starts a new life; a live uid registered again is refused", () => {
+  const mk = makeItem;
+  const l = new Ledger(false);
+  const it = mk("rifle", { uid: "uid-life-1", rarity: 2 });
+  assert.equal(l.register(it, "loadout"), true);
+  assert.equal(l.livesOf("uid-life-1"), 1);
+  assert.equal(l.register(it, "pool"), false, "still on the map: a duplicate");
+  assert.equal(l.anomalies.length, 1);
+  l.resolve(it, "extract");
+  assert.equal(l.register(it, "loadout"), true, "extracted earlier: re-entry with it");
+  assert.equal(l.livesOf("uid-life-1"), 2);
+  assert.equal(l.resolved.has("uid-life-1"), false);
+  l.resolve(it, "lost");
+  assert.equal(l.register(it, "pool"), true, "lost, then released from the pool again");
+  l.resolve(it, "returned");
+  assert.equal(l.livesOf("uid-life-1"), 3);
+  assert.deepEqual(l.pastLives, [
+    { uid: "uid-life-1", origin: "loadout", how: "extract" },
+    { uid: "uid-life-1", origin: "loadout", how: "lost" },
+  ]);
+  assert.equal(l.resolved.get("uid-life-1"), "returned");
+  assert.equal(l.livesOf("never"), 0);
+  const strict = new Ledger(true);
+  strict.register(it, "pool");
+  assert.throws(() => strict.register(it, "pool"), /registered twice/);
 });

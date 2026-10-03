@@ -88,6 +88,8 @@ export class VisionSystem {
   private changes: VisionChange[] = [];
   /** Per-target scratch rebuilt every update (no per-tick allocation after the first). */
   private readonly pre: Pre[];
+  /** Runtimes covered by the last update (≤ n): rows / columns past it are all 0. */
+  private used = 0;
 
   constructor(readonly n: number) {
     this.lastSeen = new Float64Array(n * n).fill(-Infinity);
@@ -108,7 +110,11 @@ export class VisionSystem {
     const npcCalm: VisionEnv = { idx: m.idx, rangeMult, rangeCap: NPC.VIEW_RANGE_CAP };
     const npcAlert: VisionEnv = { idx: m.idx, rangeMult, rangeCap: NPC.VIEW_RANGE_ALERT };
     const rts = m.allRuntimes();
-    for (let j = 0; j < n; j++) {
+    // WORLD v6: capacity is fixed (WORLD.MAX_RUNTIMES_PER_SHARD) and runtimes are appended as
+    // entries arrive; slots past the last runtime are never on the map (perf only).
+    const used = Math.min(n, rts.length);
+    this.used = used;
+    for (let j = 0; j < used; j++) {
       const rt = rts[j];
       const q = this.pre[j]!;
       if (!rt) {
@@ -129,13 +135,13 @@ export class VisionSystem {
       q.stillMs = clock - rt.movedAt;
       q.sinceShotMs = clock - rt.lastShotAt;
     }
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < used; i++) {
       const v = this.pre[i]!;
       // Dead / extracted viewers keep the row clearRow emptied: no spectating.
       if (!v.onMap || v.dormant) continue;
       const env = !v.npc ? human : v.viewCap > NPC.VIEW_RANGE_CAP ? npcAlert : npcCalm;
       const row = i * n;
-      for (let j = 0; j < n; j++) {
+      for (let j = 0; j < used; j++) {
         if (j === i) continue;
         const k = row + j;
         const t = this.pre[j]!;
@@ -165,7 +171,7 @@ export class VisionSystem {
   row(i: number): number[] {
     const out: number[] = [];
     if (i < 0 || i >= this.n) return out;
-    for (let j = 0; j < this.n; j++) if (j !== i && this.published[i * this.n + j] === 1) out.push(j);
+    for (let j = 0; j < this.used; j++) if (j !== i && this.published[i * this.n + j] === 1) out.push(j);
     return out;
   }
 
@@ -183,7 +189,7 @@ export class VisionSystem {
   clearRow(i: number): void {
     if (i < 0 || i >= this.n) return;
     const row = i * this.n;
-    for (let j = 0; j < this.n; j++) {
+    for (let j = 0; j < this.used; j++) {
       this.lastSeen[row + j] = -Infinity;
       if (this.published[row + j] === 1) {
         this.published[row + j] = 0;

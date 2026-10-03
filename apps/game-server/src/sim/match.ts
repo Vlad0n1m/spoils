@@ -9,6 +9,12 @@
  * rollNpcSpawns, the same rolls the matchmaking room made for raids/start) and appended after the
  * roster. They never count as players and never keep a match alive.
  *
+ * WORLD v6 (MatchOptions.world, spec §3.4): one shard-cycle of the persistent world. The clock is
+ * the cycle clock (injected now() − cycleStartsAt), humans arrive and leave through addHuman /
+ * extract / death (re-entries are new runtimes; indexes are never reused), the wipe at
+ * WORLD.CYCLE_MS sends everyone left MIA, released pool items are placed by the server
+ * (pool-place.ts) and player drops / corpses expire (A6). Legacy roster matches are unchanged.
+ *
  * Tick order inside step() (later WPs fill the hooks, never the structure):
  *   NPCs (npc.ts) → reload/heal timers → inputs (stepMovement, fire) → stepSearches → bullets → pickups →
  *   extraction → velocities → disclosure → vision.update → aoi.update → deliverSounds → counters →
@@ -38,6 +44,7 @@ import {
   SOLID,
   SelfState,
   SoundKind,
+  WORLD,
   accepts,
   bagKeys,
   bpLevelOf,
@@ -65,6 +72,7 @@ import {
   dogTagCr,
   type BushIndex,
   type CollisionIndex,
+  type BossKind,
   type BossSpot,
   type ExitType,
   type HealKind,
@@ -97,8 +105,10 @@ import { stepExtraction, timeoutPlayer } from "./extraction.js";
 import { GroundStore, autoPickup, dropSpot, groundUniques, nearestGroundItem, pickupGround, spawnGroundItem } from "./inventory.js";
 import { Ledger, cloneItem, isTrackedUnique, makeItem, toPlain, toSettled } from "./items.js";
 import { NpcSystem, type NpcSpawn } from "./npc.js";
+import { leftoverPool, poolTargetCount, poolTick, receiveBossFill, receiveEntryPool, takeUnplaced, type UnplacedPoolItem } from "./pool-place.js";
+import { pickEntrySpawn } from "./spawn.js";
 import { deliverSounds, emitSound, footstep } from "./sound.js";
-import type { Bullet, LoadoutMap, MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
+import type { Bullet, EntryInit, LoadoutMap, MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
 import { VisionSystem, followAim } from "./vision.js";
 import { mapRuntime, warmMap, type MapRuntime } from "./nav.js";
 import { PathPlanner } from "./planner.js";
@@ -220,7 +230,31 @@ export interface MatchOptions {
    * NPC-only world for rule tests). A real match ends with its last human (default 0).
    */
   npcOnlyUntilMs?: number;
+  /**
+   * WORLD v6 (spec §3.4): this match is one shard-cycle of the persistent world. The clock follows
+   * the wall clock (`now() − cycleStartsAt`, so the directory can inject worldNow()), humans arrive
+   * through addHuman (roster empty), the map is wiped at WORLD.CYCLE_MS (MIA) and never ends for
+   * lack of humans. Only the event boss's spot spawns (boss + guards). Absent = legacy roster match.
+   */
+  world?: WorldOptions;
 }
+
+/** MatchOptions.world. */
+export interface WorldOptions {
+  cycleId: number;
+  shard: number;
+  /** Wall ms of the cycle start (clock 0). */
+  cycleStartsAt: number;
+  /** Cycle clock when entry closes (CYCLE_MS − ENTRY_CLOSE_MS). */
+  entryCloseMs: number;
+  /** Event boss of this cycle (bossEventOf), or null. */
+  bossEvent: BossKind | null;
+}
+
+/** Human palette slots (Player.color) handed out least-used first among living humans. */
+const HUMAN_COLORS = 16;
+/** worldTick period (pool placement, expiry). */
+const WORLD_TICK_MS = 1_000;
 
 export class Match {
   readonly state = new BattleState();
@@ -255,6 +289,29 @@ export class Match {
   /** Exit reports of every participant (humans are also emitted as `exit` events), in exit order. */
   readonly exitReports: PlayerExitReport[] = [];
 
+  // ---- WORLD v6
+  /** World mode options plus the backstop (durationMs = WORLD.CYCLE_MS); null = legacy roster match. */
+  readonly world: (WorldOptions & { durationMs: number }) | null;
+  /** Spawn spots handed out recently (spawn.ts pickEntrySpawn). */
+  readonly recentSpawns: Array<{ x: number; y: number; at: number }> = [];
+  /** Released entry pool items waiting for a valid target (pool-place.ts). */
+  readonly unplacedPool: UnplacedPoolItem[] = [];
+  /** Boss bag items waiting for the event boss to calm down (pool-place.ts). */
+  readonly pendingBossFill: ItemLike[] = [];
+  /** BossSpot of the event boss that spawned (world mode), else null. */
+  readonly eventBossSpot: BossSpot | null = null;
+  /** Latest end of any human's NPC peace window (npc.ts skips the peace pass after it). */
+  peaceUntil: number = NPC.PEACE_MS;
+  /** A6: uniques that vanished with player corpses / player-dropped ground items (→ treasury). */
+  readonly expired: ItemLike[] = [];
+  /** A6: pool items that vanished with NPC corpses (→ pool, untaxed). */
+  readonly expiredToPool: ItemLike[] = [];
+  private readonly byUser = new Map<string, PlayerRuntime>();
+  private readonly byEntry = new Map<string, PlayerRuntime>();
+  private readonly npcAnchors: NpcAnchor[];
+  private entrySpotCache: ReadonlyArray<{ x: number; y: number; side?: MapSide }> | null = null;
+  private nextWorldTickAt = 0;
+
   private readonly runtimes = new Map<string, PlayerRuntime>();
   private readonly ordered: PlayerRuntime[] = [];
   private events: MatchEvent[] = [];
@@ -282,27 +339,44 @@ export class Match {
     this.state.mapId = this.map.id;
     this.state.mapSeed = seed;
     this.lootSeed = (opts.lootSeed ?? seed) >>> 0;
-    this.state.phase = "drop";
-    this.state.startedAt = this.now();
+    this.world = opts.world ? { ...opts.world, durationMs: WORLD.CYCLE_MS } : null;
+    this.state.phase = this.world ? "open" : "drop";
+    this.state.startedAt = this.world ? this.world.cycleStartsAt : this.now();
     this.state.clockMs = 0;
-    this.state.durationMs = MATCH.DURATION_MS;
+    this.state.durationMs = this.world ? this.world.durationMs : MATCH.DURATION_MS;
     this.env = initEnvironment(this, opts.envSeed ?? Math.floor(this.rng() * 2 ** 32) >>> 0, opts.weatherOverride ?? "");
     this.npcOnlyUntilMs = opts.npcOnlyUntilMs ?? 0;
     // Humans only (NPC MODEL v5): a pre-v5 bot entry is skipped, never turned into a player.
     const roster = opts.roster.filter((r) => r.isBot !== true);
     // NPCs are rolled from the secret loot seed alone (the matchmaking room made the same rolls for raids/start).
-    const bossSpawns: BossSpot[] = (opts.bosses ?? !opts.emptyWorld) ? rollBossSpawns(this.lootSeed, this.map.bosses) : [];
+    // World mode (D12): only the event boss's spot spawns (boss + guards), no roll; no event, no boss.
+    const bossesOn = opts.bosses ?? !opts.emptyWorld;
+    const ev = this.world?.bossEvent ?? null;
+    const bossSpawns: BossSpot[] = !bossesOn ? [] : this.world
+      ? (ev ? this.map.bosses.filter((b) => b.kind === ev).slice(0, 1) : [])
+      : rollBossSpawns(this.lootSeed, this.map.bosses);
     const posts = opts.npcPosts ?? npcPostsOf(this.map);
     const marauders = opts.marauders ?? (!opts.emptyWorld || !!opts.npcPosts || !!opts.npcSpawns);
     const squads: NpcSquadSpawn[] = !marauders ? [] : (opts.npcSpawns ?? rollNpcSpawns(this.lootSeed, posts, bossGroupNpcCount(bossSpawns)));
     const npcCount = bossGroupNpcCount(bossSpawns) + squads.reduce((n, q) => n + q.members, 0);
-    this.vision = new VisionSystem(roster.length + npcCount);
+    // World mode: a fixed capacity (D16); indexes are never reused, admission refuses before it is full.
+    this.vision = new VisionSystem(this.world ? WORLD.MAX_RUNTIMES_PER_SHARD : roster.length + npcCount);
+    if (this.world) {
+      const spot = bossSpawns[0] ?? null;
+      this.eventBossSpot = spot;
+      this.state.cycleId = this.world.cycleId >>> 0;
+      this.state.entryCloseMs = this.world.entryCloseMs;
+      this.state.bossKind = spot ? spot.kind : "";
+      this.state.bossZone = spot ? (this.map.zones.find((z) => z.id === spot.zone)?.name ?? spot.zone) : "";
+      this.state.bossState = spot ? 1 : 0;
+    }
     this.containers = new ContainerSystem(this);
     this.npcs = new NpcSystem(this);
     if (opts.containerLoot && this.mode === "live") this.containers.allocatePool(opts.containerLoot);
 
     if (!opts.emptyWorld) this.setupWorld();
-    this.setupPlayers(roster, loadoutMap(opts.loadouts), npcAnchorsOf(bossSpawns, squads, posts));
+    this.npcAnchors = npcAnchorsOf(bossSpawns, squads, posts);
+    this.setupPlayers(roster, loadoutMap(opts.loadouts), this.npcAnchors);
     this.setupNpcs(bossSpawns, squads, posts, opts.npcBrains ?? opts.botBrains ?? true);
     this.updateCounters();
   }
@@ -351,7 +425,7 @@ export class Match {
   private setupWorld(): void {
     // A map that schedules its own closes (the Steppe: N2 / S2 at 25:00) is authoritative, so every
     // side keeps an always-open allowed extract; only maps without any (legacy) get a random half.
-    const mapSchedules = this.map.extracts.some((e) => e.closesAtMs !== undefined);
+    const mapSchedules = this.world !== null || this.map.extracts.some((e) => e.closesAtMs !== undefined);
     const closing = new Set(
       mapSchedules ? [] : shuffle(this.rng, this.map.extracts.map((_, i) => i)).slice(
         0,
@@ -364,8 +438,15 @@ export class Match {
       e.x = spot.x;
       e.y = spot.y;
       e.r = spot.r;
-      e.openAt = MATCH.EXTRACT_OPEN_AT_MS;
-      e.closeAt = spot.closesAtMs ?? (closing.has(i) ? Math.round(MATCH.DURATION_MS * MATCH.EXTRACT_CLOSE_EARLY_AT) : 0);
+      if (this.world) {
+        // D8: every extract is open from clock 0 (each player arms after their own entry); the
+        // map's early-closing ones (N2 / S2) close EXTRACT_EARLY_CLOSE_MS before the wipe.
+        e.openAt = 0;
+        e.closeAt = spot.closesAtMs !== undefined ? WORLD.CYCLE_MS - WORLD.EXTRACT_EARLY_CLOSE_MS : 0;
+      } else {
+        e.openAt = MATCH.EXTRACT_OPEN_AT_MS;
+        e.closeAt = spot.closesAtMs ?? (closing.has(i) ? Math.round(MATCH.DURATION_MS * MATCH.EXTRACT_CLOSE_EARLY_AT) : 0);
+      }
       this.state.extracts.set(e.id, e);
     });
 
@@ -432,7 +513,116 @@ export class Match {
       syncPublic(rt);
       this.runtimes.set(id, rt);
       this.ordered.push(rt);
+      if (rt.userId && !this.byUser.has(rt.userId)) this.byUser.set(rt.userId, rt);
     });
+  }
+
+  // ---------------------------------------------------------------- world entries (WORLD v6)
+
+  /**
+   * Put an admitted entry on the map (spec §3.4): the next runtime index (after every NPC and
+   * earlier entry), a late-join spawn (spawn.ts), extracts armed EXTRACT_ARM_MS from now, the
+   * loadout + free kit, and the entry's released pool items / boss bag (pool-place.ts). The runtime
+   * stands idle (not connected) until attachHuman. World mode only.
+   */
+  addHuman(e: EntryInit): PlayerRuntime {
+    if (!this.world) throw new Error("addHuman: world mode only");
+    if (this.ended) throw new Error("addHuman: the map was wiped");
+    const i = this.ordered.length;
+    if (i >= this.vision.n) throw new Error(`addHuman: runtime capacity ${this.vision.n} reached`);
+    const clock = this.clock;
+    const spawn = pickEntrySpawn(this, this.rng, e.userId);
+    const id = `e${i}`;
+    const p = new Player();
+    p.sessionId = id;
+    p.nickname = e.nickname;
+    p.color = this.leastUsedColor();
+    p.x = spawn.x;
+    p.y = spawn.y;
+    p.hp = PLAYER.MAX_HP;
+    p.alive = true;
+    const s = new SelfState();
+    s.userId = e.userId;
+    s.isBot = false;
+    s.side = spawn.side;
+    s.extractMask = this.extractMaskOf(spawn.side);
+    s.enteredAt = clock;
+    s.extractArmAt = clock + WORLD.EXTRACT_ARM_MS;
+    const selfKey = selfKeyOf(i);
+    this.state.players.set(id, p);
+    this.state.self.set(selfKey, s);
+    const rt = newRuntime(id, i, selfKey, { userId: e.userId, nickname: e.nickname }, false, p, s, e.snapshot ?? undefined);
+    rt.entryId = e.entryId;
+    rt.enteredAtMs = clock;
+    rt.guest = e.guest;
+    rt.level = e.level;
+    rt.loadoutId = e.loadoutId;
+    if (e.snapshot) this.loadLoadout(rt, e.snapshot);
+    giveFreeKit(rt);
+    syncPublic(rt);
+    this.runtimes.set(id, rt);
+    this.ordered.push(rt);
+    this.byUser.set(e.userId, rt);
+    this.byEntry.set(e.entryId, rt);
+    this.peaceUntil = Math.max(this.peaceUntil, clock + NPC.PEACE_MS);
+    receiveEntryPool(this, rt, e.pool);
+    receiveBossFill(this, e.bossFill);
+    this.updateCounters();
+    return rt;
+  }
+
+  /** The newest runtime of `userId` (alive or not). */
+  currentOf(userId: string): PlayerRuntime | undefined {
+    return this.byUser.get(userId);
+  }
+
+  /** The runtime of entry `entryId` (world mode). */
+  entryById(entryId: string): PlayerRuntime | undefined {
+    return this.byEntry.get(entryId);
+  }
+
+  /** Living human runtimes, connected or not (admission capacity, D3). */
+  humansOnMap(): number {
+    let n = 0;
+    for (const rt of this.ordered) if (!rt.isNpc && rt.pub.alive) n++;
+    return n;
+  }
+
+  /** Valid pool targets now, without the human-distance rule (EntryRequest.targets, D17). */
+  poolTargetCount(): number {
+    return poolTargetCount(this);
+  }
+
+  /** The event boss runtime of this world shard, or null (none this cycle / legacy match). */
+  eventBoss(): PlayerRuntime | null {
+    if (!this.world || !this.eventBossSpot) return null;
+    return this.npcs.groups.find((g) => g.spot === this.eventBossSpot)?.boss ?? null;
+  }
+
+  /** The event boss of this shard is alive (EntryRequest.bossAlive). */
+  bossAlive(): boolean {
+    return this.eventBoss()?.pub.alive ?? false;
+  }
+
+  /** Spawn spots for late entries: the map's, minus those inside NPC camps (cached; NPC posts never move). */
+  entrySpots(): ReadonlyArray<{ x: number; y: number; side: MapSide }> {
+    this.entrySpotCache ??= spawnsClearOfNpcs(this.map.spawns, this.npcAnchors, 1);
+    return this.entrySpotCache.map((q) => ({ x: q.x, y: q.y, side: q.side ?? (0 as MapSide) }));
+  }
+
+  /** Tarkov rule (map memo §6), as in setupPlayers. */
+  private extractMaskOf(side: MapSide): number {
+    const allMask = (1 << Math.min(8, this.map.extracts.length)) - 1;
+    return extractMask(this.map, side) || allMask;
+  }
+
+  /** The palette slot used by the fewest living humans (lowest index on ties). */
+  private leastUsedColor(): number {
+    const used = new Array<number>(HUMAN_COLORS).fill(0);
+    for (const rt of this.ordered) if (!rt.isNpc && rt.pub.alive && rt.pub.color < HUMAN_COLORS) used[rt.pub.color]!++;
+    let best = 0;
+    for (let c = 1; c < HUMAN_COLORS; c++) if (used[c]! < used[best]!) best = c;
+    return best;
   }
 
   // ---------------------------------------------------------------- NPCs (npc.ts, boss.ts)
@@ -488,7 +678,8 @@ export class Match {
         continue;
       }
       const it = makeItem(e.def, { uid: e.uid, qty: e.qty, rarity: e.rarity, dur: e.dur, label: e.label, lvl: e.lvl });
-      if (d.unique) this.ledger.register(it, "loadout");
+      // A uid that is on the map right now (non-strict ledger anomaly) is never duplicated.
+      if (d.unique && !this.ledger.register(it, "loadout")) continue;
       s.set(e.key, cloneItem(it));
     }
     fixActive(rt);
@@ -501,8 +692,9 @@ export class Match {
    * Player instance; the self entry key p<rosterIndex> never changes). The input seq restarts.
    */
   attachHuman(userId: string, sessionId: string): PlayerRuntime | null {
-    const rt = this.ordered.find((r) => !r.isNpc && r.userId === userId);
-    if (!rt) return null;
+    // World mode: only the user's current (newest) runtime, and only while it is on the map.
+    const rt = this.world ? this.currentOf(userId) : this.ordered.find((r) => !r.isNpc && r.userId === userId);
+    if (!rt || (this.world && !rt.pub.alive)) return null;
     if (rt.id !== sessionId) {
       this.state.players.delete(rt.id);
       this.runtimes.delete(rt.id);
@@ -574,7 +766,11 @@ export class Match {
       return true;
     }
     const g = nearestGroundItem(this, rt);
-    if (!g) return false;
+    if (!g) {
+      // D11: F next to the body of your own earlier entry (skipped by nearestOpenable).
+      if (this.containers.ownBodyNear(rt)) this.invErr(rt, "own_body");
+      return false;
+    }
     if (pickupGround(this, rt, g)) return true;
     this.invErr(rt, "full");
     return false;
@@ -651,9 +847,17 @@ export class Match {
   step(dtMs: number): void {
     if (this.ended) return;
     const dt = Math.max(0, Math.min(MAX_STEP_MS, dtMs));
-    this.state.clockMs = Math.min(this.clock + dt, MATCH.DURATION_MS);
-    const phase = this.clock >= MATCH.EXTRACT_OPEN_AT_MS ? "open" : "drop";
-    if (this.state.phase !== phase) this.state.phase = phase;
+    if (this.world) {
+      // D7: the clock is the cycle clock (wall time since the cycle start, monotonic, clamped);
+      // a prewarmed room does nothing before its cycle starts. Physics keeps the clamped dt.
+      const wall = this.now() - this.world.cycleStartsAt;
+      if (wall < 0) return;
+      this.state.clockMs = Math.min(this.world.durationMs, Math.max(this.clock, wall));
+    } else {
+      this.state.clockMs = Math.min(this.clock + dt, MATCH.DURATION_MS);
+      const phase = this.clock >= MATCH.EXTRACT_OPEN_AT_MS ? "open" : "drop";
+      if (this.state.phase !== phase) this.state.phase = phase;
+    }
     // Sample the environment once per tick; vision / sound / audience read the cached sample.
     envNow(this);
 
@@ -676,6 +880,10 @@ export class Match {
     for (const rt of this.ordered) if (rt.pub.alive) autoPickup(this, rt);
 
     stepExtraction(this);
+    if (this.world && this.clock >= this.nextWorldTickAt) {
+      this.nextWorldTickAt = this.clock + WORLD_TICK_MS;
+      this.worldTick();
+    }
 
     for (const rt of this.ordered) {
       rt.vx = dt > 0 ? ((rt.pub.x - rt.prevX) * 1000) / dt : 0;
@@ -689,6 +897,11 @@ export class Match {
     for (const rt of this.ordered) syncPublic(rt);
     this.releaseHeldExits();
 
+    // World: never ends for lack of humans; the backstop at the cycle end is the wipe (MIA), never a timeout.
+    if (this.world) {
+      if (this.clock >= this.world.durationMs) this.wipe();
+      return;
+    }
     // NPCs never keep a match alive: it ends at 30:00 or once every human left (extract / death /
     // timeout). npcOnlyUntilMs: rule tests that need an NPC-only world for a while.
     let humansAlive = false;
@@ -699,6 +912,30 @@ export class Match {
       }
     }
     if (this.clock >= MATCH.DURATION_MS || (!humansAlive && this.clock >= this.npcOnlyUntilMs)) this.end();
+  }
+
+  /** Once a second in world mode: pool placement / boss bag (pool-place.ts), then ground and corpse expiry (A6). */
+  private worldTick(): void {
+    poolTick(this);
+    this.expireTick();
+  }
+
+  /**
+   * A6: player-dropped ground items older than GROUND_EXPIRE_MS and corpses older than
+   * CORPSE_EXPIRE_MS vanish. Player valuables → expired (treasury), NPC-corpse pool items →
+   * expiredToPool (pool, untaxed); fungibles are destroyed. Time-ordered queues: no scan of all items.
+   */
+  private expireTick(): void {
+    const ground = this.ground.expire(this, this.clock);
+    const corpses = this.containers.expireCorpses(this.clock);
+    for (const it of [...ground, ...corpses.treasury]) {
+      this.ledger.resolve(it, "expired");
+      this.expired.push(toPlain(it));
+    }
+    for (const it of corpses.pool) {
+      this.ledger.resolve(it, "expired_pool");
+      this.expiredToPool.push(toPlain(it));
+    }
   }
 
   /** HUD player counts: humans only (NPCs are not players, and their numbers must not leak). */
@@ -775,11 +1012,16 @@ export class Match {
     const settle = (it: ItemLike): SettledItem => {
       const out = toSettled(it);
       if (it.def === "junk_dogtag" && it.ref) {
-        const victim = this.ordered.find((r) => r.selfKey === it.ref)?.userId;
-        if (victim) out.victim = victim;
+        const v = this.ordered.find((r) => r.selfKey === it.ref);
+        if (v?.userId) out.victim = v.userId;
+        // D22: the killer's userId (full tag price only for them; the web applies NON_KILLER_MULT).
+        if (v?.killerUserId) out.by = v.killerUserId;
       }
       return out;
     };
+    // World: pool items of this entry never placed go back with the exit (extract only; a death
+    // places them at once, the wipe leaves them on the map).
+    const unplaced = exit === "extract" ? takeUnplaced(this, rt) : [];
     const report: PlayerExitReport = {
       matchId: this.state.matchId,
       userId: rt.userId ?? "",
@@ -792,6 +1034,12 @@ export class Match {
       destroyed: rt.destroyed.map(settle),
       stats: { ...rt.stats },
     };
+    if (rt.entryId) {
+      report.entryId = rt.entryId;
+      report.enteredAtMs = rt.enteredAtMs;
+      report.victims = [...rt.victims];
+      report.unplaced = unplaced.map(toSettled);
+    }
     rt.exitReport = report;
     this.exitReports.push(report);
 
@@ -814,7 +1062,7 @@ export class Match {
       atMs: this.clock,
       credits: junkCredits(extracted),
       sold,
-      guest: false,
+      guest: rt.guest,
     };
     rt.outcome = msg;
     this.vision.clearRow(rt.rosterIndex);
@@ -841,7 +1089,22 @@ export class Match {
     return [...this.ledger.known.keys()].filter((uid) => !this.ledger.resolved.has(uid));
   }
 
+  /** Legacy roster match over (30:00 or no human left): whoever is still on the map times out. */
   private end(): void {
+    this.close("timeout");
+  }
+
+  /**
+   * WORLD v6 wipe (D9): every human still on the map leaves with "mia" (everything carried → lost
+   * pool, no wear); pending pool items and the boss bag stay on the map (leftOnMap, untaxed); the
+   * end report lists every entry. The room calls it at the wipe time; step() is the backstop.
+   */
+  wipe(): void {
+    if (!this.world || this.ended) return;
+    this.close("mia");
+  }
+
+  private close(exit: "timeout" | "mia"): void {
     // NPCs still standing hold what they carry until the map is gone: their pool uniques (boss bag,
     // carrier) go back to the pool with no wear (leftOnMap), never "lost"; FREE gear just vanishes.
     // (Their fungibles end in the NPC's own exit report, which is never posted.)
@@ -855,13 +1118,13 @@ export class Match {
       }
       timeoutPlayer(this, rt);
     }
-    for (const rt of this.ordered) if (rt.pub.alive) timeoutPlayer(this, rt);
+    for (const rt of this.ordered) if (rt.pub.alive) timeoutPlayer(this, rt, exit);
     this.bullets = [];
     // Every exit report goes out before the end report (the web's end sweep relies on it).
     this.releaseHeldExits();
     this.state.phase = "ended";
     this.updateCounters();
-    const leftOnMap = [...groundUniques(this), ...this.containers.leftInside(), ...npcLeft];
+    const leftOnMap = [...groundUniques(this), ...this.containers.leftInside(), ...npcLeft, ...(this.world ? leftoverPool(this) : [])];
     for (const it of leftOnMap) this.ledger.resolve(it, "left");
     const gaps = this.ledgerGaps();
     if (gaps.length) {
@@ -874,7 +1137,7 @@ export class Match {
       userId: rt.userId,
       nickname: rt.nickname,
       isBot: false,
-      exitType: rt.exitReport?.exit ?? ("timeout" as ExitType),
+      exitType: rt.exitReport?.exit ?? (exit as ExitType),
       kills: rt.self.kills,
     }));
     const npcSummary = this.npcs.summary();
@@ -889,6 +1152,13 @@ export class Match {
       minted: this.mode === "demo" ? [...this.ledger.minted] : [],
       npcSummary,
     };
+    if (this.world) {
+      report.cycleId = this.world.cycleId;
+      report.shard = this.world.shard;
+      report.entries = this.ordered.filter((rt) => !rt.isNpc && rt.entryId).map((rt) => rt.entryId);
+      report.expired = this.expired.map(toSettled);
+      report.expiredToPool = this.expiredToPool.map(toSettled);
+    }
     this.report = report;
     this.emit({
       type: "ended",
@@ -959,6 +1229,14 @@ function newRuntime(
     killedBy: "",
     exitReport: null,
     outcome: null,
+    entryId: "",
+    enteredAtMs: 0,
+    guest: false,
+    victims: [],
+    killerUserId: null,
+    pendingPool: [],
+    poolApplyAt: 0,
+    exitSettled: false,
   };
 }
 
