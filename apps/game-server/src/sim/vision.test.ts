@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SERVER_TICK_MS, VISION, generateMap, mulberry32, visionRangeMult } from "@extract/shared";
+import { NPC, SERVER_TICK_MS, VISION, generateMap, mulberry32, visionRangeMult } from "@extract/shared";
 import { damagePlayer } from "./combat.js";
 import { envNow } from "./environment.js";
 import { Match } from "./match.js";
-import { counterUid, humans, ids, place, pl, rtOf, testMap, testMatch } from "./test-utils.js";
+import { counterUid, humans, ids, npcOpts, npcsOf, place, pl, rtOf, testMap, testMatch, testPost } from "./test-utils.js";
+import type { PlayerRuntime } from "./types.js";
 
 /** A wall from (1300, 600) to (1324, 1400): splits the arena left / right around y = 1000. */
 const WALL = { x: 1300, y: 600, w: 24, h: 800 };
@@ -130,32 +131,46 @@ test("vision: a still player in a bush is hidden beyond BUSH_REVEAL_R until it s
   assert.equal(m.vision.sees(r(0), r(1)), true, "shooting cancels the bush");
 });
 
-test("vision: rows are by roster index and survive a reconnect re-key; bots use BOT_RANGE_CAP", () => {
-  const m = testMatch(1, {
-    roster: [...humans(2), { userId: null, nickname: "Bot", isBot: true }],
-    botBrains: false,
+test("vision: rows are by roster index and survive a reconnect re-key; NPCs use NPC.VIEW_RANGE_CAP, never look at NPCs, and sleep when dormant", () => {
+  const m = testMatch(2, {
+    ...npcOpts([testPost(0, 1000, 2050), testPost(1, 1100, 2250)]),
+    npcBrains: false,
     envSeed: 2,
   });
-  const [a, b, bot] = ids(m);
+  const [a, b] = ids(m);
+  const [npc, npc2] = npcsOf(m) as [PlayerRuntime, PlayerRuntime];
   place(m, a!, 1000, 2000);
   place(m, b!, 1900, 2000);
-  place(m, bot!, 1000, 2050);
   pl(m, a!).aim = 0;
-  pl(m, bot!).aim = 0;
+  npc.pub.aim = 0;
+  npc2.pub.aim = -Math.PI / 2;
   m.step(SERVER_TICK_MS);
-  const ra = rtOf(m, a!).rosterIndex, rb = rtOf(m, b!).rosterIndex, rbot = rtOf(m, bot!).rosterIndex;
+  const ra = rtOf(m, a!).rosterIndex, rb = rtOf(m, b!).rosterIndex;
+  assert.equal(NPC.VIEW_RANGE_CAP, 800);
   assert.equal(m.vision.sees(ra, rb), true, "a human sees 900 px");
-  assert.equal(m.vision.sees(rbot, rb), false, "a bot is capped at 800 px");
+  assert.equal(m.vision.sees(npc.rosterIndex, rb), false, "an NPC is capped at 800 px");
+  assert.equal(m.vision.sees(npc.rosterIndex, ra), true, "an NPC sees a human up close");
+  assert.equal(m.vision.sees(ra, npc.rosterIndex), true, "humans see NPCs");
+  assert.equal(m.vision.sees(npc2.rosterIndex, npc.rosterIndex), false, "NPC → NPC is never computed");
   m.attachHuman("user1", "fresh-session");
   m.step(SERVER_TICK_MS);
   assert.equal(m.vision.sees(ra, rb), true, "same row after the target's re-key");
+  // Dormant (no row computed) while flagged; awake again it sees.
+  npc.dormant = true;
+  m.vision.clearRow(npc.rosterIndex);
+  m.vision.update(m);
+  assert.deepEqual(m.vision.row(npc.rosterIndex), [], "a dormant NPC sees nothing");
+  assert.equal(m.vision.sees(ra, npc.rosterIndex), true, "…but stays a target");
+  npc.dormant = false;
+  m.vision.update(m);
+  assert.equal(m.vision.sees(npc.rosterIndex, ra), true);
 });
 
 test("vision pass: 32 clustered players on the Steppe stay inside the per-tick budget", () => {
   const map = generateMap("steppe");
   const m = new Match({
     roster: humans(32), rng: mulberry32(5), map, newUid: counterUid, now: () => 0,
-    emptyWorld: true, botBrains: false, envSeed: 3, weatherOverride: "clear",
+    emptyWorld: true, npcBrains: false, envSeed: 3, weatherOverride: "clear",
   });
   const rng = mulberry32(9);
   // Everyone within ~1600 px of the first spawn: the worst case for the pair loop.

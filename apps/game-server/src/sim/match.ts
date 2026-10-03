@@ -4,8 +4,13 @@
  * through `rng` and all item ids through `newUid`, so tests run whole matches deterministically
  * without a network.
  *
+ * NPC MODEL v5: the roster is humans only. NPCs (boss groups at their BossSpots, marauder squads at
+ * MapData.npcPosts) are created by the match itself from the match seed (rollBossSpawns /
+ * rollNpcSpawns, the same rolls the matchmaking room made for raids/start) and appended after the
+ * roster. They never count as players and never keep a match alive.
+ *
  * Tick order inside step() (later WPs fill the hooks, never the structure):
- *   bots → reload/heal timers → inputs (stepMovement, fire) → stepSearches → bullets → pickups →
+ *   NPCs (npc.ts) → reload/heal timers → inputs (stepMovement, fire) → stepSearches → bullets → pickups →
  *   extraction → velocities → disclosure → vision.update → aoi.update → deliverSounds → counters →
  *   syncPublic → held exit reports
  * The room then runs syncViews → broadcastPatch → per-client `ev` batches (battle-room.ts).
@@ -13,13 +18,21 @@
 
 import { randomInt, randomUUID } from "node:crypto";
 import {
+  BOSSES,
+  BOSS_AI,
   BattleState,
   Extract,
   FLOOR_LOOT,
   INPUT_DT_MS,
   MATCH,
   MAX_QUEUED_INPUTS,
+  NPC,
   NPC_ROLE,
+  bossGroupNpcCount,
+  humanSideCap,
+  npcLeashPx,
+  npcPostsOf,
+  rollNpcSpawns,
   PLAYER,
   Player,
   SOLID,
@@ -64,6 +77,8 @@ import {
   type MapId,
   type MapSide,
   type MatchEndReport,
+  type NpcPost,
+  type NpcSquadSpawn,
   type OutcomeMsg,
   type PlayerExitReport,
   type RaidMode,
@@ -75,14 +90,13 @@ import { cancelHeal, cancelReload, finishHealIfDue, finishReloadIfDue, startHeal
 import { AoiSystem } from "./aoi.js";
 import { Disclosure } from "./disclosure.js";
 import { fixActive, giveFreeKit, moveOwn, removeForDrop, syncPublic, takeOpToken } from "./bag.js";
-import { BotBrain } from "./bot.js";
-import { BossSystem, bossNpcCount, type NpcSpawn } from "./boss.js";
 import { stepBullets, tryFire } from "./combat.js";
 import { ContainerSystem, closeSearch, invTakeAllOp, invTakeOp, stepSearches } from "./containers.js";
 import { envNow, initEnvironment, type EnvRuntime } from "./environment.js";
 import { stepExtraction, timeoutPlayer } from "./extraction.js";
 import { GroundStore, autoPickup, dropSpot, groundUniques, nearestGroundItem, pickupGround, spawnGroundItem } from "./inventory.js";
-import { Ledger, cloneItem, makeItem, toSettled } from "./items.js";
+import { Ledger, cloneItem, isTrackedUnique, makeItem, toPlain, toSettled } from "./items.js";
+import { NpcSystem, type NpcSpawn } from "./npc.js";
 import { deliverSounds, emitSound, footstep } from "./sound.js";
 import type { Bullet, LoadoutMap, MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
 import { VisionSystem, followAim } from "./vision.js";
@@ -129,10 +143,6 @@ export function expectedMapHash(choice: MatchMapChoice = defaultMapChoice()): st
   return warmMatchMap(choice)?.hash ?? null;
 }
 
-/** Players per match (humans + bots): the Steppe has 40 side spawns for MATCH.MAX_PLAYERS. */
-export const MATCH_PLAYERS = MATCH.MAX_PLAYERS;
-/** v1 count for whole-match tests on the legacy map (≤ 24 spawn spots on 4800 px). */
-export const LEGACY_MATCH_PLAYERS = 16;
 
 // ---------------------------------------------------------------- match
 
@@ -158,15 +168,24 @@ const LEGACY_FLOOR_LOOT = [
 export interface MatchOptions {
   roster: RosterEntry[];
   rng?: Rng;
-  /** Match seed: loot rolls (and the legacy map layout). */
+  /** Match seed: the (public, BattleState.mapSeed) map seed — legacy map layout, environment. */
   mapSeed?: number;
+  /**
+   * Server-secret seed of everything a client must not be able to predict (v5 review): container
+   * contents, boss / marauder spawns, NPC kits and bags. Never synced to clients; the matchmaking
+   * room draws it per match (planLaunch) and makes the same NPC rolls with it for raids/start.
+   * Default: mapSeed (tests and benches stay deterministic in one seed).
+   */
+  lootSeed?: number;
   /** Map to run on (default: defaultMapChoice(), i.e. the Steppe unless EXTRACT_MATCH_MAP says otherwise). */
   mapId?: MatchMapChoice;
   /** Tests: a hand-made map instead of matchMap(mapSeed, mapId). */
   map?: MapData;
   newUid?: () => string;
   now?: () => number;
-  /** Bots get a BotBrain (default true). Rule tests drive bot players by hand. */
+  /** NPCs get an NpcBrain (default true). Rule tests drive NPC players by hand. */
+  npcBrains?: boolean;
+  /** @deprecated pre-v5 name of npcBrains (there are no player-bots any more). */
   botBrains?: boolean;
   /** Skip extracts / floor loot from the map (rule tests place their own). */
   emptyWorld?: boolean;
@@ -182,10 +201,25 @@ export interface MatchOptions {
   envSeed?: number;
   weatherOverride?: string;
   /**
-   * Spawn the map's bosses and guards (rollBossSpawns(mapSeed, map.bosses), boss.ts). Default: on
+   * Spawn the map's bosses and guards (rollBossSpawns(lootSeed, map.bosses), boss.ts). Default: on
    * unless emptyWorld. Pool items for bosses come in containerLoot["boss:<kind>"].
    */
   bosses?: boolean;
+  /**
+   * Spawn the marauder squads (rollNpcSpawns(lootSeed, map.npcPosts, boss NPCs), npc.ts). Default:
+   * on unless emptyWorld (on whenever npcPosts / npcSpawns are given). Carrier pool items come in
+   * containerLoot["npc:<post>.<member>"].
+   */
+  marauders?: boolean;
+  /** Tests: these posts instead of MapData.npcPosts. */
+  npcPosts?: NpcPost[];
+  /** Tests / benches: these squads instead of the rollNpcSpawns roll (forced fills, perf gates). */
+  npcSpawns?: NpcSquadSpawn[];
+  /**
+   * Tests only: until this match clock the match does not end for lack of living humans (an
+   * NPC-only world for rule tests). A real match ends with its last human (default 0).
+   */
+  npcOnlyUntilMs?: number;
 }
 
 export class Match {
@@ -212,16 +246,19 @@ export class Match {
   /** Extract id → bit index in SelfState.extractMask (MapData.extracts order). */
   readonly extractBit = new Map<string, number>();
   bullets: Bullet[] = [];
-  readonly bots: BotBrain[] = [];
-  /** Bosses and their guards (NPC runtimes after the roster; their brains are not in `bots`). */
-  readonly bosses: BossSystem;
+  /** MatchOptions.lootSeed (server-only: never in BattleState). */
+  readonly lootSeed: number;
+  /** Bosses, guards and marauder squads (NPC runtimes after the roster). */
+  readonly npcs: NpcSystem;
+  /** @deprecated v5 has no player-bots: always empty (pre-v5 benches still read it). */
+  readonly bots: ReadonlyArray<{ rt: PlayerRuntime; role: string }> = [];
   /** Exit reports of every participant (humans are also emitted as `exit` events), in exit order. */
   readonly exitReports: PlayerExitReport[] = [];
 
   private readonly runtimes = new Map<string, PlayerRuntime>();
   private readonly ordered: PlayerRuntime[] = [];
   private events: MatchEvent[] = [];
-  private readonly hasHumans: boolean;
+  private readonly npcOnlyUntilMs: number;
   report: MatchEndReport | null = null;
 
   constructor(opts: MatchOptions) {
@@ -244,23 +281,35 @@ export class Match {
     this.state.matchId = opts.matchId ?? this.newUid();
     this.state.mapId = this.map.id;
     this.state.mapSeed = seed;
+    this.lootSeed = (opts.lootSeed ?? seed) >>> 0;
     this.state.phase = "drop";
     this.state.startedAt = this.now();
     this.state.clockMs = 0;
     this.state.durationMs = MATCH.DURATION_MS;
     this.env = initEnvironment(this, opts.envSeed ?? Math.floor(this.rng() * 2 ** 32) >>> 0, opts.weatherOverride ?? "");
-    this.hasHumans = opts.roster.some((r) => !r.isBot);
-    // Bosses are rolled from the match seed alone (the matchmaking room made the same roll for raids/start).
-    const bossSpawns: BossSpot[] = (opts.bosses ?? !opts.emptyWorld) ? rollBossSpawns(seed, this.map.bosses) : [];
-    this.vision = new VisionSystem(opts.roster.length + bossNpcCount(bossSpawns));
+    this.npcOnlyUntilMs = opts.npcOnlyUntilMs ?? 0;
+    // Humans only (NPC MODEL v5): a pre-v5 bot entry is skipped, never turned into a player.
+    const roster = opts.roster.filter((r) => r.isBot !== true);
+    // NPCs are rolled from the secret loot seed alone (the matchmaking room made the same rolls for raids/start).
+    const bossSpawns: BossSpot[] = (opts.bosses ?? !opts.emptyWorld) ? rollBossSpawns(this.lootSeed, this.map.bosses) : [];
+    const posts = opts.npcPosts ?? npcPostsOf(this.map);
+    const marauders = opts.marauders ?? (!opts.emptyWorld || !!opts.npcPosts || !!opts.npcSpawns);
+    const squads: NpcSquadSpawn[] = !marauders ? [] : (opts.npcSpawns ?? rollNpcSpawns(this.lootSeed, posts, bossGroupNpcCount(bossSpawns)));
+    const npcCount = bossGroupNpcCount(bossSpawns) + squads.reduce((n, q) => n + q.members, 0);
+    this.vision = new VisionSystem(roster.length + npcCount);
     this.containers = new ContainerSystem(this);
-    this.bosses = new BossSystem(this);
+    this.npcs = new NpcSystem(this);
     if (opts.containerLoot && this.mode === "live") this.containers.allocatePool(opts.containerLoot);
 
     if (!opts.emptyWorld) this.setupWorld();
-    this.setupPlayers(opts.roster, opts.botBrains ?? true, loadoutMap(opts.loadouts));
-    this.setupBosses(bossSpawns, opts.botBrains ?? true);
+    this.setupPlayers(roster, loadoutMap(opts.loadouts), npcAnchorsOf(bossSpawns, squads, posts));
+    this.setupNpcs(bossSpawns, squads, posts, opts.npcBrains ?? opts.botBrains ?? true);
     this.updateCounters();
+  }
+
+  /** Bosses and guards (pre-v5 name; the same NpcSystem as every NPC). */
+  get bosses(): NpcSystem {
+    return this.npcs;
   }
 
   get clock(): number {
@@ -344,8 +393,8 @@ export class Match {
     return roll ? makeItem(roll.def, { qty: roll.qty }) : null;
   }
 
-  private setupPlayers(roster: RosterEntry[], botBrains: boolean, loadouts: LoadoutMap): void {
-    const spawns = assignSpawns(this.rng, this.map.spawns, roster.map((r) => !r.isBot));
+  private setupPlayers(roster: RosterEntry[], loadouts: LoadoutMap, npcAnchors: readonly NpcAnchor[] = []): void {
+    const spawns = assignSpawns(this.rng, spawnsClearOfNpcs(this.map.spawns, npcAnchors, roster.length), roster.length);
     const colors = shuffle(this.rng, Array.from({ length: Math.max(16, roster.length) }, (_, i) => i));
     const used = new Map<string, number>();
     const allMask = (1 << Math.min(8, this.map.extracts.length)) - 1;
@@ -353,7 +402,7 @@ export class Match {
     // with none (hand-made test maps, the legacy layout) falls back to every extract.
     const maskOf = (side: MapSide) => extractMask(this.map, side) || allMask;
     roster.forEach((entry, i) => {
-      const id = entry.isBot ? `bot${i}` : `pending${i}`;
+      const id = `pending${i}`;
       const spawn = spawns[i] ?? { x: this.map.width / 2, y: this.map.height / 2, side: 0 as MapSide };
       // More players than spawn spots: spread the ones sharing a spot out a little.
       const k = `${spawn.x},${spawn.y}`;
@@ -369,7 +418,7 @@ export class Match {
       p.alive = true;
       const s = new SelfState();
       s.userId = entry.userId ?? "";
-      s.isBot = entry.isBot;
+      s.isBot = false;
       s.side = spawn.side;
       s.extractMask = maskOf(spawn.side);
       const selfKey = selfKeyOf(i);
@@ -377,32 +426,32 @@ export class Match {
       this.state.self.set(selfKey, s);
 
       const snap = entry.userId ? loadouts.get(entry.userId) : undefined;
-      const rt = newRuntime(id, i, selfKey, entry, p, s, snap);
+      const rt = newRuntime(id, i, selfKey, entry, false, p, s, snap);
       if (snap) this.loadLoadout(rt, snap);
       giveFreeKit(rt);
       syncPublic(rt);
       this.runtimes.set(id, rt);
       this.ordered.push(rt);
-      if (entry.isBot && botBrains) this.bots.push(new BotBrain(this, rt));
     });
   }
 
-  // ---------------------------------------------------------------- bosses (loot economy v4, boss.ts)
+  // ---------------------------------------------------------------- NPCs (npc.ts, boss.ts)
 
   /**
-   * Boss groups after the roster: each NPC gets the next roster index (vision / sound / views are
-   * all by roster index), a Player with role / maxHp, no free kit (boss.ts equips it), no extract
-   * mask (NPCs never extract), and a BotBrain with its NpcInfo (kept in bosses.brains).
+   * Boss groups, then marauder squads, after the roster: each NPC gets the next roster index
+   * (vision / sound / views are all by roster index), a Player with role / maxHp (npc.ts / boss.ts
+   * equip it; no free kit), no extract mask (NPCs never extract), and an NpcBrain unless brains are
+   * off (rule tests drive NPC players by hand).
    */
-  private setupBosses(spawned: readonly BossSpot[], botBrains: boolean): void {
-    if (spawned.length === 0) return;
+  private setupNpcs(bosses: readonly BossSpot[], squads: readonly NpcSquadSpawn[], posts: readonly NpcPost[], brains: boolean): void {
     const add = (n: NpcSpawn): PlayerRuntime => {
       const i = this.ordered.length;
-      const id = `bot${i}`;
+      const id = `npc${i}`;
       const p = new Player();
       p.sessionId = id;
       p.nickname = n.nickname;
-      p.color = i % 256;
+      // A fixed NPC palette slot (never a player color index; the client tints by role).
+      p.color = 255;
       p.x = n.x;
       p.y = n.y;
       p.hp = PLAYER.MAX_HP;
@@ -413,12 +462,14 @@ export class Match {
       const selfKey = selfKeyOf(i);
       this.state.players.set(id, p);
       this.state.self.set(selfKey, s);
-      const rt = newRuntime(id, i, selfKey, { userId: null, nickname: n.nickname, isBot: true }, p, s, undefined);
+      const rt = newRuntime(id, i, selfKey, { userId: null, nickname: n.nickname }, true, p, s, undefined);
       this.runtimes.set(id, rt);
       this.ordered.push(rt);
       return rt;
     };
-    this.bosses.spawn(spawned, add, botBrains ? (rt, info) => new BotBrain(this, rt, info) : null);
+    this.npcs.spawnBosses(bosses, add);
+    this.npcs.spawnSquads(squads, posts, add);
+    if (brains) this.npcs.startBrains();
   }
 
   /**
@@ -450,7 +501,7 @@ export class Match {
    * Player instance; the self entry key p<rosterIndex> never changes). The input seq restarts.
    */
   attachHuman(userId: string, sessionId: string): PlayerRuntime | null {
-    const rt = this.ordered.find((r) => !r.isBot && r.userId === userId);
+    const rt = this.ordered.find((r) => !r.isNpc && r.userId === userId);
     if (!rt) return null;
     if (rt.id !== sessionId) {
       this.state.players.delete(rt.id);
@@ -494,29 +545,29 @@ export class Match {
   }
 
   /**
-   * Bots: F on one specific ground item (range + line of sight as for F), never on whatever else
-   * happens to be nearest (Match.interact prefers containers and would open one instead).
+   * F on one specific ground item (range + line of sight as for F), never on whatever else happens
+   * to be nearest (Match.interact prefers containers). Scripted test / bench humans; NPCs never loot.
    */
   pickupItem(id: string, groundId: string): boolean {
     const rt = this.actor(id);
     const g = this.ground.byId.get(groundId);
-    if (!rt || !g) return false;
+    if (!rt || !g || rt.isNpc) return false;
     const p = rt.pub;
     if ((g.schema.x - p.x) ** 2 + (g.schema.y - p.y) ** 2 > PLAYER.INTERACT_RADIUS ** 2) return false;
     if (!hasLineOfSight(this.idx, p.x, p.y, g.schema.x, g.schema.y, SOLID.MOVE)) return false;
     return pickupGround(this, rt, g);
   }
 
-  /** Bots: open one specific search target (loot key c<idx> / k<corpse>) if it is in reach. */
+  /** Open one specific search target (loot key c<idx> / k<corpse>) if it is in reach (scripted humans). */
   openSearch(id: string, key: string): boolean {
     const rt = this.actor(id);
-    return rt ? this.containers.openKey(rt, key) : false;
+    return rt && !rt.isNpc ? this.containers.openKey(rt, key) : false;
   }
 
   /** F: the nearest untouched container wins over loose items (inventory memo §2.2). */
   interact(id: string): boolean {
     const rt = this.actor(id);
-    if (!rt) return false;
+    if (!rt || rt.isNpc) return false;
     const c = this.containers.nearestOpenable(rt);
     if (c >= 0) {
       this.containers.open(rt, c);
@@ -551,7 +602,7 @@ export class Match {
 
   /** INV_MOVE. Returns the error code (also sent as INV_ERR) or null on success. */
   invMove(id: string, msg: InvMoveMsg): InvErrCode | null {
-    // Takes from a search session live in containers.ts (one API for the room, bots and tests).
+    // Takes from a search session live in containers.ts (one API for the room, scripted humans and tests).
     if (msg.from === "loot") return invTakeOp(this, id, msg);
     const rt = this.actor(id);
     if (!rt) return "dead";
@@ -585,7 +636,7 @@ export class Match {
   }
 
   private invErr(rt: PlayerRuntime, code: InvErrCode, key?: string): InvErrCode {
-    if (!rt.isBot) this.emit({ type: "invErr", to: rt.rosterIndex, msg: key === undefined ? { code } : { code, key } });
+    if (!rt.isNpc) this.emit({ type: "invErr", to: rt.rosterIndex, msg: key === undefined ? { code } : { code, key } });
     return code;
   }
 
@@ -610,8 +661,7 @@ export class Match {
       rt.prevX = rt.pub.x;
       rt.prevY = rt.pub.y;
     }
-    for (const bot of this.bots) bot.update(dt);
-    this.bosses.update(dt);
+    this.npcs.update(dt);
 
     for (const rt of this.ordered) {
       if (!rt.pub.alive) continue;
@@ -639,24 +689,24 @@ export class Match {
     for (const rt of this.ordered) syncPublic(rt);
     this.releaseHeldExits();
 
+    // NPCs never keep a match alive: it ends at 30:00 or once every human left (extract / death /
+    // timeout). npcOnlyUntilMs: rule tests that need an NPC-only world for a while.
     let humansAlive = false;
-    let anyAlive = false;
     for (const rt of this.ordered) {
-      // Bosses and guards never leave: they do not keep a bots-only match running.
-      if (!rt.pub.alive || rt.pub.role !== NPC_ROLE.NONE) continue;
-      anyAlive = true;
-      if (!rt.isBot) humansAlive = true;
+      if (rt.pub.alive && !rt.isNpc) {
+        humansAlive = true;
+        break;
+      }
     }
-    // A bots-only match (tests, demo) runs until nobody is left; otherwise it ends with the last human.
-    if (this.clock >= MATCH.DURATION_MS || (this.hasHumans ? !humansAlive : !anyAlive)) this.end();
+    if (this.clock >= MATCH.DURATION_MS || (!humansAlive && this.clock >= this.npcOnlyUntilMs)) this.end();
   }
 
-  /** HUD player counts: roster players only (bosses and guards are not players, and must not leak). */
+  /** HUD player counts: humans only (NPCs are not players, and their numbers must not leak). */
   private updateCounters(): void {
     let alive = 0;
     let total = 0;
     for (const rt of this.ordered) {
-      if (rt.pub.role !== NPC_ROLE.NONE) continue;
+      if (rt.isNpc) continue;
       total++;
       if (rt.pub.alive) alive++;
     }
@@ -768,7 +818,7 @@ export class Match {
     };
     rt.outcome = msg;
     this.vision.clearRow(rt.rosterIndex);
-    if (!rt.isBot) {
+    if (!rt.isNpc) {
       this.emit({ type: "outcome", to: rt.rosterIndex, msg });
       // A bullet of theirs still in flight may yet kill (death.ts updates report.kills): the web
       // report goes out once the last one is gone, so the posted kills (XP) are final.
@@ -792,13 +842,26 @@ export class Match {
   }
 
   private end(): void {
+    // NPCs still standing hold what they carry until the map is gone: their pool uniques (boss bag,
+    // carrier) go back to the pool with no wear (leftOnMap), never "lost"; FREE gear just vanishes.
+    // (Their fungibles end in the NPC's own exit report, which is never posted.)
+    const npcLeft: ItemLike[] = [];
+    for (const rt of this.ordered) {
+      if (!rt.pub.alive || !rt.isNpc) continue;
+      for (const [k, it] of [...rt.self.slots.entries()]) {
+        if (!isTrackedUnique(it)) continue;
+        npcLeft.push(toPlain(it));
+        rt.self.slots.delete(k);
+      }
+      timeoutPlayer(this, rt);
+    }
     for (const rt of this.ordered) if (rt.pub.alive) timeoutPlayer(this, rt);
     this.bullets = [];
     // Every exit report goes out before the end report (the web's end sweep relies on it).
     this.releaseHeldExits();
     this.state.phase = "ended";
     this.updateCounters();
-    const leftOnMap = [...groundUniques(this), ...this.containers.leftInside()];
+    const leftOnMap = [...groundUniques(this), ...this.containers.leftInside(), ...npcLeft];
     for (const it of leftOnMap) this.ledger.resolve(it, "left");
     const gaps = this.ledgerGaps();
     if (gaps.length) {
@@ -806,13 +869,15 @@ export class Match {
       if (this.ledger.strict) throw new Error(msg);
       console.error(msg);
     }
-    const participants = this.ordered.map((rt) => ({
-      userId: rt.isBot ? null : rt.userId,
+    // Participants are humans only (v5); NPC totals ride in npcSummary.
+    const participants = this.ordered.filter((rt) => !rt.isNpc).map((rt) => ({
+      userId: rt.userId,
       nickname: rt.nickname,
-      isBot: rt.isBot,
+      isBot: false,
       exitType: rt.exitReport?.exit ?? ("timeout" as ExitType),
       kills: rt.self.kills,
     }));
+    const npcSummary = this.npcs.summary();
     const report: MatchEndReport = {
       matchId: this.state.matchId,
       mapId: this.map.id,
@@ -822,6 +887,7 @@ export class Match {
       participants,
       leftOnMap: leftOnMap.map(toSettled),
       minted: this.mode === "demo" ? [...this.ledger.minted] : [],
+      npcSummary,
     };
     this.report = report;
     this.emit({
@@ -830,17 +896,19 @@ export class Match {
       summary: {
         matchId: report.matchId,
         participants: participants.map(({ nickname, isBot, exitType, kills }) => ({ nickname, isBot, exitType, kills })),
+        npcSummary,
       },
     });
   }
 }
 
-/** Fresh server-side bookkeeping of one participant (roster player or boss NPC). */
+/** Fresh server-side bookkeeping of one participant (roster human or NPC). */
 function newRuntime(
   id: string,
   rosterIndex: number,
   selfKey: string,
-  entry: RosterEntry,
+  entry: Pick<RosterEntry, "userId" | "nickname">,
+  npc: boolean,
   p: Player,
   s: SelfState,
   snap: LoadoutSnapshot | undefined,
@@ -849,9 +917,12 @@ function newRuntime(
     id,
     rosterIndex,
     selfKey,
-    userId: entry.isBot ? null : entry.userId,
+    userId: npc ? null : entry.userId,
     nickname: entry.nickname,
-    isBot: entry.isBot,
+    isNpc: npc,
+    isBot: npc,
+    dormant: false,
+    viewCap: NPC.VIEW_RANGE_CAP,
     connected: false,
     loadoutId: snap?.loadoutId ?? "",
     level: snap?.level ?? 0,
@@ -884,7 +955,7 @@ function newRuntime(
     opsBucket: { tokens: 20, at: 0 },
     destroyed: [],
     dropped: [],
-    stats: { shotsFired: 0, dmgDealt: 0, containersSearched: 0, corpsesSearched: 0, bossKills: 0 },
+    stats: { shotsFired: 0, dmgDealt: 0, containersSearched: 0, corpsesSearched: 0, bossKills: 0, npcKills: 0, guardKills: 0 },
     killedBy: "",
     exitReport: null,
     outcome: null,
@@ -898,90 +969,105 @@ function loadoutMap(l: MatchOptions["loadouts"]): LoadoutMap {
 }
 
 /**
- * Spawn spot per roster entry (same order), side-aware (map memo §6).
- *
- * Humans are placed first, one at a time. Each may only take a spot on a side that holds fewer
- * than ceil(humans / sides) humans so far — so humans spread round-robin over N/E/S/W and every
- * side's extract mask gets used — and among those it takes the spot that maximizes the minimum
- * distance from any human to every other assigned spawn (other humans and the bots that will fill
- * in around them). Bots then take the remaining spots farthest from the humans. More players than
- * spots: the extra bots reuse spots, farthest from the humans first. Spots without a side (hand-made
- * test maps) all count as one side.
+ * Spawn spot per human (NPC MODEL v5 §1.2), side-aware (map memo §6): farthest-point sampling over
+ * the side spawns. The first spot is random; each next one maximizes its minimum distance to the
+ * spots already taken, picked at random among the candidates within 10% of the best, on a side that
+ * holds fewer than humanSideCap(n) = ceil(n/4) + 1 humans so far (so humans spread over N/E/S/W).
+ * SPAWN_RULES.HUMAN_MIN_SEP_PX (3000 px) then holds for n ≤ 16 on the Steppe. More humans than
+ * spots: the extra ones reuse spots in the same order. Spots without a side (hand-made test maps)
+ * all count as one side.
  */
-export function assignSpawns<T extends { x: number; y: number; side?: MapSide }>(
-  rng: Rng,
-  spots: readonly T[],
-  isHuman: readonly boolean[],
-): T[] {
-  const n = isHuman.length;
-  if (spots.length === 0) return [];
-  const pool = shuffle(rng, [...spots]);
-  const dist = (a: T, b: T) => Math.hypot(a.x - b.x, a.y - b.y);
-  const humanCount = Math.min(isHuman.filter(Boolean).length, pool.length);
-  const botCount = n - isHuman.filter(Boolean).length;
-  const sideOf = (i: number) => pool[i]!.side ?? 0;
-  const sideCount = new Set(pool.map((_, i) => sideOf(i))).size;
-  const sideCap = Math.ceil(humanCount / sideCount);
-
-  /** Free spots ordered farthest-from-humans first (stable over the shuffled order). */
-  const botOrder = (humanSpots: number[]): number[] => {
-    const taken = new Set(humanSpots);
-    const free = pool.map((_, i) => i).filter((i) => !taken.has(i));
-    const near = (i: number) => {
-      let d = Infinity;
-      for (const h of humanSpots) d = Math.min(d, dist(pool[i]!, pool[h]!));
-      return d;
-    };
-    const score = new Map(free.map((i) => [i, near(i)]));
-    free.sort((a, b) => score.get(b)! - score.get(a)!);
-    return free;
-  };
-  /** Smallest distance from any human spawn to any other assigned spawn. */
-  const worst = (humanSpots: number[], botSpots: number[]): number => {
-    let w = Infinity;
-    for (const h of humanSpots) {
-      for (const o of humanSpots) if (o !== h) w = Math.min(w, dist(pool[h]!, pool[o]!));
-      for (const o of botSpots) w = Math.min(w, dist(pool[h]!, pool[o]!));
+export function assignSpawns<T extends { x: number; y: number; side?: MapSide }>(rng: Rng, spots: readonly T[], n: number): T[] {
+  if (spots.length === 0 || n <= 0) return [];
+  const count = Math.min(n, spots.length);
+  // A few random restarts; keep the layout whose closest pair is farthest apart.
+  let best: number[] = [];
+  let bestScore = -Infinity;
+  for (let attempt = 0; attempt < SPAWN_ATTEMPTS; attempt++) {
+    const taken = sampleSpawns(rng, spots, n, count);
+    let worst = Infinity;
+    for (let a = 0; a < taken.length; a++) {
+      for (let b = a + 1; b < taken.length; b++) worst = Math.min(worst, Math.hypot(spots[taken[a]!]!.x - spots[taken[b]!]!.x, spots[taken[a]!]!.y - spots[taken[b]!]!.y));
     }
-    return w;
-  };
-
-  const humanSpots: number[] = [];
-  const perSide = new Map<number, number>();
-  for (let k = 0; k < humanCount; k++) {
-    // Humans still to place count as occupants too: the bots of this layout stand in for them.
-    const restCount = Math.min(pool.length - k - 1, botCount + (humanCount - k - 1));
-    let best = -1;
-    let bestScore = -Infinity;
-    // Pass 0 honours the side cap; pass 1 only runs when the capped sides ran out of spots.
-    for (let pass = 0; pass < 2 && best < 0; pass++) {
-      for (let i = 0; i < pool.length; i++) {
-        if (humanSpots.includes(i)) continue;
-        if (pass === 0 && (perSide.get(sideOf(i)) ?? 0) >= sideCap) continue;
-        const hs = [...humanSpots, i];
-        const score = worst(hs, botOrder(hs).slice(0, restCount));
-        if (score > bestScore) { bestScore = score; best = i; }
-      }
+    if (worst > bestScore) {
+      bestScore = worst;
+      best = taken;
     }
-    humanSpots.push(best);
-    perSide.set(sideOf(best), (perSide.get(sideOf(best)) ?? 0) + 1);
+    if (count <= 1) break;
   }
-  const order = botOrder(humanSpots);
-  const firstLap = shuffle(rng, order.slice(0, Math.min(botCount, order.length)));
-  const botSpots: number[] = [];
-  for (let b = 0; b < botCount; b++) {
-    const lapList = order.length > 0 ? order : humanSpots;
-    botSpots.push(b < firstLap.length ? firstLap[b]! : lapList[(b - firstLap.length) % lapList.length]!);
-  }
+  return Array.from({ length: n }, (_, k) => spots[best[k % best.length]!]!);
+}
 
-  const out: T[] = [];
-  let h = 0;
-  let b = 0;
-  for (const human of isHuman) {
-    if (human) out.push(pool[humanSpots[h++ % humanSpots.length]!]!);
-    else out.push(pool[botSpots[b++]!]!);
+/** An NPC anchor a human must not spawn next to: a post / BossSpot / guard post and its leash. */
+export interface NpcAnchor {
+  x: number;
+  y: number;
+  leash: number;
+}
+
+/**
+ * Spawn spots clear of the NPCs that spawned (v5 review: a Commander guard post stood 1882 px from a
+ * side spawn, and nobody may spawn into a camp: the peace window does not cover a human standing in
+ * a post). Preferred: every spot NPC.SPAWN_CLEAR_PX from every anchor (the Steppe generator already
+ * keeps marauder posts that far; this adds the boss groups). Too few of those (small test maps):
+ * spots outside every anchor's leash + NPC.PEACE_CLOSE_PX. Still too few: every spot.
+ */
+export function spawnsClearOfNpcs<T extends { x: number; y: number }>(spots: readonly T[], anchors: readonly NpcAnchor[], n: number): readonly T[] {
+  if (anchors.length === 0) return spots;
+  const need = Math.min(n, spots.length);
+  const far = spots.filter((s) => anchors.every((q) => Math.hypot(q.x - s.x, q.y - s.y) >= NPC.SPAWN_CLEAR_PX));
+  if (far.length >= need) return far;
+  const outside = spots.filter((s) => anchors.every((q) => Math.hypot(q.x - s.x, q.y - s.y) >= q.leash + NPC.PEACE_CLOSE_PX));
+  return outside.length >= need ? outside : spots;
+}
+
+/** Anchors of the NPCs that spawned: BossSpots and their used guard posts, marauder posts (with leash). */
+function npcAnchorsOf(bosses: readonly BossSpot[], squads: readonly NpcSquadSpawn[], posts: readonly NpcPost[]): NpcAnchor[] {
+  const out: NpcAnchor[] = [];
+  for (const b of bosses) {
+    out.push({ x: b.x, y: b.y, leash: BOSS_AI.LEASH_BOSS_PX });
+    for (const g of b.guards.slice(0, BOSSES[b.kind].guards.length)) out.push({ x: g.x, y: g.y, leash: BOSS_AI.LEASH_GUARD_PX });
+  }
+  const byId = new Map(posts.map((p) => [p.id, p]));
+  for (const sq of squads) {
+    const p = byId.get(sq.postId);
+    if (p && sq.members > 0) out.push({ x: p.x, y: p.y, leash: npcLeashPx(p) });
   }
   return out;
+}
+
+/** Farthest-point restarts of assignSpawns. */
+const SPAWN_ATTEMPTS = 6;
+
+/** One farthest-point sampling pass (assignSpawns): spot indexes in pick order. */
+function sampleSpawns<T extends { x: number; y: number; side?: MapSide }>(rng: Rng, spots: readonly T[], n: number, count: number): number[] {
+  const dist = (a: T, b: T) => Math.hypot(a.x - b.x, a.y - b.y);
+  const sideOf = (i: number) => spots[i]!.side ?? 0;
+  const sides = new Set(spots.map((_, i) => sideOf(i))).size;
+  const cap = sides > 1 ? humanSideCap(n) : Infinity;
+  const taken: number[] = [];
+  const used = new Uint8Array(spots.length);
+  const near = new Float64Array(spots.length).fill(Infinity);
+  const perSide = new Map<number, number>();
+  const take = (i: number) => {
+    taken.push(i);
+    used[i] = 1;
+    perSide.set(sideOf(i), (perSide.get(sideOf(i)) ?? 0) + 1);
+    for (let j = 0; j < spots.length; j++) near[j] = Math.min(near[j]!, dist(spots[i]!, spots[j]!));
+  };
+  take(Math.floor(rng() * spots.length));
+  while (taken.length < count) {
+    const cands: number[] = [];
+    // Pass 0 honours the side cap; pass 1 only runs when the capped sides ran out of spots.
+    for (let pass = 0; pass < 2 && cands.length === 0; pass++) {
+      const ok = (i: number) => !used[i] && (pass === 1 || (perSide.get(sideOf(i)) ?? 0) < cap);
+      let top = -Infinity;
+      for (let i = 0; i < spots.length; i++) if (ok(i)) top = Math.max(top, near[i]!);
+      for (let i = 0; i < spots.length; i++) if (ok(i) && near[i]! >= top * 0.9) cands.push(i);
+    }
+    take(cands[Math.floor(rng() * cands.length)]!);
+  }
+  return taken;
 }
 
 export function shuffle<T>(rng: Rng, arr: T[]): T[] {

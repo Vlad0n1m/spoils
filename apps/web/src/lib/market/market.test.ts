@@ -7,13 +7,13 @@ import { after, before, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
-import { CONSUMABLES_CR, MARKET, mulberry32 } from "@extract/shared";
+import { CONSUMABLES_CR, MARKET, boundOffer, mulberry32 } from "@extract/shared";
 import { creditLedger, itemEvents, items, listings, moneyLedger, trades, users } from "../../db/schema";
 import { closeTestDb, lockTestDb, makeItem, makeUser, openTestDb, resetDb } from "../inventory/test-db";
 import { seedEconomy } from "../economy/seed";
 import { getEconomyStats } from "../lobby/economy-stats";
 import { HOUSE_ACCOUNT, browseListings, buyListing, cancelListing, createListing, expireListings, marketHistory, myListings } from "./market";
-import { buyConsumables } from "./trader";
+import { buyBound, buyConsumables } from "./trader";
 
 const { db, pool } = openTestDb();
 before(() => lockTestDb(pool));
@@ -279,6 +279,26 @@ test("junker: CR → stacks, idempotent per request id, refuses overdraft", asyn
   assert.deepEqual(await buyConsumables(db, u, "rifle", 1, randomUUID()), { ok: false, code: "bad_item" });
   assert.deepEqual(await buyConsumables(db, u, "bandage", 0, randomUUID()), { ok: false, code: "bad_qty" });
   assert.deepEqual(await buyConsumables(db, u, "bandage", 1, "x"), { ok: false, code: "bad_request" });
+});
+
+test("bound trader (v5 review CR sink): CR → one BOUND unique, idempotent, level-gated, never listable", async () => {
+  const u = await user();
+  const req = randomUUID();
+  const r = await buyBound(db, u, "backpack_1", req);
+  assert.ok(r.ok && r.applied && r.itemId, JSON.stringify(r));
+  assert.equal(r.credits, 1000 - boundOffer("backpack_1")!.cr);
+  const again = await buyBound(db, u, "backpack_1", req);
+  assert.ok(again.ok && !again.applied && again.itemId === null, "a replay charges and delivers once");
+  const mine = await db.select().from(items).where(eq(items.ownerId, u));
+  assert.equal(mine.length, 1);
+  assert.ok(mine[0]!.bound && mine[0]!.origin === "trader" && mine[0]!.state === "in_stash");
+  assert.deepEqual(await buyBound(db, u, "armor_1", randomUUID()), { ok: false, code: "insufficient_credits" });
+  assert.deepEqual(await buyBound(db, u, "rifle", randomUUID()), { ok: false, code: "trader_level" }, "rifle needs trader level 2 (player level 5)");
+  assert.deepEqual(await buyBound(db, u, "ammo_light", randomUUID()), { ok: false, code: "bad_item" });
+  assert.deepEqual(await buyBound(db, u, "backpack_1", "x"), { ok: false, code: "bad_request" });
+  // Bound: the market refuses it.
+  const lr = await createListing(db, u, mine[0]!.id, 1000n, OPTS);
+  assert.deepEqual(lr.ok ? "listed" : lr.code, "bound");
 });
 
 test("economy stats: faucets, sinks, pool, treasury and trades add up", async () => {

@@ -1,14 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ITEM_FLAG, SEARCH, dogTagCr, mulberry32 } from "@extract/shared";
+import { ITEM_FLAG, NPC_ROLE, SEARCH, dogTagCr, mulberry32 } from "@extract/shared";
 import { takeAll } from "./containers.js";
 import { deathSplit, killPlayer } from "./death.js";
 import { DISCLOSE } from "./disclosure.js";
 import { extractPlayer } from "./extraction.js";
-import { makeItem, withBotSettlement } from "./items.js";
+import { makeItem, withNpcSettlement } from "./items.js";
+import { carriedItems } from "./bag.js";
 import { damagePlayer } from "./combat.js";
 import { Match } from "./match.js";
-import { clearDef, counterUid, giveItem, giveStack, giveWeapon, ids, pl, place, rtOf, run, send, testMap, testMatch } from "./test-utils.js";
+import type { PlayerRuntime } from "./types.js";
+import { clearDef, counterUid, giveItem, giveStack, giveWeapon, ids, npcOpts, npcsOf, pl, place, rtOf, run, send, testMap, testMatch, testPost } from "./test-utils.js";
 
 /** Kill outright (no armor absorb, so durabilities stay as given). */
 function kill(m: Match, id: string, by: string | null = null) {
@@ -100,18 +102,32 @@ test("another player searches the corpse, carries the dog tag out, and the repor
   assert.equal(out.credits, out.sold.reduce((x, l) => x + l.cr, 0));
 });
 
-test("bots leave no dog tag; an empty body becomes `empty` once searched", () => {
+test("NPCs leave no dog tag: a marauder corpse holds its non-FREE bag only (FREE gear vanishes); an empty body becomes `empty` once searched", () => {
   const m = new Match({
-    roster: [{ userId: "u0", nickname: "H", isBot: false }, { userId: null, nickname: "Bot", isBot: true }],
+    roster: [{ userId: "u0", nickname: "H" }],
     rng: mulberry32(1), map: testMap(), newUid: counterUid, now: () => 0, emptyWorld: true, strictLedger: true,
-    botBrains: false, envSeed: 1, weatherOverride: "clear",
+    npcBrains: false, envSeed: 1, weatherOverride: "clear", mapSeed: 77,
+    ...npcOpts([testPost(0, 1550, 1500), testPost(1, 2550, 1500)]),
   });
-  const [h, bot] = ids(m);
+  const [h] = ids(m);
+  const [bagged, empty] = npcsOf(m);
   place(m, h!, 1500, 1500);
-  place(m, bot!, 1550, 1500);
-  kill(m, bot!);
-  const t = m.containers.corpseOf(rtOf(m, bot!).rosterIndex)!;
+  // The first carries a known bag (on top of whatever rollNpcLoot gave it); the second carries nothing non-FREE.
+  giveStack(m, bagged!.id, "junk_bolts", 1);
+  const bag = carriedItems(bagged!).map((c) => c.item).filter((it) => !(it.flags & ITEM_FLAG.FREE));
+  assert.ok(carriedItems(bagged!).some((c) => c.item.flags & ITEM_FLAG.FREE), "its gear is FREE");
+  for (const c of carriedItems(empty!)) if (!(c.item.flags & ITEM_FLAG.FREE)) empty!.self.slots.delete(c.key);
+  kill(m, bagged!.id, h!);
+  const t0 = m.containers.corpseOf(bagged!.rosterIndex)!;
+  assert.deepEqual(t0.items.map((i) => `${i.def}x${i.qty}`).sort(), bag.map((i) => `${i.def}x${i.qty}`).sort(), "the bag, nothing FREE");
+  assert.ok(t0.items.every((i) => !(i.flags & ITEM_FLAG.FREE) && i.def !== "junk_dogtag"));
+  // Kill credit: a marauder is an NPC kill (XP_NPC), never a player kill (XP_KILL).
+  assert.equal(rtOf(m, h!).self.kills, 0);
+  assert.equal(rtOf(m, h!).stats.npcKills, 1);
+  kill(m, empty!.id);
+  const t = m.containers.corpseOf(empty!.rosterIndex)!;
   assert.equal(t.items.length, 0, "FREE kit only: nothing inside, no dog tag");
+  place(m, h!, 2500, 1500);
   assert.ok(m.interact(h!));
   run(m, SEARCH.OPEN_MS.corpse + 50);
   assert.equal(t.emptied, true);
@@ -186,57 +202,40 @@ test("dead players cannot search; a body is searchable only within reach and sig
   assert.equal(m.interact(a!), false);
 });
 
-test("bots: carried-out, broken and worn-out uniques ride on the end report (no web sweep), outcome lists destroyed", () => {
-  const m = testMatch(1, {
-    roster: [
-      { userId: "user0", nickname: "Human", isBot: false },
-      { userId: null, nickname: "B0", isBot: true },
-      { userId: null, nickname: "B1", isBot: true },
-      { userId: null, nickname: "B2", isBot: true },
-    ],
-    botBrains: false,
-  });
-  const [h, b0, b1, b2] = ids(m);
+test("NPC pool uniques: never break, a living NPC's go leftOnMap at the end (never lost), a dead one's stay in the corpse; no botLost / botDestroyed", () => {
+  const m = testMatch(1, { ...npcOpts([testPost(0, 1500, 1500), testPost(1, 2000, 2000), testPost(2, 2500, 2500)]), npcBrains: false });
+  const [h] = ids(m);
+  const [n0, n1, n2] = npcsOf(m) as [PlayerRuntime, PlayerRuntime, PlayerRuntime];
   place(m, h!, 1000, 1000);
-  place(m, b0!, 1500, 1500);
-  place(m, b1!, 2000, 2000);
-  place(m, b2!, 2500, 2500);
-  // Uniques the bots picked up (e.g. lost-pool allocations), registered like pool items.
-  const broke = giveWeapon(m, b0!, "w2", "rifle", 1);
-  const kept = giveItem(m, b0!, "armor_1", "armor", { dur: 5 });
-  const carried = giveWeapon(m, b1!, "w2", "shotgun", 2);
-  const vest = giveItem(m, b2!, "armor_1", "armor", { dur: 1 });
-  const pack = giveItem(m, b2!, "backpack_1", "bp");
+  // Uniques NPCs carry (boss bags / carriers), registered like pool items.
+  const onDead = giveWeapon(m, n0.id, "w2", "rifle", 1);
+  const onLiving = giveWeapon(m, n1.id, "w2", "shotgun", 2);
   const hVest = giveItem(m, h!, "armor_1", "armor", { dur: 1 });
-  // b0 dies: rifle breaks, armor survives in the corpse.
-  const rolls = [0.1, 0.9];
-  m.rng = () => rolls.shift() ?? 0.5;
-  kill(m, b0!);
-  extractPlayer(m, rtOf(m, b1!));
-  // b2's and the human's vests are shot to 0 → destroyed; b2 times out at match end.
-  damagePlayer(m, rtOf(m, b2!), 30, null, "", 2500, 2500);
+  // Every break roll would break: NPCs skip it.
+  m.rng = () => 0;
+  kill(m, n0.id, h!);
+  assert.ok(m.containers.corpseOf(n0.rosterIndex)!.items.some((i) => i.uid === onDead), "the unique reached the corpse");
   damagePlayer(m, rtOf(m, h!), 30, null, "", 1000, 1000);
   assert.deepEqual(rtOf(m, h!).destroyed.map((i) => i.uid), [hVest]);
   kill(m, h!);
   assert.deepEqual(rtOf(m, h!).outcome!.destroyed!.map((i) => i.uid), [hVest], "OutcomeMsg.destroyed");
   m.step(50);
-  assert.ok(m.ended);
-
-  const full = withBotSettlement(m.report!, m.allRuntimes());
-  assert.deepEqual(full.botLost!.map((i) => i.uid), [broke]);
-  assert.deepEqual(full.botDestroyed!.map((i) => i.uid), [vest]);
-  const left = full.leftOnMap.map((i) => i.uid);
-  for (const u of [kept, carried, pack]) assert.ok(left.includes(u), `${u} left on map`);
-  // Every tracked uid of the match appears exactly once across the web-bound reports.
-  const humanReports = m.exitReports.filter((r) => r.userId);
-  const reported = [
-    ...humanReports.flatMap((r) => [...r.extracted, ...r.lost, ...r.destroyed]),
-    ...full.leftOnMap,
-    ...full.botLost!,
-    ...full.botDestroyed!,
-  ].map((i) => i.uid).filter(Boolean);
-  assert.deepEqual([...reported].sort(), [...m.ledger.known.keys()].sort());
-  assert.deepEqual(withBotSettlement(full, m.allRuntimes()), full, "idempotent");
+  assert.ok(m.ended, "NPCs never keep a match alive");
+  const r = m.report!;
+  assert.equal(r.botLost, undefined);
+  assert.equal(r.botDestroyed, undefined);
+  const left = r.leftOnMap.map((i) => i.uid);
+  for (const u of [onDead, onLiving]) assert.ok(left.includes(u), `${u} left on map`);
+  assert.equal(m.ledger.resolved.get(onLiving), "left", "a living NPC's unique is never lost");
+  assert.deepEqual(r.participants.map((p) => p.userId), ["user0"], "participants are humans only");
+  assert.deepEqual(r.npcSummary, { spawned: { boss: 0, guard: 0, marauder: 3 }, killedByHumans: { boss: 0, guard: 0, marauder: 1 } });
+  // The settlement safety net adds nothing and never invents deprecated fields.
+  assert.deepEqual(withNpcSettlement(r, m.allRuntimes()), r, "nothing left to settle");
+  // Every tracked uid appears exactly once across the web-bound reports.
+  const humanReports = m.exitReports.filter((x) => x.userId);
+  const reported = [...humanReports.flatMap((x) => [...x.extracted, ...x.lost, ...x.destroyed]), ...r.leftOnMap].map((i) => i.uid).filter(Boolean);
+  assert.deepEqual(reported.sort(), [...m.ledger.known.keys()].sort());
+  assert.equal(n2.pub.role, NPC_ROLE.MARAUDER);
 });
 
 test("a kill by a bullet still in flight after its shooter died reaches the shooter's exit report (posted after the bullet)", () => {

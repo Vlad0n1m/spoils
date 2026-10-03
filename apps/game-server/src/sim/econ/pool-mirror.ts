@@ -5,10 +5,13 @@
  * (poolReleasePlanV4, uniqueTierScore, poolContainerEligible / Weight, armorPoints, SCRAP_CR, GIVEAWAY_KIT) are reused as-is.
  *
  * KEEP IN SYNC with apps/web/src/lib/economy/{pool,seed,value}.ts when those change:
- * - planAllocation / rankBossSlots: verbatim copies of the v4 web functions (boss slots first by
- *   tier score, the rest only into T3/T4 crate / toolbox / weapon_box / safe, guarded ×4);
+ * - planAllocation / rankBossSlots / normCarriers: verbatim copies of the web functions (v4 boss
+ *   slots first by tier score, the rest only into T3/T4 crate / toolbox / weapon_box / safe,
+ *   guarded ×4; v5 NPC carriers — spawned T3/T4 marauders — in the same draw at
+ *   npcCarrierWeight, one item each, never refilled);
  * - mirrorAllocatePool: allocatePool with poolReleasePlanV4 (the web's releasePlan at its default
- *   knobs) and the DB picks (`order by tier score desc, random()` for bosses, random for the rest);
+ *   knobs) and the DB picks (`order by tier score desc, random()` for bosses, random for the rest;
+ *   with no eligible container the rest is capped at the carrier capacity);
  * - seedPiece: seed.ts rollPiece (giveaway-kit-like pieces, ~12% rarer weapons) + dur 55..100;
  * - refValueCr: value.ts itemRefValueCr (SCRAP_CR × dur);
  * - npcPriceMinor: seed.ts NPC_PRICE_MINOR (without the ±15% listing jitter).
@@ -24,6 +27,10 @@ import {
   bossLootKey,
   itemDef,
   mulberry32,
+  npcCarrierEligible,
+  npcCarrierWeight,
+  parseNpcCarrierKey,
+  NPC_CARRIER,
   pickWeighted,
   poolContainerEligible,
   poolContainerWeight,
@@ -45,7 +52,12 @@ export interface PoolItem {
   dur: number;
 }
 
-export type UniqueOrigin = "pool" | "floor" | "boss" | "own" | "other";
+/**
+ * pool: a T3/T4 container release; carrier: a pool item stowed on a marauder (v5); boss: a boss bag;
+ * own: the extractor's own loadout; looted: another human's loadout (PvP, multi-human runs);
+ * floor: deprecated (v3 free floor); other: anything else (should stay 0 in live mode).
+ */
+export type UniqueOrigin = "pool" | "floor" | "boss" | "carrier" | "own" | "looted" | "other";
 
 /** seed.ts rollPiece: weapon / armor / backpack in turn, like the giveaway kits the pool mirrors. */
 function seedPiece(i: number, rng: Rng): { def: string; rarity: number } {
@@ -154,16 +166,44 @@ export function rankBossSlots(bosses: readonly AllocBoss[]): Array<{ kind: BossK
   return slots.map(({ kind, min }) => ({ kind, min }));
 }
 
+/** A v5 allocation carrier (RaidStartRequest.carriers entry). */
+export interface AllocCarrier {
+  key: string;
+  tier: number;
+}
+
+/** pool.ts normCarriers: well-formed keys once each, tier 3..4, sorted by key. */
+export function normCarriers(carriers: readonly AllocCarrier[] | undefined): AllocCarrier[] {
+  const seen = new Set<string>();
+  const out: AllocCarrier[] = [];
+  for (const c of carriers ?? []) {
+    if (!c || typeof c.key !== "string" || !parseNpcCarrierKey(c.key) || seen.has(c.key)) continue;
+    const tier = Math.floor(Number(c.tier));
+    if (!Number.isFinite(tier) || !npcCarrierEligible(tier) || tier > 4) continue;
+    seen.add(c.key);
+    out.push({ key: c.key, tier });
+  }
+  return out.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+/** pool.ts carrierCapacity: one item per carrier (NPC_CARRIER.MAX_PER_NPC). */
+export function carrierCapacity(carriers: readonly AllocCarrier[]): number {
+  return carriers.length * Math.min(1, NPC_CARRIER.MAX_PER_NPC);
+}
+
 /**
- * pool.ts planAllocation (v4): boss slots first (picks ranked by tier score, then value), the rest
- * one per container value-descending into poolContainerEligible containers (tier >= 3, crate /
- * toolbox / weapon_box / safe) with weight poolContainerWeight ((tier+1)² × guarded ×4).
+ * pool.ts planAllocation (v4 + v5 carriers): boss slots first (picks ranked by tier score, then
+ * value), the rest one per destination value-descending, each drawn by weight among the
+ * poolContainerEligible containers (tier >= 3, crate / toolbox / weapon_box / safe; weight
+ * poolContainerWeight = (tier+1)² × guarded ×4) and the carriers (npcCarrierWeight = 2 × (tier+1)²,
+ * one each, ever). When every container holds one a new container round starts; carriers never refill.
  */
 export function planAllocation(
   picks: readonly AllocPick[],
   containers: readonly AllocContainer[],
   bosses: readonly AllocBoss[],
   seed: number,
+  carriers: readonly AllocCarrier[] = [],
 ): Map<string, string[]> {
   const out = new Map<string, string[]>();
   const ranked = [...picks].sort((a, b) => b.score - a.score || b.value - a.value || (a.id < b.id ? -1 : 1));
@@ -175,29 +215,35 @@ export function planAllocation(
   }
   const rest = ranked.slice(nBoss).sort((a, b) => b.value - a.value || (a.id < b.id ? -1 : 1));
   const eligible = containers.filter(poolContainerEligible).sort((a, b) => a.idx - b.idx);
-  if (eligible.length === 0) return out;
+  const npcs = normCarriers(carriers);
+  if (eligible.length === 0 && npcs.length === 0) return out;
+  type Dest = { key: string; w: number; carrier: boolean };
+  const dests: Dest[] = [
+    ...eligible.map((c) => ({ key: String(c.idx), w: poolContainerWeight(c), carrier: false })),
+    ...npcs.map((c) => ({ key: c.key, w: npcCarrierWeight(c.tier), carrier: true })),
+  ];
   const rng = mulberry32((seed ^ 0x51ed270b) >>> 0);
-  const used = new Set<number>();
+  const used = new Set<string>();
   for (const p of rest) {
-    let unused = eligible.filter((c) => !used.has(c.idx));
-    if (unused.length === 0) {
-      used.clear();
-      unused = [...eligible];
+    let unused = dests.filter((d) => !used.has(d.key));
+    if (eligible.length > 0 && !unused.some((d) => !d.carrier)) {
+      for (const d of dests) if (!d.carrier) used.delete(d.key);
+      unused = dests.filter((d) => !used.has(d.key));
     }
-    const total = unused.reduce((s, c) => s + poolContainerWeight(c), 0);
+    if (unused.length === 0) break;
+    const total = unused.reduce((s, d) => s + d.w, 0);
     let roll = rng() * total;
     let pick = unused.length - 1;
     for (let i = 0; i < unused.length; i++) {
-      roll -= poolContainerWeight(unused[i]!);
+      roll -= unused[i]!.w;
       if (roll <= 0) {
         pick = i;
         break;
       }
     }
-    const c = unused[pick]!;
-    used.add(c.idx);
-    const key = String(c.idx);
-    out.set(key, [...(out.get(key) ?? []), p.id]);
+    const d = unused[pick]!;
+    used.add(d.key);
+    out.set(d.key, [...(out.get(d.key) ?? []), p.id]);
   }
   return out;
 }
@@ -219,11 +265,15 @@ export interface MirrorAllocation {
   boss: number;
   /** Items placed in containers. */
   container: number;
+  /** Items stowed on marauder carriers (v5). */
+  carrier: number;
+  /** Carriers offered (spawned T3/T4 marauders). */
+  carriersOffered: number;
   /** Of `container`, how many in guarded containers. */
   guarded: number;
   /** @deprecated v4 has no free floor (always 0; kept for old reports). */
   floor: number;
-  /** uid → where it came from ("pool" container release, "boss" boss bag). */
+  /** uid → where it came from ("pool" container release, "boss" boss bag, "carrier" marauder). */
   origin: Map<string, UniqueOrigin>;
   /** Released items by uid (DB view: dur %). */
   items: Map<string, PoolItem>;
@@ -237,19 +287,28 @@ export interface MirrorAllocation {
  */
 export function mirrorAllocatePool(
   pool: PoolItem[],
-  req: { matchSeed: number; containers: readonly AllocContainer[]; bosses: readonly AllocBoss[]; riskUnits: number },
+  req: {
+    matchSeed: number;
+    containers: readonly AllocContainer[];
+    bosses: readonly AllocBoss[];
+    riskUnits: number;
+    /** v5 RaidStartRequest.carriers (raidNpcCarriers); absent = none. */
+    carriers?: readonly AllocCarrier[];
+  },
   rng: Rng,
 ): MirrorAllocation {
+  const carriers = normCarriers(req.carriers);
   const out: MirrorAllocation = {
-    containerLoot: {}, released: 0, risk: 0, boss: 0, container: 0, guarded: 0, floor: 0, origin: new Map(), items: new Map(),
+    containerLoot: {}, released: 0, risk: 0, boss: 0, container: 0, carrier: 0, carriersOffered: carriers.length,
+    guarded: 0, floor: 0, origin: new Map(), items: new Map(),
   };
   const nSlots = req.bosses.reduce((n, b) => n + b.slots.length, 0);
   const eligible = req.containers.filter(poolContainerEligible);
-  if (eligible.length === 0 && nSlots === 0) return out;
+  if (eligible.length === 0 && nSlots === 0 && carriers.length === 0) return out;
   const rel = poolReleasePlanV4(pool.length, Math.max(0, req.riskUnits), nSlots);
   out.risk = rel.risk;
   const bossTake = Math.min(nSlots, rel.total);
-  const contTake = eligible.length > 0 ? rel.total - bossTake : 0;
+  const contTake = eligible.length > 0 ? rel.total - bossTake : Math.min(rel.total - bossTake, carrierCapacity(carriers));
   if (bossTake + contTake <= 0) return out;
   // Random order first (Fisher-Yates), then bosses take the best tier scores (stable sort keeps the shuffle as tie-break).
   for (let i = pool.length - 1; i > 0; i--) {
@@ -276,18 +335,21 @@ export function mirrorAllocatePool(
     req.containers,
     req.bosses,
     req.matchSeed,
+    carriers,
   );
   const placed = new Set<string>();
   for (const [key, ids] of plan) {
     const isBoss = bossKindOfLootKey(key) !== null;
+    const isCarrier = parseNpcCarrierKey(key) !== null;
     for (const id of ids) {
       const p = byId.get(id)!;
       placed.add(id);
       (out.containerLoot[key] ??= []).push({ uid: p.uid, def: p.def, qty: 1, rarity: p.rarity, dur: toRaidDur(p.def, p.dur) });
       out.items.set(id, p);
-      out.origin.set(id, isBoss ? "boss" : "pool");
+      out.origin.set(id, isBoss ? "boss" : isCarrier ? "carrier" : "pool");
       out.released++;
       if (isBoss) out.boss++;
+      else if (isCarrier) out.carrier++;
       else {
         out.container++;
         if (guardedIdx.has(key)) out.guarded++;

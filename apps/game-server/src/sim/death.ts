@@ -5,12 +5,16 @@
  * - survivors keep their durability (and magazine) and stay in the corpse for others;
  * - fungibles (ammo, meds, junk) never break; FREE items vanish;
  * - every human corpse holds a dog tag (label = nickname, lvl = level, ref = self key → the victim
- *   userId in reports), so it has to be searched for; bots leave none (no bot farming).
+ *   userId in reports), so it has to be searched for; NPCs leave none (no NPC farming);
+ * - every NPC bag (boss, guard, marauder) is exempt from the break roll (NPC.NO_BREAK): pool items
+ *   on bosses and carriers always reach the corpse; NPC gear is FREE and vanishes.
+ * Kill credit: `kills` (HUD, reports, XP_KILL) counts human victims only; a human's NPC kills go to
+ * stats.bossKills (bosses) and stats.npcKills (guards, marauders). KillMsg carries both roles.
  * Nothing is scattered on the ground: the body is a searchable Corpse (state.corpses, AOI-filtered)
  * whose contents go through the searchers' loot entry k<id> (containers.ts).
  */
 
-import { BOSS_AI, BREAK_CHANCE_ON_DEATH, ITEM_FLAG, NPC_ROLE, SoundKind, type ItemLike, type WeaponId } from "@extract/shared";
+import { BREAK_CHANCE_ON_DEATH, ITEM_FLAG, NPC, NPC_ROLE, SoundKind, type ItemLike, type WeaponId } from "@extract/shared";
 import { cancelHeal, cancelReload } from "./actions.js";
 import { carriedItems, clearSlots, syncPublic } from "./bag.js";
 import { closeSearch } from "./containers.js";
@@ -36,10 +40,18 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
   rt.pressPending = false;
 
   if (killer && killer !== rt) {
-    killer.self.kills = Math.min(255, killer.self.kills + 1);
     rt.killedBy = killer.nickname;
-    // Boss kill credit (web: PROGRESSION.XP_BOSS). Guards do not count.
-    if (p.role === NPC_ROLE.BOSS) killer.stats.bossKills++;
+    if (!killer.isNpc) {
+      // Kill credit (web XP): human victims → kills (XP_KILL); bosses → bossKills (XP_BOSS);
+      // guards and marauders → npcKills (XP_NPC; guards also guardKills → XP_GUARD). NPCs earn nothing.
+      if (p.role === NPC_ROLE.NONE) killer.self.kills = Math.min(255, killer.self.kills + 1);
+      else if (p.role === NPC_ROLE.BOSS) killer.stats.bossKills++;
+      else {
+        killer.stats.npcKills++;
+        if (p.role === NPC_ROLE.GUARD) killer.stats.guardKills++;
+      }
+      if (rt.isNpc) m.npcs.creditKill(rt);
+    }
     // A bullet still in flight can kill after its shooter already extracted or died: keep their
     // frozen result in line and resend it.
     if (killer.exitReport) {
@@ -48,18 +60,22 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
     }
     if (killer.outcome) {
       killer.outcome = { ...killer.outcome, kills: killer.self.kills };
-      if (!killer.isBot) m.emit({ type: "outcome", to: killer.rosterIndex, msg: killer.outcome });
+      if (!killer.isNpc) m.emit({ type: "outcome", to: killer.rosterIndex, msg: killer.outcome });
     }
   }
   const { lost, dropped } = buildCorpse(m, rt);
+  const by = killer && killer !== rt ? killer : null;
   m.emit({
     type: "kill",
+    src: by?.rosterIndex ?? -1,
     msg: {
       victim: rt.nickname,
       victimId: rt.id,
-      killer: killer && killer !== rt ? killer.nickname : "",
-      killerId: killer && killer !== rt ? killer.id : "",
+      killer: by ? by.nickname : "",
+      killerId: by ? by.id : "",
       weapon,
+      killerRole: by?.pub.role ?? NPC_ROLE.NONE,
+      victimRole: p.role,
     },
   });
   emitSound(m, rt, SoundKind.death, p.x, p.y);
@@ -69,7 +85,7 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
 
 /**
  * What happens to a carried list on death; pure apart from the rng draws (one per unique, none
- * with `noBreak`: boss / guard bags, BOSS_AI.NO_BREAK — every pool item reaches the corpse).
+ * with `noBreak`: every NPC bag, NPC.NO_BREAK — every pool item reaches the corpse).
  */
 export function deathSplit(
   carried: readonly ItemLike[],
@@ -99,10 +115,10 @@ export function deathSplit(
  * for the outcome screen: "left in your body").
  */
 export function buildCorpse(m: Match, rt: PlayerRuntime): { lost: ItemLike[]; dropped: ItemLike[] } {
-  const noBreak = BOSS_AI.NO_BREAK && rt.pub.role !== NPC_ROLE.NONE;
+  const noBreak = NPC.NO_BREAK && rt.isNpc;
   const { lost, dropped, remains } = deathSplit(carriedItems(rt).map((c) => c.item), m.rng, noBreak);
   clearSlots(rt);
-  if (!rt.isBot) remains.push(makeItem("junk_dogtag", { label: rt.nickname, lvl: rt.level, ref: rt.selfKey }));
+  if (!rt.isNpc) remains.push(makeItem("junk_dogtag", { label: rt.nickname, lvl: rt.level, ref: rt.selfKey }));
   m.containers.addCorpse(rt, remains);
   return { lost, dropped };
 }

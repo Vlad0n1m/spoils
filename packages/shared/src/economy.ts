@@ -6,7 +6,8 @@
  *   listings, trades and fees use it. The display label (SOL / USDC / iDos) is Vlad's call.
  * DB durability is a percentage 0..100 plus max_durability; in a raid InvItem.dur is weapon % or
  * armor absorb points — convert at the API boundary with armorPoints / armorPct.
- * REPAIR, SCRAP and BOUND_OFFERS are cut for v2 (cut list 2): exported but unused.
+ * REPAIR and SCRAP are cut for v2 (cut list 2): exported but unused. BOUND_OFFERS is live since
+ * the v5 review (bound gear for CR, apps/web market/trader.ts buyBound).
  * Junk values, DOG_TAG and dogTagCr live in item-defs.ts (one source for the server and the API).
  * LOOT ECONOMY v4 ("risk drives reward"): CONTAINER / CONTAINER_LOOT / containerLootFor zone the
  * fungibles by tier, FLOOR_LOOT / rollFloorLoot replace the server's flat floor table, the pool
@@ -81,24 +82,34 @@ export function dogTagPairMult(priorSamePair: number): 0 | 1 {
  * 3 Grain Elevator, 4 Radar Base). Value is zoned by tier: the wilds and T1 give almost nothing,
  * T2 pays a small wage, only T3/T4 hold high-value container loot.
  * - FILL_CHANCE: the container rolls empty otherwise; then ROLLS rolls, each empty with EMPTY_CHANCE.
- *   Empty rate ≈ 1 − FILL × (1 − EMPTY^ROLLS): T0 ≈ 79 %, T1 62 %, T2 58 %, T3 17 %, T4 12 %.
+ *   Empty rate ≈ 1 − FILL × (1 − EMPTY^ROLLS): T0 ≈ 85 %, T1 62 %, T2 58 %, T3 17 %, T4 12 %.
  * - JUNK_VALUE_CAP: junk entries whose unit value is above the tier cap are dropped from the table
  *   (weights renormalise over what is left; the draw count stays the same).
  * - AMMO_QTY_MULT: ammo stacks are scaled, qty = max(1, round(qty × mult)) (30 → 10 rounds in T0).
  * - MEDKIT_MIN_TIER: medkits come only from T3/T4 containers.
- * Model EV per container (junk CR / consumables CR-eq): T0 6.7 / 0.9, T1 12.8 / 1.0,
- * T2 19.2 / 2.1, T3 169 / 15, T4 173 / 30. Per match: ≈ 20k junk CR (was 77k), ≈ 79 % of it in
- * the elevator and the radar base; ≈ 2.5k CR-eq of consumables (was 13.1k).
+ * v5 tuning (NPC model iteration 2, loot-yield harness): T0 FILL 0.25 → 0.18 (rat ≤ 120 CR / ≤ 40 CR-eq
+ * consumables), T3/T4 AMMO_QTY_MULT 0.67 / 0.5 → 0.25 / 0.2 (T3/T4 consumable surplus).
+ * Model EV per container (junk CR / consumables CR-eq): T0 5.2 / 0.6, T1 12.8 / 1.0,
+ * T2 19.2 / 2.1, T3 169 / 10, T4 173 / 23. Per match: ≈ 20k junk CR (was 77k), ≈ 79 % of it in
+ * the elevator and the radar base; ≈ 1.9k CR-eq of consumables (v4 2.4k, pre-v4 13.1k).
+ * v5 iteration 2 (lever K3 + the T3/T4 follow-up, with the CONTAINER_LOOT medical / heavy-ammo cuts
+ * and the FLOOR_LOOT T3/T4 cut): T3/T4 AMMO_QTY_MULT 0.25 / 0.2 → 0.15 / 0.1. With one radar squad
+ * fewer (C4) the T3/T4 looter loots the radar base freely, so K3 alone left it at found − used
+ * +14; these cuts take it to ≈ −97 (target ≤ −100) without touching the rifle (light) ammo a boss
+ * hunter lives on. Do not cut the T0–T2 values: that drops the T2 looter below 250 CR (K1 / K2).
+ * Model EV after iteration 2 (junk CR / consumables CR-eq): T0 5.3 / 0.4, T1 13.0 / 0.8,
+ * T2 20.7 / 1.1, T3 176 / 3.8, T4 191 / 6.1; per match ≈ 21.3k junk CR (80 % in the elevator and
+ * the radar base), ≈ 0.69k CR-eq of consumables.
  */
 export const CONTAINER = {
   ROLLS: [1, 1, 1, 2, 2] as readonly number[],
-  FILL_CHANCE: [0.25, 0.45, 0.5, 0.85, 0.9] as readonly number[],
+  FILL_CHANCE: [0.18, 0.45, 0.5, 0.85, 0.9] as readonly number[],
   /** Chance an individual roll is empty. */
   EMPTY_CHANCE: 0.15,
   /** Max junk unit value (CR) a container of this tier can hold. */
   JUNK_VALUE_CAP: [55, 55, 110, Infinity, Infinity] as readonly number[],
   /** Ammo stack multiplier by tier. */
-  AMMO_QTY_MULT: [0.34, 0.5, 0.5, 0.67, 0.5] as readonly number[],
+  AMMO_QTY_MULT: [0.34, 0.5, 0.5, 0.15, 0.1] as readonly number[],
   /** Medkits only in containers of at least this tier. */
   MEDKIT_MIN_TIER: 3,
   /** Demo mode: CHEST_TABLES unique rolls only in containers of at least this tier. */
@@ -128,7 +139,7 @@ export const CONTAINER_LOOT: Readonly<Record<ContainerKind, readonly ContainerLo
     { def: "junk_wires", weight: 60, qty: 1 }, { def: "junk_battery", weight: 40, qty: 1 },
     { def: "junk_fuel", weight: 25, qty: 1 },
     { def: "ammo_light", weight: 40, qty: 30 }, { def: "ammo_shell", weight: 20, qty: 10 },
-    { def: "bandage", weight: 25, qty: 1 },
+    { def: "bandage", weight: 12, qty: 1 },
   ],
   // Industrial.
   toolbox: [
@@ -146,14 +157,18 @@ export const CONTAINER_LOOT: Readonly<Record<ContainerKind, readonly ContainerLo
     { def: "junk_wires", weight: 60, qty: 1 }, { def: "junk_circuit", weight: 20, qty: 1 },
     { def: "junk_hdd", weight: 14, qty: 1 }, { def: "junk_keycard", weight: 5, qty: 1 },
   ],
+  // v5 iteration 2: medical weights cut here (bandage 40 → 10, medkit 8 → 2, pills 50 → 100: the
+  // radar base's many med cases were 70 % of its consumables), in crate (bandage 25 → 12) and in
+  // stash (bandage 15 → 8).
   med_case: [
-    { def: "bandage", weight: 40, qty: 1 }, { def: "medkit", weight: 8, qty: 1 },
-    { def: "junk_pills", weight: 50, qty: 1 },
+    { def: "bandage", weight: 10, qty: 1 }, { def: "medkit", weight: 2, qty: 1 },
+    { def: "junk_pills", weight: 100, qty: 1 },
   ],
   // Military.
   weapon_box: [
+    // v5 iteration 2: heavy (sniper) ammo 15 → 8: high CR-eq, no use to the rifle / shotgun kits.
     { def: "ammo_light", weight: 40, qty: 30 }, { def: "ammo_shell", weight: 25, qty: 10 },
-    { def: "ammo_heavy", weight: 15, qty: 10 }, { def: "junk_bolts", weight: 30, qty: 1 },
+    { def: "ammo_heavy", weight: 8, qty: 10 }, { def: "junk_bolts", weight: 30, qty: 1 },
     { def: "junk_battery", weight: 40, qty: 1 }, { def: "junk_keycard", weight: 5, qty: 1 },
   ],
   // Long search, valuables only (T3/T4 safes keep a little gold chain and GPU).
@@ -165,7 +180,7 @@ export const CONTAINER_LOOT: Readonly<Record<ContainerKind, readonly ContainerLo
   stash: [
     { def: "junk_apple", weight: 100, qty: 1 }, { def: "junk_water", weight: 80, qty: 1 },
     { def: "junk_canned", weight: 70, qty: 1 }, { def: "ammo_light", weight: 15, qty: 30 },
-    { def: "bandage", weight: 15, qty: 1 },
+    { def: "bandage", weight: 8, qty: 1 },
   ],
 };
 
@@ -254,11 +269,15 @@ export interface FloorLootEntry {
  * spot spawns with SPAWN_CHANCE[spot.tier], then rolls its tier's table. Loot spots are tier 0 in
  * the wilds, tier zone−1 outdoors in a POI and the zone tier indoors, so floor loot concentrates
  * inside contested buildings. Per match (Steppe): wilds ≈ 9 items / ≈ 200 CR-eq (was 185 items /
- * 15.6k), whole map ≈ 3.5k CR-eq of consumables (was 46k), medkits only on tier 3/4 spots (≈ 2.6).
+ * 15.6k), whole map ≈ 1.9k CR-eq of consumables (v4 3.5k, pre-v4 46k), medkits only on tier 3/4
+ * spots (≈ 1.0). v5 tuning: SPAWN_CHANCE [0.05, 0.12, 0.2, 0.4, 0.45] → [0.03, 0.1, 0.16, 0.15, 0.2]
+ * (rat yield, T2 / T3 / T4 consumable surplus; wilds ≈ 6 items). v5 iteration 2 (K3): T3/T4
+ * 0.15 / 0.2 → 0.1 / 0.12, and HIGH heavy ammo 12 → 6, bandage 20 → 10, medkit 8 → 4 (whole map
+ * ≈ 1.5k CR-eq, medkits ≈ 0.33 per match).
  * Demo mode: the common floor gun only on spots of tier >= DEMO_GUN_MIN_TIER.
  */
 export const FLOOR_LOOT = {
-  SPAWN_CHANCE: [0.05, 0.12, 0.2, 0.4, 0.45] as readonly number[],
+  SPAWN_CHANCE: [0.03, 0.1, 0.16, 0.1, 0.12] as readonly number[],
   /** Tiers 0–1. */
   LOW: [
     { def: "ammo_light", qty: 10, weight: 45 }, { def: "ammo_shell", qty: 4, weight: 20 },
@@ -274,8 +293,8 @@ export const FLOOR_LOOT = {
   /** Tiers 3–4. */
   HIGH: [
     { def: "ammo_light", qty: 30, weight: 35 }, { def: "ammo_shell", qty: 10, weight: 18 },
-    { def: "ammo_heavy", qty: 10, weight: 12 }, { def: "bandage", qty: 1, weight: 20 },
-    { def: "medkit", qty: 1, weight: 8 }, { def: "junk_battery", qty: 1, weight: 7 },
+    { def: "ammo_heavy", qty: 10, weight: 6 }, { def: "bandage", qty: 1, weight: 10 },
+    { def: "medkit", qty: 1, weight: 4 }, { def: "junk_battery", qty: 1, weight: 7 },
   ] as readonly FloorLootEntry[],
   /** Demo mode: chance of a common rifle/shotgun instead, on spots of tier >= DEMO_GUN_MIN_TIER. */
   DEMO_GUN_CHANCE: 0.1,
@@ -348,7 +367,12 @@ export const CONSUMABLES_CR: Readonly<Record<ConsumableId, { qty: number; cr: nu
   ammo_heavy: { qty: 10, cr: 110 },
 };
 
-/** CUT for v2 (cut list 2) — exported but unused. */
+/**
+ * Bound gear for CR (design §15 "[позже] привязанное снаряжение у торговцев", brought forward by the
+ * v5 review as the CR sink the economy needs): BOUND_OFFERS sold by the junker's colleagues for CR.
+ * A bound item is never listable, never enters the lost pool (destroyed instead) and adds 0 risk
+ * units, so CR never leaks into SOL value. Trader level unlocks with the player level (boundTraderLevel).
+ */
 export type TraderId = "junker" | "gunsmith" | "outfitter";
 export interface BoundOffer { trader: TraderId; def: string; rarity: Rarity; cr: number; traderLevel: 1 | 2 | 3 | 4 }
 export const BOUND_OFFERS: readonly BoundOffer[] = [
@@ -360,6 +384,16 @@ export const BOUND_OFFERS: readonly BoundOffer[] = [
   { trader: "outfitter", def: "armor_2", rarity: 1, cr: 2600, traderLevel: 3 },
   { trader: "gunsmith", def: "sniper", rarity: 0, cr: 3200, traderLevel: 3 },
 ];
+
+/** Bound-trader level a player of `level` may buy from: 1–4 → 1, 5–9 → 2, 10–14 → 3, 15+ → 4. */
+export function boundTraderLevel(level: number): 1 | 2 | 3 | 4 {
+  return Math.max(1, Math.min(4, 1 + Math.floor((Math.max(1, Math.floor(level)) - 1) / 5))) as 1 | 2 | 3 | 4;
+}
+
+/** The BOUND_OFFERS entry for `def`, or null. */
+export function boundOffer(def: string): BoundOffer | null {
+  return BOUND_OFFERS.find((o) => o.def === def) ?? null;
+}
 /** CUT for v2 — exported but unused. Index: weapon by rarity, armor/backpack by level. */
 export const REPAIR_CR_PER_POINT = { weapon: [4, 8, 14, 24], armor: [0, 1.5, 2.5, 4], backpack: [0, 1, 2, 3] } as const;
 export const REPAIR_MAX_DECAY = 0.1;
@@ -378,6 +412,11 @@ export const POOL = {
    */
   RISK_K: 1.0,
   MAX_PER_MATCH: 8,
+  /**
+   * v5 review: a loadout unique adds a risk unit only at this durability % or more (riskUnitOf), so
+   * a worn-out 1 % backpack does not open the boss top-up and container release for a lobby.
+   */
+  RISK_MIN_DUR_PCT: 50,
   /** 1% of the value entering the pool accrues to the treasury. */
   TAX_SHARE: 0.01,
   /**
@@ -431,6 +470,16 @@ export function poolReleasePlan(
   const want = Math.max(0, Math.min(POOL.MAX_PER_MATCH, Math.floor(minRelease)) - risk);
   const floor = Math.max(0, Math.min(want, above));
   return { total: risk + floor, risk, floor };
+}
+
+/**
+ * Risk units one loadout unique adds to its lobby (raids/start riskUnits, v5 review): 1 when losing
+ * it would really feed the lost pool — not bound (a bound item is destroyed, never pooled) and at
+ * least POOL.RISK_MIN_DUR_PCT durability — else 0. Giveaway items under their trade lock DO count:
+ * they enter the pool on death like any other unique (the kit itself is capped and gated, GIVEAWAY).
+ */
+export function riskUnitOf(it: Pick<EconItem, "bound" | "dur">): 0 | 1 {
+  return !it.bound && it.dur >= POOL.RISK_MIN_DUR_PCT ? 1 : 0;
 }
 
 /**
@@ -559,17 +608,28 @@ export interface BossDef {
 /**
  * The three Steppe bosses (scratchpad design §2). Spawn is rolled once per match from the match
  * seed (rollBossSpawns), never respawns, never extracts, never loots. Effective HP (damage to kill,
- * effectiveHp): Commander 580, Foreman 430, Warden 312.
+ * effectiveHp): Commander 313, Foreman 369, Warden 375. v5 tuning (harness boss-kill bands with the
+ * marauder squads at the POI): Commander 400 HP / armor 3 → 310 / armor 2 and three rifle guards
+ * (armor 1, 100 HP, 80 since iteration 2; the sniper guard is gone; its kill rate is set by the guards and the radar
+ * marauders, not by its HP: 250–310 HP all measure ≈ 3 % for a hunter kit), Foreman 300 → 240 HP with rifle + pistol guards
+ * (armor 1, 90 HP), Warden 250 → 300 HP. v5 iteration 2 (lever C4, with NPC_CAMPS.radar.squads 2 → 1):
+ * Commander 310 / armor 2 → 250 / armor 1 and its guards 100 → 80 HP. 250 HP with 100 HP guards
+ * measured 16.4 % on 100 seeds but only 5.9 % on 180 seeds once the K3 loot cuts took the radar
+ * floor ammo a hunter refills from; with 80 HP guards a hunter kit kills it in 14.7 % of the raids
+ * it spawns in (180 seeds, target 12–25 %, survival 0.59), a starter kit 0 %, a free kit 0 %.
+ * (200 HP with 100 HP guards measures the same 14.7 % but would rank the Commander's pool slots
+ * below the Foreman's.)
+ * web pool.ts rankBossSlots ranks equal pool slots by raw hp: Warden 300 > Commander 250 > Foreman 240.
  * Boss junk EV: Commander ≈ 2,980 CR, Foreman ≈ 2,150 CR, Warden ≈ 925 CR.
  */
 export const BOSSES: Readonly<Record<BossKind, BossDef>> = {
   commander: {
     kind: "commander", name: "Commander", guardName: "Radar guard", enabled: true,
-    spawnChance: BOSS_CHANCE.commander, hp: 400, armor: 3, weapon: "rifle", weaponRarity: 2,
+    spawnChance: BOSS_CHANCE.commander, hp: 250, armor: 1, weapon: "rifle", weaponRarity: 2,
     guards: [
-      { weapon: "rifle", rarity: 1, armor: 2, hp: 120 },
-      { weapon: "rifle", rarity: 1, armor: 2, hp: 120 },
-      { weapon: "sniper", rarity: 0, armor: 1, hp: 120 },
+      { weapon: "rifle", rarity: 1, armor: 1, hp: 80 },
+      { weapon: "rifle", rarity: 0, armor: 1, hp: 80 },
+      { weapon: "rifle", rarity: 0, armor: 1, hp: 80 },
     ],
     poolSlots: [2, 1, 1],
     junk: [
@@ -581,10 +641,10 @@ export const BOSSES: Readonly<Record<BossKind, BossDef>> = {
   },
   foreman: {
     kind: "foreman", name: "Foreman", guardName: "Elevator thug", enabled: true,
-    spawnChance: BOSS_CHANCE.foreman, hp: 300, armor: 2, weapon: "shotgun", weaponRarity: 1,
+    spawnChance: BOSS_CHANCE.foreman, hp: 240, armor: 2, weapon: "shotgun", weaponRarity: 1,
     guards: [
-      { weapon: "rifle", rarity: 0, armor: 1, hp: 110 },
-      { weapon: "shotgun", rarity: 0, armor: 1, hp: 110 },
+      { weapon: "rifle", rarity: 0, armor: 1, hp: 90 },
+      { weapon: "pistol", rarity: 0, armor: 1, hp: 90 },
     ],
     poolSlots: [2, 1],
     junk: [
@@ -596,7 +656,7 @@ export const BOSSES: Readonly<Record<BossKind, BossDef>> = {
   },
   warden: {
     kind: "warden", name: "Warden", guardName: "Depot watchman", enabled: true,
-    spawnChance: BOSS_CHANCE.warden, hp: 250, armor: 1, weapon: "shotgun", weaponRarity: 0,
+    spawnChance: BOSS_CHANCE.warden, hp: 300, armor: 1, weapon: "shotgun", weaponRarity: 0,
     guards: [
       { weapon: "rifle", rarity: 0, armor: 0, hp: 100 },
       { weapon: "pistol", rarity: 0, armor: 0, hp: 100 },
@@ -613,7 +673,7 @@ export const BOSSES: Readonly<Record<BossKind, BossDef>> = {
 
 /** Boss / guard AI tuning (server sim/boss.ts). */
 export const BOSS_AI = {
-  /** Aim sloppiness (regular bots 0.85–1.25). */
+  /** Aim sloppiness (marauders 0.9–1.6, npc.ts MARAUDER). */
   BOSS_SLOPPINESS: 0.7,
   GUARD_SLOPPINESS: 0.85,
   REACT_MS: [300, 550] as readonly [number, number],
@@ -626,9 +686,15 @@ export const BOSS_AI = {
   ALERT_MS: 25_000,
   /** The boss heals (medkit) below this HP fraction. */
   HEAL_BELOW_FRAC: 0.5,
-  /** PMC bots drop any goal within this distance of a living boss. */
+  /**
+   * @deprecated NPC MODEL v5 removed the PMC player-bots that used it; delete with the bot code
+   * (game-server sim/bot.ts).
+   */
   BOT_AVOID_PX: 1500,
-  /** Boss and guard bags are exempt from BREAK_CHANCE_ON_DEATH. */
+  /**
+   * @deprecated alias of NPC.NO_BREAK (npc.ts): every NPC role (boss, guard, marauder) is exempt
+   * from BREAK_CHANCE_ON_DEATH. Kept for one release.
+   */
   NO_BREAK: true,
 } as const;
 
@@ -675,9 +741,19 @@ export function rollBossJunk(matchSeed: number, kind: BossKind): RolledFungible[
 }
 
 /**
+ * Non-FREE guard drop (NPC MODEL v5 trim: "found < consumed" for every NPC kill): rounds of its
+ * weapon's ammo per kind (was 30 / 10 / 10) and a bandage with BANDAGE_CHANCE (was always 1).
+ */
+export const GUARD_DROP = {
+  AMMO: { light: 15, shell: 5, heavy: 5 } as const,
+  BANDAGE_CHANCE: 0.5,
+} as const;
+
+/**
  * Non-FREE drop of guard `guardIdx` of `kind` standing in a `tier` zone: one roll of the tier's
- * crate table (containerLootFor), one pickup of its weapon's ammo (light 30 / shells 10 / heavy 10)
- * and one bandage. Its own gear is FREE and vanishes. Deterministic in (matchSeed, kind, guardIdx).
+ * crate table (containerLootFor), GUARD_DROP.AMMO rounds of its weapon's ammo and a bandage with
+ * GUARD_DROP.BANDAGE_CHANCE (that draw comes last, so the crate roll is the same as in v4). Its own
+ * gear is FREE and vanishes. Deterministic in (matchSeed, kind, guardIdx).
  */
 export function rollGuardLoot(matchSeed: number, kind: BossKind, guardIdx: number, tier: number): RolledFungible[] {
   const rng = bossRng(matchSeed, kind, 1 + guardIdx);
@@ -688,11 +764,10 @@ export function rollGuardLoot(matchSeed: number, kind: BossKind, guardIdx: numbe
     addFungible(out, e.def, e.qty);
   }
   const g = BOSSES[kind].guards[guardIdx];
-  if (g) addFungible(out, ammoDefOf(g.weapon), GUARD_AMMO[WEAPONS[g.weapon].ammo]);
-  addFungible(out, "bandage", 1);
+  if (g) addFungible(out, ammoDefOf(g.weapon), GUARD_DROP.AMMO[WEAPONS[g.weapon].ammo]);
+  if (rng() < GUARD_DROP.BANDAGE_CHANCE) addFungible(out, "bandage", 1);
   return out;
 }
-const GUARD_AMMO = { light: 30, shell: 10, heavy: 10 } as const;
 
 /**
  * Damage needed to kill `hp` behind fresh armor of `armorLevel` (ARMOR absorb / durability):
@@ -704,9 +779,6 @@ export function effectiveHp(hp: number, armorLevel: 0 | 1 | 2 | 3): number {
   const hpWhileArmored = (a.durability / a.absorb) * (1 - a.absorb);
   return hp <= hpWhileArmored ? hp / (1 - a.absorb) : hp + a.durability;
 }
-
-/** Spawn-kit light ammo of every bot (FREE: vanishes, never extracts; humans keep FREE_KIT). */
-export const BOT_FREE_AMMO_LIGHT = 90;
 
 // ---------------------------------------------------------------- market (minor units, bigint)
 
@@ -780,8 +852,17 @@ export interface PricePoint {
 
 // ---------------------------------------------------------------- giveaway / starter kit
 
+/**
+ * Giveaway (economy memo §15.6). v5 review: the SOL-tradable kit (lock_raids, then listable) goes
+ * to at most KITS accounts, and only to an account that deposited at least MIN_DEPOSIT_MINOR
+ * (= MIN_WALLET_SOL in balance_cents hundredths; custodial accounts have no external wallet whose
+ * age MIN_WALLET_AGE_DAYS could check, so a real deposit is the sybil cost). Every other new
+ * account gets the same kit BOUND (never listable, never enters the lost pool, 0 risk units):
+ * everyone can play geared, nobody can farm sellable kits with alts.
+ */
 export const GIVEAWAY = {
   KITS: 1000,
+  MIN_DEPOSIT_MINOR: 5,
   /** Raids the item must be extracted in before it can be listed (demo: 1). */
   LOCK_RAIDS: 10,
   LOCK_RAIDS_DEMO: 1,
@@ -805,7 +886,11 @@ export const GIVEAWAY_KIT = {
 
 // ---------------------------------------------------------------- progression
 
-export const PROGRESSION = { XP_RAID: 100, XP_EXTRACT: 250, XP_KILL: 80, XP_BOSS: 400 } as const;
+/**
+ * XP per raid event. XP_KILL is for human kills only; NPC kills give XP_NPC (marauder) / XP_GUARD /
+ * XP_BOSS. At most ~40 NPCs per raid, so an NPC sweep's XP is bounded.
+ */
+export const PROGRESSION = { XP_RAID: 100, XP_EXTRACT: 250, XP_KILL: 80, XP_BOSS: 400, XP_NPC: 20, XP_GUARD: 40 } as const;
 
 /** XP from level L to L+1. ~180 XP/raid: L5 ≈ 14 raids, L10 ≈ 50, L15 ≈ 105. */
 export function xpToNext(level: number): number {

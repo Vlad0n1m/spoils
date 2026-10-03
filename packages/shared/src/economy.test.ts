@@ -221,8 +221,8 @@ test("container fungibles: wilds mostly empty, T3/T4 mostly full and hold more l
       lines[tier]! += f.length;
     }
   }
-  // Empty ≈ 1 − FILL × (1 − EMPTY^ROLLS): T0 79 %, T1 62 %, T2 58 %, T3 17 %, T4 12 %.
-  const want = [0.79, 0.62, 0.58, 0.17, 0.12];
+  // Empty ≈ 1 − FILL × (1 − EMPTY^ROLLS): T0 85 % (v5 tuning: FILL 0.25 → 0.18), T1 62 %, T2 58 %, T3 17 %, T4 12 %.
+  const want = [0.85, 0.62, 0.58, 0.17, 0.12];
   want.forEach((w, t) => assert.ok(Math.abs(empty[t]! / n - w) < 0.03, `T${t} empty ${(empty[t]! / n).toFixed(3)} vs ${w}`));
   assert.ok(lines[3]! / n > lines[0]! / n + 0.8, "T3 has clearly more lines than T0");
 });

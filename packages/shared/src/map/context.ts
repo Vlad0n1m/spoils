@@ -29,6 +29,7 @@ import {
   type MapCircle,
   type MapRect,
   type MapSide,
+  type NpcPost,
   type PropKind,
   type Road,
   type SpawnSpot,
@@ -59,6 +60,8 @@ export class GenCtx {
   readonly extracts: ExtractSpot[] = [];
   readonly bosses: BossSpot[] = [];
   readonly ambient: AmbientEmitter[] = [];
+  /** Marauder posts (placeNpcPosts; own rng stream, no reservations, not hashed). */
+  readonly npcPosts: NpcPost[] = [];
 
   constructor(
     readonly seed: number,

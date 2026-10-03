@@ -27,12 +27,20 @@ import type {
   WeaponId,
 } from "@extract/shared";
 
+/**
+ * One human seat of a match (NPC MODEL v5: the roster is humans only; NPCs are created by the match
+ * itself from the map's boss spots and NPC posts and never appear here).
+ */
 export interface RosterEntry {
-  /** null for bots. */
+  /** The player's userId (null only in pre-v5 rosters). */
   userId: string | null;
   nickname: string;
-  isBot: boolean;
-  /** Locked loadout id from the JoinTicket; "" = free kit (also every bot). */
+  /**
+   * @deprecated v5 has no player-bots. Absent or false; battle-room.sanitizeRoster rejects a roster
+   * with `isBot: true` and Match skips such entries (pre-v5 benches / tools).
+   */
+  isBot?: boolean;
+  /** Locked loadout id from the JoinTicket; "" = free kit. */
   loadoutId?: string;
 }
 
@@ -47,17 +55,30 @@ export type UidResolution = "extract" | "lost" | "destroyed" | "left";
  * state.players but keeps the same instance, and the self entry key (p<rosterIndex>) never changes.
  */
 export interface PlayerRuntime {
-  /** Current key in state.players: the client's sessionId once connected, "bot<i>" / "pending<i>" before. */
+  /** Current key in state.players: the client's sessionId once connected, "pending<i>" before; NPCs "npc<i>". */
   id: string;
   rosterIndex: number;
   /** BattleState.self key: selfKeyOf(rosterIndex). */
   selfKey: string;
   userId: string | null;
   nickname: string;
+  /** Boss, guard or marauder (Player.role != NPC_ROLE.NONE): no client, no reports, never a "player". */
+  isNpc: boolean;
+  /** @deprecated alias of isNpc (pre-v5 benches read it); v5 has no player-bots. */
   isBot: boolean;
+  /**
+   * NPC dormancy (npc.ts, NPC.WAKE_PX): no living human near and no squad alert, so the NPC does
+   * not think, move, listen or run vision as a viewer (it stays a target). Always false for humans.
+   */
+  dormant: boolean;
+  /**
+   * NPC viewers: sight cap of their vision row (npc.ts sets it each decision): NPC.VIEW_RANGE_CAP
+   * while calm, NPC.VIEW_RANGE_ALERT while its squad is alerted or it is under fire. Humans: unused.
+   */
+  viewCap: number;
   connected: boolean;
   loadoutId: string;
-  /** Player level at raid start (LoadoutSnapshot.level; 0 for free kit / bots): dog tag value, XP. */
+  /** Player level at raid start (LoadoutSnapshot.level; 0 for free kit / NPCs): dog tag value, XP. */
   level: number;
   pub: Player;
   self: SelfState;
@@ -75,7 +96,7 @@ export interface PlayerRuntime {
   nextFireAt: number;
   /** Match clock of the last shot (vision: muzzle flash / bush reveal). */
   lastShotAt: number;
-  /** Match clock when the player's position last changed (bots / vision: "standing still in a bush"). */
+  /** Match clock when the player's position last changed (NPCs / vision: "standing still in a bush"). */
   movedAt: number;
   /** Position at the start of the current step (vision lead eye: velocity). */
   prevX: number;
@@ -95,7 +116,7 @@ export interface PlayerRuntime {
   viewAimSrc: number;
   /** Human exit report held back while this player's own bullets are still in flight (match.ts). */
   exitHeld: boolean;
-  /** Last other player who damaged this one, and when (bots return fire during the peace window). */
+  /** Last other player who damaged this one, and when (NPCs return fire during the peace window). */
   lastHitBy: PlayerRuntime | null;
   lastHitAt: number;
   /** Weapon slot the running reload belongs to (the active slot when it started). */
@@ -111,9 +132,10 @@ export interface PlayerRuntime {
   destroyed: ItemLike[];
   /** Death: uniques that survived the break roll and stay on the map for others. */
   dropped: ItemLike[];
-  stats: { shotsFired: number; dmgDealt: number; containersSearched: number; corpsesSearched: number; bossKills: number };
+  /** RaidStats: bossKills = bosses killed, npcKills = marauders + guards killed, guardKills = the guards among them (v5). */
+  stats: { shotsFired: number; dmgDealt: number; containersSearched: number; corpsesSearched: number; bossKills: number; npcKills: number; guardKills: number };
   killedBy: string;
-  /** Set once the player left the map (extract / death / timeout). Bots get one too (never posted). */
+  /** Set once the player left the map (extract / death / timeout). NPCs get one too (never posted). */
   exitReport: PlayerExitReport | null;
   outcome: OutcomeMsg | null;
 }
@@ -139,7 +161,8 @@ export type MatchEvent =
   | { type: "shot"; src: number; msg: ShotMsg }
   /** `src` = shooter rosterIndex or -1; `fa` = angle target → shooter (target's copy only). */
   | { type: "hit"; src: number; target: number; msg: HitMsg; fa: number | undefined }
-  | { type: "kill"; msg: KillMsg }
+  /** `src` = killer rosterIndex or -1 (audience: NPC deaths below boss go to the killer only). */
+  | { type: "kill"; src: number; msg: KillMsg }
   /** A static container (MapData.containers index) was opened by roster `src`. */
   | { type: "chest"; src: number; idx: number }
   /** A raw sound at a world position (sound.ts emitSound); radius before env.hear. */

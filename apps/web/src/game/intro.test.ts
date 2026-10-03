@@ -24,7 +24,7 @@ const zone = (id: string, name: string, x: number, y: number, w: number, h: numb
   tier: 2,
   rect: { x, y, w, h },
 });
-const MAP = { zones: [zone("a", "Zarya Village", 1000, 1000, 2000, 2000), zone("b", "Rail Yard", 8000, 8000, 1000, 1000)] } as Pick<MapData, "zones">;
+const MAP = { zones: [zone("a", "Dawnfield", 1000, 1000, 2000, 2000), zone("b", "Rail Yard", 8000, 8000, 1000, 1000)] } as Pick<MapData, "zones">;
 
 describe("formatting", () => {
   it("formats the in-game time with wrap-around", () => {
@@ -48,11 +48,11 @@ describe("formatting", () => {
 
 describe("spawnPlace", () => {
   it("names the zone the player stands in", () => {
-    assert.deepEqual(spawnPlace(MAP, 1500, 1500, 0).name, "Zarya Village");
+    assert.deepEqual(spawnPlace(MAP, 1500, 1500, 0).name, "Dawnfield");
   });
   it("says 'Outskirts of' near a zone", () => {
     const p = spawnPlace(MAP, 3500, 2000, 0);
-    assert.equal(p.name, "Outskirts of Zarya Village");
+    assert.equal(p.name, "Outskirts of Dawnfield");
     assert.equal(p.zone?.id, "a");
   });
   it("falls back to the map edge of the spawn side", () => {
@@ -82,10 +82,10 @@ describe("firstExtractOpenAt", () => {
 
 describe("titleCardText", () => {
   it("builds the card lines", () => {
-    const c = titleCardText({ mapId: "steppe", place: "Zarya Village", todMin: 21 * 60 + 40, weather: "rain" });
+    const c = titleCardText({ mapId: "steppe", place: "Dawnfield", todMin: 21 * 60 + 40, weather: "rain" });
     assert.equal(c.kicker, "DEPLOYING");
-    assert.equal(c.title, "Zarya Village");
-    assert.equal(c.sub, "STEPPE OUTSKIRTS · 21:40 · RAIN");
+    assert.equal(c.title, "Dawnfield");
+    assert.equal(c.sub, "THE OUTSKIRTS · 21:40 · RAIN");
   });
   it("says it is a rejoin when the raid has been running for a while", () => {
     assert.equal(titleCardText({ mapId: "steppe", place: "x", todMin: 600, weather: "fog", clockMs: 5000 }).kicker, "DEPLOYING");

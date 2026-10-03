@@ -5,15 +5,33 @@ import {
   ARMOR,
   GIVEAWAY_KIT,
   POOL,
+  bossGroupNpcCount,
   bossLootKey,
+  bossSlotCount,
   containerGuarded,
   generateMap,
   mulberry32,
+  npcCarrierWeight,
+  poolContainerEligible,
+  poolContainerWeight,
   poolReleasePlanV4,
+  raidBossSlots,
+  raidNpcCarriers,
+  rollBossSpawns,
+  rollNpcSpawns,
 } from "@extract/shared";
-import { DEFAULT_RELEASE, planAllocation, rankBossSlots, releasePlan, type AllocContainer, type AllocPick } from "./pool";
+import {
+  DEFAULT_RELEASE,
+  normCarriers,
+  planAllocation,
+  rankBossSlots,
+  releasePlan,
+  type AllocCarrier,
+  type AllocContainer,
+  type AllocPick,
+} from "./pool";
 import { fromRaidDur, itemRefValueCr, toRaidDur } from "./value";
-import { raidStartRequestSchema } from "../inventory/report-schemas";
+import { matchEndReportSchema, playerExitReportSchema, raidStartRequestSchema } from "../inventory/report-schemas";
 import { checkGameServerSignature, signGameServerBody } from "../game-server-hmac";
 import { rollStarterKit } from "../inventory/starter";
 
@@ -51,7 +69,9 @@ test("rankBossSlots: top slots first, the tougher boss first among equals", () =
   ]);
   assert.deepEqual(
     r.map((s) => `${s.kind}:${s.min}`),
-    ["commander:2", "foreman:2", "commander:1", "commander:1", "foreman:1", "warden:1"],
+    // Equal slots rank by BOSSES[kind].hp: Commander 250 > Foreman 240 on the top slots; on the rare
+    // slots the Warden (300 HP) now comes first, then the Commander (250, v5 iteration 2), then the Foreman.
+    ["commander:2", "foreman:2", "warden:1", "commander:1", "commander:1", "foreman:1"],
   );
 });
 
@@ -128,6 +148,159 @@ test("raids/start schema keeps v4 bosses[] and containers[].guarded; rejects an 
   assert.equal(raidStartRequestSchema.safeParse({ ...body, bosses: [{ kind: "dragon", slots: [2] }] }).success, false);
   const legacy = raidStartRequestSchema.safeParse({ ...body, bosses: undefined, containers: [{ idx: 3, kind: "safe", tier: 4 }] });
   assert.ok(legacy.success, "an older game server still validates");
+});
+
+// ---------------------------------------------------------------- NPC MODEL v5: carriers
+
+const CARRIERS: AllocCarrier[] = [
+  { key: "npc:7.0", tier: 3 },
+  { key: "npc:7.1", tier: 3 },
+  { key: "npc:12.0", tier: 4 },
+];
+
+test("planAllocation v5: no carriers → exactly the v4 placement (same draws)", () => {
+  const picks = Array.from({ length: 9 }, (_, i) => P(`i${i}`, i * 10, i % 3 === 0 ? 2 : 0));
+  const bosses = [{ kind: "foreman" as const, slots: [2, 1] }];
+  for (let seed = 0; seed < 100; seed++) {
+    assert.deepEqual(planAllocation(picks, CONTAINERS, bosses, seed, []), planAllocation(picks, CONTAINERS, bosses, seed));
+    assert.deepEqual(planAllocation(picks, CONTAINERS, bosses, seed, undefined), planAllocation(picks, CONTAINERS, bosses, seed));
+  }
+});
+
+test("planAllocation v5: bosses first, then containers + carriers; a carrier never holds two; deterministic", () => {
+  const picks = Array.from({ length: 12 }, (_, i) => P(`i${i}`, 100 + i, i < 2 ? 2 : 0));
+  const bosses = [{ kind: "warden" as const, slots: [1] }];
+  let onCarriers = 0;
+  for (let seed = 0; seed < 500; seed++) {
+    const a = planAllocation(picks, CONTAINERS, bosses, seed, CARRIERS);
+    assert.deepEqual(a.get(bossLootKey("warden")), ["i1"], "best item to the boss slot");
+    assert.equal([...a.values()].flat().length, 12, "containers take the overflow in rounds");
+    for (const [k, ids] of a) {
+      if (k.startsWith("npc:")) {
+        assert.equal(ids.length, 1, `seed ${seed}: ${k} holds ${ids.length}`);
+        onCarriers++;
+      } else if (!k.startsWith("boss:")) assert.ok(k === "2" || k === "3", `seed ${seed}: container ${k}`);
+    }
+    assert.deepEqual(planAllocation(picks, CONTAINERS, bosses, seed, CARRIERS), a);
+  }
+  assert.ok(onCarriers > 0, "carriers do get items");
+});
+
+test("planAllocation v5: carriers only (no T3/T4 container) take one each; the rest stays out", () => {
+  const picks = Array.from({ length: 6 }, (_, i) => P(`i${i}`, i));
+  const low: AllocContainer[] = [{ idx: 1, kind: "crate", tier: 2 }];
+  for (let seed = 0; seed < 50; seed++) {
+    const a = planAllocation(picks, low, [], seed, CARRIERS);
+    assert.deepEqual([...a.keys()].sort(), ["npc:12.0", "npc:7.0", "npc:7.1"]);
+    assert.deepEqual([...a.values()].map((v) => v.length), [1, 1, 1]);
+  }
+  // The most valuable picks go first.
+  const a = planAllocation(picks, low, [], 3, CARRIERS);
+  assert.deepEqual([...a.values()].flat().sort(), ["i3", "i4", "i5"]);
+});
+
+test("normCarriers: never below T3, well-formed keys once each, sorted", () => {
+  const n = normCarriers([
+    { key: "npc:9.1", tier: 4 },
+    { key: "npc:9.1", tier: 4 },
+    { key: "npc:2.0", tier: 3 },
+    { key: "npc:3.0", tier: 2 },
+    { key: "npc:4.0", tier: 5 },
+    { key: "boss:commander", tier: 4 },
+    { key: "17", tier: 4 },
+    { key: "npc:x.0", tier: 3 },
+  ]);
+  assert.deepEqual(n, [{ key: "npc:2.0", tier: 3 }, { key: "npc:9.1", tier: 4 }]);
+  assert.deepEqual(normCarriers(undefined), []);
+  // A T2 "carrier" is ignored by planAllocation as well.
+  const a = planAllocation([P("x", 1)], [], [], 1, [{ key: "npc:3.0", tier: 2 }]);
+  assert.equal(a.size, 0);
+});
+
+test("planAllocation on the Steppe with rolled carriers: share of the non-boss release follows the weights", () => {
+  const map = generateMap("steppe");
+  const posts = map.npcPosts ?? [];
+  assert.ok(posts.length > 0, "the generator places NPC posts");
+  const containers: AllocContainer[] = map.containers.map((c, idx) => ({ idx, kind: c.kind, tier: c.tier, guarded: containerGuarded(c, map.bosses) }));
+  const wC = containers.filter(poolContainerEligible).reduce((s, c) => s + poolContainerWeight(c), 0);
+  const N = 2000;
+  let nonBoss = 0;
+  let carried = 0;
+  let wK = 0;
+  for (let seed = 0; seed < N; seed++) {
+    const spawned = rollBossSpawns(seed, map.bosses);
+    const bosses = raidBossSlots(spawned);
+    const carriers = raidNpcCarriers(rollNpcSpawns(seed, posts, bossGroupNpcCount(spawned)), posts);
+    assert.ok(carriers.every((c) => c.tier >= 3));
+    wK += carriers.reduce((s, c) => s + npcCarrierWeight(c.tier), 0);
+    const rel = releasePlan(700, 24, bossSlotCount(bosses));
+    assert.equal(rel.total, 8, "R = 24: the cap");
+    const picks = Array.from({ length: rel.total }, (_, i) => P(`p${i}`, 100 + i, i % 3 ? 1 : 2));
+    const a = planAllocation(picks, containers, bosses, seed, carriers);
+    for (const [k, ids] of a) {
+      if (k.startsWith("boss:")) continue;
+      nonBoss += ids.length;
+      if (k.startsWith("npc:")) {
+        assert.equal(ids.length, 1);
+        carried += ids.length;
+      }
+    }
+  }
+  const share = carried / nonBoss;
+  const expected = wK / N / (wC + wK / N);
+  // NPC_CARRIER.WEIGHT_MULT 5 (v5 review; was 3, design 2): the loot-yield harness measures 0.61 of the
+  // ≈ 3.6 non-boss items per raid on carriers at R 24 (≈ 17 %, design 15–20 %). Pinned to the configured weights.
+  assert.ok(Math.abs(share - expected) < 0.25 * expected, `carrier share ${share.toFixed(3)} vs weights ${expected.toFixed(3)}`);
+  assert.ok(share > 0.05 && share < 0.4, `carrier share ${share.toFixed(3)}`);
+});
+
+test("v5 report schemas: carriers, npcKills and npcSummary survive parsing; bad carriers are rejected", () => {
+  const start = {
+    matchId: "6f1c2b9e-8a1d-4b7a-9c3e-2f5d6a7b8c9d",
+    mode: "live",
+    mapId: "steppe",
+    matchSeed: 7,
+    players: [],
+    containers: [],
+    bossSlots: 0,
+    carriers: [{ key: "npc:12.0", tier: 4 }, { key: "npc:3.2", tier: 3 }],
+  };
+  const r = raidStartRequestSchema.safeParse(start);
+  assert.ok(r.success);
+  assert.deepEqual(r.data.carriers, start.carriers);
+  assert.equal(raidStartRequestSchema.safeParse({ ...start, carriers: [{ key: "npc:1.0", tier: 2 }] }).success, false, "T2 never carries");
+  assert.equal(raidStartRequestSchema.safeParse({ ...start, carriers: [{ key: "boss:commander", tier: 4 }] }).success, false);
+  assert.ok(raidStartRequestSchema.safeParse({ ...start, carriers: undefined }).success, "a pre-v5 server still validates");
+
+  const exit = playerExitReportSchema.safeParse({
+    matchId: start.matchId,
+    userId: "8f1c2b9e-8a1d-4b7a-9c3e-2f5d6a7b8c9d",
+    exit: "extract",
+    atMs: 1,
+    kills: 0,
+    level: 1,
+    extracted: [],
+    lost: [],
+    destroyed: [],
+    stats: { shotsFired: 1, dmgDealt: 1, containersSearched: 0, corpsesSearched: 0, bossKills: 0, npcKills: 4 },
+  });
+  assert.ok(exit.success);
+  assert.equal(exit.data.stats.npcKills, 4, "npcKills is not stripped");
+
+  const npcSummary = { spawned: { boss: 2, guard: 5, marauder: 31 }, killedByHumans: { boss: 1, guard: 2, marauder: 9 } };
+  const end = matchEndReportSchema.safeParse({
+    matchId: start.matchId,
+    mapId: "steppe",
+    matchSeed: 7,
+    startedAt: 0,
+    endedAt: 1,
+    participants: [{ userId: "8f1c2b9e-8a1d-4b7a-9c3e-2f5d6a7b8c9d", nickname: "a", isBot: false, exitType: "extract", kills: 0 }],
+    leftOnMap: [],
+    npcSummary,
+  });
+  assert.ok(end.success);
+  assert.deepEqual(end.data.npcSummary, npcSummary);
+  assert.equal(end.data.botLost, undefined, "v5 reports carry no bot fields");
 });
 
 test("durability conversion: armor % ↔ points, weapons stay %", () => {

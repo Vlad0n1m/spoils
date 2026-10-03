@@ -104,7 +104,7 @@ test("loot entries reach only ready searchers; leave / re-enter / mutate never b
         { userId: "u2", nickname: "C", isBot: false },
       ],
       rng: mulberry32(8), map: testMap({ containers: [CRATE] }), newUid: counterUid, now: () => 1_700_000_000_000,
-      emptyWorld: true, strictLedger: true, botBrains: false, envSeed: 1, weatherOverride: "clear",
+      emptyWorld: true, strictLedger: true, npcBrains: false, envSeed: 1, weatherOverride: "clear",
     });
     m.containers.roll = () => {
       const out = [
@@ -191,7 +191,7 @@ test("a reconnect while the old socket is still open keeps the ready search's lo
   const m = new Match({
     roster: [{ userId: "u0", nickname: "A", isBot: false }],
     rng: mulberry32(3), map: testMap({ containers: [CRATE] }), newUid: counterUid, now: () => 1_700_000_000_000,
-    emptyWorld: true, strictLedger: true, botBrains: false, envSeed: 1, weatherOverride: "clear",
+    emptyWorld: true, strictLedger: true, npcBrains: false, envSeed: 1, weatherOverride: "clear",
   });
   m.containers.roll = () => [makeItem("junk_gpu"), makeItem("junk_apple", { qty: 2 })];
   const r = new Room(m);

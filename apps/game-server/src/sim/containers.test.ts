@@ -329,7 +329,7 @@ test("a search survives taking damage; closing twice is harmless", () => {
 
 test("v4 zoning: demo uniques only in containers of tier >= DEMO_UNIQUE_MIN_TIER; fungibles stay the deterministic roll", () => {
   const map = generateMap("steppe");
-  const m = new Match({ roster: humans(1), rng: mulberry32(1), mapSeed: 1234, mapId: "steppe", newUid: counterUid, botBrains: false, emptyWorld: true, mode: "demo" });
+  const m = new Match({ roster: humans(1), rng: mulberry32(1), mapSeed: 1234, mapId: "steppe", newUid: counterUid, npcBrains: false, emptyWorld: true, mode: "demo" });
   const byTier = [0, 0, 0, 0, 0];
   map.containers.forEach((spot, idx) => {
     const items = m.containers.roll(idx);
@@ -350,7 +350,7 @@ test("v4 zoning: floor loot spawns by spot tier (FLOOR_LOOT.SPAWN_CHANCE), medki
   const items = [0, 0, 0, 0, 0];
   const seeds = 12;
   for (let seed = 1; seed <= seeds; seed++) {
-    const m = new Match({ roster: humans(1), rng: mulberry32(seed), mapSeed: seed, mapId: "steppe", newUid: counterUid, botBrains: false, mode: "live", bosses: false });
+    const m = new Match({ roster: humans(1), rng: mulberry32(seed), mapSeed: seed, mapId: "steppe", newUid: counterUid, npcBrains: false, mode: "live", bosses: false });
     const tierAt = new Map(map.lootSpots.map((s) => [`${s.x},${s.y}`, s.tier]));
     for (const g of m.ground.all()) {
       const t = tierAt.get(`${g.schema.x},${g.schema.y}`);
@@ -370,6 +370,6 @@ test("v4 zoning: floor loot spawns by spot tier (FLOOR_LOOT.SPAWN_CHANCE), medki
   // Wilds: almost nothing (≈ 5 % of spots).
   assert.ok(items[0]! / seeds < spots[0]! * 0.1, `wild floor items ${items[0]! / seeds}/${spots[0]}`);
   // Legacy (no zones): every spot spawns as in v1.
-  const legacy = new Match({ roster: humans(1), rng: mulberry32(3), mapSeed: 3, mapId: "legacy", newUid: counterUid, botBrains: false, mode: "live" });
+  const legacy = new Match({ roster: humans(1), rng: mulberry32(3), mapSeed: 3, mapId: "legacy", newUid: counterUid, npcBrains: false, mode: "live" });
   assert.equal([...legacy.ground.all()].length, legacy.map.lootSpots.length);
 });

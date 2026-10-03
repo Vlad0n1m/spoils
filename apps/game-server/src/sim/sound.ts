@@ -4,7 +4,7 @@
  * Emission: the sim calls emitSound wherever something audible happens. Each call queues a pending
  * sound {src, kind, x, y, base radius, variant} for this match (positions captured at emit time,
  * so a death sound still plays after the body is gone) and also emits a raw `sound` MatchEvent
- * (tests, debugging, and bots until WP-G reads heardBy). Raw events are never sent to clients.
+ * (tests, debugging, and NPC hearing through heardBy). Raw events are never sent to clients.
  *
  * Delivery (deliverSounds, end of Match.step, after vision.update so "visible" agrees with the
  * patch cut in the same tick): for every alive listener other than the source —
@@ -18,7 +18,7 @@
  *      Hidden entries never carry coordinates or ids: moving the source anywhere inside one
  *      (sector, band) bucket gives a byte-identical payload.
  *   Per listener per tick: dedupe identical entries, cap at SOUND.MAX_PER_TICK by SOUND_PRIORITY,
- *   then one `snd` event (humans; the room merges it into that client's `ev` batch) or the bot's
+ *   then one `snd` event (humans; the room merges it into that client's `ev` batch) or the NPC's
  *   heardBy list (WP-G investigates from it). Dead / extracted listeners hear nothing.
  *
  * Sounds emitted between ticks (reload / heal / switch / interact messages) wait in the queue and go
@@ -59,7 +59,7 @@ export interface PendingSound {
 
 interface SoundRuntime {
   pending: PendingSound[];
-  /** What each bot heard in the last delivery (rosterIndex → decoded entries). */
+  /** What each NPC heard in the last delivery (rosterIndex → decoded entries). */
   heard: Map<number, DecodedSound[]>;
 }
 
@@ -131,7 +131,7 @@ function channelSounds(m: Match): void {
   }
 }
 
-/** Sounds a bot heard in the last delivery (WP-G: investigate hidden ones by sector / band). */
+/** Sounds an NPC heard in the last delivery (npc.ts: suspicious / squad alert by sector / band). */
 export function heardBy(m: Match, rosterIndex: number): readonly DecodedSound[] {
   return soundRt(m).heard.get(rosterIndex) ?? [];
 }
@@ -176,13 +176,16 @@ export function deliverSounds(m: Match): void {
   const walls = getWallIndex(m.map);
   for (const l of m.allRuntimes()) {
     if (!l.pub.alive) continue;
-    // Disconnected humans have nobody to send to; bots listen for WP-G.
-    if (!l.isBot && !l.connected) continue;
+    // Disconnected humans have nobody to send to; dormant NPCs do not listen (npc.ts).
+    if (l.isNpc ? l.dormant : !l.connected) continue;
     const lx = l.pub.x, ly = l.pub.y;
     const entries: Entry[] = [];
     const seen = new Set<string>();
     for (const s of pending) {
       if (s.src === l.rosterIndex) continue;
+      // NPCs are one faction: an NPC listener ignores other NPCs' footsteps and chatter (they
+      // would keep every squad suspicious of itself); their gunshots still carry.
+      if (l.isNpc && s.src >= 0 && s.kind !== SoundKind.shot && m.rosterRuntime(s.src)?.isNpc) continue;
       const R = s.radius * hear;
       if (!(R >= 1)) continue;
       const dx = s.x - lx, dy = s.y - ly;
@@ -215,7 +218,7 @@ export function deliverSounds(m: Match): void {
     }
     const msg: SoundMsg = {};
     for (const e of entries) e.push(msg);
-    if (l.isBot) srt.heard.set(l.rosterIndex, decodeSoundMsg(msg));
+    if (l.isNpc) srt.heard.set(l.rosterIndex, decodeSoundMsg(msg));
     else m.emit({ type: "snd", to: l.rosterIndex, msg });
   }
 }

@@ -7,6 +7,7 @@ export type CreditReason =
   | "autosell"
   | "giveaway"
   | "consumables"
+  | "bound"
   | "listing_fee"
   | "admin";
 

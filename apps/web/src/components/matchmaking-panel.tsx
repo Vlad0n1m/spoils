@@ -7,6 +7,7 @@ import { MATCH, type JoinTicket } from "@extract/shared";
 import { getColyseusClient } from "@/lib/colyseus";
 import { describeRoomExit, errorCodeAndReason, type RoomExit } from "@/lib/room-exit";
 import { wireMatchmakingRoom } from "@/lib/matchmaking-room";
+import { queueLine, queueStatus, readQueueState, type QueueView } from "./matchmaking-queue";
 
 interface Props {
   ticket: JoinTicket;
@@ -17,37 +18,16 @@ interface Props {
   onBattleReady: (battleRoomId: string) => void;
 }
 
-interface MmView {
-  players: number;
-  /** Wall-clock ms when bots fill the lobby. */
-  deadlineAt: number;
-  launching: boolean;
-}
-
 /**
- * The matchmaking room's schema belongs to the game server; read it loosely so a renamed or
- * missing field degrades the countdown instead of breaking the lobby.
+ * Humans-only queue (NPC MODEL v5): shows the real players found and when the raid launches.
+ * Nobody fills empty seats — NPCs (marauders, guards, bosses) are already on the map.
  */
-function readMmState(state: unknown, fallbackDeadline: number): MmView {
-  const s = (state ?? {}) as Record<string, unknown>;
-  const players = s.players as { length?: number; size?: number } | undefined;
-  const count = typeof players?.length === "number" ? players.length : typeof players?.size === "number" ? players.size : 0;
-  const now = Date.now();
-  const raw = typeof s.deadlineAt === "number" ? s.deadlineAt : 0;
-  // Ignore deadlines that only make sense with a badly skewed client clock.
-  const sane = raw > now - 10_000 && raw < now + 120_000;
-  const status = typeof s.status === "string" ? s.status : "waiting";
-  return {
-    players: count,
-    deadlineAt: sane ? raw : fallbackDeadline,
-    launching: status === "starting" || status === "started",
-  };
-}
 
 export function MatchmakingPanel({ ticket, roomName, onCancel, onRetry, onBattleReady }: Props) {
-  const [view, setView] = useState<MmView>(() => ({
+  const [view, setView] = useState<QueueView>(() => ({
     players: 1,
-    deadlineAt: Date.now() + MATCH.MATCHMAKING_TIMEOUT_MS,
+    openedAt: 0,
+    deadlineAt: Date.now() + MATCH.QUEUE_WINDOW_MS,
     launching: false,
   }));
   const [now, setNow] = useState(() => Date.now());
@@ -68,7 +48,7 @@ export function MatchmakingPanel({ ticket, roomName, onCancel, onRetry, onBattle
     if (!sessionRef.current) {
       let disposed = false;
       let room: Room | null = null;
-      const fallbackDeadline = Date.now() + MATCH.MATCHMAKING_TIMEOUT_MS;
+      const fallbackDeadline = Date.now() + MATCH.QUEUE_WINDOW_MS;
       void (async () => {
         try {
           const client = await getColyseusClient();
@@ -80,7 +60,7 @@ export function MatchmakingPanel({ ticket, roomName, onCancel, onRetry, onBattle
           room = joined;
           wireMatchmakingRoom(joined, {
             isDisposed: () => disposed,
-            onState: (state) => setView(readMmState(state, fallbackDeadline)),
+            onState: (state) => setView(readQueueState(state, fallbackDeadline)),
             onBattleReady: (battleRoomId) => onReadyRef.current(battleRoomId),
             onError: (code, message) => setErr(describeRoomExit(code, message) ?? genericExit(message)),
             // Kicks (QUEUE_CLOSED, JOINED_ELSEWHERE, LAUNCH_FAILED) arrive as a close code.
@@ -116,9 +96,8 @@ export function MatchmakingPanel({ ticket, roomName, onCancel, onRetry, onBattle
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const secsLeft = Math.max(0, Math.ceil((view.deadlineAt - now) / 1000));
-  const humans = Math.max(1, Math.min(MATCH.MAX_PLAYERS, view.players));
-  const launching = view.launching || secsLeft === 0;
+  const q = queueStatus(view, now);
+  const { humans, launching } = q;
 
   // Leave synchronously on Cancel: the unmount dispose is deferred a tick (StrictMode), and a
   // battle_ready landing in that tick would otherwise still pull the player into the raid.
@@ -139,24 +118,26 @@ export function MatchmakingPanel({ ticket, roomName, onCancel, onRetry, onBattle
 
         {!err && (
           <>
-            <p className="mt-5 text-base tracking-wide text-white/80">
+            <p className="mt-5 text-base tracking-wide text-white/80" aria-live="polite">
+              Players in queue: <span className="toon-text-thin text-2xl tabular-nums text-zooa-lime">{humans}</span>
+              <span className="text-white/40"> · </span>
               {launching ? (
-                "Bots are filling the empty spots"
+                "launching now"
               ) : (
                 <>
-                  Bots fill the lobby in{" "}
-                  <span className="toon-text-thin text-2xl tabular-nums text-amber-300">{secsLeft}s</span>
+                  launching in{" "}
+                  <span className="toon-text-thin text-2xl tabular-nums text-amber-300">{q.countdown}</span>
                 </>
               )}
             </p>
 
-            <ul className="mx-auto mt-7 grid max-w-xs grid-cols-8 gap-1.5" aria-label={`${humans} players waiting`}>
-              {Array.from({ length: MATCH.MAX_PLAYERS }, (_, i) => (
+            <ul className="mx-auto mt-7 grid max-w-xs grid-cols-8 gap-1.5" aria-label={queueLine(q)}>
+              {Array.from({ length: q.max }, (_, i) => (
                 <li
                   key={i}
                   className={clsx(
                     "grid aspect-square place-items-center rounded-lg border-2 border-black",
-                    i < humans ? "bg-zooa-lime shadow-[0_2px_0_#000]" : launching ? "bg-sky-300/70" : "bg-white/10",
+                    i < humans ? "bg-zooa-lime shadow-[0_2px_0_#000]" : "bg-white/10",
                   )}
                 >
                   {i < humans && (
@@ -167,7 +148,13 @@ export function MatchmakingPanel({ ticket, roomName, onCancel, onRetry, onBattle
               ))}
             </ul>
             <p className="mt-3 text-sm tabular-nums text-white/60">
-              {humans} {humans === 1 ? "player" : "players"} waiting · up to {MATCH.MAX_PLAYERS}
+              Real players only · up to {q.max} per raid
+              {q.early && !launching ? " · launching early" : ""}
+            </p>
+            <p className="font-body mx-auto mt-4 max-w-[38ch] text-sm leading-relaxed text-white/55">
+              {q.solo
+                ? "Nobody else yet. If no one joins, you raid solo — marauder camps and bosses are already on the map."
+                : "Empty seats stay empty: marauders, guards and bosses are NPCs already on the map."}
             </p>
           </>
         )}

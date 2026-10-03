@@ -5,11 +5,13 @@
  * agrees with the reports, and fungible stacks are conserved (junk exactly; ammo and meds are only
  * ever consumed, never duplicated).
  *
- * Brain bots fight; scripted human "looters" exercise the inventory paths the brains do not use
- * yet (WP-G): they walk (nav grid) to containers and bodies, search them, take revealed slots one
- * by one or with take-all, drop junk now and then, and extract — or die and become corpses that
- * other looters search. Odd seeds run demo mode (server mints), even seeds live mode (loadouts +
- * pool allocation, nothing minted).
+ * NPC MODEL v5: humans + NPCs only. Marauder squads (brains on) hold posts on the map; scripted
+ * human "looters" walk (nav grid) to containers and bodies, search them, take revealed slots one
+ * by one or with take-all, drop junk now and then, shoot NPCs they see, and extract — or die and
+ * become corpses that other looters search. NPC bags (rollNpcLoot) enter the fungible totals; on
+ * even seeds (live mode: loadouts + pool allocation, nothing minted) T3 marauders also carry pool
+ * uniques (carrier keys npc:<post>.<member>) that must end in exactly one bucket like any pool item.
+ * Odd seeds run demo mode (server mints).
  */
 
 import { test } from "node:test";
@@ -19,10 +21,14 @@ import {
   INPUT_DT_MS,
   MATCH,
   SEARCH,
+  SOLID,
   SERVER_TICK_MS,
+  NPC_ROLE,
   bagKeys,
   bpLevelOf,
+  hasLineOfSight,
   itemDef,
+  npcCarrierKey,
   mulberry32,
   rollContainerFungibles,
   type InputSample,
@@ -34,12 +40,14 @@ import {
 import { currentTarget, invTakeAllOp, invTakeOp } from "./containers.js";
 import { extractAllowed, extractIsOpen } from "./extraction.js";
 import { toPlain } from "./items.js";
-import { LEGACY_MATCH_PLAYERS, Match } from "./match.js";
+import { Match } from "./match.js";
 import { navGridFor, type Pt } from "./nav.js";
-import { counterUid } from "./test-utils.js";
+import { counterUid, legacyNpcPosts } from "./test-utils.js";
 import type { PlayerRuntime, RosterEntry } from "./types.js";
 
-const LOOTERS = 3;
+const LOOTERS = 6;
+/** Marauder posts per legacy match (2 per squad): T3 ones may carry pool uniques. */
+const POSTS = 8;
 
 class Looter {
   private path: Pt[] = [];
@@ -127,11 +135,27 @@ class Looter {
     }
     this.lastX = p.x;
     this.lastY = p.y;
+    // Shoot the nearest NPC in sight (never another human): NPC corpses and their bags enter the books.
+    let aim = Math.atan2(my, mx || 1e-9);
+    let fire = false;
+    let best = 650;
+    for (const j of m.vision.row(rt.rosterIndex)) {
+      const o = m.rosterRuntime(j);
+      if (!o?.pub.alive || o.pub.role === NPC_ROLE.NONE) continue;
+      const d = Math.hypot(o.pub.x - p.x, o.pub.y - p.y);
+      if (d < best) {
+        best = d;
+        aim = Math.atan2(o.pub.y - p.y, o.pub.x - p.x);
+        fire = true;
+      }
+    }
+    // Stop to shoot only with a clear line of fire (an NPC in cover is walked past, not stared at).
+    if (fire && !t && hasLineOfSight(m.idx, p.x, p.y, p.x + Math.cos(aim) * best, p.y + Math.sin(aim) * best, SOLID.SHOT)) [mx, my] = [0, 0];
     // ~30 Hz input stream like a real client.
     this.acc += SERVER_TICK_MS;
     while (this.acc >= INPUT_DT_MS) {
       this.acc -= INPUT_DT_MS;
-      const s: InputSample = { seq: ++this.seq, mx, my, aim: Math.atan2(my, mx || 1e-9), fire: false };
+      const s: InputSample = { seq: ++this.seq, mx, my, aim, fire: fire && this.seq % 4 < 2 };
       m.enqueueInput(rt.id, s);
     }
   }
@@ -239,19 +263,24 @@ function runMatch(seed: number) {
   const live = seed % 2 === 0;
   const rng = mulberry32(seed * 7_771);
   const humans: RosterEntry[] = Array.from({ length: LOOTERS }, (_, k) => ({
-    userId: `user-${seed}-${k}`, nickname: `Looter${k}`, isBot: false, loadoutId: live ? `lo-${seed}-${k}` : "",
+    userId: `user-${seed}-${k}`, nickname: `Looter${k}`, loadoutId: live ? `lo-${seed}-${k}` : "",
   }));
-  const bots: RosterEntry[] = Array.from({ length: LEGACY_MATCH_PLAYERS - LOOTERS }, (_, i) => ({ userId: null, nickname: `Bot${i}`, isBot: true }));
+  const posts = legacyNpcPosts(1000 + seed, POSTS);
   const pool: Record<string, SettledItem[]> = {};
   if (live) {
     const defs = ["sniper", "shotgun", "armor_3", "backpack_3", "rifle", "armor_2"];
     defs.forEach((def, i) => {
       (pool[String(i * 3)] ??= []).push({ uid: `pool-${seed}-${i}`, def, qty: 1, rarity: (i % 4) as 0, dur: def.startsWith("armor") ? 50 : 70 });
     });
+    // Carriers: one pool unique on member 0 of every T3 post (and one on a key nobody spawns at).
+    for (const p of posts.filter((q) => q.tier >= 3)) {
+      pool[npcCarrierKey(p.id, 0)] = [{ uid: `carry-${seed}-${p.id}`, def: p.id % 4 === 1 ? "rifle" : "armor_2", qty: 1, rarity: 2, dur: 60 }];
+    }
+    pool[npcCarrierKey(99, 0)] = [{ uid: `carry-${seed}-ghost`, def: "shotgun", qty: 1, rarity: 1, dur: 60 }];
   }
   const m = new Match({
     mapId: "legacy",
-    roster: [...humans, ...bots],
+    roster: humans,
     rng: mulberry32(seed),
     mapSeed: 1000 + seed,
     newUid: counterUid,
@@ -260,11 +289,14 @@ function runMatch(seed: number) {
     mode: live ? "live" : "demo",
     loadouts: live ? humans.map((h, k) => loadoutFor(h.userId!, k, seed)) : [],
     containerLoot: pool,
+    npcPosts: posts,
+    npcSpawns: posts.map((p) => ({ postId: p.id, members: 2 })),
   });
   // Half the looters are tough (test-only hp) so some survive to extract with their loot.
-  m.allRuntimes().filter((r) => !r.isBot).forEach((rt, k) => { if (k % 2 === 0) rt.pub.hp = 2_000; });
+  // (20 000: v5 NPCs fight back to their full weapon range and see as far as a human once alerted.)
+  m.allRuntimes().filter((r) => !r.isNpc).forEach((rt, k) => { if (k % 2 === 0) rt.pub.hp = 20_000; });
   const start = worldNow(m);
-  const looters = m.allRuntimes().filter((r) => !r.isBot).map((rt, k) => new Looter(m, rt, rng, k % 2 === 0, 4 + k * 3));
+  const looters = m.allRuntimes().filter((r) => !r.isNpc).map((rt, k) => new Looter(m, rt, rng, k % 2 === 0, 4 + k * 3));
   const maxTicks = MATCH.DURATION_MS / SERVER_TICK_MS + 10;
   for (let i = 0; i < maxTicks && !m.ended; i++) {
     for (const l of looters) l.tick();
@@ -312,12 +344,12 @@ function assertFungibles(m: Match, start: Totals, seed: number): void {
     // Independent re-roll: the container held exactly its deterministic fungible roll (+ demo table).
     const spot = m.map.containers[t.idx]!;
     const junkRolled: Totals = {};
-    add(junkRolled, rollContainerFungibles(m.state.mapSeed, t.idx, spot).filter((f) => itemDef(f.def)?.cat === "junk"));
+    add(junkRolled, rollContainerFungibles(m.lootSeed, t.idx, spot).filter((f) => itemDef(f.def)?.cat === "junk"));
     const junkHeld: Totals = {};
     add(junkHeld, t.initial.filter((i) => itemDef(i.def)?.cat === "junk"));
     assert.deepEqual(junkHeld, junkRolled, `seed ${seed}: container ${t.idx} junk = its roll`);
   }
-  const humanDeaths = m.exitReports.filter((r) => r.exit === "dead" && m.allRuntimes().some((rt) => !rt.isBot && rt.userId === r.userId)).length;
+  const humanDeaths = m.exitReports.filter((r) => r.exit === "dead" && m.allRuntimes().some((rt) => !rt.isNpc && rt.userId === r.userId)).length;
   sources.junk_dogtag = (sources.junk_dogtag ?? 0) + humanDeaths;
 
   const end: Totals = worldNow(m);
@@ -334,8 +366,11 @@ function assertFungibles(m: Match, start: Totals, seed: number): void {
   assert.deepEqual(broken([...m.ground.all()].map((g) => toPlain(g.item))), []);
 }
 
-test("ledger invariant over 10 seeded bot matches with scripted looters (demo and live)", () => {
-  const agg = { looterExtracts: 0, takes: 0, searched: 0, drops: 0, corpses: 0, corpseSearches: 0, extractedJunk: 0, known: 0, left: 0, dead: 0, extracted: 0 };
+test("ledger invariant over 10 seeded matches: scripted looters vs marauder squads, NPC bags and carrier uniques (demo and live)", () => {
+  const agg = {
+    looterExtracts: 0, takes: 0, searched: 0, drops: 0, corpses: 0, npcCorpses: 0, corpseSearches: 0, extractedJunk: 0,
+    known: 0, left: 0, dead: 0, extracted: 0, carriers: 0, carriersTaken: 0, npcKills: 0,
+  };
   for (let seed = 1; seed <= 10; seed++) {
     const { m, live, start, looters } = runMatch(seed);
     assertUids(m, live, seed);
@@ -345,22 +380,39 @@ test("ledger invariant over 10 seeded bot matches with scripted looters (demo an
       agg.searched += l.searched;
       agg.drops += l.drops;
       agg.corpseSearches += l.rt.stats.corpsesSearched;
+      agg.npcKills += l.rt.stats.npcKills;
       if (l.rt.exitReport?.exit === "extract") agg.looterExtracts++;
     }
     agg.corpses += m.containers.corpses().length;
+    agg.npcCorpses += m.containers.corpses().filter((t) => m.rosterRuntime(t.owner)?.isNpc).length;
     agg.known += m.ledger.known.size;
     agg.left += m.report!.leftOnMap.length;
+    // NPCs: never searched, never extracted, never reported to the web; no FREE item in any report.
+    for (const rt of m.npcs.runtimes()) {
+      assert.equal(rt.stats.containersSearched + rt.stats.corpsesSearched, 0, `seed ${seed}: ${rt.id} never loots`);
+      assert.notEqual(rt.exitReport?.exit, "extract", `seed ${seed}: ${rt.id} never extracts`);
+    }
     for (const rep of m.exitReports) {
       if (rep.exit === "dead") agg.dead++;
       if (rep.exit === "extract") agg.extracted++;
       agg.extractedJunk += rep.extracted.filter((i) => itemDef(i.def)?.cat === "junk").length;
+    }
+    if (live) {
+      for (const [uid] of m.ledger.known) {
+        if (!uid.startsWith(`carry-${seed}`)) continue;
+        agg.carriers++;
+        if (m.ledger.resolved.get(uid) !== "left") agg.carriersTaken++;
+      }
+      assert.equal(m.ledger.resolved.get(`carry-${seed}-ghost`), "left", "a carrier that never spawned leaves its item on the map");
     }
   }
   console.log(`ledger x10: ${JSON.stringify(agg)}`);
   // The paths under test were actually exercised.
   assert.ok(agg.searched > 20, "looters searched containers and bodies");
   assert.ok(agg.takes > 20, "looters took items");
-  assert.ok(agg.corpses > 50 && agg.corpseSearches > 0, "bodies were searched");
+  assert.ok(agg.npcKills > 0 && agg.npcCorpses > 0, "NPCs were killed");
+  assert.ok(agg.corpses > 10 && agg.corpseSearches > 0, "bodies were searched");
   assert.ok(agg.extracted > 0 && agg.dead > 0);
   assert.ok(agg.looterExtracts > 0 && agg.extractedJunk > 0, "looters carried junk out");
+  assert.ok(agg.carriers >= 5 * 4, "carrier uniques were in play");
 });

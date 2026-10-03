@@ -167,6 +167,12 @@ export interface KillMsg {
   killer: string;
   killerId: string;
   weapon: WeaponId | "";
+  /**
+   * NPC MODEL v5: NPC_ROLE of the killer / victim (absent = 0, a human; optional for older
+   * servers). Marauder and guard deaths go only to their killer; boss and human deaths broadcast.
+   */
+  killerRole?: number;
+  victimRole?: number;
 }
 
 /** A static container was opened (lid / sound cue) — MapData.containers index. */

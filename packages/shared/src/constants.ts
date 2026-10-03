@@ -25,13 +25,48 @@ export const MATCH = {
   EXTRACT_CLOSE_EARLY_FRACTION: 0.5,
   /** 0.83 × 30 min ≈ 25:00. */
   EXTRACT_CLOSE_EARLY_AT: 0.83,
-  /** Players per match (humans + bots). */
+  /**
+   * NPC MODEL v5 queue ("mm", humans only; NPCs are never players). A window opens on the first
+   * join; the match launches at the first of: queue >= MAX_HUMANS (at once); queue >= MIN_HUMANS
+   * and >= MIN_WAIT_MS since the window opened; the window ends with >= 1 human (a solo raid against
+   * NPCs is legal, SOLO_START_OK). Joiners beyond MAX_HUMANS open the next window (mmShouldLaunch).
+   */
+  MAX_HUMANS: 24,
+  MIN_HUMANS: 12,
+  MIN_WAIT_MS: 10_000,
+  QUEUE_WINDOW_MS: 45_000,
+  SOLO_START_OK: true,
+  /** @deprecated v5: humans + bots per match; use MAX_HUMANS (bots are gone). */
   MAX_PLAYERS: 32,
-  /** Demo matchmaking waits this long, then fills with bots. */
+  /** @deprecated v5: the old bot-fill deadline; use QUEUE_WINDOW_MS. */
   MATCHMAKING_TIMEOUT_MS: 4_000,
   /** Room stays alive this long after the end so clients receive the final messages. */
   DISPOSE_AFTER_END_MS: 8_000,
 } as const;
+
+/**
+ * Human spawn rules (NPC MODEL v5, game-server assignSpawns): farthest-point sampling over the side
+ * spawns, at most ceil(n / 4) + SIDE_CAP_EXTRA humans per side, HUMAN_MIN_SEP_PX soft (always holds
+ * for n <= 16 on the Steppe, best effort above). NPC posts keep NPC.SPAWN_CLEAR_PX from every spawn.
+ */
+export const SPAWN_RULES = { HUMAN_MIN_SEP_PX: 3000, SIDE_CAP_EXTRA: 1 } as const;
+
+/** Humans allowed on one side for a match of `n` humans: ceil(n / 4) + SPAWN_RULES.SIDE_CAP_EXTRA. */
+export function humanSideCap(n: number): number {
+  return Math.ceil(Math.max(0, n) / 4) + SPAWN_RULES.SIDE_CAP_EXTRA;
+}
+
+/**
+ * Queue rule (MATCH): should the "mm" queue launch now? `queued` humans, `sinceOpenMs` since the
+ * window opened, `windowMs` = the window length (env MM_QUEUE_WINDOW_MS, default
+ * MATCH.QUEUE_WINDOW_MS). Never launches an empty queue.
+ */
+export function mmShouldLaunch(queued: number, sinceOpenMs: number, windowMs: number = MATCH.QUEUE_WINDOW_MS): boolean {
+  if (queued < 1) return false;
+  if (queued >= MATCH.MAX_HUMANS) return true;
+  if (queued >= MATCH.MIN_HUMANS && sinceOpenMs >= MATCH.MIN_WAIT_MS) return true;
+  return sinceOpenMs >= windowMs && MATCH.SOLO_START_OK;
+}
 
 /**
  * v2 world: 24 × 1024 px blocks. The 20,480 px fallback (critique cut 8) is BLOCK = 853.
@@ -109,6 +144,12 @@ export const FREE_KIT = {
   WEAPON: "pistol",
   AMMO_LIGHT: 36,
   BANDAGES: 1,
+  /**
+   * v5 review: junk extracted from a live raid entered with no unique at all (the free kit) autosells
+   * at this × the day's multiplier. A free-kit full raid made ≈ 1.1k CR (62 CR/min at zero gear risk)
+   * — more CR per minute than a geared T2 looter — and alt accounts farm it. Geared raids pay × 1.
+   */
+  AUTOSELL_MULT: 0.5,
 } as const;
 
 /**

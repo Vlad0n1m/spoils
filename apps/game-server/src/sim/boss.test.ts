@@ -1,8 +1,9 @@
 /**
- * Bosses and guards (loot economy v4, boss.ts): spawn from the match seed, kit and pool items,
- * no-break corpses, boss kill credit, heals above PLAYER.MAX_HP, group alert and leash, locals,
- * PMC avoidance, ledger conservation with bosses on the real Steppe, and a solo free-kit sanity
- * check against the bosses (scripted duel + the loot-yield harness strategy "boss").
+ * Bosses and guards (loot economy v4, boss.ts; NPC MODEL v5: a boss group is an NpcSystem squad):
+ * spawn from the match seed, kit and pool items, no-break corpses, boss kill credit, heals above
+ * PLAYER.MAX_HP, group alert and leash, locals (marauders and the boss group never trade fire),
+ * ledger conservation with bosses and carriers on the real Steppe, and a solo free-kit sanity
+ * check against the bosses (scripted duel).
  */
 
 import { test } from "node:test";
@@ -12,16 +13,21 @@ import {
   BOSS_AI,
   CONTAINER_STATE,
   ITEM_FLAG,
+  NPC,
   NPC_ROLE,
   PLAYER,
   SERVER_TICK_MS,
   ammoDefOf,
   generateMap,
+  bossGroupNpcCount,
   itemDef,
   mulberry32,
+  npcPostsOf,
+  raidNpcCarriers,
   rollBossJunk,
   rollBossSpawns,
   rollGuardLoot,
+  rollNpcSpawns,
   type BossKind,
   type BossSpot,
   type ContainerSpot,
@@ -33,15 +39,13 @@ import {
   type Zone,
 } from "@extract/shared";
 import { activeWeapon, ammoCount, carriedItems, weaponDefOf } from "./bag.js";
-import { BOT_PEACE_MS } from "./bot.js";
 import { placeItem } from "./bag.js";
 import { GUARD_FREE_AMMO, BOSS_FREE_AMMO, bossNpcCount, isNpc, startNpcHeal } from "./boss.js";
 import { damagePlayer } from "./combat.js";
-import { runYieldRaid } from "./econ/loot-yield.bench.js";
-import { makeItem, withBotSettlement } from "./items.js";
-import { MATCH_PLAYERS, Match, type MatchOptions } from "./match.js";
+import { makeItem, withNpcSettlement } from "./items.js";
+import { Match, type MatchOptions } from "./match.js";
 import { navGridFor, type Pt } from "./nav.js";
-import { counterUid, humans, place, run, testMap, testMatch } from "./test-utils.js";
+import { counterUid, humans, npcOpts, place, run, testMap, testMatch, testPost } from "./test-utils.js";
 import type { PlayerRuntime, RosterEntry } from "./types.js";
 
 const steppe = generateMap("steppe");
@@ -77,12 +81,12 @@ const npcOf = (m: Match, kind: BossKind, role: "boss" | "guard") =>
 
 // ---------------------------------------------------------------- spawn and kit
 
-test("boss spawn: rolled from the match seed only; NPCs after the roster at spot / posts, not in Match.bots", () => {
-  const roster: RosterEntry[] = [{ userId: "h", nickname: "H", isBot: false }, ...Array.from({ length: 3 }, (_, i) => ({ userId: null, nickname: `Bot${i}`, isBot: true }))];
+test("boss spawn: rolled from the match seed only; NPCs after the (humans-only) roster at spot / posts", () => {
+  const roster: RosterEntry[] = humans(4);
   const seen = new Set<string>();
   for (let s = 1; s <= 12; s++) {
     const seed = (s * 2654435761) >>> 0;
-    const mk = (rngSeed: number) => new Match({ roster, rng: mulberry32(rngSeed), mapSeed: seed, mapId: "steppe", newUid: counterUid, botBrains: false, emptyWorld: true, bosses: true });
+    const mk = (rngSeed: number) => new Match({ roster, rng: mulberry32(rngSeed), mapSeed: seed, mapId: "steppe", newUid: counterUid, npcBrains: false, emptyWorld: true, bosses: true });
     const m = mk(1);
     const want = rollBossSpawns(seed, steppe.bosses);
     assert.deepEqual(m.bosses.groups.map((g) => g.kind), want.map((b) => b.kind), `seed ${seed}`);
@@ -93,7 +97,7 @@ test("boss spawn: rolled from the match seed only; NPCs after the roster at spot
     assert.equal(m.allRuntimes().length, roster.length + bossNpcCount(want));
     assert.equal(m.state.totalPlayers, roster.length, "HUD counts players only (NPCs neither count nor leak)");
     assert.equal(m.state.aliveCount, roster.length);
-    assert.equal(m.bots.length, 0, "brains off: no roster brains; NPC brains never go into Match.bots");
+    assert.equal(m.npcs.brains.length, 0, "brains off");
     for (const g of m.bosses.groups) {
       const def = BOSSES[g.kind];
       assert.equal(g.guards.length, def.guards.length);
@@ -108,19 +112,19 @@ test("boss spawn: rolled from the match seed only; NPCs after the roster at spot
         assert.equal(gr.pub.maxHp, def.guards[i]!.hp);
       });
       for (const rt of [g.boss, ...g.guards]) {
-        assert.ok(rt.isBot && rt.rosterIndex >= roster.length && rt.self.extractMask === 0);
+        assert.ok(rt.isNpc && rt.rosterIndex >= roster.length && rt.self.extractMask === 0);
         assert.ok(isNpc(rt));
       }
     }
   }
   assert.ok(seen.size >= 3, `spawn sets vary with the seed: ${[...seen].join(" / ")}`);
   // Off for empty worlds unless asked (rule tests place their own things).
-  const off = new Match({ roster, rng: mulberry32(1), mapSeed: 5, mapId: "steppe", newUid: counterUid, botBrains: false, emptyWorld: true });
+  const off = new Match({ roster, rng: mulberry32(1), mapSeed: 5, mapId: "steppe", newUid: counterUid, npcBrains: false, emptyWorld: true });
   assert.equal(off.bosses.groups.length, 0);
 });
 
 test("boss kit without pool items: FREE weapon / armor / backpack, boss junk, non-FREE meds and ammo; guards carry their FREE kit plus rollGuardLoot", () => {
-  const m = bossMatch(bossMap([{ kind: "commander" }]), { botBrains: false });
+  const m = bossMatch(bossMap([{ kind: "commander" }]), { npcBrains: false });
   const [boss] = npcOf(m, "commander", "boss");
   const def = BOSSES.commander;
   const s = boss!.self.slots;
@@ -158,7 +162,7 @@ test("boss pool items (live): the best pool weapon is wielded, the rest stowed (
     "boss:warden": [settled({ uid: "pw-sniper", def: "sniper", rarity: 2 })],
     boss: [settled({ uid: "legacy-armor", def: "armor_2" })],
   };
-  const m = bossMatch(map, { mode: "live", containerLoot: loot, botBrains: false });
+  const m = bossMatch(map, { mode: "live", containerLoot: loot, npcBrains: false });
   assert.deepEqual(m.bosses.groups.map((g) => g.kind), ["foreman"]);
   const [boss] = npcOf(m, "foreman", "boss");
   const s = boss!.self.slots;
@@ -181,17 +185,18 @@ test("boss pool items (live): the best pool weapon is wielded, the rest stowed (
   assert.ok(m.ended);
   assert.deepEqual(m.ledgerGaps(), []);
   assert.ok(m.report!.leftOnMap.some((i) => i.uid === "pw-sniper"));
-  const full = withBotSettlement(m.report!, m.allRuntimes());
-  const left = new Set(full.leftOnMap.map((i) => i.uid));
+  const left = new Set(m.report!.leftOnMap.map((i) => i.uid));
   for (const uid of [...uids, "pw-sniper"]) assert.ok(left.has(uid), `${uid} back to the pool (leftOnMap)`);
-  assert.deepEqual(full.botLost, [], "nothing on a boss is ever lost with wear");
+  for (const uid of uids) assert.equal(m.ledger.resolved.get(uid), "left", "nothing on a boss is ever lost with wear");
+  assert.equal(m.report!.botLost, undefined, "no deprecated bot buckets");
+  assert.deepEqual(withNpcSettlement(m.report!, m.allRuntimes()), m.report!);
 });
 
 test("boss death: nothing breaks, the corpse holds pool items + boss junk + leftovers, FREE gear vanishes; the killer gets bossKills (guards do not count)", () => {
   const loot: Record<string, SettledItem[]> = {
     "boss:foreman": [settled({ uid: "pf-1", def: "rifle", rarity: 2 }), settled({ uid: "pf-2", def: "armor_2" })],
   };
-  const m = bossMatch(bossMap([{ kind: "foreman" }]), { mode: "live", containerLoot: loot, botBrains: false });
+  const m = bossMatch(bossMap([{ kind: "foreman" }]), { mode: "live", containerLoot: loot, npcBrains: false });
   m.rng = () => 0; // every break roll would succeed for a normal player
   const human = m.allRuntimes()[0]!;
   place(m, human.id, 2400, 2100);
@@ -200,7 +205,7 @@ test("boss death: nothing breaks, the corpse holds pool items + boss junk + left
   damagePlayer(m, boss!, 100_000, human, "rifle", boss!.pub.x, boss!.pub.y);
   assert.equal(boss!.pub.alive, false);
   assert.equal(human.stats.bossKills, 1);
-  assert.equal(human.self.kills, 1);
+  assert.equal(human.self.kills, 0, "kills (XP_KILL) count human victims only");
   assert.deepEqual(boss!.exitReport!.lost, [], "no break roll on a boss");
   const corpse = m.containers.corpseOf(boss!.rosterIndex)!;
   assert.deepEqual(corpse.items.map((i) => i.uid).filter(Boolean).sort(), ["pf-1", "pf-2"]);
@@ -212,6 +217,7 @@ test("boss death: nothing breaks, the corpse holds pool items + boss junk + left
   const gBefore = fungibles(carried(guard!));
   damagePlayer(m, guard!, 100_000, human, "rifle", guard!.pub.x, guard!.pub.y);
   assert.equal(human.stats.bossKills, 1, "a guard is not a boss");
+  assert.equal(human.stats.npcKills, 1, "a guard is an NPC kill (XP_NPC)");
   const gc = m.containers.corpseOf(guard!.rosterIndex)!;
   assert.deepEqual(fungibles(gc.items), gBefore);
   assert.ok(gc.items.every((i) => !i.uid && !(i.flags & ITEM_FLAG.FREE)), "guard gear is FREE and vanished");
@@ -227,28 +233,64 @@ test("boss heal: above PLAYER.MAX_HP, capped at its own maxHp, one medkit per he
   const [boss] = npcOf(m, "commander", "boss");
   const p = boss!.pub;
   const medkits = () => fungibles(carried(boss!)).medkit ?? 0;
+  // Commander: 250 HP (v5 iteration 2 tuning; was 310, 400 in v4), half = 125, 2 medkits (+75 each).
+  const max = BOSSES.commander.hp;
+  assert.ok(p.maxHp === max && max > PLAYER.MAX_HP + 75 && PLAYER.MAX_HP === 100);
+  const half = max * BOSS_AI.HEAL_BELOW_FRAC;
   assert.equal(medkits(), 2);
-  p.hp = 120;
+  p.hp = 30;
   run(m, 6500);
-  assert.equal(p.hp, 195, "120 + 75: not capped at PLAYER.MAX_HP");
+  assert.equal(p.hp, 105, "30 + 75");
   assert.equal(medkits(), 1);
-  // Still below half (195 < 200): the second medkit right after.
+  // Still below half (105 < 125): the second medkit right after, past PLAYER.MAX_HP.
+  assert.ok(105 < half);
   run(m, 6500);
-  assert.equal(p.hp, 270);
+  assert.equal(p.hp, 180, "105 + 75: not capped at PLAYER.MAX_HP");
   assert.equal(medkits(), 0);
   p.hp = 50;
   run(m, 8000);
   assert.equal(p.hp, 50, "no medkits left");
   // Above half no heal starts; a heal lands capped at the NPC's own maxHp.
   placeItem(boss!, makeItem("medkit", { qty: 2 }));
-  p.hp = 210;
+  p.hp = Math.ceil(half) + 5;
   run(m, 8000);
-  assert.equal(p.hp, 210);
-  p.hp = 390;
+  assert.equal(p.hp, Math.ceil(half) + 5);
+  p.hp = max - 10;
   assert.ok(startNpcHeal(m, boss!));
   run(m, 6500);
   assert.equal(p.hp, p.maxHp);
-  assert.ok(p.maxHp === 400 && PLAYER.MAX_HP === 100);
+});
+
+test("boss heal: never while it is being shot (even by someone it cannot see); it patches up once things calm down", () => {
+  const m = bossMatch(bossMap([{ kind: "commander" }]));
+  const human = m.allRuntimes()[0]!;
+  place(m, human.id, 600, 600);
+  human.pub.hp = 1e6;
+  const [boss] = npcOf(m, "commander", "boss");
+  const p = boss!.pub;
+  const medkits = () => fungibles(carried(boss!)).medkit ?? 0;
+  run(m, NPC.PEACE_MS + 1000);
+  p.hp = 60;
+  // Peppered every 2 s from 2400 px away (far beyond any sight): no heal starts.
+  for (let t = 0; t < 10_000; t += 2000) {
+    damagePlayer(m, boss!, 1, human, "sniper", p.x, p.y);
+    run(m, 2000);
+    assert.equal(boss!.self.healUntil, 0, `no heal under fire (t ${t})`);
+  }
+  assert.equal(medkits(), 2);
+  run(m, 9000);
+  assert.ok(medkits() < 2, "calm again: it heals");
+});
+
+test("human spawns keep NPC.SPAWN_CLEAR_PX from every spawned boss group (BossSpot and guard posts) on the Steppe", () => {
+  for (let s = 1; s <= 40; s++) {
+    const seed = (s * 2654435761) >>> 0;
+    const m = new Match({ roster: humans(12), rng: mulberry32(s), mapSeed: seed, mapId: "steppe", newUid: counterUid, npcBrains: false, bosses: true, marauders: false });
+    const pts = m.bosses.groups.flatMap((g) => [g.spot, ...g.spot.guards.slice(0, g.guards.length)]);
+    for (const rt of m.allRuntimes().filter((r) => !r.isNpc)) {
+      for (const q of pts) assert.ok(Math.hypot(q.x - rt.pub.x, q.y - rt.pub.y) >= NPC.SPAWN_CLEAR_PX, `seed ${seed}: spawn ${rt.pub.x},${rt.pub.y} near ${q.x},${q.y}`);
+    }
+  }
 });
 
 // ---------------------------------------------------------------- behaviour
@@ -262,7 +304,7 @@ test("alert: a gunshot near the group reaches every member within one think; gua
   const human = m.allRuntimes()[0]!;
   place(m, human.id, 2400, 1500);
   const g = m.bosses.groups[0]!;
-  run(m, BOT_PEACE_MS + 1000);
+  run(m, NPC.PEACE_MS + 1000);
   assert.ok(!(g.alertUntil > m.clock), "calm before the shot");
   // One pistol shot (FREE kit) away from the group, behind the wall.
   run(m, 100, { [human.id]: { aim: -Math.PI / 2, fire: true } });
@@ -291,59 +333,27 @@ test("alert: a gunshot near the group reaches every member within one think; gua
   assert.equal(m.containers.stateOf(0), CONTAINER_STATE.UNTOUCHED);
 });
 
-test("locals: a scav next to the guards never trades fire with them; a human in sight is engaged", () => {
+test("locals: a marauder squad next to the guards never trades fire with them (NPC bullets pass through NPCs); a human in sight is engaged", () => {
   const map = bossMap([{ kind: "foreman" }]);
-  const roster: RosterEntry[] = [
-    { userId: "h", nickname: "H", isBot: false },
-    ...Array.from({ length: 3 }, (_, i) => ({ userId: null, nickname: `Bot${i}`, isBot: true })),
-  ];
-  const m = new Match({ roster, map, rng: mulberry32(3), mapSeed: 77, newUid: counterUid, strictLedger: true, emptyWorld: true, bosses: true, envSeed: 1, weatherOverride: "clear" });
-  const scav = m.bots.find((b) => b.role === "scav")!;
-  assert.ok(scav, "the third bot is a scav");
-  // Only the scav and the group near each other (no PMC crossfire).
-  for (const b of m.bots) if (b !== scav) damagePlayer(m, b.rt, 1e6, null, "", b.rt.pub.x, b.rt.pub.y);
-  place(m, scav.rt.id, 2550, 2550);
+  const m = new Match({
+    roster: humans(1), map, rng: mulberry32(3), mapSeed: 77, newUid: counterUid, strictLedger: true, emptyWorld: true, bosses: true,
+    envSeed: 1, weatherOverride: "clear", ...npcOpts([testPost(0, 2550, 2550, { tier: 3, size: [2, 2] })]),
+  });
   const human = m.allRuntimes()[0]!;
   place(m, human.id, 600, 600);
   human.pub.hp = 1e6;
-  const locals = new Set([scav.rt.rosterIndex, ...m.bosses.runtimes().map((r) => r.rosterIndex)]);
-  const ev = run(m, BOT_PEACE_MS + 20_000);
-  const friendly = ev.filter((e) => e.type === "hit" && locals.has(m.runtime((e as { msg: { t: string } }).msg.t)?.rosterIndex ?? -1) && locals.has((e as { src: number }).src));
-  assert.equal(friendly.length, 0, "no local shoots another local");
-  // A human walks in: the group fights him.
+  const npcs = new Set(m.npcs.runtimes().map((r) => r.rosterIndex));
+  assert.equal(npcs.size, 1 + BOSSES.foreman.guards.length + 2);
+  const ev = run(m, NPC.PEACE_MS + 20_000);
+  assert.equal(ev.filter((e) => e.type === "shot").length, 0, "nobody shoots without a human in sight");
+  // A human walks in among them: the group and the squad fight him; no NPC ever hits an NPC.
   place(m, human.id, 2400, 2250);
   human.pub.aim = Math.PI / 2;
-  const ev2 = run(m, 6000);
-  const npcShots = ev2.filter((e) => e.type === "shot" && m.bosses.runtimes().some((r) => r.rosterIndex === e.src)).length;
-  assert.ok(npcShots > 0, "boss / guards engage the human");
-});
-
-test("PMC bots keep their goals out of a living boss's ground (and take it once the boss is dead)", () => {
-  const map = bossMap([{ kind: "foreman" }]);
-  // The only loot near the PMC: a crate 900 px from the boss (inside BOT_AVOID_PX).
-  const crate: ContainerSpot = { x: 2400, y: 1500, kind: "crate", tier: 3, zone: "z" };
-  map.containers = [crate];
-  const mk = () => {
-    const m = new Match({
-      roster: [{ userId: "h", nickname: "H", isBot: false }, { userId: null, nickname: "Pmc", isBot: true }],
-      map, rng: mulberry32(9), mapSeed: 77, newUid: counterUid, strictLedger: true, emptyWorld: true, bosses: true, envSeed: 1, weatherOverride: "clear",
-    });
-    const pmc = m.bots[0]!;
-    assert.equal(pmc.role, "pmc");
-    place(m, pmc.rt.id, 2400, 900);
-    const human = m.allRuntimes()[0]!;
-    place(m, human.id, 400, 4400);
-    human.pub.hp = 1e6;
-    return { m, pmc };
-  };
-  const a = mk();
-  run(a.m, 25_000);
-  assert.equal(a.m.containers.stateOf(0), CONTAINER_STATE.UNTOUCHED, "the PMC leaves the boss's crate alone");
-  const b = mk();
-  const boss = b.m.bosses.groups[0]!.boss;
-  damagePlayer(b.m, boss, 100_000, null, "", boss.pub.x, boss.pub.y);
-  run(b.m, 25_000);
-  assert.notEqual(b.m.containers.stateOf(0), CONTAINER_STATE.UNTOUCHED, "with the boss dead the PMC loots it");
+  const ev2 = run(m, 8000);
+  const npcShots = ev2.filter((e) => e.type === "shot" && npcs.has(e.src)).length;
+  assert.ok(npcShots > 0, "boss / guards / marauders engage the human");
+  const friendly = ev2.filter((e) => e.type === "hit" && npcs.has(e.target) && npcs.has(e.src));
+  assert.equal(friendly.length, 0, "no NPC damages another NPC");
 });
 
 // ---------------------------------------------------------------- ledger with bosses on the Steppe
@@ -366,68 +376,75 @@ function poolFor(seed: number): Record<string, SettledItem[]> {
   return out;
 }
 
-test("ledger over live Steppe raids with bosses: every pool uid resolves once; boss items never break; nothing a bot carries out reaches a stash", () => {
+test("ledger over live Steppe raids with bosses and carriers: every pool uid resolves once; NPC items never break; an unlooted carrier item returns to the pool", () => {
   for (const seed of [11, 12]) {
-    const roster: RosterEntry[] = [
-      { userId: "h", nickname: "H", isBot: false },
-      ...Array.from({ length: MATCH_PLAYERS - 1 }, (_, i) => ({ userId: null, nickname: `Bot${i}`, isBot: true })),
-    ];
+    const mapSeed = 0x5eed0 + seed;
     const loot = poolFor(seed);
-    const m = new Match({ roster, rng: mulberry32(seed), mapSeed: 0x5eed0 + seed, mapId: "steppe", mode: "live", containerLoot: loot, newUid: counterUid, strictLedger: true, now: () => 1_700_000_000_000 });
+    // One pool unique per spawned T3/T4 marauder (the web's carrier allocation, raidNpcCarriers).
+    const spawned = rollBossSpawns(mapSeed, steppe.bosses);
+    const posts = npcPostsOf(steppe);
+    const carriers = raidNpcCarriers(rollNpcSpawns(mapSeed, posts, bossGroupNpcCount(spawned)), posts);
+    carriers.forEach((c, k) => { loot[c.key] = [settled({ uid: `N${seed}-${k}`, def: k % 2 ? "armor_2" : "rifle", rarity: 2 })]; });
+    const m = new Match({ roster: humans(1), rng: mulberry32(seed), mapSeed, mapId: "steppe", mode: "live", containerLoot: loot, newUid: counterUid, strictLedger: true, now: () => 1_700_000_000_000 });
     const human = m.allRuntimes()[0]!;
     human.pub.hp = 1e6;
     assert.ok(m.bosses.groups.length > 0, `seed ${seed}: bosses spawned`);
-    // Two minutes in, a PMC bot kills the first boss: its body (pool items) is fair game for bots.
-    const killer = m.bots.find((b) => b.role === "pmc")!.rt;
+    assert.ok(carriers.length > 0, `seed ${seed}: carriers spawned`);
+    // Two minutes in, the human kills the first boss and the first carrier (never looted).
     const first = m.bosses.groups[0]!;
+    const carrier = m.npcs.runtimes().find((r) => [...r.self.slots.values()].some((it) => it.uid.startsWith(`N${seed}-`)))!;
+    assert.ok(carrier, "a marauder carries its pool unique");
+    const carried = [...carrier.self.slots.values()].find((it) => it.uid.startsWith(`N${seed}-`))!.uid;
+    assert.ok(![carrier.self.slots.get("w1")?.uid, carrier.self.slots.get("armor")?.uid].includes(carried), "stowed, never wielded or worn");
     while (!m.ended && m.clock < 12 * 60_000) {
-      if (m.clock === 120_000) damagePlayer(m, first.boss, 100_000, killer, "rifle", first.boss.pub.x, first.boss.pub.y);
+      if (m.clock === 120_000) {
+        damagePlayer(m, first.boss, 100_000, human, "rifle", first.boss.pub.x, first.boss.pub.y);
+        m.rng = () => 0; // every break roll would succeed for a human
+        damagePlayer(m, carrier, 100_000, human, "rifle", carrier.pub.x, carrier.pub.y);
+        m.rng = mulberry32(seed + 1);
+        assert.ok(m.containers.corpseOf(carrier.rosterIndex)!.items.some((i) => i.uid === carried), "the carrier item reached the corpse");
+      }
       m.step(SERVER_TICK_MS);
       m.drainEvents();
     }
-    assert.equal(killer.stats.bossKills, 1);
+    assert.equal(human.stats.bossKills, 1);
+    assert.equal(human.stats.npcKills, 1);
     damagePlayer(m, human, 1e7, null, "", human.pub.x, human.pub.y);
     m.step(SERVER_TICK_MS);
     assert.ok(m.ended, `seed ${seed}: ended`);
     assert.deepEqual(m.ledgerGaps(), []);
     assert.deepEqual(m.ledger.anomalies, []);
-    const full = withBotSettlement(m.report!, m.allRuntimes());
-    // Each known uid in exactly one bucket of the settled report (human reports + end report).
+    const r = m.report!;
+    assert.equal(r.botLost, undefined);
+    // Each known uid in exactly one bucket (human reports + end report).
     const where = new Map<string, string[]>();
     const put = (uid: string, at: string) => where.set(uid, [...(where.get(uid) ?? []), at]);
-    for (const rep of m.exitReports.filter((r) => r.userId)) {
+    for (const rep of m.exitReports.filter((x) => x.userId)) {
       for (const it of rep.extracted) if (it.uid) put(it.uid, "extract");
       for (const it of rep.lost) if (it.uid) put(it.uid, "lost");
       for (const it of rep.destroyed) if (it.uid) put(it.uid, "destroyed");
     }
-    for (const it of full.leftOnMap) put(it.uid, "left");
-    for (const it of full.botLost ?? []) put(it.uid, "botLost");
-    for (const it of full.botDestroyed ?? []) put(it.uid, "botDestroyed");
+    for (const it of r.leftOnMap) put(it.uid, "left");
     for (const [uid] of m.ledger.known) assert.equal((where.get(uid) ?? []).length, 1, `seed ${seed}: ${uid} in ${where.get(uid)}`);
-    // Boss pool items: never broken / worn on a boss; back to the pool unless a human carried them out.
-    const bossUids = Object.entries(loot).filter(([k]) => k.startsWith("boss:")).flatMap(([, v]) => v.map((s) => s.uid));
-    const bossLost = new Set((full.botLost ?? []).map((s) => s.uid));
-    for (const rt of m.bosses.runtimes()) {
+    // Boss and carrier items: never broken or worn on an NPC; nobody took them, so all back to the pool.
+    const npcUids = Object.entries(loot).filter(([k]) => k.startsWith("boss:") || k.startsWith("npc:")).flatMap(([, v]) => v.map((x) => x.uid));
+    for (const uid of npcUids) if (m.ledger.known.has(uid)) assert.equal(m.ledger.resolved.get(uid), "left", `NPC item ${uid}`);
+    assert.equal(m.ledger.resolved.get(carried), "left", "the unlooted carrier item returns to the pool");
+    for (const rt of m.npcs.runtimes()) {
       if (rt.exitReport?.exit === "dead") assert.deepEqual(rt.exitReport.lost, [], `${rt.nickname}: no break roll on death`);
       else assert.equal(rt.exitReport?.exit, "timeout", `${rt.nickname} never extracts`);
+      assert.equal(rt.stats.containersSearched + rt.stats.corpsesSearched, 0, `${rt.nickname} never loots`);
     }
-    // Bot extracts: every unique a bot carried out is in leftOnMap (pool, no wear), never in a stash.
-    const left = new Set(full.leftOnMap.map((s) => s.uid));
-    for (const b of m.allRuntimes().filter((r) => r.isBot && r.exitReport?.exit === "extract")) {
-      for (const it of b.exitReport!.extracted) if (it.uid) assert.ok(left.has(it.uid), `bot-extracted ${it.uid} returns to the pool`);
-    }
-    for (const uid of bossUids) {
-      if (!m.ledger.known.has(uid)) continue;
-      // A bot may have looted the dead boss and died with it (botLost) — that is the bot's break roll.
-      assert.ok(left.has(uid) || bossLost.has(uid) || where.get(uid)?.[0] === "extract", `boss item ${uid}: ${where.get(uid)}`);
-    }
+    // No FREE item (NPC gear) in any report.
+    for (const it of r.leftOnMap) assert.ok(it.uid);
   }
 });
 
 // ---------------------------------------------------------------- solo free kit vs a boss
 
 /**
- * Scripted solo player: waits out the peace window 1100 px from the boss spot, walks in along a
+ * Scripted solo player: waits out the peace window 1700 px from the boss spot (outside every guard's
+ * post: an intruder is fought even during the peace window), walks in along a
  * nav path and fights the nearest visible NPC with decent aim (free kit: pistol + 36 FREE rounds),
  * reloading when dry. Returns whether it killed the boss.
  */
@@ -452,14 +469,14 @@ function duel(kind: BossKind, seed: number, kit: "free" | "starter"): { bossKill
   const grid = navGridFor(m.map);
   for (let k = 0; k < 64; k++) {
     const a = rng() * Math.PI * 2;
-    const p = { x: g.spot.x + Math.cos(a) * 1100, y: g.spot.y + Math.sin(a) * 1100 };
+    const p = { x: g.spot.x + Math.cos(a) * 1700, y: g.spot.y + Math.sin(a) * 1700 };
     if ((grid.findPath(p, g.spot)?.length ?? 0) > 1) {
       h.pub.x = h.prevX = p.x;
       h.pub.y = h.prevY = p.y;
       break;
     }
   }
-  while (m.clock < BOT_PEACE_MS + 1000) {
+  while (!m.ended && m.clock < NPC.PEACE_MS + 1000) {
     m.step(SERVER_TICK_MS);
     m.drainEvents();
   }
@@ -523,17 +540,4 @@ test("solo free kit vs a boss: a scripted duel almost never wins (design: ≤ 5 
   assert.ok(wins <= 1, `free kit beat a boss ${wins}× in ${3 * n} duels`);
   assert.ok(dmg > 0, "the duels are real fights (damage dealt)");
   assert.ok(starter.some((r) => r.dmg > 100), "a starter kit hurts the Foreman's group");
-});
-
-test("solo free kit through the loot-yield harness (strategy boss): R = 0 releases nothing, no unique gained", () => {
-  let kills = 0;
-  const lines: string[] = [];
-  for (let seed = 1; seed <= 3; seed++) {
-    const r = runYieldRaid({ strategy: "boss", seed, kit: "free", humanOnly: true });
-    kills += r.kills;
-    lines.push(`${seed}:${r.exit}@${r.minutes}m k${r.kills}`);
-    assert.equal(r.riskUnits, 0);
-    assert.equal(r.gained.filter((u) => u.origin !== "other").length, 0, "R = 0: nothing released from the pool");
-  }
-  console.log(`harness boss/free: ${lines.join(" ")} (kills ${kills})`);
 });

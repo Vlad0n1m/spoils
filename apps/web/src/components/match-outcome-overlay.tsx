@@ -14,6 +14,7 @@ import { BREAK_CHANCE_ON_DEATH, type MatchSummaryMsg, type OutcomeMsg, type Sold
 import { playUi } from "@/game/audio/ui-sounds";
 import { buildReceipt, fmtClock } from "@/lib/items-ui";
 import type { RoomExit } from "@/lib/room-exit";
+import { killedByLine, npcKillsLine, npcLabels, type KillTally } from "@/game/npc-labels";
 import { DogTagRow, ItemStrip, SellReceipt } from "./inventory/outcome-receipt";
 
 /** Delay before the result card appears, so the player sees the moment of death / extraction. */
@@ -40,6 +41,11 @@ export interface MatchOutcomeOverlayProps {
   kick?: RoomExit | null;
   /** Final numbers from the web API after settlement; null/undefined = show the server estimate. */
   finalCredits?: FinalCredits | null;
+  /**
+   * The local player's kills split by victim (renderer tally of its own KillMsgs): "Players killed N ·
+   * NPCs killed M (boss K)". Missing (e.g. after a reconnect) = the server's total under "Kills".
+   */
+  killTally?: KillTally | null;
   /** Coin sound per receipt line; defaults to the shared UI coin sound. Pass a no-op to mute. */
   onCoin?: () => void;
   onContinue: () => void;
@@ -53,6 +59,7 @@ export function MatchOutcomeOverlay({
   disconnected,
   kick = null,
   finalCredits = null,
+  killTally = null,
   onCoin = defaultCoin,
   onContinue,
 }: MatchOutcomeOverlayProps) {
@@ -98,6 +105,7 @@ export function MatchOutcomeOverlay({
                 outcome={outcome}
                 settlement={settlement}
                 finalCredits={finalCredits}
+                killTally={killTally}
                 onCoin={onCoin}
                 onContinue={onContinue}
               />
@@ -125,18 +133,23 @@ function ResultCard({
   outcome,
   settlement,
   finalCredits,
+  killTally,
   onCoin,
   onContinue,
 }: {
   outcome: OutcomeMsg;
   settlement: MatchSummaryMsg | null;
   finalCredits: FinalCredits | null;
+  killTally: KillTally | null;
   onCoin: () => void;
   onContinue: () => void;
 }) {
   const style = EXIT_STYLE[outcome.exit];
+  const L = npcLabels();
+  // v5 participants are humans only; the filter keeps pre-v5 reports (with bots) honest too.
   const humans = settlement?.participants.filter((p) => !p.isBot) ?? [];
-  const raidersOut = settlement?.participants.filter((p) => p.exitType === "extract").length ?? 0;
+  const raidersOut = humans.filter((p) => p.exitType === "extract").length;
+  const npc = settlement?.npcSummary;
   const receipt = useMemo(
     () => buildReceipt(outcome.extracted, outcome.sold, outcome.guest ? null : finalCredits),
     [outcome.extracted, outcome.sold, outcome.guest, finalCredits],
@@ -198,19 +211,36 @@ function ResultCard({
           )}
         </div>
 
-        <dl className="mt-6 grid grid-cols-3 gap-2 border-t-[3px] border-black/50 pt-5 text-center">
-          <Stat label="Kills" value={String(outcome.kills)} />
+        <dl
+          className={clsx(
+            "mt-6 grid gap-2 border-t-[3px] border-black/50 pt-5 text-center",
+            killTally ? "grid-cols-2 gap-y-4 sm:grid-cols-4" : "grid-cols-3",
+          )}
+        >
+          {killTally ? (
+            <>
+              <Stat label={L.playersKilled} value={String(killTally.players)} />
+              <Stat
+                label={L.npcsKilled}
+                value={npcKillsLine(killTally)}
+                title="Marauders, guards and bosses you killed this raid"
+              />
+            </>
+          ) : (
+            <Stat label="Kills" value={String(outcome.kills)} />
+          )}
           <Stat label={outcome.exit === "extract" ? "Out at" : "Survived"} value={fmtClock(outcome.atMs)} />
           <Stat
             label="Extracted"
-            value={settlement ? `${raidersOut}/${settlement.participants.length}` : "…"}
-            title={
-              settlement
-                ? `${humans.filter((p) => p.exitType === "extract").length} of ${humans.length} human raiders got out`
-                : "Raid still running"
-            }
+            value={settlement ? `${raidersOut}/${humans.length}` : "…"}
+            title={settlement ? `${raidersOut} of ${humans.length} players got out` : "Raid still running"}
           />
         </dl>
+        {npc && (
+          <p className="font-body mt-3 text-center text-xs leading-relaxed text-white/50">
+            {npcRaidLine(npc)}
+          </p>
+        )}
 
         <button type="button" onClick={onContinue} className="toon-btn mt-8 min-h-14 w-full text-xl tracking-wide">
           Back to lobby
@@ -222,8 +252,16 @@ function ResultCard({
 
 function subtitle(o: OutcomeMsg): string {
   if (o.exit === "extract") return o.guest ? "You made it out! Register to keep what you find." : "Everything you carried is yours to keep.";
-  if (o.exit === "dead") return o.killedBy ? `Killed by ${o.killedBy}` : "You died.";
+  if (o.exit === "dead") return o.killedBy ? killedByLine(o.killedBy) : "You died.";
   return "You were still on the map when the raid ended. Everything you carried is lost.";
+}
+
+/** "This raid: 31 NPCs, 9 taken down by players (boss 1 of 2)". */
+export function npcRaidLine(n: NonNullable<MatchSummaryMsg["npcSummary"]>): string {
+  const spawned = n.spawned.boss + n.spawned.guard + n.spawned.marauder;
+  const killed = n.killedByHumans.boss + n.killedByHumans.guard + n.killedByHumans.marauder;
+  const boss = n.spawned.boss > 0 ? ` (boss ${n.killedByHumans.boss} of ${n.spawned.boss})` : "";
+  return `This raid: ${spawned} NPCs, ${killed} taken down by players${boss}`;
 }
 
 function Stat({ label, value, title }: { label: string; value: string; title?: string }) {

@@ -5,7 +5,7 @@
  * floor item vanishing or changing quantity, a dropped item appearing or a corpse turning
  * opened / empty would tell a far client, in the same tick, that a hidden player stands right there.
  *
- * So such a change is applied to the server's truth at once (rules, bots and the actor's own
+ * So such a change is applied to the server's truth at once (rules, NPCs and the actor's own
  * session use the truth) but published to the shared state only after every actor has been away
  * from the spot (farther than AWAY_PX, or dead / extracted) for QUIET_MS. A far client then learns
  * "someone was here and left a while ago", which is no finer than the sound it already heard.

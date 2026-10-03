@@ -7,12 +7,16 @@ import {
   MAP_GEN_VERSION,
   SERVER_TICK_MS,
   SOLID,
+  circleIsFree,
+  getCollisionIndex,
   itemDef,
+  legacyMapData,
   mulberry32,
   type ContainerSpot,
   type InputSample,
   type MapData,
   type MapRect,
+  type NpcPost,
   type Player,
   type Rarity,
   type SelfState,
@@ -66,7 +70,41 @@ export function counterUid(): string {
 }
 
 export function humans(n: number): RosterEntry[] {
-  return Array.from({ length: n }, (_, i) => ({ userId: `user${i}`, nickname: `P${i}`, isBot: false }));
+  return Array.from({ length: n }, (_, i) => ({ userId: `user${i}`, nickname: `P${i}` }));
+}
+
+/** A marauder post for hand-made test maps (default: a lone T1 "low" marauder that holds its post). */
+export function testPost(id: number, x: number, y: number, o: Partial<NpcPost> = {}): NpcPost {
+  return { id, zone: null, tier: 1, kind: "poi", x, y, patrol: [], size: [1, 1], chance: 1, ...o };
+}
+
+/** Match options that always spawn one squad per post, at its largest size (size[1]). */
+export function npcOpts(posts: NpcPost[]): Partial<MatchOptions> {
+  return { npcPosts: posts, npcSpawns: posts.map((p) => ({ postId: p.id, members: p.size[1] })) };
+}
+
+/**
+ * `count` marauder posts on free ground of the legacy map of `mapSeed` (≥ 700 px apart, away from
+ * the border); every 2nd one is T3 (carrier-eligible, "high" class), the rest T1 ("low").
+ */
+export function legacyNpcPosts(mapSeed: number, count: number, size: [number, number] = [2, 2]): NpcPost[] {
+  const map = legacyMapData(mapSeed);
+  const idx = getCollisionIndex(map);
+  const rng = mulberry32((mapSeed ^ 0x9057) >>> 0);
+  const out: NpcPost[] = [];
+  for (let tries = 0; out.length < count && tries < 1000; tries++) {
+    const x = 900 + rng() * (map.width - 1800);
+    const y = 900 + rng() * (map.height - 1800);
+    if (!circleIsFree(idx, x, y, 60) || out.some((q) => Math.hypot(q.x - x, q.y - y) < 700)) continue;
+    const t3 = out.length % 2 === 1;
+    out.push({ id: out.length, zone: null, tier: t3 ? 3 : 1, kind: "poi", x, y, patrol: [], size, chance: 1 });
+  }
+  return out;
+}
+
+/** The NPC runtimes of a match (bosses, guards, marauders) in spawn order. */
+export function npcsOf(m: Match): PlayerRuntime[] {
+  return m.npcs.runtimes();
 }
 
 export function testMatch(n = 2, opts: Partial<MatchOptions> = {}): Match {

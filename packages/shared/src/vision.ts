@@ -41,14 +41,17 @@ export const VISION = {
   BUSH_INSIDE_FRAC: 0.9,
   /** Shooting cancels bush concealment for this long. */
   SHOT_REVEAL_MS: 1500,
-  /** Muzzle flash: weather/night range penalties ignored this long after a shot. */
+  /** Muzzle flash: weather/night range penalties and the NPC sight cap ignored this long after a shot. */
   FLASH_MS: 250,
   /** Floor of the environment range multiplier (night fog ≈ 400 px). */
   MIN_RANGE_MULT: 0.4,
   /** Interest management for ground items / corpses: 512 px cells, ±3 cell ring. */
   AOI_CELL: 512,
   AOI_RING: 3,
-  /** Bots keep their current tuning: their sight is capped at this range. */
+  /**
+   * @deprecated NPC MODEL v5: NPC sight cap moved to NPC.VIEW_RANGE_CAP (npc.ts, same 800). Kept
+   * for one release while the server renames its bot viewers.
+   */
   BOT_RANGE_CAP: 800,
 } as const;
 
@@ -78,7 +81,7 @@ export interface VisionEnv {
   idx: CollisionIndex;
   /** visionRangeMult(sampleEnv(...).vis). */
   rangeMult: number;
-  /** Bots: VISION.BOT_RANGE_CAP. */
+  /** NPC viewers: NPC.VIEW_RANGE_CAP (calm) or NPC.VIEW_RANGE_ALERT (alerted); a muzzle flash ignores it. */
   rangeCap?: number;
 }
 
@@ -94,8 +97,11 @@ export function visionRangeMult(envVis: number): number {
 export function canSee(env: VisionEnv, v: VisionViewer, t: VisionTarget): boolean {
   const dx = t.x - v.x, dy = t.y - v.y;
   const d2 = dx * dx + dy * dy;
-  let R = VISION.RANGE * (t.sinceShotMs < VISION.FLASH_MS ? 1 : env.rangeMult);
+  let R = VISION.RANGE * env.rangeMult;
   if (env.rangeCap !== undefined) R = Math.min(R, env.rangeCap);
+  // Muzzle flash: a shooter is seen to the full VISION.RANGE by every viewer — weather / night and
+  // the NPC sight cap included (v5 review fix: the cap used to hide a firing human from NPCs).
+  if (t.sinceShotMs < VISION.FLASH_MS) R = VISION.RANGE;
   if (t.inBush && t.sinceShotMs > VISION.SHOT_REVEAL_MS) {
     R = t.stillMs >= VISION.BUSH_STILL_MS ? Math.min(R, VISION.BUSH_REVEAL_R) : R * VISION.BUSH_MOVING_RANGE_MULT;
   }

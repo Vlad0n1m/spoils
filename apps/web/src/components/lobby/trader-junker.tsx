@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CONSUMABLES_CR, itemDef, type ConsumableId } from "@extract/shared";
+import { BOUND_OFFERS, CONSUMABLES_CR, boundTraderLevel, itemDef, type ConsumableId } from "@extract/shared";
 import { fmtCr } from "@/lib/items-ui";
 import { ItemCard } from "./item-card";
 import { api, newRequestId } from "./use-lobby";
@@ -24,12 +24,18 @@ export function TraderJunker({
   credits,
   stacks,
   autosellMult,
+  level = 1,
   onBought,
+  onBoundBought,
 }: {
   credits: number;
   stacks: Readonly<Record<string, number>>;
   autosellMult: number;
+  /** Player level: unlocks bound-trader offers (boundTraderLevel). */
+  level?: number;
   onBought: (r: { credits: number; def: string; qty: number }) => void;
+  /** A bound item was bought (new CR balance); the caller reloads the stash. */
+  onBoundBought?: (credits: number) => void;
 }) {
   const [packs, setPacks] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -49,6 +55,21 @@ export function TraderJunker({
       setBusy(null);
     }
   };
+
+  const buyBoundItem = async (def: string) => {
+    setBusy(`bound:${def}`);
+    setMsg(null);
+    try {
+      const r = await api<{ ok: true; credits: number }>("/api/trader/bound", { body: { def, requestId: newRequestId() } });
+      onBoundBought?.(r.credits);
+      setMsg({ ok: true, text: `Bought a bound ${itemDef(def)?.name ?? def}. It is yours to use, never to sell.` });
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Purchase failed" });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const tl = boundTraderLevel(level);
 
   return (
     <section className="toon-panel bg-[#1b2234]/95 p-5">
@@ -108,6 +129,33 @@ export function TraderJunker({
                 <span className="optical-center tabular-nums">{busy === def ? "…" : fmtCr(cost)}</span>
               </button>
               </div>
+            </li>
+          );
+        })}
+      </ul>
+      <h3 className="mt-5 text-sm uppercase tracking-[0.18em] text-white/60">Bound gear</h3>
+      <p className="font-body mt-1 text-xs text-white/50">
+        For CR. Bound gear can&apos;t be sold or traded and is destroyed when lost.
+      </p>
+      <ul className="mt-2 divide-y-2 divide-black/40">
+        {BOUND_OFFERS.map((o) => {
+          const locked = o.traderLevel > tl;
+          const afford = credits >= o.cr;
+          return (
+            <li key={`${o.def}:${o.rarity}`} className="flex flex-wrap items-center gap-3 py-3">
+              <ItemCard def={o.def} qty={1} size="sm" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm tracking-wide text-white">{itemDef(o.def)?.name ?? o.def}</p>
+                <p className="font-body text-xs text-white/50">{locked ? `Unlocks at level ${(o.traderLevel - 1) * 5}` : "Bound"}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => buyBoundItem(o.def)}
+                disabled={locked || !afford || busy !== null}
+                className="toon-btn ml-auto min-h-10 min-w-[6.5rem] px-3 text-sm"
+              >
+                <span className="optical-center tabular-nums">{busy === `bound:${o.def}` ? "…" : fmtCr(o.cr)}</span>
+              </button>
             </li>
           );
         })}

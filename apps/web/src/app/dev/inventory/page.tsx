@@ -163,7 +163,7 @@ function InventoryBench() {
           participants: [
             { nickname: "You", isBot: false, exitType: outcome?.exit ?? "extract", kills: 3 },
             { nickname: "Viper", isBot: false, exitType: "dead", kills: 2 },
-            { nickname: "Bot 7", isBot: true, exitType: "extract", kills: 0 },
+            { nickname: "Kestrel", isBot: false, exitType: "extract", kills: 0 },
           ],
         }}
         raidEnded

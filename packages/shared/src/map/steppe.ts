@@ -21,9 +21,9 @@ export interface ZoneTemplate {
 }
 
 export const STEPPE_ZONES: readonly ZoneTemplate[] = [
-  { id: "zarya", name: "Zarya Village", kind: "village", tier: 2, rect: [2.5, 2.6, 7, 5.9] },
-  { id: "kolkhoz", name: "Kolkhoz Farm", kind: "farm", tier: 2, rect: [1.2, 8.8, 4.3, 3.0] },
-  { id: "dachas", name: "Dachas", kind: "village", tier: 1, rect: [1.5, 14.2, 5, 5] },
+  { id: "zarya", name: "Dawnfield", kind: "village", tier: 2, rect: [2.5, 2.6, 7, 5.9] },
+  { id: "kolkhoz", name: "Red Barn Farm", kind: "farm", tier: 2, rect: [1.2, 8.8, 4.3, 3.0] },
+  { id: "dachas", name: "Summer Cabins", kind: "village", tier: 1, rect: [1.5, 14.2, 5, 5] },
   { id: "fuel", name: "Fuel Stop", kind: "gas", tier: 1, rect: [6.5, 10.4, 2.4, 2.2] },
   { id: "sawmill", name: "Sawmill", kind: "lumber", tier: 2, rect: [10.6, 1.4, 4.4, 3.4] },
   { id: "elevator", name: "Grain Elevator", kind: "industrial", tier: 3, rect: [9.5, 7.6, 6, 5.6], boss: "foreman" },
@@ -110,7 +110,7 @@ export const STEPPE_EXTRACTS: readonly ExtractTemplate[] = [
   { id: "S1", name: "Rail Tunnel", side: 2, at: [9.0, 23.58] },
   { id: "S2", name: "Southern Ford", side: 2, at: [20.6, 23.58], closesAtMs: 25 * 60_000 },
   { id: "W1", name: "Highway West", side: 3, at: [0.42, 12.4] },
-  { id: "W2", name: "Dacha Fence", side: 3, at: [0.42, 16.6] },
+  { id: "W2", name: "Cabin Fence", side: 3, at: [0.42, 16.6] },
 ];
 
 export const EXTRACT_RADIUS = 150;

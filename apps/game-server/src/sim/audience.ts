@@ -16,7 +16,9 @@
  * - HIT → the target (its copy carries `fa`, the quantized direction to the shooter), the shooter
  *   and every recipient that sees the target. `s` is blanked for recipients that do not see the
  *   shooter.
- * - KILL → everyone, names / ids only (the kill feed; no position).
+ * - KILL → everyone, names / ids / roles only (the kill feed; no position) — except a marauder or
+ *   guard death, which goes to its killer only (a personal "You ✕ Marauder" row: NPC deaths must
+ *   not become a map-wide radar of who is fighting where). Boss and human deaths are broadcast.
  * - CHEST (a static container opened) → the opener and recipients that see the opener (with `by`).
  *   Everyone else learns it from the lid sound and, later, the deferred containerState flip.
  * - snd → the listener it was built for (sound.ts deliverSounds already applied every rule).
@@ -24,6 +26,7 @@
  */
 
 import {
+  NPC_ROLE,
   SOLID,
   VISION,
   WEAPONS,
@@ -181,9 +184,15 @@ export function buildBatches(
           (batchOf(out, r).hits ??= []).push(msg);
         }
         break;
-      case "kill":
-        for (const r of recipients) (batchOf(out, r).kills ??= []).push(ev.msg);
+      case "kill": {
+        const role = ev.msg.victimRole ?? NPC_ROLE.NONE;
+        const personal = role === NPC_ROLE.GUARD || role === NPC_ROLE.MARAUDER;
+        for (const r of recipients) {
+          if (personal && r !== ev.src) continue;
+          (batchOf(out, r).kills ??= []).push(ev.msg);
+        }
         break;
+      }
       case "chest": {
         // Only the opener and those who see them: anyone else would learn that a hidden player
         // stands at a known container right now. They hear the lid (sound.ts) and see the

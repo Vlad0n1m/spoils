@@ -18,7 +18,8 @@
  * - uniques: live mode = the lost-pool allocation from raids/start (registered in the ledger at
  *   match start); demo mode = minted from CHEST_TABLES (registered as "minted" when rolled), only
  *   in containers of tier >= CONTAINER.DEMO_UNIQUE_MIN_TIER (v4 zoning, same as the live pool).
- * Boss pool items (containerLoot "boss:<kind>") are held here until boss.ts hands them to the boss.
+ * Boss pool items (containerLoot "boss:<kind>") and marauder carrier items ("npc:<post>.<member>") are held
+ * here until npc.ts hands them to the NPC.
  *
  * A session closes on SEARCH_CLOSE, distance > SEARCH.CANCEL_RANGE (checked every tick; 128 vs the
  * 96 px open range is the hysteresis), firing (combat.ts), roll start, death, extract, disconnect
@@ -47,6 +48,7 @@ import {
   itemDef,
   lootRollToItem,
   mulberry32,
+  parseNpcCarrierKey,
   pickWeighted,
   planPlace,
   revealMs,
@@ -116,6 +118,8 @@ export class ContainerSystem {
   /** Live-mode pool uniques allocated to a boss that has not taken them (yet / did not spawn). */
   private readonly bossPool = new Map<BossKind, ItemLike[]>();
   private readonly legacyBossPool: ItemLike[] = [];
+  /** NPC MODEL v5: pool uniques allocated to a marauder carrier key "npc:<post>.<member>" not taken (yet / did not spawn). */
+  private readonly carrierPool = new Map<string, ItemLike[]>();
   /** Opened containers and every corpse, by loot key. */
   readonly targets = new Map<string, SearchTarget>();
   /** Corpses in creation order (nearestOpenable's index space after the static containers). */
@@ -135,7 +139,7 @@ export class ContainerSystem {
     for (let i = 0; i < n; i++) m.state.containerState.push(CONTAINER_STATE.UNTOUCHED);
   }
 
-  /** Real state of container `idx` (rules and bots; clients see the deferred public copy). */
+  /** Real state of container `idx` (rules and scripted humans; clients see the deferred public copy). */
   stateOf(idx: number): number {
     return this.truth[idx] ?? CONTAINER_STATE.UNTOUCHED;
   }
@@ -155,7 +159,9 @@ export class ContainerSystem {
    * - "<idx>": a static container (rolled into it on first open);
    * - bossLootKey(kind) = "boss:<kind>": that boss's bag (boss.ts takes them at spawn; a boss that
    *   did not spawn leaves them here → leftOnMap, back to the pool with no wear);
-   * - legacy "boss" (pre-v4 web): given to the first boss that spawns, else leftOnMap.
+   * - legacy "boss" (pre-v4 web): given to the first boss that spawns, else leftOnMap;
+   * - npcCarrierKey(post, member) = "npc:<post>.<member>" (v5): one stowed unique on that marauder
+   *   (npc.ts takes it at spawn; a carrier that did not spawn leaves it here → leftOnMap, no wear).
    * Unknown keys / indexes are ignored (never registered: the web sweeps them back to the pool).
    */
   allocatePool(containerLoot: Readonly<Record<string, SettledItem[]>>): void {
@@ -179,6 +185,10 @@ export class ContainerSystem {
         this.legacyBossPool.push(...toItems(items));
         continue;
       }
+      if (parseNpcCarrierKey(key)) {
+        this.carrierPool.set(key, [...(this.carrierPool.get(key) ?? []), ...toItems(items)]);
+        continue;
+      }
       const idx = Number(key);
       if (!/^\d+$/.test(key) || !Number.isInteger(idx) || idx < 0 || idx >= this.m.map.containers.length) continue;
       this.pool.set(idx, [...(this.pool.get(idx) ?? []), ...toItems(items)]);
@@ -190,6 +200,18 @@ export class ContainerSystem {
     const out = this.bossPool.get(kind) ?? [];
     this.bossPool.delete(kind);
     return out;
+  }
+
+  /** The pool items allocated to marauder carrier `key` (removed from here: the NPC carries them now). */
+  takeCarrierPool(key: string): ItemLike[] {
+    const out = this.carrierPool.get(key) ?? [];
+    this.carrierPool.delete(key);
+    return out;
+  }
+
+  /** Carrier items an NPC could not take (over NPC_CARRIER.MAX_PER_NPC, not eligible): left on the map. */
+  returnCarrierPool(key: string, items: ItemLike[]): void {
+    this.carrierPool.set(key, [...(this.carrierPool.get(key) ?? []), ...items]);
   }
 
   /** Legacy "boss" key items (pre-v4 web), removed from here. */
@@ -212,7 +234,7 @@ export class ContainerSystem {
     const out: ItemLike[] = [];
     if (m.mode === "demo") {
       const table = CHEST_TABLES[demoChestRarity(spot)];
-      const rng = mulberry32(uniqueSeed(m.state.mapSeed, idx));
+      const rng = mulberry32(uniqueSeed(m.lootSeed, idx));
       // v4 zoning: demo uniques only in T3/T4 containers, like the live pool (draws unchanged).
       const uniquesHere = spot.tier >= CONTAINER.DEMO_UNIQUE_MIN_TIER;
       for (let i = 0; i < table.rolls; i++) {
@@ -231,7 +253,7 @@ export class ContainerSystem {
       out.push(...(this.pool.get(idx) ?? []));
       this.pool.delete(idx);
     }
-    for (const f of rollContainerFungibles(m.state.mapSeed, idx, spot)) {
+    for (const f of rollContainerFungibles(m.lootSeed, idx, spot)) {
       out.push(makeItem(f.def, { qty: f.qty, rarity: f.rarity }));
     }
     return out;
@@ -336,8 +358,9 @@ export class ContainerSystem {
 
   /**
    * Open the target with loot key `key` (c<idx> / k<corpseId>) if it is openable from where the
-   * player stands (same range / line-of-sight / not-emptied rules as nearestOpenable). Bots use
-   * this instead of the generic F, which would open whatever is nearest. Returns true if opened.
+   * player stands (same range / line-of-sight / not-emptied rules as nearestOpenable). Scripted
+   * test / bench humans use this instead of the generic F, which would open whatever is nearest.
+   * Returns true if opened.
    */
   openKey(rt: PlayerRuntime, key: string): boolean {
     const m = this.m;
@@ -375,7 +398,8 @@ export class ContainerSystem {
 
   private startSession(rt: PlayerRuntime, t: SearchTarget): void {
     const m = this.m;
-    if (!rt.pub.alive) return;
+    // NPCs never open containers or search bodies (NPC MODEL v5).
+    if (!rt.pub.alive || rt.isNpc) return;
     // F again on the target being searched is a no-op (the panel is already open).
     if (rt.search?.key === t.key) return;
     closeSearch(m, rt, "switch");
@@ -406,7 +430,7 @@ export class ContainerSystem {
     const t = this.targets.get(key);
     if (!t) return;
     t.searchers.delete(rt);
-    if (t.ready.delete(rt) && !rt.isBot) this.m.emit({ type: "view", to: rt.rosterIndex, op: "remove", key });
+    if (t.ready.delete(rt) && !rt.isNpc) this.m.emit({ type: "view", to: rt.rosterIndex, op: "remove", key });
     // Nobody past the delay any more: pause now (an inactive target is not stepped).
     if (t.ready.size === 0 && t.loot.nextRevealAt !== 0) t.loot.nextRevealAt = 0;
     if (t.searchers.size === 0) this.active.delete(t);
@@ -425,7 +449,7 @@ export class ContainerSystem {
         }
         if (!t.ready.has(rt) && m.clock >= rt.search!.readyAt) {
           t.ready.add(rt);
-          if (!rt.isBot) m.emit({ type: "view", to: rt.rosterIndex, op: "add", key: t.key });
+          if (!rt.isNpc) m.emit({ type: "view", to: rt.rosterIndex, op: "add", key: t.key });
         }
         if (m.clock >= rt.nextSearchSoundAt) {
           emitSound(m, rt, SoundKind.search, p.x, p.y);
@@ -488,18 +512,18 @@ export class ContainerSystem {
 
   /**
    * Uniques still on the map inside containers and corpses (MatchEndReport.leftOnMap): unopened
-   * live pool allocations (containers, and bosses that did not spawn) plus the remaining contents
+   * live pool allocations (containers, bosses and carriers that did not spawn) plus the remaining contents
    * of every target. Broken items never sit in
    * a corpse (they were reported lost at death).
    */
   leftInside(): ItemLike[] {
-    const out = [...this.pool.values(), ...this.bossPool.values(), this.legacyBossPool].flat();
+    const out = [...this.pool.values(), ...this.bossPool.values(), ...this.carrierPool.values(), this.legacyBossPool].flat();
     for (const t of this.targets.values()) for (const it of this.remaining(t)) if (isTrackedUnique(it)) out.push(it);
     return out;
   }
 }
 
-// ---------------------------------------------------------------- session API (match / room / bots)
+// ---------------------------------------------------------------- session API (match / room / scripted humans)
 
 /** Per-tick reveal loop of search sessions. Called by Match.step after inputs. */
 export function stepSearches(m: Match): void {
@@ -640,15 +664,15 @@ function afterTake(m: Match, rt: PlayerRuntime, t: SearchTarget): void {
 
 // ---------------------------------------------------------------- room entry points
 
-/** A living, acting player of a running match (the room's sessionId), else undefined. */
+/** A living, acting human of a running match (the room's sessionId), else undefined. NPCs never loot. */
 function actor(m: Match, sessionId: string): PlayerRuntime | undefined {
   if (m.ended) return undefined;
   const rt = m.runtime(sessionId);
-  return rt?.pub.alive ? rt : undefined;
+  return rt?.pub.alive && !rt.isNpc ? rt : undefined;
 }
 
 function invErr(m: Match, rt: PlayerRuntime, code: InvErrCode, key?: string, taken?: number): InvErrCode {
-  if (!rt.isBot) {
+  if (!rt.isNpc) {
     const msg: { code: InvErrCode; key?: string; taken?: number } = { code };
     if (key !== undefined) msg.key = key;
     if (taken !== undefined) msg.taken = taken;
@@ -675,7 +699,7 @@ export function invTakeAllOp(m: Match, sessionId: string): InvErrCode | null {
   return r.code ? invErr(m, rt, r.code, undefined, r.taken) : null;
 }
 
-/** Items of a corpse / container slot map as plain copies (tests, bots). */
+/** Items of a corpse / container slot map as plain copies (tests, scripted humans). */
 export function lootItems(t: SearchTarget): Array<{ key: string; item: ItemLike }> {
   return [...t.loot.slots.entries()]
     .sort(([a], [b]) => Number(a) - Number(b))

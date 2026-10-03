@@ -12,6 +12,7 @@ export * from "./occluders.js";
 export * from "./sound.js";
 export * from "./environment.js";
 export * from "./economy.js";
+export * from "./npc.js";
 export * from "./schema.js";
 export * from "./protocol.js";
 export * from "./types.js";

@@ -4,7 +4,9 @@
  * the reachability validation that makes the generator's output trustworthy.
  */
 
+import { WORLD } from "../constants.js";
 import type { Rect } from "../geometry.js";
+import { MARAUDER, NPC, NPC_CAMPS, npcClassOfTier } from "../npc.js";
 import type { Rng } from "../rng.js";
 import type { GenCtx } from "./context.js";
 import { floodWalk, getCollisionIndex, getWalkGrid, nearestWalkCell, reachedNear, walkCellOf } from "./query.js";
@@ -12,6 +14,8 @@ import { BOSS_BUILDING_PREFS, BOSS_CHANCE, BOSS_GUARD_COUNT, EXTRACT_RADIUS, STE
 import { ROAD_MASK } from "./terrain.js";
 import {
   TERRAIN,
+  TERRAIN_INDOOR,
+  TERRAIN_KIND_MASK,
   type BossKind,
   type Building,
   type BuildingArch,
@@ -19,8 +23,10 @@ import {
   type LootTier,
   type MapData,
   type MapSide,
+  type NpcPost,
+  type Zone,
 } from "./types.js";
-import { chance, dist2, grow, inRect, pickW, ri } from "./util.js";
+import { chance, dist2, grow, inRect, pickW, ri, shuffle } from "./util.js";
 
 // ───────────────────────── extracts and spawns
 
@@ -257,6 +263,210 @@ export function placeBosses(ctx: GenCtx): void {
   }
 }
 
+// ───────────────────────── marauder posts (NPC MODEL v5)
+
+/** Wild stretches road camps sit on (highway W/E of the zones, N–S road, ford trail, radar spur, rail). */
+const ROAD_CAMP_ROADS = ["highway", "ns", "ford", "radar", "rail"] as const;
+/** Road camps keep this far from the wild hunter cabins (the rat's reward stays unguarded). */
+const CABIN_CLEAR_PX = 800;
+
+/** Squared distance from a point to a rect (0 inside). */
+function rectDist2(r: Rect, x: number, y: number): number {
+  const dx = x < r.x ? r.x - x : x > r.x + r.w ? x - (r.x + r.w) : 0;
+  const dy = y < r.y ? r.y - y : y > r.y + r.h ? y - (r.y + r.h) : 0;
+  return dx * dx + dy * dy;
+}
+
+/** Points every `step` px along a flat polyline, with the unit direction of their segment. */
+function polySamples(pts: readonly number[], step: number): Array<{ x: number; y: number; nx: number; ny: number }> {
+  const out: Array<{ x: number; y: number; nx: number; ny: number }> = [];
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    const x0 = pts[i]!, y0 = pts[i + 1]!, dx = pts[i + 2]! - x0, dy = pts[i + 3]! - y0;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len === 0) continue;
+    const n = Math.max(1, Math.ceil(len / step));
+    for (let s = 0; s < n; s++) out.push({ x: Math.round(x0 + (dx * s) / n), y: Math.round(y0 + (dy * s) / n), nx: dx / len, ny: dy / len });
+  }
+  return out;
+}
+
+/** NPC post clearances at map scale `k` (block / 1024): spawns, extracts, boss spots. */
+function npcClearances(k: number) {
+  const sc = (v: number) => Math.round(v * k);
+  return {
+    spawn: sc(NPC.SPAWN_CLEAR_PX), extract: sc(NPC.EXTRACT_CLEAR_PX), boss: sc(NPC.BOSS_CLEAR_PX),
+    sep: sc(NPC.POST_MIN_SEP_PX), campSep: sc(NPC.ROAD_CAMP_SEP_PX), zone: sc(NPC.ROAD_CAMP_ZONE_CLEAR_PX), cabin: sc(CABIN_CLEAR_PX),
+  };
+}
+
+/** Nobody spawns or extracts into a camp, and marauders hold the approaches, not the boss room. */
+function npcPostClear(
+  map: Pick<MapData, "spawns" | "extracts" | "bosses">, c: ReturnType<typeof npcClearances>, x: number, y: number,
+): boolean {
+  if (map.spawns.some((s) => dist2(s.x, s.y, x, y) < c.spawn * c.spawn)) return false;
+  if (map.extracts.some((e) => dist2(e.x, e.y, x, y) < c.extract * c.extract)) return false;
+  if (map.bosses.some((b) => dist2(b.x, b.y, x, y) < c.boss * c.boss)) return false;
+  return true;
+}
+
+/**
+ * Marauder posts (NPC MODEL v5 §2.2), placed last from the "npc-posts" rng stream. Adds no solids
+ * and reserves nothing, so the layout and mapHash are unchanged.
+ * - POI posts (NPC_CAMPS[zone.id].squads per zone): up to half of them on zone gates (a road entering
+ *   the zone, 256 px inside, beside the road), the rest in yards 192 px in front of exterior doors,
+ *   then random outdoor points in the zone. ≥ POST_MIN_SEP_PX apart, ≥ BOSS_CLEAR_PX from any boss
+ *   spot (guards hold the boss building, marauders the approaches), never indoors.
+ * - Road camps (NPC_CAMPS.road.squads): beside the wild stretches of ROAD_CAMP_ROADS, ≥
+ *   ROAD_CAMP_ZONE_CLEAR_PX from any zone, ≥ ROAD_CAMP_SEP_PX apart, never on forest / water / a bridge
+ *   or the ford, ≥ 800 px from hunter cabins; candidates are taken round-robin over the stretches.
+ * - Every post: ≥ SPAWN_CLEAR_PX from spawns, ≥ EXTRACT_CLEAR_PX from extracts (scaled with the block).
+ * - Every other POI post patrols 2–3 points within leash/2; road camps hold.
+ */
+export function placeNpcPosts(ctx: GenCtx): void {
+  const rng = ctx.rng("npc-posts");
+  const k = ctx.block / 1024;
+  const c = npcClearances(k);
+  const posts = ctx.npcPosts;
+
+  const groundOk = (x: number, y: number): boolean => {
+    const r: Rect = { x: x - 40, y: y - 40, w: 80, h: 80 };
+    if (!ctx.inBounds(r, 200)) return false;
+    const byte = ctx.terrain.byteAt(x, y);
+    if ((byte & TERRAIN_INDOOR) !== 0) return false;
+    const kind = byte & TERRAIN_KIND_MASK;
+    if (kind === TERRAIN.WATER || kind === TERRAIN.SHALLOW || kind === TERRAIN.BRIDGE || kind === TERRAIN.FOREST) return false;
+    if (!ctx.blocks.free(r, 8)) return false;
+    return !ctx.buildings.some((b) => inRect(grow(b.floor, 64), x, y));
+  };
+  const apart = (x: number, y: number, list: readonly NpcPost[], d: number) => list.every((p) => dist2(p.x, p.y, x, y) >= d * d);
+  const ok = (x: number, y: number) => groundOk(x, y) && npcPostClear(ctx, c, x, y) && apart(x, y, posts, c.sep);
+
+  const post = (zone: Zone | null, kind: NpcPost["kind"], x: number, y: number, camp: { size: readonly [number, number]; chance: number }): NpcPost => {
+    const p: NpcPost = {
+      id: posts.length, zone: zone ? zone.id : null, tier: zone ? zone.tier : 0, kind, x, y, patrol: [],
+      size: [camp.size[0], camp.size[1]], chance: camp.chance,
+    };
+    posts.push(p);
+    return p;
+  };
+
+  let poiIdx = 0;
+  for (const z of ctx.zones) {
+    const camp = NPC_CAMPS[z.id];
+    if (!camp || camp.squads <= 0) continue;
+    const inZone = (x: number, y: number) => inRect(grow(z.rect, -96), x, y);
+    // Gates: where a road crosses the zone border, 256 px inside, beside the road (or on it).
+    const gates: Array<[number, number]> = [];
+    for (const road of ctx.roads) {
+      const sm = polySamples(road.pts, 64);
+      const off = Math.round(road.width / 2 + 96);
+      for (let i = 1; i < sm.length; i++) {
+        const a = inRect(z.rect, sm[i - 1]!.x, sm[i - 1]!.y), b = inRect(z.rect, sm[i]!.x, sm[i]!.y);
+        if (a === b) continue;
+        const q = sm[b ? Math.min(sm.length - 1, i + 4) : Math.max(0, i - 5)]!;
+        if (!inZone(q.x, q.y)) continue;
+        for (const o of [off, -off, 0]) gates.push([Math.round(q.x - q.ny * o), Math.round(q.y + q.nx * o)]);
+      }
+    }
+    // Yards in front of exterior doors.
+    const yards: Array<[number, number]> = [];
+    for (const b of ctx.buildings) {
+      if (b.zone !== z.id) continue;
+      for (const d of b.doors) {
+        const ox = d.x === b.floor.x ? -192 : d.x + d.w === b.floor.x + b.floor.w ? 192 : 0;
+        const oy = d.y === b.floor.y ? -192 : d.y + d.h === b.floor.y + b.floor.h ? 192 : 0;
+        if (ox === 0 && oy === 0) continue;
+        yards.push([Math.round(d.x + d.w / 2 + ox), Math.round(d.y + d.h / 2 + oy)]);
+      }
+    }
+    const want = camp.squads;
+    const maxGates = Math.ceil(want / 2);
+    let n = 0, nGates = 0;
+    // Gate triples stay together (beside / other side / on the road) so one gate yields one post.
+    const gateIdx = shuffle(rng, Array.from({ length: gates.length / 3 }, (_, i) => i));
+    for (const gi of gateIdx) {
+      if (n >= want || nGates >= maxGates) break;
+      for (let j = 0; j < 3; j++) {
+        const [x, y] = gates[gi * 3 + j]!;
+        if (!inZone(x, y) || !ok(x, y)) continue;
+        post(z, "gate", x, y, camp);
+        n++;
+        nGates++;
+        break;
+      }
+    }
+    for (const [x, y] of shuffle(rng, yards)) {
+      if (n >= want) break;
+      if (!inZone(x, y) || !ok(x, y)) continue;
+      post(z, "poi", x, y, camp);
+      n++;
+    }
+    for (let t = 0; t < 600 && n < want; t++) {
+      const x = Math.round(z.rect.x + 96 + rng() * (z.rect.w - 192));
+      const y = Math.round(z.rect.y + 96 + rng() * (z.rect.h - 192));
+      if (!ok(x, y)) continue;
+      post(z, "poi", x, y, camp);
+      n++;
+    }
+  }
+
+  // Patrols: every other POI post walks 2–3 points within leash/2 of its anchor.
+  for (const p of posts) {
+    if (poiIdx++ % 2 === 0) continue;
+    const z = ctx.zone(p.zone!);
+    const L = Math.round((MARAUDER[npcClassOfTier(p.tier)].leashPx / 2) * k);
+    const want = ri(rng, 2, 3);
+    for (let t = 0; t < 40 && p.patrol.length < want; t++) {
+      const dx = ri(rng, -L, L), dy = ri(rng, -L, L);
+      const d2 = dx * dx + dy * dy;
+      if (d2 > L * L || d2 * 9 < L * L) continue;
+      const x = p.x + dx, y = p.y + dy;
+      if (!inRect(z.rect, x, y) || !groundOk(x, y) || !npcPostClear(ctx, c, x, y)) continue;
+      if (p.patrol.some((q) => dist2(q.x, q.y, x, y) < (L / 2) * (L / 2))) continue;
+      p.patrol.push({ x, y });
+    }
+  }
+
+  // Road camps on the wild stretches.
+  const road = NPC_CAMPS.road;
+  if (!road || road.squads <= 0) return;
+  // Candidates per stretch (shuffled within it), taken round-robin over the stretches so camps
+  // spread over different roads instead of clustering on the longest one.
+  const perRoad: Array<Array<[number, number]>> = [];
+  for (const id of ROAD_CAMP_ROADS) {
+    const ri0 = ctx.roadIds.indexOf(id);
+    if (ri0 < 0) continue;
+    const rd = ctx.roads[ri0]!;
+    const off = Math.round(rd.width / 2 + 160);
+    const list: Array<[number, number]> = [];
+    for (const q of polySamples(rd.pts, 256)) {
+      for (const o of [off, -off]) list.push([Math.round(q.x - q.ny * o), Math.round(q.y + q.nx * o)]);
+    }
+    perRoad.push(shuffle(rng, list));
+  }
+  const cabins = ctx.buildings.filter((b) => b.zone === "");
+  const campOk = (x: number, y: number, camps: readonly NpcPost[]): boolean => {
+    if (ctx.zones.some((z) => rectDist2(z.rect, x, y) < c.zone * c.zone)) return false;
+    if (cabins.some((b) => rectDist2(b.floor, x, y) < c.cabin * c.cabin)) return false;
+    return apart(x, y, camps, c.campSep) && ok(x, y);
+  };
+  const camps: NpcPost[] = [];
+  const cursor = perRoad.map(() => 0);
+  for (let progress = true; progress && camps.length < road.squads; ) {
+    progress = false;
+    for (let r = 0; r < perRoad.length && camps.length < road.squads; r++) {
+      const list = perRoad[r]!;
+      while (cursor[r]! < list.length) {
+        const [x, y] = list[cursor[r]!++]!;
+        if (!campOk(x, y, camps)) continue;
+        camps.push(post(null, "road", x, y, road));
+        progress = true;
+        break;
+      }
+    }
+  }
+}
+
 // ───────────────────────── ambient emitters (audio reads positions instead of hardcoding them)
 
 export function placeAmbient(ctx: GenCtx): void {
@@ -296,6 +506,8 @@ export interface ValidationReport {
   droppedLoot: number;
   nudgedLoot: number;
   droppedSpawns: number;
+  /** Marauder posts dropped (unreachable, or a nudge broke a clearance). */
+  droppedNpcPosts: number;
 }
 
 /** Interact range used for "reachable": a reached cell centre within this of the spot. */
@@ -312,7 +524,7 @@ export function validateMap(map: MapData): ValidationReport {
   void getCollisionIndex(map); // warmed by getWalkGrid; explicit for readers
   const e0 = map.extracts[0]!;
   const reached = floodWalk(g, e0.x, e0.y);
-  const report: ValidationReport = { errors: [], droppedContainers: 0, droppedLoot: 0, nudgedLoot: 0, droppedSpawns: 0 };
+  const report: ValidationReport = { errors: [], droppedContainers: 0, droppedLoot: 0, nudgedLoot: 0, droppedSpawns: 0, droppedNpcPosts: 0 };
   for (const e of map.extracts) {
     if (!reachedNear(g, reached, e.x, e.y, 48)) report.errors.push(`extract ${e.id} unreachable`);
   }
@@ -358,6 +570,22 @@ export function validateMap(map: MapData): ValidationReport {
   for (const b of map.bosses) {
     if (!nudge(b)) report.errors.push(`boss ${b.kind} unreachable`);
     b.guards = b.guards.filter(nudge);
+  }
+
+  // Marauder posts: anchors and patrol points onto the reached component; a post that cannot be
+  // reached, or that a nudge pushed into a clearance, is dropped; ids are renumbered (= index).
+  if (map.npcPosts) {
+    const c = npcClearances(map.width / WORLD.WIDTH);
+    const fine = (p: { x: number; y: number }) => nudge(p) && npcPostClear(map, c, p.x, p.y);
+    const posts = map.npcPosts.filter(fine);
+    report.droppedNpcPosts = map.npcPosts.length - posts.length;
+    posts.forEach((p, i) => {
+      p.id = i;
+      p.patrol = p.patrol.filter(fine);
+    });
+    map.npcPosts.splice(0, map.npcPosts.length, ...posts);
+    const camps = posts.filter((p) => p.kind === "road").length;
+    if (camps < NPC.ROAD_CAMPS_MIN) report.errors.push(`only ${camps} road camps (min ${NPC.ROAD_CAMPS_MIN})`);
   }
   return report;
 }

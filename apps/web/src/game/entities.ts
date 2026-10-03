@@ -36,8 +36,9 @@ import {
   type SpriteName,
   type Textures,
 } from "./assets";
-import { BOSS_COLOR, BOSS_SCALE, GUARD_COLOR, GUARD_SCALE, GUARD_TINT, hpFraction, kindOfNpc, npcNameTag, npcRole, type NpcRole } from "./boss";
-import { guardBadgeContext } from "./boss-icons";
+import { BOSS_COLOR, BOSS_SCALE, GUARD_SCALE, GUARD_TINT, MARAUDER_TINT, hpFraction, kindOfNpc, npcNameTag, npcRole, type NpcRole } from "./boss";
+import { guardBadgeContext, npcBadgeContext } from "./boss-icons";
+import { NPC_CORPSE_TINT, NPC_RING_COLOR, NPC_TAG_COLOR, type NpcRoleName } from "./npc-labels";
 import { SnapshotBuffer } from "./prediction";
 import type { GameContext, GameSystem } from "./systems";
 
@@ -149,14 +150,14 @@ export class PlayerView {
   /** Above the head: heal / loot status; around the feet: extract ring. */
   private readonly status = new Graphics(statusContexts().heal);
   private readonly extractRing = new Graphics(statusContexts().extract);
-  /** Guard badge left of the name tag (boss NPCs, loot economy v4). */
+  /** Role badge left of the name tag: guard shield (v4) or marauder "NPC" chevron (v5). */
   private readonly badge = new Graphics(guardBadgeContext());
   readonly buffer = new SnapshotBuffer();
 
   private weaponId = "";
   private barsKey = "";
   private colorKey = "";
-  /** Boss / guard presentation (Player.role); null = a player or a regular bot. */
+  /** NPC presentation (Player.role: boss / guard / marauder); null = a human player. */
   private role: NpcRole = null;
   private roleSet = false;
   private roleNick = "";
@@ -239,23 +240,25 @@ export class PlayerView {
     const key = `${index}|${this.role ?? ""}`;
     if (key === this.colorKey) return;
     this.colorKey = key;
-    const c = this.role === "boss" ? BOSS_COLOR : this.role === "guard" ? GUARD_COLOR : playerColor(index);
+    // NPCs take the fixed NPC palette, never a player colour index.
+    const c = this.role ? NPC_RING_COLOR[this.role] : playerColor(index);
     const r = PLAYER.RADIUS * (this.role === "boss" ? 1.25 : 1) + 3;
     this.ring.clear();
     this.ring.circle(0, 0, r).fill({ color: c, alpha: this.role === "boss" ? 0.22 : 0.28 });
     this.ring.circle(0, 0, r).stroke({ width: this.role === "boss" ? 5 : 4, color: c, alpha: 0.95 });
-    this.name.style.fill = this.isSelf ? 0xffffff : c;
+    this.name.style.fill = this.isSelf ? 0xffffff : this.role ? NPC_TAG_COLOR[this.role] : c;
   }
 
   setNickname(nick: string) {
-    // Bosses and guards show their role tag (setRole) instead of the raw nickname.
+    // NPCs show their role tag (setRole) instead of the raw nickname.
     if (this.role) return;
     if (this.name.text !== nick) this.name.text = nick;
   }
 
   /**
    * Player.role (NPC_ROLE): a boss gets the boss sprite (bigger, red ring, "FOREMAN" tag, wide HP
-   * bar), a guard a khaki tint, an amber ring and a badge. `bosses` (map.bosses) resolves the kind
+   * bar), a guard a khaki tint, an amber ring and a shield badge, a marauder an olive tint, a khaki
+   * ring, the "Marauder" tag and the NPC chevron badge. `bosses` (map.bosses) resolves the kind
    * when the nickname does not name it. Cheap when nothing changed; retries until boss.png loaded.
    */
   setRole(role: number, nickname: string, bosses?: readonly BossSpot[], x = 0, y = 0) {
@@ -272,7 +275,8 @@ export class PlayerView {
     this.scaleK = r === "boss" ? BOSS_SCALE : r === "guard" ? GUARD_SCALE : 1;
     this.sprite.texture = r === "boss" && ready ? bossTex! : this.tex.player;
     // Until boss.png decoded, a red tint keeps the boss readable.
-    this.sprite.tint = r === "guard" ? GUARD_TINT : r === "boss" && this.sprite.texture === this.tex.player ? 0xff8a80 : 0xffffff;
+    this.sprite.tint =
+      r === "guard" ? GUARD_TINT : r === "marauder" ? MARAUDER_TINT : r === "boss" && this.sprite.texture === this.tex.player ? 0xff8a80 : 0xffffff;
     this.sprite.width = PLAYER_SPRITE_SIZE * this.scaleK;
     this.sprite.height = PLAYER_SPRITE_SIZE * this.scaleK;
     // The boss sprite carries its own pack.
@@ -283,21 +287,25 @@ export class PlayerView {
     this.weaponId = "";
     this.setWeapon(id);
 
-    const kind = r ? kindOfNpc({ nickname, x, y }, bosses ?? []) : null;
+    const kind = r === "boss" || r === "guard" ? kindOfNpc({ nickname, x, y }, bosses ?? []) : null;
     this.name.text = npcNameTag(r, kind, nickname);
     this.name.style.fontSize = r === "boss" ? 16 : 13;
     this.name.style.letterSpacing = r === "boss" ? 2 : 0;
     const head = -PLAYER.RADIUS * (r === "boss" ? 1.35 : 1);
-    this.name.position.set(r === "guard" ? 8 : 0, head - 16);
-    this.badge.visible = r === "guard";
-    if (r === "guard") this.badge.position.set(8 - this.name.width / 2 - 9, head - 16 - this.name.height / 2 + 1);
+    const badged = r === "guard" || r === "marauder";
+    this.name.position.set(badged ? 8 : 0, head - 16);
+    this.badge.visible = badged;
+    if (badged) {
+      this.badge.context = r === "guard" ? guardBadgeContext() : npcBadgeContext();
+      this.badge.position.set(8 - this.name.width / 2 - 9, head - 16 - this.name.height / 2 + 1);
+    }
     this.colorKey = "";
     this.barsKey = "";
     this.statusY = head - 44;
     this.status.position.set(0, this.statusY);
   }
 
-  /** Boss / guard role of this view (null = player or regular bot). */
+  /** NPC role of this view (null = a human player). */
   get npc(): NpcRole {
     return this.role;
   }
@@ -347,7 +355,7 @@ export class PlayerView {
     if (key === this.barsKey) return;
     this.barsKey = key;
     const boss = this.role === "boss";
-    const W = boss ? 84 : this.role === "guard" ? 52 : 44;
+    const W = boss ? 84 : this.role === "guard" ? 52 : this.role === "marauder" ? 48 : 44;
     const H = boss ? 7 : 5;
     const y = -PLAYER.RADIUS * (boss ? 1.35 : 1) - 13;
     const g = this.bars;
@@ -493,8 +501,9 @@ export class CorpseView {
   private readonly ring = new Graphics();
   private readonly sprite = new Sprite(Texture.EMPTY);
   private readonly name: Text;
-  private colorIndex = -1;
+  private colorKey = "";
   private stateKey = "";
+  private labelKey = "";
   /** Fog alpha (0..1), eased by the renderer. */
   alpha = 0;
 
@@ -510,7 +519,15 @@ export class CorpseView {
     this.root.addChild(this.ring, this.sprite, this.name);
   }
 
-  sync(c: { x: number; y: number; label: string; color: number; rot: number; opened: boolean; empty: boolean }) {
+  /**
+   * `npc` (NPC MODEL v5): the body of an NPC — khaki-olive ground ring and tint instead of a player
+   * colour, and its role name ("Marauder") as the label; `npcName` is that display name.
+   */
+  sync(
+    c: { x: number; y: number; label: string; color: number; rot: number; opened: boolean; empty: boolean },
+    npc: NpcRoleName | null = null,
+    npcName = "",
+  ) {
     this.root.position.set(c.x, c.y);
     if (this.sprite.texture === Texture.EMPTY) {
       const t = this.icons.get("corpse");
@@ -521,17 +538,32 @@ export class CorpseView {
     }
     // The sprite's head points up (−y): turn it to face the death aim.
     this.sprite.rotation = c.rot + Math.PI / 2;
-    if (c.color !== this.colorIndex) {
-      this.colorIndex = c.color;
+    const colorKey = npc ? `npc:${npc}` : String(c.color);
+    if (colorKey !== this.colorKey) {
+      this.colorKey = colorKey;
       this.ring.clear();
-      this.ring.ellipse(0, 0, 34, 26).fill({ color: playerColor(c.color), alpha: 0.18 });
+      if (npc) {
+        // Dashed-looking double ring in the role colour: an NPC body, not a raider's.
+        this.ring.ellipse(0, 0, 34, 26).fill({ color: NPC_CORPSE_TINT, alpha: 0.2 });
+        this.ring.ellipse(0, 0, 34, 26).stroke({ width: 2, color: NPC_RING_COLOR[npc], alpha: 0.55 });
+      } else {
+        this.ring.ellipse(0, 0, 34, 26).fill({ color: playerColor(c.color), alpha: 0.18 });
+      }
     }
-    if (this.name.text !== c.label) this.name.text = c.label;
-    const key = `${c.opened}|${c.empty}`;
+    const label = npc ? npcName || c.label : c.label;
+    const labelKey = `${npc ?? ""}|${label}`;
+    if (labelKey !== this.labelKey) {
+      this.labelKey = labelKey;
+      this.name.text = label;
+      this.name.style.fill = npc ? NPC_TAG_COLOR[npc] : 0xd0d0d0;
+    }
+    const key = `${c.opened}|${c.empty}|${npc ?? ""}`;
     if (key !== this.stateKey) {
       this.stateKey = key;
-      // Searched bodies read "done" at a glance; emptied ones fade into the ground.
-      this.sprite.tint = c.empty ? 0x5a5a5a : c.opened ? 0xb0b0b0 : 0xffffff;
+      // Searched bodies read "done" at a glance; emptied ones fade into the ground. NPC bodies keep
+      // their olive tint so they never pass for a raider's.
+      const base = npc ? NPC_CORPSE_TINT : 0xffffff;
+      this.sprite.tint = c.empty ? 0x5a5a5a : c.opened ? (npc ? 0x7d7a64 : 0xb0b0b0) : base;
       this.name.alpha = c.empty ? 0.45 : 0.85;
     }
   }

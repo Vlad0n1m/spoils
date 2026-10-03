@@ -9,6 +9,7 @@
 
 import type { Room } from "colyseus.js";
 import type { HealKind, MapData, WeaponId } from "@extract/shared";
+import type { KillTally } from "./npc-labels";
 
 export interface HudSlot {
   weapon: WeaponId | "";
@@ -70,6 +71,12 @@ export interface KillFeedEntry {
   killer: string;
   victim: string;
   weapon: WeaponId | "";
+  /**
+   * NPC_ROLE of the killer / victim (0 = a human; KillMsg.killerRole / victimRole, NPC MODEL v5).
+   * NPC names render in their role colour with the NPC badge.
+   */
+  killerRole?: number;
+  victimRole?: number;
   /** Match clock when it happened. */
   atMs: number;
 }
@@ -92,12 +99,12 @@ export interface HudSnapshot {
   extractOpenAtMs: number;
   self: HudSelf | null;
   /**
-   * Players still on the map (alive and not extracted), humans and bots — from
-   * BattleState.aliveCount (state.players only holds visible players in v2). After the raid
-   * ends this holds the last count taken while it was running.
+   * Human players still on the map (alive and not extracted) — from BattleState.aliveCount, which
+   * the server counts over humans only (NPC MODEL v5: NPCs are never players and never counted).
+   * After the raid ends this holds the last count taken while it was running.
    */
   aliveCount: number;
-  /** Roster size (humans + bots) of this raid; does not shrink when players die or leave. */
+  /** Human roster size of this raid; does not shrink when players die or leave. */
   totalPlayers: number;
   /** Direction to the nearest ALLOWED extraction point that is open (or will open). */
   nearestExtract: { dx: number; dy: number; dist: number; open: boolean } | null;
@@ -106,6 +113,8 @@ export interface HudSnapshot {
   /** Context hint for the interact key, e.g. "F — search Supply crate", "F — pick up Rifle". */
   interactHint: string | null;
   killFeed: KillFeedEntry[];
+  /** The local player's kills this raid split by victim kind (players / NPCs / bosses). */
+  killTally?: KillTally;
   /** Round-trip latency in ms, null until measured. */
   pingMs: number | null;
 }

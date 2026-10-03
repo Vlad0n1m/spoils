@@ -29,9 +29,14 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
     setClaiming(true);
     setNote(null);
     try {
-      await api("/api/stash/starter", { method: "POST" });
+      const r = await api<{ bound?: boolean }>("/api/stash/starter", { method: "POST" });
       await res.reload();
-      setNote({ ok: true, text: "Starter kit added to your stash. Equip it in the Loadout tab." });
+      setNote({
+        ok: true,
+        text: r?.bound
+          ? "Starter kit added to your stash (bound: yours to use, not to sell). Equip it in the Loadout tab."
+          : "Starter kit added to your stash. Equip it in the Loadout tab.",
+      });
     } catch (e) {
       setNote({ ok: false, text: e instanceof Error ? e.message : "Claim failed" });
     } finally {
@@ -86,8 +91,9 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
               <div className="min-w-0 flex-1">
                 <h2 className="text-2xl tracking-wide">Claim your starter kit</h2>
                 <p className="font-body text-sm">
-                  A weapon, armor, a backpack, ammo, meds and {fmtCr(GIVEAWAY_KIT.cr)}. Kit items unlock for the market after
-                  you extract with them.
+                  A weapon, armor, a backpack, ammo, meds and {fmtCr(GIVEAWAY_KIT.cr)}. Accounts with a deposit (while the
+                  giveaway lasts) get tradable items that unlock for the market after you extract with them; otherwise the
+                  kit is bound: yours to use, not to sell.
                 </p>
               </div>
               <button type="button" onClick={claim} disabled={claiming} className="toon-btn-ghost min-h-12 px-6 text-lg">
@@ -131,7 +137,9 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
           credits={stash.credits}
           stacks={stash.stacks}
           autosellMult={stash.autosellMult}
+          level={stash.level}
           onBought={(r) => res.mutate((s) => ({ ...s, credits: r.credits, stacks: { ...s.stacks, [r.def]: r.qty } }))}
+          onBoundBought={() => void res.reload()}
         />
       </div>
 

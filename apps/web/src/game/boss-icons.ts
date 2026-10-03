@@ -4,7 +4,7 @@
  */
 
 import { GraphicsContext } from "pixi.js";
-import { BOSS_COLOR, GUARD_COLOR } from "./boss";
+import { BOSS_COLOR, GUARD_COLOR, MARAUDER_COLOR } from "./boss";
 
 const DARK = 0x16090a;
 const skulls = new Map<string, GraphicsContext>();
@@ -46,4 +46,23 @@ export function guardBadgeContext(): GraphicsContext {
     .poly([-3.5, -3, 0, 0, 3.5, -3, 3.5, -0.5, 0, 2.5, -3.5, -0.5])
     .fill({ color: 0x2a1a08 });
   return badge;
+}
+
+let npcBadge: GraphicsContext | null = null;
+
+/**
+ * Marauder "NPC" badge (NPC MODEL v5): a small khaki tag with a double chevron, left of the name
+ * tag and in kill-feed rows — marks a non-player at a glance without looking like a rank.
+ */
+export function npcBadgeContext(): GraphicsContext {
+  if (npcBadge && !npcBadge.destroyed) return npcBadge;
+  npcBadge = new GraphicsContext()
+    .roundRect(-7, -6, 14, 12, 3)
+    .fill({ color: MARAUDER_COLOR })
+    .stroke({ width: 1.5, color: 0x111111 })
+    .poly([-4, -3.2, 0, -0.6, 4, -3.2, 4, -1.2, 0, 1.4, -4, -1.2])
+    .fill({ color: 0x23210f })
+    .poly([-4, 0.6, 0, 3.2, 4, 0.6, 4, 2.6, 0, 5.2, -4, 2.6])
+    .fill({ color: 0x23210f });
+  return npcBadge;
 }

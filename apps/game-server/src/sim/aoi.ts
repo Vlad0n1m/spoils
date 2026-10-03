@@ -130,7 +130,7 @@ export class AoiSystem {
     // Knowers first (vision.update already ran this tick), so every add below respects them.
     for (const r of this.restricted.values()) {
       for (const v of m.allRuntimes()) {
-        if (v.isBot || r.knowers.has(v.rosterIndex) || offMap(m, v.rosterIndex)) continue;
+        if (v.isNpc || r.knowers.has(v.rosterIndex) || offMap(m, v.rosterIndex)) continue;
         for (const a of r.actors) {
           if (a === v || m.vision.sees(v.rosterIndex, a.rosterIndex)) {
             r.knowers.add(v.rosterIndex);
@@ -141,7 +141,7 @@ export class AoiSystem {
     }
 
     for (const rt of m.allRuntimes()) {
-      if (rt.isBot) continue;
+      if (rt.isNpc) continue;
       const i = rt.rosterIndex;
       // Left the map (dead / extracted) before this tick: the ring freezes (no spectating). The
       // tick of the death itself still runs, so the player's own corpse reaches their view.

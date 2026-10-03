@@ -15,7 +15,7 @@ import { damagePlayer } from "./combat.js";
 import { envNow } from "./environment.js";
 import type { Match } from "./match.js";
 import { emitSound, heardBy, pendingSounds } from "./sound.js";
-import { giveWeapon, humans, ids, pl, rtOf, run, testMap, testMatch } from "./test-utils.js";
+import { giveWeapon, humans, ids, npcOpts, pl, rtOf, run, testMap, testMatch, testPost } from "./test-utils.js";
 import type { MatchEvent } from "./types.js";
 
 /** Wall x 1300..1324, y 600..1400 (occlusion); envSeed 2 = midday clear (hear 1.0). */
@@ -201,8 +201,8 @@ test("sound: dedupe identical buckets; cap MAX_PER_TICK keeps the highest priori
   assert.ok(SOUND_PRIORITY[SoundKind.death] > SOUND_PRIORITY[SoundKind.step]);
 });
 
-test("sound: dead or disconnected listeners hear nothing; bots get heardBy; queued sounds go out next tick", () => {
-  const m = testMatch(1, { envSeed: 2, roster: [...humans(3), { userId: null, nickname: "Bot", isBot: true }], botBrains: false });
+test("sound: dead or disconnected listeners hear nothing; NPCs get heardBy; queued sounds go out next tick", () => {
+  const m = testMatch(1, { envSeed: 2, roster: humans(3), ...npcOpts([testPost(0, 1000, 1700)]), npcBrains: false });
   const A = listen(m, 0), B = listen(m, 1);
   const cId = ids(m)[2]!; // never connects
   const botId = ids(m)[3]!;
@@ -218,7 +218,7 @@ test("sound: dead or disconnected listeners hear nothing; bots get heardBy; queu
   const evs = m.drainEvents();
   assert.ok(sndOf(evs, A.r) && sndOf(evs, B.r));
   assert.equal(sndOf(evs, rtOf(m, cId).rosterIndex), undefined, "nobody to send to");
-  assert.equal(heardBy(m, rtOf(m, botId).rosterIndex)[0]?.kind, SoundKind.extract, "the bot heard it");
+  assert.equal(heardBy(m, rtOf(m, botId).rosterIndex)[0]?.kind, SoundKind.extract, "the NPC heard it");
   assert.equal(pendingSounds(m).length, 0);
 
   damagePlayer(m, rtOf(m, B.sid), 1000, null, "", 1300, 2000);

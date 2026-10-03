@@ -249,6 +249,8 @@ function screenSlice(s: HudSnapshot) {
   };
 }
 
+const killTallySlice = (s: HudSnapshot) => s.killTally ?? null;
+
 export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<{ dispose: () => void } | null>(null);
@@ -293,6 +295,8 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
   }, []);
 
   const { hasSelf, selfOut, selfExit, phase } = useHud(hudStore, screenSlice, shallowEqual);
+  // The renderer keeps the same tally object until a kill lands, so identity is enough here.
+  const killTally = useHud(hudStore, killTallySlice);
   // The extraction / death cinematic plays on the canvas first; the overlay's dim and card would
   // hide it. Once the hold ran out it stays (one battle per mount).
   const cineExit = selfExit ?? cineExitOf(null, outcome?.exit);
@@ -349,6 +353,7 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
         raidEnded={phase === "ended" || settlement !== null}
         disconnected={disconnected}
         kick={kick}
+        killTally={killTally}
         onContinue={onLeave}
       />
     </div>

@@ -65,6 +65,11 @@ export interface RaidStartRequest {
   mode: RaidMode;
   mapId: MapId;
   matchSeed: number;
+  /**
+   * Server-secret seed of the pool allocation (the game server's per-match lootSeed, never sent to a
+   * client). Absent (older servers): the web falls back to matchSeed, which clients know.
+   */
+  allocSeed?: number;
   /** loadoutId "" = free kit (no pool loot for that player). */
   players: Array<{ userId: string; loadoutId: string }>;
   /**
@@ -78,11 +83,18 @@ export interface RaidStartRequest {
    */
   bossSlots: number;
   /**
-   * v4: bosses that spawned this match (rollBossSpawns(matchSeed, map.bosses), raidBossSlots), each
+   * v4: bosses that spawned this match (rollBossSpawns(lootSeed, map.bosses), raidBossSlots), each
    * with its pool slots (minimum uniqueTierScore per slot). Their items come back under
    * containerLoot[bossLootKey(kind)].
    */
   bosses?: RaidBossSlots[];
+  /**
+   * NPC MODEL v5 §3.3: spawned T3/T4 marauders that may carry ONE pool unique each (raidNpcCarriers
+   * over rollNpcSpawns). planAllocation weighs them npcCarrierWeight(tier) next to the containers;
+   * their items come back under containerLoot[key] (key = npcCarrierKey(postId, member)). Never
+   * minted: same risk-tied release, a third destination.
+   */
+  carriers?: Array<{ key: string; tier: 3 | 4 }>;
   /**
    * Game server process that runs the match (GameServerBoot.instanceId). On its next boot the
    * server calls POST /api/raids/void-orphans and raids of an older instance are voided at once.
@@ -111,8 +123,10 @@ export interface RaidStartResponse {
   rejected: Array<{ userId: string; reason: "not_locked" | "wrong_user" | "expired" }>;
   /**
    * Lost-pool uniques allocated to containers, keyed by container index (decimal string in JSON);
-   * v4 key bossLootKey(kind) ("boss:<kind>") = that boss's bag (pool slots, never break); legacy
-   * key "boss" = the old boss stash share. Fungibles are rolled by the server itself.
+   * v4 key bossLootKey(kind) ("boss:<kind>") = that boss's bag (pool slots, never break); v5 key
+   * npcCarrierKey(postId, member) ("npc:<postId>.<member>") = one stowed unique on a marauder (never
+   * breaks; unlooted → leftOnMap); legacy key "boss" = the old boss stash share. Fungibles are
+   * rolled by the server itself.
    */
   containerLoot: Record<string, SettledItem[]>;
   /** Current autosell multiplier (shown in the outcome receipt). */
@@ -126,6 +140,10 @@ export interface RaidStats {
   containersSearched: number;
   corpsesSearched: number;
   bossKills: number;
+  /** NPC MODEL v5: marauders + guards killed (bosses count in bossKills). Optional for older servers. */
+  npcKills?: number;
+  /** The guards among npcKills (XP_GUARD instead of XP_NPC). Optional for older servers (then 0). */
+  guardKills?: number;
 }
 
 /** Sent once per human as soon as they leave the map. */
@@ -147,9 +165,10 @@ export interface PlayerExitReport {
 }
 
 export interface MatchEndParticipant {
-  /** null for bots. */
+  /** null only in reports of pre-v5 servers (bots). */
   userId: string | null;
   nickname: string;
+  /** v5: participants are humans only, so always false (kept for older reports and the DB column). */
   isBot: boolean;
   exitType: ExitType;
   kills: number;
@@ -167,13 +186,28 @@ export interface MatchEndReport {
   /** Demo mode only: uniques the server rolled itself (must be empty in live mode). */
   minted: SettledItem[];
   /**
-   * Uniques that broke on a BOT's death (bots get no exit report): → lost pool with the death
-   * wear, like PlayerExitReport.lost of a human. Bot extracts / timeouts go to leftOnMap,
-   * worn-out armor a bot wore to `botDestroyed`.
+   * NPC MODEL v5: NPCs that spawned and how many of them humans killed. Optional for older servers.
+   */
+  npcSummary?: NpcSummary;
+  /**
+   * @deprecated v5 never produces it (NPCs never break items: noBreak). Still parsed for one release
+   * (in-flight / orphan reports of older servers): uniques that broke on a BOT's death → lost pool.
    */
   botLost?: SettledItem[];
-  /** Uniques destroyed on a bot (durability hit 0): → destroyed. */
+  /** @deprecated v5 never produces it (NPCs never wear pool armor). Uniques destroyed on a bot → destroyed. */
   botDestroyed?: SettledItem[];
+}
+
+/** Counts per NPC kind (MatchEndReport.npcSummary). */
+export interface NpcCounts {
+  boss: number;
+  guard: number;
+  marauder: number;
+}
+
+export interface NpcSummary {
+  spawned: NpcCounts;
+  killedByHumans: NpcCounts;
 }
 
 /**
@@ -229,10 +263,12 @@ export interface OutcomeMsg {
   guest: boolean;
 }
 
-/** S2C.SETTLED, broadcast at the end: scoreboard only (no user ids, no items). */
+/** S2C.SETTLED, broadcast at the end: scoreboard only (no user ids, no items). v5: humans only. */
 export interface MatchSummaryMsg {
   matchId: string;
   participants: Array<{ nickname: string; isBot: boolean; exitType: ExitType; kills: number }>;
+  /** v5: NPC totals for the outcome screen ("NPCs killed M (boss K)"). Optional for older servers. */
+  npcSummary?: NpcSummary;
 }
 
 /** S2C.INV_ERR, to one client. */

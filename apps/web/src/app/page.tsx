@@ -132,7 +132,7 @@ function Hero() {
           >
             <span className="optical-center">Play raid</span>
           </Link>
-          <p className="font-body text-sm font-semibold text-white/75">Free to play · no wallet needed · bots fill the lobby</p>
+          <p className="font-body text-sm font-semibold text-white/75">Free to play · no wallet needed · real players only</p>
         </Reveal>
       </div>
     </section>
