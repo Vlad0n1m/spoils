@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Luckiest_Guy, Nunito, Press_Start_2P } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
+import { BRAND } from "@/lib/brand";
 
 const luckiestGuy = Luckiest_Guy({
   weight: "400",
@@ -28,7 +29,7 @@ const pixel = Press_Start_2P({
 });
 
 export const metadata: Metadata = {
-  title: "EXTRACT",
+  title: BRAND.name,
   description: "Top-down extraction shooter — drop in, loot up, get out alive",
 };
 

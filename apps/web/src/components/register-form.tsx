@@ -9,6 +9,7 @@ import { authErrorMessage } from "@/lib/auth-error-messages";
 import { safeAuthRedirect } from "@/lib/safe-auth-redirect";
 import { Reveal } from "@/components/reveal";
 import { authInputClass, authLabelClass } from "@/components/auth-field-styles";
+import { BRAND } from "@/lib/brand";
 
 const glass =
   "rounded-[2rem] border border-white/10 bg-zooa-dark/80 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_20px_40px_-15px_rgba(0,0,0,0.35)] backdrop-blur md:p-8";
@@ -86,7 +87,7 @@ export function RegisterForm() {
     <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-6 md:py-14">
       <div className="grid grid-cols-1 items-start gap-10 lg:grid-cols-12 lg:gap-12">
         <Reveal as="div" delay={0} className="lg:col-span-5">
-          <p className="font-display text-xs uppercase tracking-[0.2em] text-zooa-lime/80">EXTRACT</p>
+          <p className="font-display text-xs uppercase tracking-[0.2em] text-zooa-lime/80">{BRAND.name}</p>
           <h1 className="mt-3 font-display text-3xl tracking-wide text-[#c4f07a] md:text-4xl">Create account</h1>
           <p className="font-body mt-4 max-w-[52ch] text-base leading-relaxed text-white/65">
             Pick a nickname, secure password, and a real email. Your raider name is yours across raids.

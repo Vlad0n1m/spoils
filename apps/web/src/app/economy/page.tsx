@@ -5,12 +5,13 @@ import { getEconomyStats } from "@/lib/lobby/economy-stats";
 import type { EconomyStatsDto } from "@/lib/lobby/api-types";
 import { fmtCr } from "@/lib/items-ui";
 import { formatMinor } from "@/lib/market/config";
+import { BRAND } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Economy — EXTRACT",
-  description: "Live numbers of the EXTRACT economy: credits in and out, items in circulation, the lost pool, treasury and market trades.",
+  title: `Economy — ${BRAND.name}`,
+  description: `Live numbers of the ${BRAND.name} economy: credits in and out, items in circulation, the lost pool, treasury and market trades.`,
 };
 
 /** Plain-language names of credit_ledger reasons. */

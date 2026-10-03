@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ITEM_FLAG, ITEM_IDS, dogTagCr, type ItemLike } from "@extract/shared";
+import { ITEM_FLAG, ITEM_IDS, XP_LINE_LABEL, dogTagCr, type ItemLike } from "@extract/shared";
 import {
   INV_ERR_TEXT,
   buildReceipt,
@@ -16,6 +16,7 @@ import {
   quickTarget,
   recordStore,
   slotLabel,
+  xpLineText,
 } from "./items-ui";
 
 const item = (def: string, extra: Partial<ItemLike> = {}): ItemLike => ({
@@ -123,5 +124,17 @@ describe("buildReceipt", () => {
     assert.equal(r.lines.reduce((a, l) => a + l.cr, 0), 200);
     assert.equal(r.lines.at(-1)!.name, "Adjustment");
     assert.equal(r.mult, 0.9);
+  });
+});
+
+describe("xpLineText", () => {
+  it("extract shows minutes on the map, haul the CR, counts a multiplier", () => {
+    assert.deepEqual(xpLineText({ key: "extract", qty: 12, xp: 220 }), { label: XP_LINE_LABEL.extract, detail: "12 min on the map", xp: "+220 XP" });
+    assert.deepEqual(xpLineText({ key: "haul", qty: 640, xp: 64 }), { label: XP_LINE_LABEL.haul, detail: "640 CR", xp: "+64 XP" });
+    assert.equal(xpLineText({ key: "npc", qty: 3, xp: 60 }).detail, "×3");
+    assert.equal(xpLineText({ key: "first_extract", qty: 1, xp: 300 }).detail, "");
+  });
+  it("the daily cap line is negative and has no detail", () => {
+    assert.deepEqual(xpLineText({ key: "daily_cap", qty: 1, xp: -75 }), { label: XP_LINE_LABEL.daily_cap, detail: "", xp: "−75 XP" });
   });
 });

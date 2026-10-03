@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MATCH, NPC, PERF_BUDGET } from "@extract/shared";
+import { MATCH, NPC, PERF_BUDGET, WORLD } from "@extract/shared";
 import { groundUniques } from "./inventory.js";
 import type { Match } from "./match.js";
 import { describeSoak, runSoak } from "./perf.bench.js";
@@ -69,7 +69,7 @@ test("soak: 30-minute Steppe raid, 1 touring human + every NPC — perf budget, 
 });
 
 test("perf gate shape: 24 scripted humans + 60 NPCs for 6 minutes stay inside PERF_BUDGET", () => {
-  const r = runSoak({ humans: MATCH.MAX_HUMANS, minutes: 6, seed: 7, drive: "scripted", npcFill: "max" });
+  const r = runSoak({ humans: WORLD.CAPACITY, minutes: 6, seed: 7, drive: "scripted", npcFill: "max" });
   console.log(describeSoak(r));
   console.log(`design gate (§2.6): avg ${r.stepAvg.toFixed(3)} ms (≤ 1.5), p99 ${r.stepP99.toFixed(3)} ms (≤ 6)`);
   assert.deepEqual(r.errors, [], "no exceptions");

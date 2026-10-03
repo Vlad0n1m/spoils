@@ -14,7 +14,7 @@
 //   $T $B --humans 8 --seeds 20 --tag pvp --out $O
 //   node scripts/econ/econ-sim.mjs --data $O [--scenario base|ratheavy|altfarm|lowdau|highdau|crash|queue90|all]
 //        [--days 90] [--seed 7] [--json out.json] [--csv DIR] [--pvp-source harness|design]  (default harness)
-//        [--queue-window 45] [--max-humans 24] [--min-humans 12] [--no-primary] [--no-giveaway-cap] [--no-regulator] [--k 1.0]
+//        [--queue-window 45] [--max-humans 24] [--min-humans 12] [--onmap-min 20] [--no-primary] [--no-giveaway-cap] [--no-regulator] [--k 1.0]
 //        [--no-bound-shop] [--cr-kit CR]   (bound gear shop for CR: default ON at BOUND_OFFERS prices; --cr-kit overrides the set price)
 //        [--free-kit-autosell M]   (free-kit raid junk sells at M ×; default FREE_KIT.AUTOSELL_MULT)
 //        [--comp C]   (lobby competition: junk / consumables × 1/(1+C(n−1)); default harness-calibrated)
@@ -64,7 +64,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const shared = await import(resolve(here, "../../packages/shared/dist/index.js"));
 const {
-  BOSSES, BOSS_KINDS, CONSUMABLES_CR, MARKET, POOL, GIVEAWAY, PROGRESSION, MATCH, FREE_KIT, BOUND_OFFERS,
+  BOSSES, BOSS_KINDS, CONSUMABLES_CR, MARKET, POOL, GIVEAWAY, MATCH, FREE_KIT, BOUND_OFFERS, xpForExit,
   nextAutosellMult, levelForXp, takeTreasuryTax, dogTagCr, poolReleasePlanV4, generateMap,
   rollBossSpawns, rollNpcSpawns, raidNpcCarriers, bossGroupNpcCount, npcPostsOf, npcCarrierWeight,
   poolContainerEligible, poolContainerWeight, containerGuarded, boundTraderLevel,
@@ -111,8 +111,12 @@ const PRIMARY_SHARE = Number(arg("primary-share", 0.08));
 const MARKET_LIST_P = Number(arg("list-p", 0.3));
 const MARKET_BUY_P = Number(arg("buy-p", 0.25));
 const SENS = { junk: Number(arg("junk-mult", 1)), found: Number(arg("found-mult", 1)), rate: Number(arg("rate-mult", 1)), lambda: Number(arg("lambda-mult", 1)) };
+// --onmap-min M: minutes on the map per raid for xpForExit (records have no exit time; default 20).
+const ONMAP_MS = Number(arg("onmap-min", 20)) * 60_000;
+// Legacy queue model (the shared queue constants are gone since WORLD v6 S8; their last values are the
+// defaults here). Step S9-light replaces this with the §8.2 cycle model.
 const QUEUE = {
-  WINDOW_S: Number(arg("queue-window", MATCH.QUEUE_WINDOW_MS / 1000)),
+  WINDOW_S: Number(arg("queue-window", (MATCH.QUEUE_WINDOW_MS ?? 45_000) / 1000)),
   MAX: Number(arg("max-humans", MATCH.MAX_HUMANS ?? 24)),
   MIN: Number(arg("min-humans", MATCH.MIN_HUMANS ?? 12)),
   MIN_WAIT_S: (MATCH.MIN_WAIT_MS ?? 10_000) / 1000,
@@ -615,8 +619,20 @@ function run(name) {
       for (const r of rs) {
         const p = r.p;
         const ks = r.rec.killsBy ?? {};
-        p.xp += PROGRESSION.XP_RAID + (r.out === "extract" ? PROGRESSION.XP_EXTRACT : 0) + r.tags * PROGRESSION.XP_KILL +
-          (ks.marauder ?? 0) * (PROGRESSION.XP_NPC ?? 0) + (ks.guard ?? 0) * (PROGRESSION.XP_GUARD ?? 0) + (r.rec.humanBossKills ?? 0) * PROGRESSION.XP_BOSS;
+        // WORLD v6 XP (shared xpForExit). The yield records carry no time on the map: ONMAP_MS stands in
+        // (S9-light's cycle model replaces it); no daily cap / first-extract state is tracked here.
+        p.xp += xpForExit({
+          exit: r.out === "extract" ? "extract" : "dead",
+          onMapMs: ONMAP_MS,
+          haulCr: r.out === "extract" ? Math.round(r.rec.haul.junkCr * SENS.junk * comp) : 0,
+          containers: r.rec.containers?.total ?? 0,
+          marauders: ks.marauder ?? 0,
+          guards: ks.guard ?? 0,
+          bosses: r.rec.humanBossKills ?? 0,
+          rankedPvp: r.tags,
+          grindToday: 0,
+          firstExtractToday: false,
+        }).total;
         p.lvl = levelForXp(p.xp);
         d.used += r.fights * PVP.FIGHT_CONS_CR;
         if (r.out === "extract") {

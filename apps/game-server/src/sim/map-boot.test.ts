@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   LEGACY_WORLD,
-  MATCH,
   NPC,
   SPAWN_RULES,
   WORLD,
@@ -35,7 +34,7 @@ test("map boot: the Steppe is the default, built once per process, and its hash 
   assert.equal(boot.hash, STEPPE_HASH);
   assert.equal(expectedMapHash(), mapHash(generateMap("steppe")));
   assert.equal(expectedMapHash("legacy"), null, "seed-dependent legacy map: no single hash");
-  assert.equal(MATCH.MAX_HUMANS, 24);
+  assert.equal(WORLD.CAPACITY, 24);
 
   const a = new Match({ roster: roster(1), rng: mulberry32(1), newUid: counterUid, npcBrains: false });
   const b = new Match({ roster: roster(1), rng: mulberry32(2), newUid: counterUid, npcBrains: false });
@@ -51,7 +50,7 @@ test("map boot: the Steppe is the default, built once per process, and its hash 
   assert.equal(a.planner.regions, boot.regions);
   // Creating a room builds nothing static any more.
   const t0 = performance.now();
-  const full = new Match({ roster: roster(MATCH.MAX_HUMANS), rng: mulberry32(3), newUid: counterUid });
+  const full = new Match({ roster: roster(WORLD.CAPACITY), rng: mulberry32(3), newUid: counterUid });
   assert.ok(performance.now() - t0 < 100, "room creation on a warm map is cheap (24 humans + every NPC)");
   assert.ok(full.npcs.runtimes().length > 0 && full.npcs.runtimes().length <= NPC.MAX_PER_RAID);
 });
@@ -124,8 +123,8 @@ function checkSpawns(map: MapData, label: string, maxHumans: number) {
 
 test("humans-only spawns on the Steppe: farthest-point sampling, spread over sides, ≥ HUMAN_MIN_SEP_PX for n ≤ 16", () => {
   const map = generateMap("steppe");
-  assert.ok(map.spawns.length >= MATCH.MAX_HUMANS);
-  checkSpawns(map, "steppe", MATCH.MAX_HUMANS);
+  assert.ok(map.spawns.length >= WORLD.CAPACITY);
+  checkSpawns(map, "steppe", WORLD.CAPACITY);
   // Four humans spread over the sides (cap 2 per side), each with that side's mask.
   const m = new Match({ roster: roster(4), rng: mulberry32(9), newUid: counterUid, npcBrains: false });
   const humanSides = m.allRuntimes().filter((r) => !r.isNpc).map((r) => r.self.side);

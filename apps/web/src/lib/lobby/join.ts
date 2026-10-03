@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import {
-  ROOMS,
   WORLD,
   isSlotKey,
   worldCycleAt,
@@ -23,7 +22,7 @@ import type { WorldJoinErrorBody } from "./api-types";
 import { LOADOUT_ERR_TEXT, draftFromLocked, pruneDraft, sameLoadout } from "./loadout-model";
 import type { Caller } from "./route-helpers";
 
-/** PUT /api/loadout/draft and POST /api/loadout/lock bodies. Contents are checked at lock time. */
+/** PUT /api/loadout/draft and POST /api/world/join bodies. Contents are checked at lock time. */
 export const loadoutEntrySchema = z.object({
   key: z.string().refine(isSlotKey, "bad slot key") as unknown as z.ZodType<SlotKey>,
   itemId: z.string().uuid().optional(),
@@ -33,7 +32,7 @@ export const loadoutEntrySchema = z.object({
 export const entriesSchema = z.array(loadoutEntrySchema).max(MAX_LOADOUT_ENTRIES);
 
 export type JoinResult =
-  | { ok: true; ticket: JoinTicket; roomName: string; loadoutId: string; entries: LoadoutEntry[]; pruned: boolean }
+  | { ok: true; ticket: JoinTicket; loadoutId: string; entries: LoadoutEntry[]; pruned: boolean }
   | { ok: false; status: number; error: string; message: string; key?: string; matchId?: string };
 
 /**
@@ -45,20 +44,19 @@ export type JoinResult =
  * longer matches the draft (the player edited it after a cancelled search) is unlocked and
  * re-locked, so the raid always carries what the Loadout tab shows.
  * `world` (WORLD v6, worldJoin) puts the shard's matchId and the freshly minted entryId into the
- * signed ticket; the legacy routes leave both "" until S8.
+ * signed ticket.
  */
 export async function lockAndIssueTicket(
   db: Db,
   c: Caller,
-  entries?: LoadoutEntry[],
-  world: { matchId: string; entryId: string } = { matchId: "", entryId: "" },
+  entries: LoadoutEntry[] | undefined,
+  world: { matchId: string; entryId: string },
 ): Promise<JoinResult> {
   if (c.kind === "anon") return { ok: false, status: 401, error: "unauthenticated", message: "Sign in first." };
   if (c.kind === "guest") {
     return {
       ok: true,
       ticket: signJoinTicket({ userId: c.userId, nickname: c.nickname, loadoutId: "", ...world }),
-      roomName: ROOMS.MATCHMAKING,
       loadoutId: "",
       entries: [],
       pruned: false,
@@ -103,7 +101,6 @@ export async function lockAndIssueTicket(
   return {
     ok: true,
     ticket: signJoinTicket({ userId: c.userId, nickname: c.nickname, loadoutId: lock.loadoutId, ...world }),
-    roomName: ROOMS.MATCHMAKING,
     loadoutId: lock.loadoutId,
     entries: lock.loadoutId ? draftFromLocked(lock.entries) : [],
     pruned,

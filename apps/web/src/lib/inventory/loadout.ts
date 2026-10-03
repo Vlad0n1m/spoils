@@ -180,7 +180,7 @@ export async function releaseLoadout(
 
 /**
  * Lazy expiry (inventory memo §4.2): loadouts locked longer than LOADOUT_LOCK_TTL_MS without a
- * raids/start go back to the stash. Called on lock, on stash reads, and by the void cron.
+ * raids/enter go back to the stash. Called on lock, on stash reads, and by the void cron.
  */
 export async function expireStaleLocks(tx: Tx, now = new Date(), userId?: string): Promise<number> {
   const cutoff = new Date(now.getTime() - LOADOUT_LOCK_TTL_MS);

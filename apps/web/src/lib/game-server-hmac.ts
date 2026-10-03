@@ -30,7 +30,7 @@ export function checkGameServerSignature(
 }
 
 /**
- * Reads and verifies a game-server → web request (raids/start|exit|end). Returns the parsed JSON,
+ * Reads and verifies a game-server → web request (raids/open|enter|exit|end, world/event). Returns the parsed JSON,
  * or a ready 401/400 Response the route returns as is.
  */
 export async function readSignedJson(req: Request): Promise<{ ok: true; json: unknown } | { ok: false; res: Response }> {

@@ -2,7 +2,7 @@
  * Pure model of the Loadout page (inventory memo "Lobby"): a draft is a LoadoutEntry[] (slot key →
  * stash unique or a stack taken from the stash). Placement reuses the shared slot engine
  * (planPlace on a Map store) and validation reuses validateLoadout, i.e. the exact code that
- * POST /api/loadout/lock runs authoritatively, so the page can never accept a draft the API
+ * POST /api/world/join runs authoritatively, so the page can never accept a draft the API
  * rejects (or the other way round). No React, no DOM: unit-tested with tsx --test.
  */
 import {

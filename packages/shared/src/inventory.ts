@@ -237,7 +237,7 @@ export interface StashUnique {
 export type LoadoutErrCode =
   | "bad_item" | "dup_slot" | "bad_slot" | "no_backpack_room" | "item_unavailable" | "bad_qty" | "not_enough";
 
-/** Shared by the loadout page (live validation) and POST /api/loadout/lock (authoritative). */
+/** Shared by the loadout page (live validation) and the loadout lock of POST /api/world/join (authoritative). */
 export function validateLoadout(
   entries: readonly LoadoutEntry[],
   uniques: ReadonlyMap<string, StashUnique>,

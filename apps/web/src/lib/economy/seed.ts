@@ -62,7 +62,7 @@ export interface SeedResult {
 
 /**
  * Demo seed (critique "Live vs demo economy mode"): a starter-kit lost pool (≈700 items, so
- * raids/start has something to release on day 1) and NPC treasury listings (seller NULL) so the
+ * raids/enter has something to release on day 1) and NPC treasury listings (seller NULL) so the
  * market and /economy are not empty. Idempotent through economy_params.seeded_at unless `force`.
  */
 export async function seedEconomy(

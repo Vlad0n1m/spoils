@@ -195,7 +195,7 @@ export interface NpcSummary {
 }
 
 /**
- * Issued by the web API (POST /api/matches/join) and verified by the game server in onAuth.
+ * Issued by the web API (POST /api/world/join) and verified by the game server in onAuth.
  * `sig` = hex HMAC-SHA256 over joinTicketPayload() with GAME_SERVER_HMAC_SECRET.
  */
 export interface JoinTicket {
