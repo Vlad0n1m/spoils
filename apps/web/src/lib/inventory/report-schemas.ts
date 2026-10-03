@@ -4,14 +4,18 @@ import {
   NPC,
   CONTAINER_KINDS,
   MAP_IDS,
+  WORLD,
   type BossKind,
   type ContainerKind,
+  type EntryRequest,
   type GameServerBoot,
   type MapId,
   type MatchEndReport,
   type PlayerExitReport,
   type RaidStartRequest,
   type SettledItem,
+  type ShardOpenRequest,
+  type WorldEventReport,
 } from "@extract/shared";
 
 /**
@@ -22,7 +26,8 @@ import {
 const uuid = z.string().uuid();
 const mapId = z.enum(MAP_IDS as unknown as [MapId, ...MapId[]]);
 const containerKind = z.enum(CONTAINER_KINDS as unknown as [ContainerKind, ...ContainerKind[]]);
-const exitType = z.enum(["extract", "dead", "timeout"]);
+const exitType = z.enum(["extract", "dead", "timeout", "mia"]);
+const bossKind = z.enum(BOSS_KINDS as unknown as [BossKind, ...BossKind[]]);
 const npcCount = z.number().int().min(0).max(1000);
 const npcCounts = z.object({ boss: npcCount, guard: npcCount, marauder: npcCount });
 
@@ -35,6 +40,8 @@ export const settledItemSchema = z.object({
   label: z.string().max(64).optional(),
   lvl: z.number().int().min(0).max(1000).optional(),
   victim: z.string().max(64).optional(),
+  /** WORLD v6 (D22): dog tag killer userId. */
+  by: z.string().max(64).optional(),
 }) satisfies z.ZodType<SettledItem>;
 
 export const raidStartRequestSchema = z.object({
@@ -69,7 +76,7 @@ export const raidStartRequestSchema = z.object({
   bosses: z
     .array(
       z.object({
-        kind: z.enum(BOSS_KINDS as unknown as [BossKind, ...BossKind[]]),
+        kind: bossKind,
         slots: z.array(z.number().int().min(0).max(2)).max(8),
       }),
     )
@@ -121,6 +128,14 @@ export const playerExitReportSchema = z.object({
   lost: z.array(settledItemSchema).max(64),
   destroyed: z.array(settledItemSchema).max(64),
   stats: statsSchema.default({}),
+  /** WORLD v6: this entry (world matches always set it; absent = a legacy roster match). */
+  entryId: uuid.optional(),
+  /** WORLD v6: cycle clock at admission. */
+  enteredAtMs: z.number().finite().min(0).max(WORLD.CYCLE_MS).optional(),
+  /** WORLD v6: userIds of the humans this entry killed (guests included; the web filters). */
+  victims: z.array(z.string().max(64)).max(256).optional(),
+  /** WORLD v6: this entry's pool items never placed → pool, untaxed. */
+  unplaced: z.array(settledItemSchema).max(64).optional(),
 }) as unknown as z.ZodType<PlayerExitReport>;
 
 export const matchEndReportSchema = z.object({
@@ -129,7 +144,7 @@ export const matchEndReportSchema = z.object({
   matchSeed: z.number().int().min(0).max(0xffffffff),
   startedAt: z.number().finite(),
   endedAt: z.number().finite(),
-  /** v5: humans only. Pre-v5 servers may still list bots (userId null, isBot): applyEnd drops them. */
+  /** v5: humans only (WORLD v6: one row per entry). Pre-v5 servers may still list bots: applyEnd drops them. */
   participants: z
     .array(
       z.object({
@@ -141,7 +156,7 @@ export const matchEndReportSchema = z.object({
         kills: z.number().int().min(0),
       }),
     )
-    .max(64),
+    .max(2048),
   leftOnMap: z.array(settledItemSchema).max(8192),
   minted: z.array(settledItemSchema).max(8192).default([]),
   npcSummary: z
@@ -154,4 +169,63 @@ export const matchEndReportSchema = z.object({
   botLost: z.array(settledItemSchema).max(8192).optional(),
   /** @deprecated pre-v5 servers only; see botLost. */
   botDestroyed: z.array(settledItemSchema).max(8192).optional(),
+  /** WORLD v6: the shard's cycle and index. */
+  cycleId: z.number().int().min(0).optional(),
+  shard: z.number().int().min(0).max(64).optional(),
+  /** WORLD v6: every materialized entryId (unlisted active entries are voided). */
+  entries: z.array(uuid).max(4096).optional(),
+  /** WORLD v6 (A6): expired player corpse / ground uniques → treasury. */
+  expired: z.array(settledItemSchema).max(8192).optional(),
+  /** WORLD v6 (A6): expired NPC-corpse pool items → pool, untaxed. */
+  expiredToPool: z.array(settledItemSchema).max(8192).optional(),
 }) as unknown as z.ZodType<MatchEndReport>;
+
+// ---------------------------------------------------------------- WORLD v6 (strict: unknown keys are refused)
+
+const worldBossRef = z.object({ kind: bossKind, zone: z.string().min(1).max(64) }).strict();
+const wallMs = z.number().int().min(0).max(8.64e15);
+const serverIdSchema = z.string().min(1).max(64);
+
+export const shardOpenRequestSchema = z
+  .object({
+    matchId: uuid,
+    cycleId: z.number().int().min(0).max(0x7fffffff),
+    shard: z.number().int().min(0).max(64),
+    roomId: z.string().min(1).max(64),
+    mode: z.enum(["live", "demo"]),
+    mapId,
+    matchSeed: z.number().int().min(0).max(0xffffffff),
+    startsAt: wallMs,
+    entryClosesAt: wallMs,
+    endsAt: wallMs,
+    boss: worldBossRef.nullable(),
+    nextBoss: worldBossRef.nullable(),
+    serverId: serverIdSchema,
+    instanceId: serverIdSchema,
+  })
+  .strict() satisfies z.ZodType<ShardOpenRequest>;
+
+export const entryRequestSchema = z
+  .object({
+    matchId: uuid,
+    entryId: uuid,
+    /** Registered users and guests both have uuid ids. */
+    userId: uuid,
+    /** "" = free kit. */
+    loadoutId: z.union([z.literal(""), uuid]),
+    atMs: z.number().finite().min(0).max(WORLD.CYCLE_MS),
+    targets: z.number().int().min(0).max(100_000),
+    bossAlive: z.boolean(),
+  })
+  .strict() satisfies z.ZodType<EntryRequest>;
+
+export const worldEventReportSchema = z
+  .object({
+    matchId: uuid,
+    cycleId: z.number().int().min(0).max(0x7fffffff),
+    kind: z.literal("boss_killed"),
+    boss: bossKind,
+    by: z.string().max(64),
+    atMs: z.number().finite().min(0).max(WORLD.CYCLE_MS),
+  })
+  .strict() satisfies z.ZodType<WorldEventReport>;

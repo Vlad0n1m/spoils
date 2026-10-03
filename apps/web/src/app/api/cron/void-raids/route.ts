@@ -8,8 +8,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 /**
- * Housekeeping for raids the game server never closed (crash, lost end report): voids raids older
- * than RAID_VOID_AFTER_MS (gear back to owners, pool items back to the pool) and expires loadout
+ * Housekeeping for raids the game server never closed (crash, lost end report): voids raids
+ * RAID_VOID_GRACE_MS past their ends_at (the wipe) (gear back to owners, pool items back to the pool) and expires loadout
  * locks nobody deployed. Both also run lazily on stash reads; this catches users who never return.
  */
 export async function GET(req: Request) {

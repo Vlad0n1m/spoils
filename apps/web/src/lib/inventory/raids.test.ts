@@ -22,12 +22,31 @@ import {
   ITEM_IDS,
   poolReleaseCount,
   uniqueTierScore,
+  WORLD,
+  XP,
+  xpForExit,
+  levelForXp,
+  type EntryRequest,
+  type ShardOpenRequest,
   type MatchEndReport,
   type PlayerExitReport,
   type RaidStartRequest,
   type SettledItem,
 } from "@extract/shared";
-import { creditLedger, deposits, itemEvents, items, loadouts, matchResults, raids, stashStacks, users } from "../../db/schema";
+import {
+  creditLedger,
+  deposits,
+  itemEvents,
+  items,
+  loadouts,
+  matchResults,
+  pvpKills,
+  raidEntries,
+  raidExits,
+  raids,
+  stashStacks,
+  users,
+} from "../../db/schema";
 import { PARAM, getNumberParam, setParam } from "../economy/params";
 import { TIER_SCORE_SQL } from "../economy/pool";
 import { runEconomyDaily } from "../economy/daily";
@@ -42,7 +61,9 @@ import {
   voidStaleForUser,
   RAID_USER_VOID_AFTER_MS,
   RAID_VOID_AFTER_MS,
+  legacyEntryId,
 } from "./raids";
+import { enterRaid, openShard } from "./world";
 import { claimStarter } from "./starter";
 import { getStash } from "./stash";
 import { seedEconomy } from "../economy/seed";
@@ -1053,5 +1074,391 @@ describe("seed", () => {
     assert.ok(ls.every((l) => l.sellerId === null && l.status === "active" && l.priceMinor > 0n));
     assert.equal((await seedEconomy(db, { rng: mulberry32(2) })).status, "already");
     assert.equal(await itemCount(), 720);
+  });
+});
+
+// ============================================================================ WORLD v6 (T20, T21)
+
+const W_CYCLE = 640_100;
+
+function wShard(over: Partial<ShardOpenRequest> = {}): ShardOpenRequest {
+  const startsAt = W_CYCLE * WORLD.CYCLE_MS;
+  return {
+    matchId: randomUUID(),
+    cycleId: W_CYCLE,
+    shard: 0,
+    roomId: "room1",
+    mode: "live",
+    mapId: "steppe",
+    matchSeed: 7,
+    startsAt,
+    entryClosesAt: startsAt + WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS,
+    endsAt: startsAt + WORLD.CYCLE_MS,
+    boss: null,
+    nextBoss: null,
+    serverId: "eu-1",
+    instanceId: "inst-1",
+    ...over,
+  };
+}
+
+function wEntry(matchId: string, userId: string, loadoutId = "", over: Partial<EntryRequest> = {}): EntryRequest {
+  return { matchId, entryId: randomUUID(), userId, loadoutId, atMs: 60_000, targets: 30, bossAlive: true, ...over };
+}
+
+/** Exit report of a world entry `onMapMin` minutes after its admission. */
+function wExit(e: EntryRequest, onMapMin: number, over: Partial<PlayerExitReport> = {}): PlayerExitReport {
+  return exitReport(e.matchId, e.userId, { entryId: e.entryId, enteredAtMs: e.atMs, atMs: e.atMs + onMapMin * 60_000, ...over });
+}
+
+async function enterOk(e: EntryRequest) {
+  const r = await enterRaid(db, e);
+  assert.equal(r.status, "accepted", r.reason);
+  return r;
+}
+
+async function events(itemId: string) {
+  return db.select().from(itemEvents).where(eq(itemEvents.itemId, itemId));
+}
+
+async function taxAcc() {
+  return getNumberParam(db, PARAM.TAX_ACC);
+}
+
+describe("WORLD v6 exit settlement (T20)", () => {
+  test("legacyEntryId is a stable uuid per (match, user)", () => {
+    const m = randomUUID(), u = randomUUID();
+    assert.equal(legacyEntryId(m, u), legacyEntryId(m, u));
+    assert.notEqual(legacyEntryId(m, u), legacyEntryId(m, randomUUID()));
+    assert.match(legacyEntryId(m, u), /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  test("two exits of one user in one match both settle and both credit CR; a replay is a duplicate", async () => {
+    const s = wShard();
+    await openShard(db, s);
+    const u = await makeUser(db);
+    const gpu = [{ uid: "", def: "junk_gpu", qty: 1, rarity: 3, dur: 0 }];
+    const e1 = wEntry(s.matchId, u);
+    await enterOk(e1);
+    const r1 = await applyExit(db, wExit(e1, 10, { extracted: gpu }));
+    const e2 = wEntry(s.matchId, u, "", { atMs: 900_000 });
+    await enterOk(e2);
+    const r2 = await applyExit(db, wExit(e2, 10, { extracted: gpu }));
+    assert.deepEqual([r1.status, r2.status], ["applied", "applied"]);
+    assert.ok(r1.credits > 0);
+    assert.equal(r2.credits, r1.credits);
+    assert.equal(await credits(u), 1000 + r1.credits + r2.credits);
+    const refs = (await db.select().from(creditLedger).where(eq(creditLedger.userId, u))).map((l) => l.refId).sort();
+    assert.deepEqual(refs, [`exit:${e1.entryId}`, `exit:${e2.entryId}`].sort());
+    const rows = await db.select().from(raidExits).where(eq(raidExits.matchId, s.matchId));
+    assert.equal(rows.length, 2);
+    assert.ok(rows.every((r) => r.cycleId === W_CYCLE));
+    const ents = await db.select().from(raidEntries).where(eq(raidEntries.matchId, s.matchId));
+    assert.ok(ents.every((e) => e.status === "exited" && e.settledAt));
+    const dup = await applyExit(db, wExit(e1, 10, { extracted: gpu }));
+    assert.equal(dup.status, "duplicate");
+    assert.equal(await credits(u), 1000 + r1.credits + r2.credits);
+    assert.equal((await db.select().from(users).where(eq(users.id, u)))[0]!.matchesPlayed, 2);
+    // An entry of another user, or an unknown one, is refused (the server stops retrying).
+    assert.equal((await applyExit(db, wExit(e1, 10, { userId: await makeUser(db) }))).status, "unknown_entry");
+    assert.equal((await applyExit(db, wExit({ ...e1, entryId: randomUUID() }, 10))).status, "unknown_entry");
+    await assertCreditsConserved();
+  });
+
+  test("mia: everything carried enters the pool with no wear (reason mia, ref entry); XP = kill lines only", async () => {
+    const s = wShard();
+    await openShard(db, s);
+    const p = await lockedPlayer();
+    const e = wEntry(s.matchId, p.userId, p.loadoutId);
+    await enterOk(e);
+    const r = await applyExit(
+      db,
+      wExit(e, 44, {
+        exit: "mia",
+        lost: [
+          { uid: p.rifle, def: "rifle", qty: 1, rarity: 1, dur: 100 },
+          { uid: p.armor, def: "armor_2", qty: 1, rarity: 1, dur: ARMOR[2].durability * 0.5 },
+          { uid: p.bp, def: "backpack_1", qty: 1, rarity: 0, dur: 100 },
+        ],
+        stats: { shotsFired: 0, dmgDealt: 0, containersSearched: 6, corpsesSearched: 0, bossKills: 0, npcKills: 2 },
+      }),
+    );
+    assert.equal(r.status, "applied");
+    const rifle = await item(p.rifle), armor = await item(p.armor);
+    assert.deepEqual([rifle.state, rifle.ownerId, rifle.durability], ["lost_pool", null, 100]);
+    assert.deepEqual([armor.state, armor.durability], ["lost_pool", 50]);
+    const ev = (await events(p.rifle)).find((x) => x.toState === "lost_pool")!;
+    assert.deepEqual([ev.reason, ev.refId], ["mia", e.entryId]);
+    assert.equal(r.xp, 2 * XP.NPC);
+    assert.deepEqual(r.xpLines, [{ key: "npc", qty: 2, xp: 2 * XP.NPC }]);
+    const lo = (await db.select().from(loadouts).where(eq(loadouts.id, p.loadoutId)))[0]!;
+    assert.equal(lo.status, "settled");
+  });
+
+  test("unplaced pool items return untaxed; the giveaway lock burns only after MIN_EXPOSURE_MS on the map", async () => {
+    await bulkPool(30);
+    const s = wShard();
+    await openShard(db, s);
+    const p = await lockedPlayer();
+    const e1 = wEntry(s.matchId, p.userId, p.loadoutId);
+    const res = await enterOk(e1);
+    assert.equal(res.pool.length, 3);
+    const own = [
+      { uid: p.rifle, def: "rifle", qty: 1, rarity: 1, dur: 100 },
+      { uid: p.armor, def: "armor_2", qty: 1, rarity: 1, dur: ARMOR[2].durability * 0.5 },
+      { uid: p.bp, def: "backpack_1", qty: 1, rarity: 0, dur: 100 },
+    ];
+    await applyExit(db, wExit(e1, 5, { extracted: own, unplaced: res.pool }));
+    for (const it of res.pool) {
+      const row = await item(it.uid);
+      assert.deepEqual([row.state, row.matchId], ["lost_pool", null]);
+      const ev = (await events(it.uid)).find((x) => x.reason === "return")!;
+      assert.equal(ev.refId, e1.entryId);
+    }
+    assert.equal(await taxAcc(), 0, "untaxed");
+    assert.equal((await item(p.rifle)).lockRaids, 2, "5 min on the map: the lock is not burned");
+
+    const lock2 = await lockLoadout(db, p.userId, [{ key: "w1", itemId: p.rifle, def: "rifle", qty: 1 }]);
+    assert.ok(lock2.ok);
+    const e2 = wEntry(s.matchId, p.userId, lock2.ok ? lock2.loadoutId : "", { atMs: 600_000 });
+    await enterOk(e2);
+    await applyExit(db, wExit(e2, WORLD.MIN_EXPOSURE_MS / 60_000, { extracted: [own[0]!] }));
+    assert.equal((await item(p.rifle)).lockRaids, 1, "≥ 8 min: one raid of the lock is done");
+  });
+
+  test("bind rule by match_id: a pool unique re-released in the same match and extracted by a risk-free entry arrives bound", async () => {
+    const x = await makeItem(db, { def: "rifle", rarity: 1, dur: 90, state: "lost_pool" });
+    const s = wShard();
+    await openShard(db, s);
+    const a = await lockedPlayer();
+    const ea = wEntry(s.matchId, a.userId, a.loadoutId);
+    assert.deepEqual((await enterOk(ea)).pool.map((i) => i.uid), [x]);
+    await applyExit(db, wExit(ea, 2, { unplaced: [{ uid: x, def: "rifle", qty: 1, rarity: 1, dur: 90 }] }));
+    assert.equal((await item(x)).state, "lost_pool");
+    const c = await lockedPlayer();
+    const ec = wEntry(s.matchId, c.userId, c.loadoutId, { atMs: 300_000 });
+    assert.deepEqual((await enterOk(ec)).pool.map((i) => i.uid), [x], "re-released by another entry");
+    const b = await makeUser(db);
+    const eb = wEntry(s.matchId, b, "", { atMs: 400_000 });
+    await enterOk(eb);
+    await applyExit(db, wExit(eb, 20, { extracted: [{ uid: x, def: "rifle", qty: 1, rarity: 1, dur: 90 }] }));
+    const row = await item(x);
+    assert.deepEqual([row.state, row.ownerId, row.bound], ["in_stash", b, true]);
+    const allocs = (await events(x)).filter((ev) => ev.reason === "alloc");
+    assert.deepEqual(allocs.map((ev) => ev.refId).sort(), [ea.entryId, ec.entryId].sort());
+    assert.ok(allocs.every((ev) => ev.matchId === s.matchId));
+  });
+
+  test("dog tags (D22): full price only for the killer, anyone else × NON_KILLER_MULT", async () => {
+    const s = wShard();
+    await openShard(db, s);
+    const u = await makeUser(db);
+    const e = wEntry(s.matchId, u);
+    await enterOk(e);
+    const v1 = randomUUID(), v2 = randomUUID();
+    const r = await applyExit(
+      db,
+      wExit(e, 10, {
+        extracted: [
+          { uid: "", def: "junk_dogtag", qty: 1, rarity: 0, dur: 0, lvl: 4, label: "V1", victim: v1, by: u },
+          { uid: "", def: "junk_dogtag", qty: 1, rarity: 0, dur: 0, lvl: 4, label: "V2", victim: v2, by: randomUUID() },
+        ],
+      }),
+    );
+    const full = dogTagCr(4);
+    assert.equal(r.credits, full + Math.floor(full * DOG_TAG.NON_KILLER_MULT));
+    assert.deepEqual(r.sold.map((l) => l.cr), [full, Math.floor(full * DOG_TAG.NON_KILLER_MULT)]);
+  });
+
+  test("XP lines, ranked PvP pair rule, first extract of the day and the daily soft cap; pvp_kills rows", async () => {
+    const s = wShard();
+    await openShard(db, s);
+    const k = await makeUser(db);
+    const v1 = await makeUser(db);
+    const guestVictim = randomUUID();
+    const e1 = wEntry(s.matchId, k);
+    await enterOk(e1);
+    const stats = { shotsFired: 0, dmgDealt: 0, containersSearched: 4, corpsesSearched: 0, bossKills: 0, npcKills: 3, guardKills: 1 };
+    const r1 = await applyExit(
+      db,
+      wExit(e1, 15, {
+        extracted: [{ uid: "", def: "junk_gpu", qty: 1, rarity: 3, dur: 0 }],
+        victims: [v1, v1, v1, guestVictim, k],
+        stats,
+      }),
+    );
+    const haul = r1.sold.filter((l) => l.def !== "junk_dogtag").reduce((a, l) => a + l.cr, 0);
+    const want1 = xpForExit({
+      exit: "extract",
+      onMapMs: 15 * 60_000,
+      haulCr: haul,
+      containers: 4,
+      marauders: 2,
+      guards: 1,
+      bosses: 0,
+      rankedPvp: 2,
+      grindToday: 0,
+      firstExtractToday: true,
+    });
+    assert.equal(r1.xp, want1.total);
+    assert.deepEqual(r1.xpLines, want1.lines);
+    assert.ok(r1.xpLines.some((l) => l.key === "first_extract"));
+    assert.deepEqual([r1.levelBefore, r1.level, r1.levelUp], [1, levelForXp(want1.total), levelForXp(want1.total) > 1]);
+    const kills = await db.select().from(pvpKills).where(eq(pvpKills.killerId, k));
+    assert.equal(kills.length, 3, "guests and self get no row");
+    assert.equal(kills.filter((x) => x.ranked).length, XP.PVP_PAIR_PER_DAY);
+    assert.ok(kills.every((x) => x.victimId === v1 && x.entryId === e1.entryId && x.cycleId === W_CYCLE));
+    const row1 = (await db.select().from(raidExits).where(eq(raidExits.entryId, e1.entryId)))[0]!;
+    assert.deepEqual(
+      [row1.xp, row1.xpGrind, row1.onMapMs, row1.npcKills, row1.bossKills, row1.pvpRanked],
+      [want1.total, want1.grind, 15 * 60_000, 3, 0, 2],
+    );
+
+    // Earlier grind today (another map) pushes the next exit over the soft cap; no first-extract bonus.
+    await db.insert(raidExits).values({ entryId: randomUUID(), matchId: randomUUID(), userId: k, exit: "extract", report: wExit(e1, 1), xpGrind: 2_400 });
+    const e2 = wEntry(s.matchId, k, "", { atMs: 1_000_000 });
+    await enterOk(e2);
+    const r2 = await applyExit(db, wExit(e2, 12, { victims: [v1], stats: { ...stats, containersSearched: 10, npcKills: 0, guardKills: 0 } }));
+    const want2 = xpForExit({
+      exit: "extract",
+      onMapMs: 12 * 60_000,
+      haulCr: 0,
+      containers: 10,
+      marauders: 0,
+      guards: 0,
+      bosses: 0,
+      rankedPvp: 0,
+      grindToday: want1.grind + 2_400,
+      firstExtractToday: false,
+    });
+    assert.equal(r2.xp, want2.total);
+    assert.deepEqual(r2.xpLines, want2.lines);
+    assert.ok(r2.xpLines.some((l) => l.key === "daily_cap" && l.xp < 0));
+    assert.equal((await db.select().from(pvpKills).where(and(eq(pvpKills.entryId, e2.entryId), eq(pvpKills.ranked, false)))).length, 1);
+    const u = (await db.select().from(users).where(eq(users.id, k)))[0]!;
+    assert.equal(u.xp, want1.total + want2.total);
+    assert.equal(u.level, levelForXp(want1.total + want2.total));
+  });
+});
+
+describe("WORLD v6 end settlement and voids (T21)", () => {
+  test("raids/end voids unlisted active entries first: gear back to the owner, allocations to the pool untaxed", async () => {
+    await bulkPool(30);
+    const s = wShard();
+    await openShard(db, s);
+    const a = await lockedPlayer();
+    const ea = wEntry(s.matchId, a.userId, a.loadoutId);
+    const ra = await enterOk(ea);
+    assert.equal(ra.pool.length, 3);
+    const b = await makeUser(db);
+    const eb = wEntry(s.matchId, b);
+    await enterOk(eb);
+    await applyExit(db, wExit(eb, 9));
+    const r = await applyEnd(db, endReport(s.matchId, { cycleId: W_CYCLE, shard: 0, entries: [eb.entryId] }));
+    assert.equal(r.status, "applied");
+    assert.deepEqual(r.voidedEntries, [ea.entryId]);
+    assert.equal(r.swept, 0, "nothing left for the sweep");
+    const rifle = await item(a.rifle);
+    assert.deepEqual([rifle.state, rifle.ownerId, rifle.matchId, rifle.loadoutId], ["in_stash", a.userId, null, null]);
+    assert.equal((await events(a.rifle)).find((x) => x.reason === "void")!.refId, ea.entryId);
+    for (const it of ra.pool) {
+      assert.equal((await item(it.uid)).state, "lost_pool");
+      assert.equal((await events(it.uid)).find((x) => x.reason === "return")!.refId, ea.entryId);
+    }
+    assert.equal(await taxAcc(), 0);
+    assert.equal(await stack(a.userId, "ammo_light"), 100, "fungibles refunded");
+    assert.equal((await db.select().from(loadouts).where(eq(loadouts.id, a.loadoutId)))[0]!.status, "voided");
+    const ents = await db.select().from(raidEntries).where(eq(raidEntries.matchId, s.matchId));
+    assert.deepEqual(ents.map((e) => [e.entryId === ea.entryId ? "a" : "b", e.status]).sort(), [["a", "voided"], ["b", "exited"]]);
+    assert.equal((await db.select().from(raids).where(eq(raids.matchId, s.matchId)))[0]!.status, "settled");
+    assert.ok((await lockLoadout(db, a.userId, [{ key: "w1", itemId: a.rifle, def: "rifle", qty: 1 }])).ok);
+  });
+
+  test("allocations left on the map / swept re-enter untaxed; A6 expiry: player uniques → treasury, NPC-corpse pool items → pool", async () => {
+    await bulkPool(30);
+    const s = wShard();
+    await openShard(db, s);
+    const a = await lockedPlayer();
+    const ea = wEntry(s.matchId, a.userId, a.loadoutId);
+    const ra = await enterOk(ea);
+    const [x1, x2, x3] = ra.pool as [SettledItem, SettledItem, SettledItem];
+    await applyExit(db, wExit(ea, 10, { extracted: [
+      { uid: a.rifle, def: "rifle", qty: 1, rarity: 1, dur: 100 },
+      { uid: a.armor, def: "armor_2", qty: 1, rarity: 1, dur: ARMOR[2].durability * 0.5 },
+      { uid: a.bp, def: "backpack_1", qty: 1, rarity: 0, dur: 100 },
+    ] }));
+    // B dies with a rifle that does not break; his corpse expires on the map.
+    const b = await makeUser(db);
+    const bRifle = await makeItem(db, { def: "rifle", rarity: 2, dur: 70, ownerId: b });
+    const lb = await lockLoadout(db, b, [{ key: "w1", itemId: bRifle, def: "rifle", qty: 1 }]);
+    // targets 0: B's own entry releases nothing, so A's three allocations are the only pool items here.
+    const eb = wEntry(s.matchId, b, lb.ok ? lb.loadoutId : "", { atMs: 120_000, targets: 0 });
+    await enterOk(eb);
+    await applyExit(db, wExit(eb, 3, { exit: "dead" }));
+    const r = await applyEnd(
+      db,
+      endReport(s.matchId, {
+        cycleId: W_CYCLE,
+        entries: [ea.entryId, eb.entryId],
+        leftOnMap: [x1],
+        expiredToPool: [x2],
+        expired: [
+          { uid: bRifle, def: "rifle", qty: 1, rarity: 2, dur: 70 },
+          { uid: "", def: "ammo_light", qty: 30, rarity: 0, dur: 0 },
+        ],
+      }),
+    );
+    assert.equal(r.status, "applied");
+    assert.equal(r.treasury, 1);
+    assert.equal(r.swept, 1, "x3 was never reported");
+    assert.deepEqual([(await item(x1.uid)).state, (await events(x1.uid)).at(-1)!.reason], ["lost_pool", "left"]);
+    assert.deepEqual([(await item(x2.uid)).state, (await events(x2.uid)).at(-1)!.reason], ["lost_pool", "expire"]);
+    assert.deepEqual([(await item(x3.uid)).state, (await events(x3.uid)).at(-1)!.reason], ["lost_pool", "sweep"]);
+    const br = await item(bRifle);
+    assert.deepEqual([br.state, br.ownerId, br.durability, br.matchId], ["treasury", null, 70, null]);
+    const bev = (await events(bRifle)).at(-1)!;
+    assert.deepEqual([bev.reason, bev.refId, bev.toState], ["expire", s.matchId, "treasury"]);
+    assert.equal(await taxAcc(), 0, "no tax on allocations, none on expiry");
+    assert.equal(await poolCount(), 30 - 3 + 3);
+  });
+
+  test("voids run from ends_at: nothing at minute 36 of a live map; the user's raid at ends_at + 5 min (free-kit entries too); the cron at + 10 min", async () => {
+    const t0 = new Date();
+    const s = wShard({ startsAt: t0.getTime(), entryClosesAt: t0.getTime() + 35 * 60_000, endsAt: t0.getTime() + WORLD.CYCLE_MS });
+    await openShard(db, s, t0);
+    const a = await lockedPlayer();
+    const ea = wEntry(s.matchId, a.userId, a.loadoutId);
+    await enterOk(ea);
+    const f = await makeUser(db);
+    await enterOk(wEntry(s.matchId, f));
+    const at = (min: number) => new Date(t0.getTime() + min * 60_000);
+    assert.deepEqual(await voidStaleForUser(db, a.userId, at(36)), [], "a live 45-minute map is never voided at minute 36");
+    assert.deepEqual(await voidStale(db, at(36)), []);
+    assert.deepEqual(await voidStale(db, at(51)), [], "the cron waits 10 min past the wipe");
+    assert.deepEqual(await voidStaleForUser(db, f, at(51)), [s.matchId], "free-kit entry: found through raid_entries");
+    assert.equal((await item(a.rifle)).state, "in_stash");
+    const ents = await db.select().from(raidEntries).where(eq(raidEntries.matchId, s.matchId));
+    assert.ok(ents.every((e) => e.status === "voided"));
+    assert.equal((await applyExit(db, wExit(ea, 10))).status, "voided");
+  });
+
+  test("orphaned by a newer boot of the same GAME_SERVER_ID (server_id / instance_id columns)", async () => {
+    const s1 = wShard({ serverId: "eu-8", instanceId: "inst-1" });
+    const s2 = wShard({ serverId: "eu-8", instanceId: "inst-2", cycleId: W_CYCLE + 1 });
+    await openShard(db, s1);
+    await openShard(db, s2);
+    const a = await lockedPlayer();
+    await enterOk(wEntry(s1.matchId, a.userId, a.loadoutId));
+    const res = await voidOrphans(db, { serverId: "eu-8", instanceId: "inst-2", bootedAt: Date.now() }, new Date(Date.now() + 1000));
+    assert.deepEqual(res.voided, [s1.matchId]);
+    assert.equal((await item(a.rifle)).state, "in_stash");
+
+    // Lazy path: the boot was recorded but its void never ran.
+    const s3 = wShard({ serverId: "eu-9", instanceId: "inst-1", cycleId: W_CYCLE + 2 });
+    await openShard(db, s3);
+    const b = await makeUser(db);
+    await enterOk(wEntry(s3.matchId, b));
+    await setParam(db, "gs_boot:eu-9", { serverId: "eu-9", instanceId: "inst-9", bootedAt: Date.now() + 1000, sentAt: 1 });
+    assert.deepEqual(await voidStaleForUser(db, b, new Date(Date.now() + 2000)), [s3.matchId]);
   });
 });
