@@ -105,7 +105,7 @@ export interface ChestTable {
 
 /**
  * Chest contents by chest rarity. DEMO MODE ONLY: in live mode valuables come only from the lost
- * pool (RaidStartResponse.containerLoot). lootRollToItem (item-defs.ts) converts a roll to a def.
+ * pool. lootRollToItem (item-defs.ts) converts a roll to a def.
  */
 export const CHEST_TABLES: Record<Rarity, ChestTable> = {
   0: {

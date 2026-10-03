@@ -1,6 +1,6 @@
 /**
  * NPC MODEL v5 ("humans + NPCs, no player-bots"; scratchpad npc5 design). Decided by Vlad: no bot
- * may behave like a player. A match holds real humans (1..MATCH.MAX_HUMANS) and NPCs only:
+ * may behave like a player. A map holds real humans (1..WORLD.CAPACITY) and NPCs only:
  * - boss + guards (loot economy v4, economy.ts BOSSES), and
  * - Marauders (NPC_ROLE.MARAUDER): squads of 1..3 holding a post (MapData.npcPosts) at a POI or a
  *   road camp in the wilds. They never loot, never extract, never roam the map, never respawn
@@ -8,8 +8,8 @@
  *   (rollNpcLoot) when killed. T3/T4 marauders may also carry ONE pool unique (NPC_CARRIER): a third
  *   destination of the same risk-tied release, never minted.
  *
- * Everything here is pure and deterministic: the matchmaking room (raids/start carriers) and the
- * match setup call rollNpcSpawns / rollNpcLoot / rollMarauderKit with the same seed and agree.
+ * Everything here is pure and deterministic: rollNpcSpawns / rollNpcLoot / rollMarauderKit give the
+ * same answer for the same seed (match setup, sim harness, tests).
  * All NPC gear (weapon, armor, backpack, reserve ammo) is ITEM_FLAG.FREE = NPC_GEAR_FLAGS: never in
  * a corpse, never extracted, never valued, never ledger-tracked. No new flag is needed.
  */
@@ -420,7 +420,7 @@ export function rollMarauderKit(matchSeed: number, postId: number, members: numb
 
 // ---------------------------------------------------------------- pool carriers (§3.3)
 
-/** RaidStartResponse.containerLoot key of a carrier marauder: "npc:<postId>.<member>". */
+/** containerLoot key of a carrier marauder (legacy allocation, sim harness): "npc:<postId>.<member>". */
 export type NpcCarrierKey = `npc:${number}.${number}`;
 
 export function npcCarrierKey(postId: number, member: number): NpcCarrierKey {
@@ -444,14 +444,14 @@ export function npcCarrierWeight(tier: number): number {
   return NPC_CARRIER.WEIGHT_MULT * (tier + 1) * (tier + 1);
 }
 
-/** One RaidStartRequest.carriers entry. */
+/** One carrier of the legacy allocation (planAllocation, sim harness). */
 export interface RaidNpcCarrier {
   key: NpcCarrierKey;
   tier: 3 | 4;
 }
 
 /**
- * RaidStartRequest.carriers: every member of every spawned squad whose post is a POI post of tier
+ * Legacy allocation carriers: every member of every spawned squad whose post is a POI post of tier
  * >= NPC_CARRIER.MIN_TIER (road camps never carry). Keyed npcCarrierKey(postId, member), in spawn order.
  */
 export function raidNpcCarriers(spawns: readonly NpcSquadSpawn[], posts: readonly NpcPost[]): RaidNpcCarrier[] {

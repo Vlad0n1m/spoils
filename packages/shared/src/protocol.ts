@@ -11,18 +11,9 @@ import type { SoundMsg } from "./sound.js";
 
 /** Colyseus room names. */
 export const ROOMS = {
-  /** @deprecated v6: no matchmaking (world shards are joined by id). Deleted in S8. */
-  MATCHMAKING: "mm",
   /** One room per match. Join by id with BattleJoinOptions. */
   BATTLE: "battle",
 } as const;
-
-/** @deprecated v6: no matchmaking. Deleted in S8. Matchmaking room → client: the battle is created, join it by id. */
-export const MM_BATTLE_READY = "battle_ready";
-/** @deprecated v6: no matchmaking. Deleted in S8. */
-export interface BattleReadyMsg {
-  battleRoomId: string;
-}
 
 /** Options of joinById(battleRoomId, …). */
 export interface BattleJoinOptions {
@@ -37,20 +28,14 @@ export interface BattleJoinOptions {
  * 4000–4010 (e.g. 4002 = WS_CLOSE_WITH_ERROR).
  */
 export const CLOSE_CODES = {
-  /** @deprecated v6 (legacy roster matches). Battle: the ticket's user is not in this match's roster. */
-  NOT_IN_ROSTER: 4101,
-  /** @deprecated v6: no matchmaking. Matchmaking: the queue already launched its battle. */
-  QUEUE_CLOSED: 4102,
   /** The same user connected again from another tab / device; the old connection is dropped. */
   JOINED_ELSEWHERE: 4103,
-  /** raids/start rejected this player's loadout (not locked / expired / wrong user). */
+  /** raids/enter rejected this player's loadout (not locked / expired / wrong user). */
   LOADOUT_REJECTED: 4104,
   /** WORLD v6: the map was wiped (sent 8 s after the end report). */
   WIPED: 4105,
   /** WORLD v6: this connection has no runtime on this map (entry gone / settled). */
   NOT_IN_WORLD: 4109,
-  /** @deprecated v6: no matchmaking. Matchmaking: the battle room could not be created. */
-  LAUNCH_FAILED: 4150,
 } as const;
 
 /**

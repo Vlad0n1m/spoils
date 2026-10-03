@@ -1,11 +1,11 @@
 /**
  * NPC MODEL v5 (humans + NPCs, no player-bots): marauder tables, spawn / loot / kit rolls, pool
- * carriers, the marauder posts of the Steppe generator and the humans-only queue rules.
+ * carriers, the marauder posts of the Steppe generator and the humans-only side caps.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MATCH, SPAWN_RULES, humanSideCap, mmShouldLaunch } from "./constants.js";
+import { SPAWN_RULES, WORLD, humanSideCap } from "./constants.js";
 import {
   BOSSES,
   BOSS_AI,
@@ -394,17 +394,8 @@ test("npc posts never touch the layout: mapHash unchanged without them; fallback
   assert.deepEqual(npcPostsOf({}), []);
 });
 
-test("queue rules (humans only): 24 → at once; 12 after 10 s; window end with ≥ 1; never empty", () => {
-  const W = MATCH.QUEUE_WINDOW_MS;
-  assert.equal(MATCH.MAX_HUMANS, 24);
-  assert.ok(mmShouldLaunch(24, 0, W));
-  assert.ok(!mmShouldLaunch(23, 9_999, W));
-  assert.ok(!mmShouldLaunch(12, MATCH.MIN_WAIT_MS - 1, W));
-  assert.ok(mmShouldLaunch(12, MATCH.MIN_WAIT_MS, W));
-  assert.ok(!mmShouldLaunch(11, W - 1, W));
-  assert.ok(mmShouldLaunch(1, W, W), "solo raid against NPCs is legal");
-  assert.ok(!mmShouldLaunch(0, 10 * W, W));
-  assert.ok(mmShouldLaunch(1, 0, 0), "test override MM_QUEUE_WINDOW_MS = 0");
+test("humans per map and side caps (humans only, no queue)", () => {
+  assert.equal(WORLD.CAPACITY, 24);
   assert.equal(humanSideCap(1), 2);
   assert.equal(humanSideCap(12), 4);
   assert.equal(humanSideCap(24), 7);

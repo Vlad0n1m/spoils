@@ -9,8 +9,8 @@ import {
   GIVEAWAY_KIT,
   MARKET,
   POOL,
-  PROGRESSION,
   armorPct,
+  boundTraderLevel,
   armorPoints,
   dogTagPairMult,
   junkSellCr,
@@ -19,12 +19,12 @@ import {
   nextAutosellMult,
   poolEntry,
   poolReleaseCount,
-  poolReleasePlan,
   rollContainerFungibles,
   priceBand,
   takeTreasuryTax,
   templateKey,
   trimmedMedian,
+  xpForExit,
   xpToNext,
 } from "./economy.js";
 import { DOG_TAG, JUNK_IDS, dogTagCr, itemDef, junkCredits } from "./item-defs.js";
@@ -155,10 +155,14 @@ test("progression: xpToNext grows, levelForXp inverts it", () => {
     assert.ok(xpToNext(l + 1) > xpToNext(l));
     xp += xpToNext(l);
   }
-  // Memo calibration: ~180 XP per raid → level 5 after roughly 14 raids.
-  const perRaid = PROGRESSION.XP_RAID + 0.3 * PROGRESSION.XP_EXTRACT + 0.1 * PROGRESSION.XP_KILL;
-  const raidsToL5 = Math.ceil([1, 2, 3, 4].reduce((a, l) => a + xpToNext(l), 0) / perRaid);
-  assert.ok(raidsToL5 >= 10 && raidsToL5 <= 18, String(raidsToL5));
+  // WORLD v6 calibration (xpForExit): 40 % extracts after 15 min (400 CR haul, 8 containers, 1 marauder),
+  // 60 % deaths (5 containers, 1 marauder) → ~150 XP per entry → level 5 after roughly 17 entries.
+  const base = { onMapMs: 15 * 60_000, guards: 0, bosses: 0, rankedPvp: 0, grindToday: 0, firstExtractToday: false };
+  const ext = xpForExit({ ...base, exit: "extract", haulCr: 400, containers: 8, marauders: 1 }).total;
+  const dead = xpForExit({ ...base, exit: "dead", haulCr: 0, containers: 5, marauders: 1 }).total;
+  const perEntry = 0.4 * ext + 0.6 * dead;
+  const entriesToL5 = Math.ceil([1, 2, 3, 4].reduce((a, l) => a + xpToNext(l), 0) / perEntry);
+  assert.ok(entriesToL5 >= 10 && entriesToL5 <= 20, String(entriesToL5));
 });
 
 test("armorPoints / armorPct convert at the API boundary and clamp", () => {
@@ -198,13 +202,10 @@ test("tables reference real item defs with valid quantities", () => {
   for (const p of CONTAINER.FILL_CHANCE) assert.ok(p > 0 && p <= 1);
 });
 
-test("legacy poolReleasePlan: v4 has no free floor (risk-only by default)", () => {
-  assert.equal(POOL.MIN_RELEASE_PER_MATCH, 0);
-  assert.deepEqual(poolReleasePlan(700, 0), { total: 0, risk: 0, floor: 0 }, "free-kit lobby gets nothing");
-  assert.deepEqual(poolReleasePlan(700, 3), { total: 3, risk: 3, floor: 0 });
-  assert.deepEqual(poolReleasePlan(700, 50), { total: POOL.MAX_PER_MATCH, risk: POOL.MAX_PER_MATCH, floor: 0 });
-  // An explicit floor still works for old callers, never below FLOOR_MIN_POOL.
-  assert.deepEqual(poolReleasePlan(POOL.FLOOR_MIN_POOL + 2, 0, 6), { total: 2, risk: 0, floor: 2 });
+test("boundTraderLevel: 1–4 → 1, 5–9 → 2, 10–14 → 3, 15+ → 4 (badge bands; rifle at level 5)", () => {
+  const want = (l: number) => (l < 5 ? 1 : l < 10 ? 2 : l < 15 ? 3 : 4);
+  for (let l = 0; l <= 40; l++) assert.equal(boundTraderLevel(l), want(Math.max(1, l)), `level ${l}`);
+  assert.equal(BOUND_OFFERS.find((o) => o.def === "rifle")?.traderLevel, boundTraderLevel(5));
 });
 
 test("container fungibles: wilds mostly empty, T3/T4 mostly full and hold more lines", () => {

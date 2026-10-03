@@ -10,6 +10,7 @@ test("message names are unique per direction; v1 broadcast events are gone", () 
     assert.ok(!(Object.values(S2C) as string[]).includes(gone), gone);
   }
   assert.equal(CLOSE_CODES.LOADOUT_REJECTED, 4104);
+  for (const gone of ["NOT_IN_ROSTER", "QUEUE_CLOSED", "LAUNCH_FAILED"]) assert.ok(!(gone in CLOSE_CODES), `${gone} removed in v6`);
   for (const c of Object.values(CLOSE_CODES)) assert.ok(c > 4100 && c < 5000, "outside Colyseus' reserved 4000–4010");
 });
 

@@ -1,11 +1,9 @@
-import { createHash } from "node:crypto";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import {
   DOG_TAG,
   FREE_KIT,
   MATCH,
   NPC,
-  PROGRESSION,
   WORLD,
   XP,
   dogTagCr,
@@ -13,16 +11,12 @@ import {
   itemDef,
   junkSellCr,
   levelForXp,
-  riskUnitOf,
   xpForExit,
   type ExitType,
   type GameServerBoot,
   type JunkSellLine,
-  type LoadoutSnapshot,
   type MatchEndReport,
   type PlayerExitReport,
-  type RaidStartRequest,
-  type RaidStartResponse,
   type SettledItem,
   type XpLine,
 } from "@extract/shared";
@@ -38,9 +32,9 @@ import {
 } from "../../db/schema";
 import { credit } from "../economy/ledger";
 import { PARAM, getNumberParam, setParam } from "../economy/params";
-import { allocatePool, enterPool, expireToTreasury, type PoolCandidate } from "../economy/pool";
-import { fromRaidDur, toRaidDur } from "../economy/value";
-import { LOADOUT_LOCK_TTL_MS, type Db, type Tx } from "./db";
+import { enterPool, expireToTreasury, type PoolCandidate } from "../economy/pool";
+import { fromRaidDur } from "../economy/value";
+import type { Db, Tx } from "./db";
 import { releaseLoadout } from "./loadout";
 import { applyMove, isUuid, lockItem, lockLoadoutItems, lockMatchItems, addStack } from "./transition";
 import { worldDate } from "../world/clock";
@@ -67,41 +61,15 @@ type RaidRow = {
   status: "running" | "settled" | "voided";
   mode: "live" | "demo";
   started: boolean;
-  start_response: RaidStartResponse | null;
 };
 
 async function lockRaid(tx: Tx, matchId: string, mode: "share" | "update"): Promise<RaidRow | null> {
   const res = await tx.execute<RaidRow>(
     mode === "share"
-      ? sql`select match_id, status, mode, started, start_response from raids where match_id = ${matchId} for share`
-      : sql`select match_id, status, mode, started, start_response from raids where match_id = ${matchId} for update`,
+      ? sql`select match_id, status, mode, started from raids where match_id = ${matchId} for share`
+      : sql`select match_id, status, mode, started from raids where match_id = ${matchId} for update`,
   );
   return res.rows[0] ?? null;
-}
-
-/**
- * Did `userId` enter this LIVE raid on the free kit (no accepted loadout, or one without any unique)?
- * Demo raids (no raids/start, or the demo fallback) never count: everyone there is on free kits.
- */
-export function freeKitRaid(raid: Pick<RaidRow, "mode" | "start_response">, userId: string): boolean {
-  if (raid.mode !== "live" || !raid.start_response) return false;
-  const acc = raid.start_response.accepted.find((a) => a.userId === userId);
-  return !acc || !acc.entries.some((e) => !!e.uid);
-}
-
-/**
- * Did `userId` enter this LIVE raid without risking anything: the free kit, or only bound gear?
- * (Demo raids: false — they allocate no pool items.)
- */
-async function riskFreeRaider(tx: Tx, raid: Pick<RaidRow, "mode" | "start_response">, userId: string): Promise<boolean> {
-  if (raid.mode !== "live" || !raid.start_response) return false;
-  const acc = raid.start_response.accepted.find((a) => a.userId === userId);
-  const uids = (acc?.entries ?? []).map((e) => e.uid).filter((u): u is string => !!u && isUuid(u));
-  if (uids.length === 0) return true;
-  const r = await tx.execute<{ n: number }>(
-    sql`select count(*)::int as n from items where id in (${sql.join(uids.map((u) => sql`${u}::uuid`), sql`, `)}) and bound = false`,
-  );
-  return Number(r.rows[0]?.n ?? 0) === 0;
 }
 
 /**
@@ -122,9 +90,9 @@ function freeKitSale(sale: { total: number; lines: JunkSellLine[] }): { total: n
 }
 
 /**
- * Exit/end reports for a match whose raids/start never reached the web (the game server fell back
- * to demo mode) still settle: the row is created lazily with started=false. No item of such a
- * match is in_raid in the DB, so only fungibles (junk CR, ammo, meds) and XP apply.
+ * An end report for a match whose raids/open never reached the web still settles: the row is created
+ * lazily as a demo row with started=false. No item of such a match is in_raid in the DB, and it has
+ * no entries, so nothing but the scoreboard is stored.
  */
 async function ensureRaid(tx: Tx, matchId: string, mapId: string, matchSeed: number, now: Date): Promise<void> {
   await tx
@@ -140,125 +108,6 @@ async function ensureRaid(tx: Tx, matchId: string, mapId: string, matchSeed: num
       endsAt: new Date(now.getTime() + MATCH.DURATION_MS),
     })
     .onConflictDoNothing();
-}
-
-// ============================================================================ start
-
-/**
- * POST /api/raids/start (MatchmakingRoom.launch, retried). Idempotent per matchId: the raids row
- * is inserted first (a concurrent retry blocks on the primary key), and a replay returns the
- * stored response unchanged. Per player: the loadout must be `locked`, belong to the user and be
- * younger than LOADOUT_LOCK_TTL_MS; accepted loadouts move locked → in_raid and their items get
- * match_id. Then the lost pool is released (live mode only, allocatePool, LOOT ECONOMY v4): risk
- * units of the accepted loadouts decide the count (round(k × risk), capped), the spawned bosses
- * (req.bosses) get the best items first plus a display top-up while someone risked gear, the rest
- * lands only in T3/T4 containers and, NPC MODEL v5, on spawned T3/T4 marauders (req.carriers, one
- * each). A lobby of free kits gets no uniques at all. v5 raids are humans only: `players` never
- * holds an NPC, and only accepted loadouts add risk units. Demo mode releases nothing (the server
- * never mints uniques onto NPCs).
- */
-export async function startRaid(db: Db, req: RaidStartRequest, now = new Date()): Promise<RaidStartResponse> {
-  return db.transaction(async (tx) => {
-    const ins = await tx
-      .insert(raids)
-      .values({
-        matchId: req.matchId,
-        mode: req.mode,
-        mapId: req.mapId,
-        matchSeed: req.matchSeed,
-        status: "running",
-        started: true,
-        startRequest: req,
-        startedAt: now,
-        endsAt: new Date(now.getTime() + MATCH.DURATION_MS),
-        serverId: req.serverId ?? null,
-        instanceId: req.instanceId ?? null,
-      })
-      .onConflictDoNothing()
-      .returning({ matchId: raids.matchId });
-    if (ins.length === 0) {
-      const existing = await lockRaid(tx, req.matchId, "share");
-      if (existing?.start_response) return existing.start_response;
-      // Row created lazily by an early exit report, or a start that crashed mid-way cannot
-      // exist (same tx). Answer with nothing allocated rather than double-allocating.
-      return { accepted: [], rejected: [], containerLoot: {}, autosellMult: await getNumberParam(tx, PARAM.AUTOSELL_MULT) };
-    }
-
-    const accepted: LoadoutSnapshot[] = [];
-    const rejected: RaidStartResponse["rejected"] = [];
-    let riskUnits = 0;
-    const seen = new Set<string>();
-    for (const p of req.players) {
-      if (!p.loadoutId || seen.has(p.userId)) continue;
-      seen.add(p.userId);
-      if (!isUuid(p.loadoutId) || !isUuid(p.userId)) {
-        rejected.push({ userId: p.userId, reason: "not_locked" });
-        continue;
-      }
-      const lr = await tx.execute<{ id: string; user_id: string; status: string; locked_at: Date; entries: LoadoutSnapshot["entries"] }>(
-        sql`select id, user_id, status, locked_at, entries from loadouts where id = ${p.loadoutId} for update`,
-      );
-      const lo = lr.rows[0];
-      if (!lo || lo.status !== "locked") {
-        rejected.push({ userId: p.userId, reason: "not_locked" });
-        continue;
-      }
-      if (lo.user_id !== p.userId) {
-        rejected.push({ userId: p.userId, reason: "wrong_user" });
-        continue;
-      }
-      if (new Date(lo.locked_at).getTime() < now.getTime() - LOADOUT_LOCK_TTL_MS) {
-        await releaseLoadout(tx, lo.id, lo.user_id, "cancelled", "expire");
-        rejected.push({ userId: p.userId, reason: "expired" });
-        continue;
-      }
-      await tx
-        .update(loadouts)
-        .set({ status: "in_raid", matchId: req.matchId, startedAt: now })
-        .where(and(eq(loadouts.id, lo.id), eq(loadouts.status, "locked")));
-      const entries: LoadoutSnapshot["entries"] = [];
-      for (const e of lo.entries) {
-        if (!e.uid) {
-          entries.push({ ...e, dur: toRaidDur(e.def, e.dur) });
-          continue;
-        }
-        const it = await lockItem(tx, e.uid);
-        // A locked item can only be in_raid with this loadout; anything else is dropped from
-        // the snapshot so the server can never spawn an item the DB does not hold for it.
-        if (!it || it.state !== "in_raid" || it.loadoutId !== lo.id || it.matchId !== null) continue;
-        await applyMove(tx, it, { state: "in_raid", matchId: req.matchId }, { reason: "start", refId: req.matchId });
-        entries.push({ key: e.key, uid: it.id, def: it.defId, qty: 1, rarity: it.rarity, dur: toRaidDur(it.defId, it.durability) });
-        // Bound or worn-out (< POOL.RISK_MIN_DUR_PCT) gear rides along but risks nothing for the pool.
-        riskUnits += riskUnitOf({ bound: it.bound, dur: it.durability });
-      }
-      const lv = await tx.execute<{ level: number }>(sql`select level from users where id = ${lo.user_id}`);
-      accepted.push({ loadoutId: lo.id, userId: lo.user_id, level: Number(lv.rows[0]?.level ?? 1), entries });
-    }
-
-    const alloc =
-      req.mode === "live"
-        ? await allocatePool(tx, {
-            matchId: req.matchId,
-            matchSeed: req.matchSeed,
-            allocSeed: req.allocSeed,
-            containers: req.containers,
-            bosses: req.bosses,
-            carriers: req.carriers,
-            riskUnits,
-          })
-        : { containerLoot: {}, released: 0, boss: 0, carrier: 0, risk: 0 };
-    const response: RaidStartResponse = {
-      accepted,
-      rejected,
-      containerLoot: alloc.containerLoot,
-      autosellMult: await getNumberParam(tx, PARAM.AUTOSELL_MULT),
-    };
-    await tx
-      .update(raids)
-      .set({ startResponse: response, riskUnits, poolReleased: alloc.released })
-      .where(eq(raids.matchId, req.matchId));
-    return response;
-  });
 }
 
 // ============================================================================ exit
@@ -277,23 +126,10 @@ export interface ExitResult {
   level: number;
   /** Uniques the report named that the DB did not hold in_raid for this match. */
   skipped: string[];
-  /** WORLD v6: xpForExit lines (empty for legacy reports and guests). */
+  /** WORLD v6: xpForExit lines (empty for guests). */
   xpLines: XpLine[];
   levelBefore: number;
   levelUp: boolean;
-}
-
-/**
- * Entry id of a legacy exit report (no entryId, pre-v6 servers; S8 removes the path): a uuid
- * formatted from sha1(`${matchId}:${userId}`), so a replay of the same report hits the same
- * raid_exits primary key.
- */
-export function legacyEntryId(matchId: string, userId: string): string {
-  const h = createHash("sha1").update(`${matchId}:${userId}`).digest("hex").slice(0, 32).split("");
-  h[12] = "5";
-  h[16] = ((parseInt(h[16]!, 16) & 0x3) | 0x8).toString(16);
-  const x = h.join("");
-  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`;
 }
 
 type EntryRow = {
@@ -315,7 +151,7 @@ function utcDayStart(now: Date): Date {
 }
 
 /**
- * POST /api/raids/exit: one human left the map (extract, death, MIA at the wipe, legacy timeout).
+ * POST /api/raids/exit: one human left the map (extract, death, MIA at the wipe).
  * WORLD v6 reports carry `entryId` (spec §4.3): the entry row must exist for this user and match
  * (else `unknown_entry`, HTTP 409, the server stops retrying); raid_exits is keyed by entry_id, so
  * two exits of one user in one match both settle, and a replay returns the stored result.
@@ -331,12 +167,11 @@ function utcDayStart(now: Date): Date {
  * - XP (registered): xpForExit with ranked PvP victims (D24, pvp_kills rows), the daily soft cap
  *   and the first extract of the UTC day; users.xp / level / matches_played; the entry's loadout →
  *   settled; the entry → exited.
- * Legacy reports (no entryId) keep the pre-v6 logic under legacyEntryId(matchId, userId).
+ * A report without entryId (pre-v6 roster matches, removed in S8) is `unknown_entry` (HTTP 409).
  * Refused (status voided → HTTP 409) once the raid was voided.
  */
 export async function applyExit(db: Db, report: PlayerExitReport, now = new Date()): Promise<ExitResult> {
   return db.transaction(async (tx) => {
-    const world = !!report.entryId;
     const autosellMult = await getNumberParam(tx, PARAM.AUTOSELL_MULT);
     const base: ExitResult = {
       status: "voided",
@@ -352,29 +187,26 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
       levelUp: false,
     };
 
-    let entry: EntryRow | null = null;
-    let raid: RaidRow | null;
-    if (world) {
-      const er = await tx.execute<EntryRow>(sql`
-        select entry_id, match_id, cycle_id, user_id, loadout_id, guest, free_kit, status, risk_units
-        from raid_entries where entry_id = ${report.entryId!} for update`);
-      entry = er.rows[0] ?? null;
-      if (!entry || entry.user_id !== report.userId || entry.match_id !== report.matchId) {
-        console.warn(`[raids/exit] ${report.matchId} ${report.userId}: unknown entry ${report.entryId}`);
-        return { ...base, status: "unknown_entry" };
-      }
-      raid = await lockRaid(tx, report.matchId, "share");
-      if (!raid) return { ...base, status: "unknown_entry" };
-    } else {
-      await ensureRaid(tx, report.matchId, "steppe", 0, now);
-      raid = (await lockRaid(tx, report.matchId, "share"))!;
+    if (!report.entryId) {
+      console.warn(`[raids/exit] ${report.matchId} ${report.userId}: report without entryId (pre-v6 server)`);
+      return { ...base, status: "unknown_entry" };
     }
+    const entryId = report.entryId;
+    const er = await tx.execute<EntryRow>(sql`
+      select entry_id, match_id, cycle_id, user_id, loadout_id, guest, free_kit, status, risk_units
+      from raid_entries where entry_id = ${entryId} for update`);
+    const entry = er.rows[0] ?? null;
+    if (!entry || entry.user_id !== report.userId || entry.match_id !== report.matchId) {
+      console.warn(`[raids/exit] ${report.matchId} ${report.userId}: unknown entry ${entryId}`);
+      return { ...base, status: "unknown_entry" };
+    }
+    const raid = await lockRaid(tx, report.matchId, "share");
+    if (!raid) return { ...base, status: "unknown_entry" };
     if (raid.status === "voided") return base;
     // Voided entries (never materialized, or a voided shard) take no exit.
-    if (entry && entry.status === "voided") return base;
-    const entryId = report.entryId ?? legacyEntryId(report.matchId, report.userId);
-    // Settled items and the credit are referenced by entry in world matches; legacy keeps the matchId.
-    const ref = world ? entryId : report.matchId;
+    if (entry.status === "voided") return base;
+    // Settled items and the credit are referenced by the entry (D30).
+    const ref = entryId;
 
     const userRes = await tx.execute<{ id: string; xp: number; level: number }>(
       sql`select id, xp, level from users where id = ${report.userId} for update`,
@@ -382,28 +214,22 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
     const user = userRes.rows[0] ?? null;
     const guest = !user;
 
-    // Pre-v6 rows got random entry ids in the migration: a legacy replay is also matched by (match, user).
-    const legacyDup = !world
-      ? await tx.select().from(raidExits).where(and(eq(raidExits.matchId, report.matchId), eq(raidExits.userId, report.userId)))
-      : [];
-    const ins = legacyDup.length
-      ? []
-      : await tx
-          .insert(raidExits)
-          .values({
-            entryId,
-            matchId: report.matchId,
-            userId: report.userId,
-            exit: report.exit,
-            report,
-            guest,
-            at: now,
-            cycleId: entry ? Number(entry.cycle_id) : null,
-          })
-          .onConflictDoNothing()
-          .returning({ entryId: raidExits.entryId });
+    const ins = await tx
+      .insert(raidExits)
+      .values({
+        entryId,
+        matchId: report.matchId,
+        userId: report.userId,
+        exit: report.exit,
+        report,
+        guest,
+        at: now,
+        cycleId: Number(entry.cycle_id),
+      })
+      .onConflictDoNothing()
+      .returning({ entryId: raidExits.entryId });
     if (ins.length === 0) {
-      const prev = legacyDup.length ? legacyDup : await tx.select().from(raidExits).where(eq(raidExits.entryId, entryId));
+      const prev = await tx.select().from(raidExits).where(eq(raidExits.entryId, entryId));
       const r = prev[0]!;
       const level = Number(user?.level ?? 0);
       const levelBefore = user ? levelForXp(Math.max(0, Number(user.xp) - r.xp)) : 0;
@@ -426,11 +252,10 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
     const junk: SettledItem[] = [];
     const live = raid.mode === "live";
     // D21: a pool unique released into this match that an entry with no risk extracts arrives BOUND.
-    const bindPool = !guest && (entry ? live && Number(entry.risk_units) === 0 : await riskFreeRaider(tx, raid, report.userId));
+    const bindPool = !guest && live && Number(entry.risk_units) === 0;
     const allocated = bindPool ? await poolAllocatedIds(tx, report.matchId) : new Set<string>();
-    const onMapMs =
-      world && Number.isFinite(report.enteredAtMs) ? Math.max(0, Math.floor(report.atMs - Number(report.enteredAtMs))) : 0;
-    const lockRaidsDelta = world ? (onMapMs >= WORLD.MIN_EXPOSURE_MS ? -1 : 0) : -1;
+    const onMapMs = Number.isFinite(report.enteredAtMs) ? Math.max(0, Math.floor(report.atMs - Number(report.enteredAtMs))) : 0;
+    const lockRaidsDelta = onMapMs >= WORLD.MIN_EXPOSURE_MS ? -1 : 0;
 
     for (const s of report.extracted) {
       const d = itemDef(s.def);
@@ -502,11 +327,11 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
     if (guest) {
       sale = junkSellCr(junk, autosellMult);
     } else {
-      const mults = await dogTagMults(tx, user!.id, report.matchId, junk, now, world);
+      const mults = await dogTagMults(tx, user!.id, report.matchId, junk, now);
       sale = junkSellCr(junk, autosellMult, 0, (i) => mults[i] ?? 1);
     }
     // A live entry with no unique (the free kit): junk sells at FREE_KIT.AUTOSELL_MULT (dog tags keep their price).
-    if (entry ? live && entry.free_kit : freeKitRaid(raid, report.userId)) sale = freeKitSale(sale);
+    if (live && entry.free_kit) sale = freeKitSale(sale);
     let credited = 0;
     if (!guest && sale.total > 0) {
       const c = await credit(tx, user!.id, sale.total, "autosell", `exit:${ref}`);
@@ -524,68 +349,50 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
     let pvpRanked = 0;
     if (!guest) {
       levelBefore = levelForXp(Number(user!.xp));
-      if (world) {
-        pvpRanked = await recordPvpKills(tx, {
-          killerId: user!.id,
-          victims: report.victims ?? [],
-          matchId: report.matchId,
-          entryId,
-          cycleId: Number(entry!.cycle_id),
-          now,
-        });
-        const dayStart = utcDayStart(now);
-        const g = await tx.execute<{ grind: number; first: number }>(sql`
-          select coalesce(sum(xp_grind), 0)::int as grind,
-                 count(*) filter (where exit = 'extract' and on_map_ms >= ${XP.MIN_ONMAP_MS})::int as first
-          from raid_exits where user_id = ${user!.id} and at >= ${dayStart} and entry_id <> ${entryId}`);
-        const r = xpForExit({
-          exit: report.exit,
-          onMapMs,
-          haulCr: sale.lines.filter((l) => l.def !== "junk_dogtag").reduce((a, l) => a + l.cr, 0),
-          containers: Number(report.stats?.containersSearched ?? 0),
-          marauders: npcKills - guardKills,
-          guards: guardKills,
-          bosses: bossKills,
-          rankedPvp: pvpRanked,
-          grindToday: Number(g.rows[0]?.grind ?? 0),
-          firstExtractToday: Number(g.rows[0]?.first ?? 0) === 0,
-        });
-        xp = r.total;
-        xpLines = r.lines;
-        xpGrind = r.grind;
-      } else {
-        xp =
-          PROGRESSION.XP_RAID +
-          (report.exit === "extract" ? PROGRESSION.XP_EXTRACT : 0) +
-          Math.max(0, report.kills) * PROGRESSION.XP_KILL +
-          Math.max(0, report.stats?.bossKills ?? 0) * PROGRESSION.XP_BOSS +
-          npcKillXp(report);
-      }
+      pvpRanked = await recordPvpKills(tx, {
+        killerId: user!.id,
+        victims: report.victims ?? [],
+        matchId: report.matchId,
+        entryId,
+        cycleId: Number(entry.cycle_id),
+        now,
+      });
+      const dayStart = utcDayStart(now);
+      const g = await tx.execute<{ grind: number; first: number }>(sql`
+        select coalesce(sum(xp_grind), 0)::int as grind,
+               count(*) filter (where exit = 'extract' and on_map_ms >= ${XP.MIN_ONMAP_MS})::int as first
+        from raid_exits where user_id = ${user!.id} and at >= ${dayStart} and entry_id <> ${entryId}`);
+      const r = xpForExit({
+        exit: report.exit,
+        onMapMs,
+        haulCr: sale.lines.filter((l) => l.def !== "junk_dogtag").reduce((a, l) => a + l.cr, 0),
+        containers: Number(report.stats?.containersSearched ?? 0),
+        marauders: npcKills - guardKills,
+        guards: guardKills,
+        bosses: bossKills,
+        rankedPvp: pvpRanked,
+        grindToday: Number(g.rows[0]?.grind ?? 0),
+        firstExtractToday: Number(g.rows[0]?.first ?? 0) === 0,
+      });
+      xp = r.total;
+      xpLines = r.lines;
+      xpGrind = r.grind;
       const total = Number(user!.xp) + xp;
       level = levelForXp(total);
       await tx.execute(
         sql`update users set xp = ${total}, level = ${level}, matches_played = matches_played + 1 where id = ${user!.id}`,
       );
-      if (entry) {
-        if (entry.loadout_id) {
-          await tx
-            .update(loadouts)
-            .set({ status: "settled", closedAt: now })
-            .where(and(eq(loadouts.id, entry.loadout_id), eq(loadouts.status, "in_raid")));
-        }
-      } else {
+      if (entry.loadout_id) {
         await tx
           .update(loadouts)
           .set({ status: "settled", closedAt: now })
-          .where(and(eq(loadouts.userId, user!.id), eq(loadouts.matchId, report.matchId), eq(loadouts.status, "in_raid")));
+          .where(and(eq(loadouts.id, entry.loadout_id), eq(loadouts.status, "in_raid")));
       }
     }
-    if (entry) {
-      await tx
-        .update(raidEntries)
-        .set({ status: "exited", settledAt: now })
-        .where(and(eq(raidEntries.entryId, entryId), eq(raidEntries.status, "active")));
-    }
+    await tx
+      .update(raidEntries)
+      .set({ status: "exited", settledAt: now })
+      .where(and(eq(raidEntries.entryId, entryId), eq(raidEntries.status, "active")));
     await tx
       .update(raidExits)
       .set({
@@ -657,16 +464,6 @@ async function recordPvpKills(
 }
 
 /**
- * XP for NPC kills (v5, legacy reports): marauders at XP_NPC, guards (RaidStats.guardKills, a subset
- * of npcKills) at XP_GUARD; bosses are paid via bossKills. npcKillCount caps the total at NPC.MAX_PER_RAID.
- */
-export function npcKillXp(report: Pick<PlayerExitReport, "stats">): number {
-  const n = npcKillCount(report);
-  const g = Math.min(n, Math.max(0, Math.floor(Number(report.stats?.guardKills ?? 0)) || 0));
-  return (n - g) * PROGRESSION.XP_NPC + g * PROGRESSION.XP_GUARD;
-}
-
-/**
  * NPC MODEL v5: marauders + guards this human killed (RaidStats.npcKills; bosses count in
  * bossKills), capped at NPC.MAX_PER_RAID so an NPC sweep's XP stays bounded.
  */
@@ -677,8 +474,8 @@ export function npcKillCount(report: Pick<PlayerExitReport, "stats">): number {
 
 /**
  * Per-line dog-tag multiplier (index = position in `junk`): tags of the same victim extracted by the
- * same user inside DOG_TAG.REPEAT_WINDOW_MS are paid for the first REPEAT_FREE only; WORLD v6 (D22,
- * `world`): a tag whose killer (`by`) is not this user pays DOG_TAG.NON_KILLER_MULT. Records every
+ * same user inside DOG_TAG.REPEAT_WINDOW_MS are paid for the first REPEAT_FREE only; WORLD v6 (D22):
+ * a tag whose killer (`by`) is not this user pays DOG_TAG.NON_KILLER_MULT. Records every
  * tag in dog_tag_payouts so later raids see it.
  */
 async function dogTagMults(
@@ -687,7 +484,6 @@ async function dogTagMults(
   matchId: string,
   junk: SettledItem[],
   now: Date,
-  world: boolean,
 ): Promise<number[]> {
   const out: number[] = [];
   const since = new Date(now.getTime() - DOG_TAG.REPEAT_WINDOW_MS);
@@ -704,7 +500,7 @@ async function dogTagMults(
       where extractor_id = ${userId} and victim_key = ${key} and paid and at > ${since}`);
     const already = Number(prior.rows[0]?.n ?? 0) + (paidHere.get(key) ?? 0);
     const pair = dogTagPairMult(already);
-    const m = pair * (world && s.by !== userId ? DOG_TAG.NON_KILLER_MULT : 1);
+    const m = pair * (s.by !== userId ? DOG_TAG.NON_KILLER_MULT : 1);
     out.push(m);
     if (pair) paidHere.set(key, (paidHere.get(key) ?? 0) + 1);
     await tx
@@ -762,7 +558,7 @@ async function voidEntryTx(
 }
 
 /**
- * POST /api/raids/end (legacy match end, WORLD v6 wipe). Idempotent on raids.status:
+ * POST /api/raids/end (WORLD v6 wipe; running rows of pre-v6 matches settle the same way). Idempotent on raids.status:
  * 1. WORLD v6: active entries not in `report.entries` never materialized → voided first (gear back,
  *    allocations to the pool untaxed).
  * 2. A6 expiry: `expired` (player corpse / ground uniques) → treasury, no wear, no tax step (reason

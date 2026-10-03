@@ -129,7 +129,7 @@ export interface ContainerLootEntry {
  * v4: high-value junk (gold chain, GPU, cold wallet) left the ordinary containers — it drops from
  * bosses (BOSSES[kind].junk), and a little gold chain / GPU stays in safes (T3/T4 only on the
  * Steppe). Per-tier filtering and ammo scaling: containerLootFor. Uniques never come from here: in
- * live mode they come only from the lost pool (RaidStartResponse.containerLoot), in demo mode from
+ * live mode they come only from the lost pool (WORLD v6: placed by the server, D18), in demo mode from
  * CHEST_TABLES (tier >= CONTAINER.DEMO_UNIQUE_MIN_TIER).
  */
 export const CONTAINER_LOOT: Readonly<Record<ContainerKind, readonly ContainerLootEntry[]>> = {
@@ -386,9 +386,12 @@ export const BOUND_OFFERS: readonly BoundOffer[] = [
   { trader: "gunsmith", def: "sniper", rarity: 0, cr: 3200, traderLevel: 3 },
 ];
 
-/** Bound-trader level a player of `level` may buy from: 1–4 → 1, 5–9 → 2, 10–14 → 3, 15+ → 4. */
+/**
+ * Bound-trader level a player of `level` may buy from: 1–4 → 1, 5–9 → 2, 10–14 → 3, 15+ → 4 (the same
+ * bands as the lobby level badge, spec §6.2; the rifle unlocks at level 5).
+ */
 export function boundTraderLevel(level: number): 1 | 2 | 3 | 4 {
-  return Math.max(1, Math.min(4, 1 + Math.floor((Math.max(1, Math.floor(level)) - 1) / 5))) as 1 | 2 | 3 | 4;
+  return Math.max(1, Math.min(4, 1 + Math.floor(Math.max(1, Math.floor(level)) / 5))) as 1 | 2 | 3 | 4;
 }
 
 /** The BOUND_OFFERS entry for `def`, or null. */
@@ -434,14 +437,6 @@ export const POOL = {
   GUARDED_RADIUS_PX: 1600,
   /** …and gets this weight multiplier in planAllocation (≈ 68 % of container uniques on the Steppe). */
   GUARDED_WEIGHT: 4,
-  /** @deprecated v4 removed the free release floor (0 = risk-only); kept for the legacy poolReleasePlan. */
-  MIN_RELEASE_PER_MATCH: 0,
-  /** @deprecated v4: use BOSS_MIN_POOL. */
-  FLOOR_MIN_POOL: 150,
-  /** @deprecated v4: use CONTAINER_MIN_TIER. */
-  FLOOR_MIN_TIER: 3,
-  /** @deprecated v4: boss slots come from BOSSES[kind].poolSlots (raidBossSlots). */
-  BOSS_SHARE: 2,
   // ---- WORLD v6: per-entry release (D17), server placement (D18), boss bag (D19).
   /** Shard-cycle cap = min(CYCLE_MAX, CYCLE_BASE + ceil(CYCLE_PER_RISK_USER × riskUsers)). */
   CYCLE_BASE: 4,
@@ -480,24 +475,7 @@ export function poolReleaseCount(poolSize: number, riskUnits: number): number {
 }
 
 /**
- * @deprecated v4 — use poolReleasePlanV4. Legacy shape: the risk count topped up to `minRelease`
- * (default POOL.MIN_RELEASE_PER_MATCH = 0, i.e. risk-only) while the pool stays above
- * FLOOR_MIN_POOL.
- */
-export function poolReleasePlan(
-  poolSize: number,
-  riskUnits: number,
-  minRelease: number = POOL.MIN_RELEASE_PER_MATCH,
-): { total: number; risk: number; floor: number } {
-  const risk = poolReleaseCount(poolSize, riskUnits);
-  const above = Math.max(0, poolSize - risk - POOL.FLOOR_MIN_POOL);
-  const want = Math.max(0, Math.min(POOL.MAX_PER_MATCH, Math.floor(minRelease)) - risk);
-  const floor = Math.max(0, Math.min(want, above));
-  return { total: risk + floor, risk, floor };
-}
-
-/**
- * Risk units one loadout unique adds to its lobby (raids/start riskUnits, v5 review): 1 when losing
+ * Risk units one loadout unique adds to its entry (raids/enter risk_units, v5 review): 1 when losing
  * it would really feed the lost pool — not bound (a bound item is destroyed, never pooled) and at
  * least POOL.RISK_MIN_DUR_PCT durability — else 0. Giveaway items under their trade lock DO count:
  * they enter the pool on death like any other unique (the kit itself is capped and gated, GIVEAWAY).
@@ -800,8 +778,8 @@ export const BOSS_SALT = 0xb055_5a17;
 /**
  * Which of the map's boss spots spawn this match. One draw per spot in array order (also for a
  * disabled boss, so toggling one never shifts the others): spawned when BOSSES[kind].enabled and
- * the draw < spot.chance. Deterministic in matchSeed: the matchmaking room (raids/start bosses[])
- * and the match setup must call it with the same seed and get the same answer.
+ * the draw < spot.chance. Deterministic in matchSeed. Legacy roster matches and the sim harness only:
+ * WORLD v6 spawns exactly the event boss of bossEventOf.
  */
 export function rollBossSpawns(matchSeed: number, spots: readonly BossSpot[]): BossSpot[] {
   const rng = mulberry32((matchSeed ^ BOSS_SALT) >>> 0);
@@ -876,12 +854,12 @@ export function bossEventOf(cycle: number, hash: (label: string) => number): Bos
   return perm[idx]!;
 }
 
-/** RaidStartRequest.bosses for the spawned bosses: their poolSlots (min tier scores). */
+/** Legacy allocation input (planAllocation, sim harness): the spawned bosses and their poolSlots. */
 export function raidBossSlots(spawned: ReadonlyArray<{ kind: BossKind }>): Array<{ kind: BossKind; slots: number[] }> {
   return spawned.map((b) => ({ kind: b.kind, slots: [...BOSSES[b.kind].poolSlots] }));
 }
 
-/** Σ pool slots of the spawned bosses (poolReleasePlanV4's bossNeed; legacy RaidStartRequest.bossSlots). */
+/** Σ pool slots of the spawned bosses (poolReleasePlanV4's bossNeed). */
 export function bossSlotCount(bosses: ReadonlyArray<{ slots: readonly number[] }>): number {
   return bosses.reduce((n, b) => n + b.slots.length, 0);
 }
@@ -1071,13 +1049,6 @@ export const XP = {
   DAILY_SOFT_CAP: 2_500,
   DAILY_OVER_MULT: 0.25,
 } as const;
-
-/**
- * @deprecated v6: use XP / xpForExit. Kept until S8 (old tests).
- * XP per raid event. XP_KILL is for human kills only; NPC kills give XP_NPC (marauder) / XP_GUARD /
- * XP_BOSS. At most ~40 NPCs per raid, so an NPC sweep's XP is bounded.
- */
-export const PROGRESSION = { XP_RAID: 100, XP_EXTRACT: 250, XP_KILL: 80, XP_BOSS: 400, XP_NPC: 20, XP_GUARD: 40 } as const;
 
 export type XpKey = "extract" | "haul" | "containers" | "npc" | "guard" | "boss" | "pvp" | "first_extract" | "daily_cap";
 /** One line of the XP receipt: `qty` units of `key` worth `xp` (daily_cap is negative). */

@@ -1,20 +1,20 @@
 /**
  * Game server ↔ web API payloads (HMAC-signed, headers in constants.ts HEADERS) and the personal
- * outcome message. Flow (critique "Settlement and loadout flow"):
- *   web: lock loadout → JoinTicket{loadoutId}
- *   MatchmakingRoom.launch → POST /api/raids/start (RaidStartRequest, idempotent, 3 retries)
- *   each human leaving the map → POST /api/raids/exit (PlayerExitReport, idempotent per user)
- *   match end → POST /api/raids/end (MatchEndReport)
- * Every unique uid appears in exactly one report per match (server ledger invariant).
- * WORLD v6 (spec §2.6): no matchmaking; the directory opens a shard (raids/open, ShardOpenRequest),
- * each entry is admitted with raids/enter (EntryRequest), every exit is keyed by entryId, and the
- * wipe posts raids/end. One uid may live several lives in one match (extract X, re-enter with X).
+ * outcome message. WORLD v6 flow (spec §2.6; no matchmaking):
+ *   web: POST /api/world/join locks the loadout → JoinTicket{loadoutId, matchId, entryId}
+ *   directory opens a shard → POST /api/raids/open (ShardOpenRequest, idempotent per matchId)
+ *   battle room admission → POST /api/raids/enter (EntryRequest, idempotent per entryId)
+ *   each human leaving the map → POST /api/raids/exit (PlayerExitReport keyed by entryId)
+ *   event boss killed → POST /api/world/event (WorldEventReport)
+ *   wipe → POST /api/raids/end (MatchEndReport)
+ * Every unique uid appears in exactly one report per life (server ledger invariant). One uid may
+ * live several lives in one match (extract X, re-enter with X).
  */
 
 import type { WorldPhase } from "./constants.js";
 import type { XpLine } from "./economy.js";
 import type { InvErrCode, LoadoutEntry, LoadoutErrCode, SlotKey } from "./inventory.js";
-import { BOSS_KINDS, type BossKind, type ContainerKind, type LootTier, type MapId } from "./map/types.js";
+import { BOSS_KINDS, type BossKind, type MapId } from "./map/types.js";
 
 /**
  * How a human left the map. "timeout" = legacy roster matches only; "mia" = WORLD v6: still on the
@@ -43,7 +43,7 @@ export interface SettledItem {
   by?: string;
 }
 
-/** A locked loadout as accepted by raids/start. */
+/** A locked loadout as accepted by raids/enter (EntryResponse.snapshot). */
 export interface LoadoutSnapshot {
   loadoutId: string;
   userId: string;
@@ -54,15 +54,14 @@ export interface LoadoutSnapshot {
 
 export type RaidMode = "live" | "demo";
 
-/** Game server (MatchmakingRoom) → web. Idempotent per matchId (the stored response is replayed). */
-/** One spawned boss and its pool slots (RaidStartRequest.bosses). */
+/** One spawned boss and its pool slots (legacy v4/v5 allocation: planAllocation, sim harness). */
 export interface RaidBossSlots {
   kind: BossKind;
   /** One entry per slot: the minimum uniqueTierScore wanted (fallback: best available). */
   slots: number[];
 }
 
-/** RaidStartResponse.containerLoot key of a boss's pool items (v4; the legacy key was "boss"). */
+/** containerLoot key of a boss's pool items (legacy v4 allocation and the sim harness; the older key was "boss"). */
 export type BossLootKey = `boss:${BossKind}`;
 export function bossLootKey(kind: BossKind): BossLootKey {
   return `boss:${kind}`;
@@ -72,51 +71,6 @@ export function bossKindOfLootKey(key: string): BossKind | null {
   if (!key.startsWith("boss:")) return null;
   const k = key.slice(5);
   return (BOSS_KINDS as readonly string[]).includes(k) ? (k as BossKind) : null;
-}
-
-/** @deprecated v6: legacy roster matches only (world shards use ShardOpenRequest / EntryRequest). Deleted in S8. */
-export interface RaidStartRequest {
-  matchId: string;
-  mode: RaidMode;
-  mapId: MapId;
-  matchSeed: number;
-  /**
-   * Server-secret seed of the pool allocation (the game server's per-match lootSeed, never sent to a
-   * client). Absent (older servers): the web falls back to matchSeed, which clients know.
-   */
-  allocSeed?: number;
-  /** loadoutId "" = free kit (no pool loot for that player). */
-  players: Array<{ userId: string; loadoutId: string }>;
-  /**
-   * Static containers eligible for pool items (MapData.containers index). v4: `guarded` = within
-   * POOL.GUARDED_RADIUS_PX of a BossSpot (containerGuarded), weight × POOL.GUARDED_WEIGHT.
-   */
-  containers: Array<{ idx: number; kind: ContainerKind; tier: LootTier; guarded?: boolean }>;
-  /**
-   * Legacy: Σ pool slots of the spawned bosses (bossSlotCount(bosses)); kept during the v4
-   * rollout. 0 = no boss.
-   */
-  bossSlots: number;
-  /**
-   * v4: bosses that spawned this match (rollBossSpawns(lootSeed, map.bosses), raidBossSlots), each
-   * with its pool slots (minimum uniqueTierScore per slot). Their items come back under
-   * containerLoot[bossLootKey(kind)].
-   */
-  bosses?: RaidBossSlots[];
-  /**
-   * NPC MODEL v5 §3.3: spawned T3/T4 marauders that may carry ONE pool unique each (raidNpcCarriers
-   * over rollNpcSpawns). planAllocation weighs them npcCarrierWeight(tier) next to the containers;
-   * their items come back under containerLoot[key] (key = npcCarrierKey(postId, member)). Never
-   * minted: same risk-tied release, a third destination.
-   */
-  carriers?: Array<{ key: string; tier: 3 | 4 }>;
-  /**
-   * Game server process that runs the match (GameServerBoot.instanceId). On its next boot the
-   * server calls POST /api/raids/void-orphans and raids of an older instance are voided at once.
-   */
-  instanceId?: string;
-  /** Stable id of the game server deployment (GameServerBoot.serverId); absent = "default". */
-  serverId?: string;
 }
 
 /** Game server → web at process boot (POST /api/raids/void-orphans, HMAC-signed). */
@@ -131,22 +85,6 @@ export interface GameServerBoot {
 
 export interface VoidOrphansResponse {
   voided: string[];
-}
-
-/** @deprecated v6: legacy roster matches only. Deleted in S8. */
-export interface RaidStartResponse {
-  accepted: LoadoutSnapshot[];
-  rejected: Array<{ userId: string; reason: "not_locked" | "wrong_user" | "expired" }>;
-  /**
-   * Lost-pool uniques allocated to containers, keyed by container index (decimal string in JSON);
-   * v4 key bossLootKey(kind) ("boss:<kind>") = that boss's bag (pool slots, never break); v5 key
-   * npcCarrierKey(postId, member) ("npc:<postId>.<member>") = one stowed unique on a marauder (never
-   * breaks; unlooted → leftOnMap); legacy key "boss" = the old boss stash share. Fungibles are
-   * rolled by the server itself.
-   */
-  containerLoot: Record<string, SettledItem[]>;
-  /** Current autosell multiplier (shown in the outcome receipt). */
-  autosellMult: number;
 }
 
 /** Per-raid stats for XP / quests. */
@@ -178,7 +116,11 @@ export interface PlayerExitReport {
   /** Durability hit 0 during the raid (armor fully absorbed). */
   destroyed: SettledItem[];
   stats: RaidStats;
-  /** WORLD v6: this entry (one stay of one user on the map, minted by the web). World matches: always set. */
+  /**
+   * WORLD v6: this entry (one stay of one user on the map, minted by the web). World matches always
+   * set it; the web settles only reports that carry it (no entryId → 409 unknown_entry). Optional
+   * because legacy roster matches (sim tests, the loot-yield harness) build reports without it.
+   */
   entryId?: string;
   /** WORLD v6: cycle clock at admission (onMapMs = atMs − enteredAtMs). */
   enteredAtMs?: number;

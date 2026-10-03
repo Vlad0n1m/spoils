@@ -14,6 +14,10 @@ export const INPUT_DT_MS = 1000 / INPUT_HZ;
 /** Server-side cap on queued inputs per player (anti speed-hack + memory bound). */
 export const MAX_QUEUED_INPUTS = 15;
 
+/**
+ * Legacy roster matches (sim tests, the loot-yield harness). WORLD v6 maps use the WORLD cycle fields
+ * below: 45-minute maps, personal extract arm, no queue (one always-live world, joined by id).
+ */
 export const MATCH = {
   /** Total match length; players still on the map at the end lose what they carry. */
   DURATION_MS: 30 * 60_000,
@@ -25,27 +29,6 @@ export const MATCH = {
   EXTRACT_CLOSE_EARLY_FRACTION: 0.5,
   /** 0.83 × 30 min ≈ 25:00. */
   EXTRACT_CLOSE_EARLY_AT: 0.83,
-  /**
-   * NPC MODEL v5 queue ("mm", humans only; NPCs are never players). A window opens on the first
-   * join; the match launches at the first of: queue >= MAX_HUMANS (at once); queue >= MIN_HUMANS
-   * and >= MIN_WAIT_MS since the window opened; the window ends with >= 1 human (a solo raid against
-   * NPCs is legal, SOLO_START_OK). Joiners beyond MAX_HUMANS open the next window (mmShouldLaunch).
-   * WORLD v6: the queue is gone (one always-live world, WORLD below); these stay until step S8.
-   */
-  /** @deprecated v6: no matchmaking (WORLD.CAPACITY). Deleted in S8. */
-  MAX_HUMANS: 24,
-  /** @deprecated v6: no matchmaking. Deleted in S8. */
-  MIN_HUMANS: 12,
-  /** @deprecated v6: no matchmaking. Deleted in S8. */
-  MIN_WAIT_MS: 10_000,
-  /** @deprecated v6: no matchmaking. Deleted in S8. */
-  QUEUE_WINDOW_MS: 45_000,
-  /** @deprecated v6: no matchmaking. Deleted in S8. */
-  SOLO_START_OK: true,
-  /** @deprecated v5: humans + bots per match; use MAX_HUMANS (bots are gone). */
-  MAX_PLAYERS: 32,
-  /** @deprecated v5: the old bot-fill deadline; use QUEUE_WINDOW_MS. */
-  MATCHMAKING_TIMEOUT_MS: 4_000,
   /** Room stays alive this long after the end so clients receive the final messages. */
   DISPOSE_AFTER_END_MS: 8_000,
 } as const;
@@ -60,19 +43,6 @@ export const SPAWN_RULES = { HUMAN_MIN_SEP_PX: 3000, SIDE_CAP_EXTRA: 1 } as cons
 /** Humans allowed on one side for a match of `n` humans: ceil(n / 4) + SPAWN_RULES.SIDE_CAP_EXTRA. */
 export function humanSideCap(n: number): number {
   return Math.ceil(Math.max(0, n) / 4) + SPAWN_RULES.SIDE_CAP_EXTRA;
-}
-
-/**
- * @deprecated v6: no matchmaking (one always-live world). Deleted in S8.
- * Queue rule (MATCH): should the "mm" queue launch now? `queued` humans, `sinceOpenMs` since the
- * window opened, `windowMs` = the window length (env MM_QUEUE_WINDOW_MS, default
- * MATCH.QUEUE_WINDOW_MS). Never launches an empty queue.
- */
-export function mmShouldLaunch(queued: number, sinceOpenMs: number, windowMs: number = MATCH.QUEUE_WINDOW_MS): boolean {
-  if (queued < 1) return false;
-  if (queued >= MATCH.MAX_HUMANS) return true;
-  if (queued >= MATCH.MIN_HUMANS && sinceOpenMs >= MATCH.MIN_WAIT_MS) return true;
-  return sinceOpenMs >= windowMs && MATCH.SOLO_START_OK;
 }
 
 /**
