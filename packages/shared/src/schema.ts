@@ -151,6 +151,10 @@ export class SelfState extends Schema {
   @type("uint8") side = 0;
   /** Bit i = MapData.extracts[i] allowed for this player. */
   @type("uint8") extractMask = 0;
+  /** WORLD v6: match clock when this entry was admitted; 0 = legacy match. */
+  @type("number") enteredAt = 0;
+  /** WORLD v6: match clock when this player's extracts arm (enteredAt + EXTRACT_ARM_MS); see extractOpenAtFor. */
+  @type("number") extractArmAt = 0;
 }
 
 /** Item lying on the ground. AOI-filtered. uid / mag / dur live in the server runtime only. */
@@ -162,6 +166,8 @@ export class GroundItem extends Schema {
   @type("number") y = 0;
   @type("uint16") qty = 1;
   @type("uint8") rarity = 0;
+  /** WORLD v6 (A6): match clock when it vanishes (hit the ground + WORLD.GROUND_EXPIRE_MS); 0 = never. */
+  @type("number") expiresAt = 0;
 }
 
 /** A dead player's body (dynamic container). AOI-filtered; contents go through `loot` k<id>. */
@@ -178,6 +184,8 @@ export class Corpse extends Schema {
   @type("boolean") opened = false;
   /** Fully looted (renders as empty). */
   @type("boolean") empty = false;
+  /** WORLD v6 (A6): match clock when it vanishes with its contents (death + WORLD.CORPSE_EXPIRE_MS); 0 = never. */
+  @type("number") expiresAt = 0;
 }
 
 /**
@@ -210,7 +218,7 @@ export class BattleState extends Schema {
   @type("string") mapId = "steppe";
   /** Match seed: loot, bosses (NOT geometry in v2; legacy map uses it as the layout seed). */
   @type("uint32") mapSeed = 0;
-  /** "drop" (extracts closed) | "open" (extracts open) | "ended" */
+  /** "drop" (extracts closed) | "open" (extracts open) | "ended". World matches: "open" all cycle, "ended" after the wipe. */
   @type("string") phase = "drop";
   /** Server wall-clock ms when the match started. */
   @type("number") startedAt = 0;
@@ -219,7 +227,8 @@ export class BattleState extends Schema {
   @type("number") durationMs = 0;
   /** Replaces counting state.players (which now only holds visible players). */
   @type("uint8") aliveCount = 0;
-  @type("uint8") totalPlayers = 0;
+  /** Humans in the match; WORLD v6: entries this cycle (uint16: re-entries can pass 255). */
+  @type("uint16") totalPlayers = 0;
   /** Environment (environment.ts envConfigOf): fully determines weather, light and lightning. */
   @type("uint32") envSeed = 0;
   /** In-game start time, minutes since midnight. */
@@ -240,6 +249,17 @@ export class BattleState extends Schema {
   @view() @type({ map: ContainerLoot }) loot = new MapSchema<ContainerLoot>();
   /** Unfiltered (few, static). */
   @type({ map: Extract }) extracts = new MapSchema<Extract>();
+  // ---- WORLD v6 (plain fields, no @view)
+  /** World cycle of this map (worldCycleOf); 0 = legacy match. */
+  @type("uint32") cycleId = 0;
+  /** Cycle clock when entry closes (CYCLE_MS − ENTRY_CLOSE_MS); 0 = legacy match. */
+  @type("number") entryCloseMs = 0;
+  /** Event boss of this map: BossKind or "". */
+  @type("string") bossKind = "";
+  /** Display name of the boss spot's zone ("Grain Elevator"). */
+  @type("string") bossZone = "";
+  /** 0 none · 1 alive · 2 killed. */
+  @type("uint8") bossState = 0;
 }
 
 /** Every schema class (the no-@view lint and the codegen iterate this). */

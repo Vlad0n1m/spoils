@@ -45,7 +45,9 @@ export interface SlotStore<T extends ItemLike = ItemLike> {
 
 export type InvErrCode =
   | "full" | "gone" | "range" | "not_searching" | "not_ready" | "not_revealed" | "broken"
-  | "bad_slot" | "bp_not_empty" | "rate" | "dead";
+  | "bad_slot" | "bp_not_empty" | "rate" | "dead"
+  /** WORLD v6 (D11): the corpse of this user's own earlier entry cannot be searched. */
+  | "own_body";
 
 export function isSlotKey(k: unknown): k is SlotKey {
   return typeof k === "string" && (EQUIP_KEYS.includes(k as EquipKey) || /^p[0-3]$/.test(k) || /^b(?:\d|1[0-5])$/.test(k));

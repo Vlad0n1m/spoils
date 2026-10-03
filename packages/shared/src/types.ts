@@ -6,12 +6,21 @@
  *   each human leaving the map → POST /api/raids/exit (PlayerExitReport, idempotent per user)
  *   match end → POST /api/raids/end (MatchEndReport)
  * Every unique uid appears in exactly one report per match (server ledger invariant).
+ * WORLD v6 (spec §2.6): no matchmaking; the directory opens a shard (raids/open, ShardOpenRequest),
+ * each entry is admitted with raids/enter (EntryRequest), every exit is keyed by entryId, and the
+ * wipe posts raids/end. One uid may live several lives in one match (extract X, re-enter with X).
  */
 
-import type { InvErrCode, SlotKey } from "./inventory.js";
+import type { WorldPhase } from "./constants.js";
+import type { XpLine } from "./economy.js";
+import type { InvErrCode, LoadoutEntry, LoadoutErrCode, SlotKey } from "./inventory.js";
 import { BOSS_KINDS, type BossKind, type ContainerKind, type LootTier, type MapId } from "./map/types.js";
 
-export type ExitType = "extract" | "dead" | "timeout";
+/**
+ * How a human left the map. "timeout" = legacy roster matches only; "mia" = WORLD v6: still on the
+ * map (connected or not) at the wipe — everything carried enters the lost pool with no wear (D9).
+ */
+export type ExitType = "extract" | "dead" | "timeout" | "mia";
 
 /** One item in a report or snapshot (uid "" = fungible). Replaces v1 ItemRef. */
 export interface SettledItem {
@@ -27,6 +36,11 @@ export interface SettledItem {
   lvl?: number;
   /** Dog tag: victim userId (resolved by the server from InvItem.ref; absent for guest victims). */
   victim?: string;
+  /**
+   * WORLD v6 (D22) dog tag: the killer's userId (server-resolved). Full price only when it equals
+   * the extracting user; anyone else gets DOG_TAG.NON_KILLER_MULT.
+   */
+  by?: string;
 }
 
 /** A locked loadout as accepted by raids/start. */
@@ -60,6 +74,7 @@ export function bossKindOfLootKey(key: string): BossKind | null {
   return (BOSS_KINDS as readonly string[]).includes(k) ? (k as BossKind) : null;
 }
 
+/** @deprecated v6: legacy roster matches only (world shards use ShardOpenRequest / EntryRequest). Deleted in S8. */
 export interface RaidStartRequest {
   matchId: string;
   mode: RaidMode;
@@ -118,6 +133,7 @@ export interface VoidOrphansResponse {
   voided: string[];
 }
 
+/** @deprecated v6: legacy roster matches only. Deleted in S8. */
 export interface RaidStartResponse {
   accepted: LoadoutSnapshot[];
   rejected: Array<{ userId: string; reason: "not_locked" | "wrong_user" | "expired" }>;
@@ -157,11 +173,19 @@ export interface PlayerExitReport {
   level: number;
   /** Extract only: everything carried (non-FREE), incl. junk and dog tags. */
   extracted: SettledItem[];
-  /** Death: uniques that broke (→ lost pool at −8 dur). Timeout: everything carried. */
+  /** Death: uniques that broke (→ lost pool at −8 dur). Timeout / MIA: everything carried (no wear). */
   lost: SettledItem[];
   /** Durability hit 0 during the raid (armor fully absorbed). */
   destroyed: SettledItem[];
   stats: RaidStats;
+  /** WORLD v6: this entry (one stay of one user on the map, minted by the web). World matches: always set. */
+  entryId?: string;
+  /** WORLD v6: cycle clock at admission (onMapMs = atMs − enteredAtMs). */
+  enteredAtMs?: number;
+  /** WORLD v6: userIds of humans this entry killed (guests included; the web filters). */
+  victims?: string[];
+  /** WORLD v6: this entry's pool items never placed (left before POOL.APPLY_AFTER_MS) → pool, untaxed. */
+  unplaced?: SettledItem[];
 }
 
 export interface MatchEndParticipant {
@@ -196,6 +220,24 @@ export interface MatchEndReport {
   botLost?: SettledItem[];
   /** @deprecated v5 never produces it (NPCs never wear pool armor). Uniques destroyed on a bot → destroyed. */
   botDestroyed?: SettledItem[];
+  /** WORLD v6: the cycle of this shard (worldCycleOf). */
+  cycleId?: number;
+  /** WORLD v6: shard index within the cycle (0 at launch). */
+  shard?: number;
+  /** WORLD v6: every materialized entryId of this shard (the web voids unlisted active entries). */
+  entries?: string[];
+  /**
+   * WORLD v6 (addendum A6): uniques that vanished with an expired player corpse or as loose ground
+   * items a player dropped / spilled (WORLD.GROUND_EXPIRE_MS / CORPSE_EXPIRE_MS) → state `treasury`,
+   * no wear, no tax step (item_events kind `expire`, ref = matchId). Fungibles are destroyed, not listed.
+   */
+  expired?: SettledItem[];
+  /**
+   * WORLD v6 (A6): pool-allocated items that vanished with an expired NPC corpse → lost pool, untaxed
+   * (they never belonged to a player, D20). An item is in exactly one of leftOnMap / expired /
+   * expiredToPool / an exit report.
+   */
+  expiredToPool?: SettledItem[];
 }
 
 /** Counts per NPC kind (MatchEndReport.npcSummary). */
@@ -220,12 +262,194 @@ export interface JoinTicket {
   issuedAt: number;
   /** Locked loadout id; "" = free kit. */
   loadoutId: string;
+  /** WORLD v6: the shard (match) this ticket admits to. */
+  matchId?: string;
+  /** WORLD v6: the entry minted by the web at join. */
+  entryId?: string;
   sig: string;
 }
 
-/** Payload string that a JoinTicket signature covers. */
-export function joinTicketPayload(t: Pick<JoinTicket, "userId" | "nickname" | "issuedAt" | "loadoutId">): string {
-  return `${t.userId}.${t.nickname}.${t.issuedAt}.${t.loadoutId}`;
+/** Payload string that a JoinTicket signature covers: `${userId}.${nickname}.${issuedAt}.${loadoutId}.${matchId ?? ""}.${entryId ?? ""}`. */
+export function joinTicketPayload(t: Omit<JoinTicket, "sig">): string {
+  return `${t.userId}.${t.nickname}.${t.issuedAt}.${t.loadoutId}.${t.matchId ?? ""}.${t.entryId ?? ""}`;
+}
+
+// ---------------------------------------------------------------- WORLD v6: game server → web (HMAC-signed)
+
+/** The event boss of a shard: kind and the MapData zone id of its boss spot. */
+export interface WorldBossRef {
+  kind: BossKind;
+  zone: string;
+}
+
+/** POST raids/open: a shard (one Colyseus battle room = one Match = one raids row, kind 'world'). */
+export interface ShardOpenRequest {
+  matchId: string;
+  cycleId: number;
+  shard: number;
+  roomId: string;
+  mode: RaidMode;
+  mapId: MapId;
+  matchSeed: number;
+  /** Wall ms. */
+  startsAt: number;
+  entryClosesAt: number;
+  endsAt: number;
+  boss: WorldBossRef | null;
+  nextBoss: WorldBossRef | null;
+  serverId: string;
+  instanceId: string;
+}
+export interface ShardOpenResponse {
+  status: "opened" | "exists";
+  autosellMult: number;
+}
+
+/** POST raids/enter: admission of one entry (idempotent per entryId; replays return the stored response). */
+export interface EntryRequest {
+  matchId: string;
+  entryId: string;
+  userId: string;
+  /** "" = free kit. */
+  loadoutId: string;
+  /** Cycle clock at admission (stored; replays reuse it). */
+  atMs: number;
+  /** Match.poolTargetCount(). */
+  targets: number;
+  /** The event boss of this shard is alive. */
+  bossAlive: boolean;
+}
+export type EntryRejectReason = "not_locked" | "wrong_user" | "expired" | "already_active" | "entry_limit" | "shard_closed";
+export interface EntryResponse {
+  status: "accepted" | "rejected";
+  reason?: EntryRejectReason;
+  /** null = free kit. */
+  snapshot: LoadoutSnapshot | null;
+  /** Always the user's level (0 for guests): dog tags, XP. */
+  level: number;
+  guest: boolean;
+  /** Released for this entry (the server places them, D18). */
+  pool: SettledItem[];
+  /** Boss bag (D19), usually empty. */
+  bossFill: SettledItem[];
+  autosellMult: number;
+}
+/** POST /api/world/event. */
+export interface WorldEventReport {
+  matchId: string;
+  cycleId: number;
+  kind: "boss_killed";
+  boss: BossKind;
+  /** Killer nickname. */
+  by: string;
+  atMs: number;
+}
+
+// ---------------------------------------------------------------- WORLD v6: web → client
+
+export interface WorldBossDto {
+  kind: BossKind;
+  name: string;
+  zone: string;
+  zoneName: string;
+  tier: number;
+  guards: number;
+  status: "alive" | "killed";
+  killedBy: string | null;
+}
+/** GET /api/world/status (public, CDN-cached). */
+export interface WorldStatusDto {
+  v: 1;
+  serverTime: number;
+  cycle: number;
+  mapNumber: number;
+  phase: WorldPhase;
+  openAt: number;
+  entryClosesAt: number;
+  wipeAt: number;
+  /** A running world raids row exists for this cycle. */
+  online: boolean;
+  /** Active entries of this cycle. */
+  humans: number;
+  /** WORLD.CAPACITY × WORLD.MAX_SHARDS. */
+  capacity: number;
+  boss: WorldBossDto | null;
+  next: {
+    cycle: number;
+    mapNumber: number;
+    openAt: number;
+    /** Absent until revealed (WORLD.NEXT_BOSS_REVEAL_MS before the wipe). */
+    boss?: { kind: BossKind; name: string; zoneName: string } | null;
+  };
+  last: {
+    cycle: number;
+    mapNumber: number;
+    extracted: number;
+    died: number;
+    mia: number;
+    topKiller: { nickname: string; kills: number } | null;
+    bossKilledBy: string | null;
+  } | null;
+}
+/** POST /api/world/join success body. */
+export interface WorldJoinResponse {
+  ticket: JoinTicket;
+  roomId: string;
+  matchId: string;
+  cycle: number;
+  wipeAt: number;
+  entryClosesAt: number;
+  rejoin: boolean;
+  serverTime: number;
+  loadoutId: string;
+  entries: LoadoutEntry[];
+  pruned: boolean;
+}
+/** Error body of /api/world/join: { error, message, serverTime, openAt?, retryInMs?, settlesAt?, key? }. */
+export type WorldJoinError = "unauthenticated" | "entry_closed" | "world_starting" | "in_raid" | "entry_limit" | LoadoutErrCode;
+export interface LastRaidDto {
+  entryId: string;
+  cycle: number;
+  mapNumber: number;
+  exit: ExitType;
+  at: number;
+  onMapMs: number;
+  xp: number;
+  xpLines: XpLine[];
+  credits: number;
+  levelBefore: number;
+  level: number;
+  kills: { players: number; npcs: number; bosses: number };
+}
+/** GET /api/me/world (private). */
+export interface MeWorldDto {
+  serverTime: number;
+  activeEntry: { matchId: string; entryId: string; cycle: number; wipeAt: number; rejoinable: boolean } | null;
+  lastRaid: LastRaidDto | null;
+}
+export type LeaderboardBoard = "level" | "kills" | "npc";
+export type LeaderboardPeriod = "map" | "week" | "all";
+export interface LeaderboardDto {
+  board: LeaderboardBoard;
+  period: LeaderboardPeriod;
+  cycle: number | null;
+  updatedAt: number;
+  /** ≤ 100 rows, ties share a rank. */
+  rows: Array<{ rank: number; nickname: string; level: number; value: number }>;
+}
+export type LeaderboardMeDto = { rank: number; value: number } | null;
+export interface WorldEventDto {
+  id: string;
+  at: number;
+  cycle: number;
+  mapNumber: number;
+  kind: "boss_spawned" | "boss_killed" | "wiped";
+  boss?: { kind: BossKind; name: string; zoneName: string };
+  by?: string;
+  stats?: { entries: number; extracted: number; died: number; mia: number };
+}
+export interface WorldEventsDto {
+  events: WorldEventDto[];
 }
 
 /** Autosell receipt line (web fills it after applyExit; the server sends lines at mult 1). */
@@ -261,6 +485,12 @@ export interface OutcomeMsg {
   sold: SoldLine[];
   /** Guests: junk is not kept ("would sell for N CR — register to keep"). */
   guest: boolean;
+  /** WORLD v6: XP granted by the web for this exit (absent until settled / legacy). */
+  xp?: number;
+  xpLines?: XpLine[];
+  /** Level after this exit. */
+  level?: number;
+  levelUp?: boolean;
 }
 
 /** S2C.SETTLED, broadcast at the end: scoreboard only (no user ids, no items). v5: humans only. */

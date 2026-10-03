@@ -20,6 +20,7 @@ import { ARMOR, WEAPONS, type Rarity, type WeaponId } from "./items.js";
 import { BOSS_CHANCE } from "./map/steppe.js";
 import { BOSS_KINDS, type BossKind, type BossSpot, type ContainerKind, type LootTier } from "./map/types.js";
 import { mulberry32, pickWeighted, type Rng } from "./rng.js";
+import type { ExitType } from "./types.js";
 
 export const CR = { CODE: "CR", START_BALANCE: 1000 } as const;
 
@@ -441,6 +442,29 @@ export const POOL = {
   FLOOR_MIN_TIER: 3,
   /** @deprecated v4: boss slots come from BOSSES[kind].poolSlots (raidBossSlots). */
   BOSS_SHARE: 2,
+  // ---- WORLD v6: per-entry release (D17), server placement (D18), boss bag (D19).
+  /** Shard-cycle cap = min(CYCLE_MAX, CYCLE_BASE + ceil(CYCLE_PER_RISK_USER × riskUsers)). */
+  CYCLE_BASE: 4,
+  CYCLE_PER_RISK_USER: 0.5,
+  CYCLE_MAX: 24,
+  /** At most this many pool items released per user per UTC day (across maps and entries). */
+  USER_DAILY_MAX: 8,
+  /** Late taper: × clamp((entryCloseMs − atMs) / LATE_TAPER_MS, 0, 1). */
+  LATE_TAPER_MS: 15 * 60_000,
+  /** No release while the map has fewer valid pool targets than this… */
+  MIN_TARGETS: 8,
+  /** …and at most floor(targets / TARGETS_PER_ITEM) items per entry. */
+  TARGETS_PER_ITEM: 3,
+  /** Released items are placed this long after the entry (or at the entrant's death). */
+  APPLY_AFTER_MS: 8 * 60_000,
+  /** A pool target must be at least this far from every living human. */
+  PLACE_MIN_HUMAN_PX: 1500,
+  /** No valid target → retry this often. */
+  PLACE_RETRY_MS: 10_000,
+  /** A boss-bag slot may take a top item only while the pool holds more than this many top items. */
+  TOP_RESERVE: 20,
+  /** The server stows the boss bag only when the boss has not been hit for this long. */
+  BOSS_ENGAGED_MS: 60_000,
 } as const;
 
 /** Durability the item enters the pool with, or null if it does not enter (bound or worn out). */
@@ -503,6 +527,78 @@ export function poolReleasePlanV4(
   const gate = R >= POOL.BOSS_MIN_RISK && P - risk > POOL.BOSS_MIN_POOL;
   const boss = gate ? Math.max(0, Math.min(Math.max(0, Math.floor(bossNeed)), POOL.MAX_PER_MATCH) - risk) : 0;
   return { total: risk + boss, risk, boss };
+}
+
+/** WORLD v6: inputs of poolReleaseForEntry (web raids/enter, D17). */
+export interface EntryReleaseInput {
+  poolSize: number;
+  /** Risk units of this entry (riskUnitOf sum). */
+  entryRisk: number;
+  /** Max risk_units of this user's earlier entries this cycle. */
+  userCycleMaxRisk: number;
+  /** Released by this user's earlier entries this cycle. */
+  userCycleReleased: number;
+  /** Released by this user today (UTC). */
+  userDayReleased: number;
+  /** Released on this shard-cycle so far. */
+  shardReleased: number;
+  /** Distinct users with risk ≥ 1 on this shard, including this entry. */
+  riskUsers: number;
+  /** Cycle clock at admission. */
+  atMs: number;
+  /** CYCLE_MS − ENTRY_CLOSE_MS. */
+  entryCloseMs: number;
+  /** Valid pool targets on the map now (server count). */
+  targets: number;
+  /** economy_params pool_risk_k (default POOL.RISK_K). */
+  k?: number;
+}
+
+const nn = (v: number): number => (Number.isFinite(v) ? Math.max(0, v) : 0);
+
+/**
+ * WORLD v6 lost-pool release for one entry (D17). All terms ≥ 0:
+ *   budget = round(K × max(userCycleMaxRisk, entryRisk)) − userCycleReleased   (re-entries add nothing)
+ *   cap    = min(CYCLE_MAX, CYCLE_BASE + ceil(CYCLE_PER_RISK_USER × riskUsers)) − shardReleased
+ *   daily  = USER_DAILY_MAX − userDayReleased
+ *   tgt    = targets < MIN_TARGETS ? 0 : floor(targets / TARGETS_PER_ITEM)
+ *   taper  = clamp((entryCloseMs − atMs) / LATE_TAPER_MS, 0, 1)
+ *   n      = floor(max(0, min(budget, cap, daily, poolSize, tgt)) × taper)
+ * The tier match (each item's tier score ≤ the user's max tier risked this cycle) is the caller's pick.
+ */
+export function poolReleaseForEntry(i: EntryReleaseInput): { n: number; budget: number; cap: number; taper: number } {
+  const k = i.k ?? POOL.RISK_K;
+  const maxRisk = Math.max(nn(i.userCycleMaxRisk), nn(i.entryRisk));
+  const budget = nn(Math.round(k * maxRisk) - nn(i.userCycleReleased));
+  const cycleCap = Math.min(POOL.CYCLE_MAX, POOL.CYCLE_BASE + Math.ceil(POOL.CYCLE_PER_RISK_USER * nn(i.riskUsers)));
+  const cap = nn(cycleCap - nn(i.shardReleased));
+  const daily = nn(POOL.USER_DAILY_MAX - nn(i.userDayReleased));
+  const targets = Math.floor(nn(i.targets));
+  const tgt = targets < POOL.MIN_TARGETS ? 0 : Math.floor(targets / POOL.TARGETS_PER_ITEM);
+  const taper = Math.max(0, Math.min(1, (i.entryCloseMs - i.atMs) / POOL.LATE_TAPER_MS)) || 0;
+  const n = Math.floor(nn(Math.min(budget, cap, daily, Math.floor(nn(i.poolSize)), tgt)) * taper);
+  return { n, budget, cap, taper };
+}
+
+/**
+ * WORLD v6 boss bag (D19), once per shard-cycle. n = slots.length when !filled, Σ max risk of the
+ * shard's distinct users (shardRiskSum) ≥ slots.length and poolSize − slots.length > BOSS_MIN_POOL;
+ * else 0. maxTier: 2 (top allowed) only when some entrant risked a top item and the pool holds more
+ * than TOP_RESERVE top items, else 1 (≤ rare); 0 when nothing is filled.
+ */
+export function bossFillPlan(i: {
+  slots: readonly number[];
+  shardRiskSum: number;
+  anyTopRisk: boolean;
+  poolSize: number;
+  topInPool: number;
+  filled: boolean;
+}): { n: number; maxTier: 0 | 1 | 2 } {
+  const need = i.slots.length;
+  if (i.filled || need === 0) return { n: 0, maxTier: 0 };
+  if (!(i.shardRiskSum >= need)) return { n: 0, maxTier: 0 };
+  if (!(i.poolSize - need > POOL.BOSS_MIN_POOL)) return { n: 0, maxTier: 0 };
+  return { n: need, maxTier: i.anyTopRisk && i.topInPool > POOL.TOP_RESERVE ? 2 : 1 };
 }
 
 /**
@@ -717,6 +813,69 @@ export function rollBossSpawns(matchSeed: number, spots: readonly BossSpot[]): B
   return out;
 }
 
+// ---------------------------------------------------------------- boss events (WORLD v6, D12–D14)
+
+/**
+ * WORLD v6 boss events: exactly one boss map per block of BLOCK_CYCLES cycles; an event boss that
+ * took no damage and has no human within its leash returns to full HP after RESET_AFTER_MS.
+ */
+export const BOSS_EVENT = { BLOCK_CYCLES: 3, RESET_AFTER_MS: 180_000 } as const;
+
+/** Seeded Fisher–Yates shuffle (mulberry32 of `seed`). */
+function shuffleSeeded<T>(items: readonly T[], seed: number): T[] {
+  const out = [...items];
+  const rng = mulberry32(seed >>> 0);
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const t = out[i]!;
+    out[i] = out[j]!;
+    out[j] = t;
+  }
+  return out;
+}
+
+/**
+ * The boss of `cycle`, or null. hash(label) → uint32 (the game server passes an HMAC of its world
+ * secret; tests pass any deterministic function). Pure; same answer for every caller with the same hash.
+ *   kinds = BOSS_KINDS.filter(k => BOSSES[k].enabled); none → null
+ *   b = floor(cycle / 3); raw(b) = hash("pos|" + b) % 3
+ *   pos(b) = raw(b) === 0 && raw(b − 1) === 2 ? 1 : raw(b)        (no two boss maps in a row)
+ *   cycle % 3 !== pos(b) → null
+ *   r = floor(b / kinds.length); perm(r) = seeded shuffle of kinds by hash("perm|" + r)
+ *   if perm(r)[0] === perm(r − 1)[last] swap perm(r)[0] and perm(r)[1]   (length ≥ 3; the swap never
+ *   touches the last element, so perm(r − 1)'s raw shuffle is the one to compare with)
+ *   return perm(r)[b % kinds.length]
+ * Two enabled kinds alternate (ordered by hash("perm|0")); one enabled kind is every boss map.
+ * Gap between boss maps: 2–5 cycles.
+ */
+export function bossEventOf(cycle: number, hash: (label: string) => number): BossKind | null {
+  const kinds = BOSS_KINDS.filter((k) => BOSSES[k].enabled);
+  if (kinds.length === 0) return null;
+  const B = BOSS_EVENT.BLOCK_CYCLES;
+  const c = Math.floor(cycle);
+  const b = Math.floor(c / B);
+  const raw = (blk: number): number => (hash(`pos|${blk}`) >>> 0) % B;
+  const rb = raw(b);
+  const pos = rb === 0 && raw(b - 1) === B - 1 ? 1 : rb;
+  if (((c % B) + B) % B !== pos) return null;
+  const L = kinds.length;
+  if (L === 1) return kinds[0]!;
+  const idx = ((b % L) + L) % L;
+  if (L === 2) {
+    const base = shuffleSeeded(kinds, hash("perm|0"));
+    return base[idx]!;
+  }
+  const r = Math.floor(b / L);
+  const perm = shuffleSeeded(kinds, hash(`perm|${r}`));
+  const prev = shuffleSeeded(kinds, hash(`perm|${r - 1}`));
+  if (perm[0] === prev[L - 1]) {
+    const t = perm[0]!;
+    perm[0] = perm[1]!;
+    perm[1] = t;
+  }
+  return perm[idx]!;
+}
+
 /** RaidStartRequest.bosses for the spawned bosses: their poolSlots (min tier scores). */
 export function raidBossSlots(spawned: ReadonlyArray<{ kind: BossKind }>): Array<{ kind: BossKind; slots: number[] }> {
   return spawned.map((b) => ({ kind: b.kind, slots: [...BOSSES[b.kind].poolSlots] }));
@@ -887,10 +1046,123 @@ export const GIVEAWAY_KIT = {
 // ---------------------------------------------------------------- progression
 
 /**
+ * WORLD v6 XP (D23), granted only by the web at exit (xpForExit). Extract and haul XP need an
+ * extract after ≥ MIN_ONMAP_MS on the map; no XP for time alive or for entering. The grind lines
+ * (extract, haul, containers, marauders, guards) are soft-capped per UTC day; boss and ranked PvP
+ * kills are not. PVP_PAIR_PER_DAY: ranked kills per (killer, victim) pair per 24 h (D24).
+ */
+export const XP = {
+  EXTRACT_BASE: 100,
+  EXTRACT_PER_MIN: 10,
+  EXTRACT_MAX_MIN: 25,
+  MIN_ONMAP_MS: 8 * 60_000,
+  HAUL_CR_PER_XP: 10,
+  HAUL_MAX: 150,
+  CONTAINER: 2,
+  CONTAINER_MAX: 30,
+  NPC: 20,
+  GUARD: 40,
+  BOSS: 400,
+  PVP: 80,
+  PVP_PAIR_PER_DAY: 2,
+  FIRST_EXTRACT_MAX: 300,
+  DAILY_SOFT_CAP: 2_500,
+  DAILY_OVER_MULT: 0.25,
+} as const;
+
+/**
+ * @deprecated v6: use XP / xpForExit. Kept until S8 (old tests).
  * XP per raid event. XP_KILL is for human kills only; NPC kills give XP_NPC (marauder) / XP_GUARD /
  * XP_BOSS. At most ~40 NPCs per raid, so an NPC sweep's XP is bounded.
  */
 export const PROGRESSION = { XP_RAID: 100, XP_EXTRACT: 250, XP_KILL: 80, XP_BOSS: 400, XP_NPC: 20, XP_GUARD: 40 } as const;
+
+export type XpKey = "extract" | "haul" | "containers" | "npc" | "guard" | "boss" | "pvp" | "first_extract" | "daily_cap";
+/** One line of the XP receipt: `qty` units of `key` worth `xp` (daily_cap is negative). */
+export interface XpLine {
+  key: XpKey;
+  qty: number;
+  xp: number;
+}
+export const XP_LINE_LABEL: Readonly<Record<XpKey, string>> = {
+  extract: "Extracted",
+  haul: "Haul",
+  containers: "Containers searched",
+  npc: "Marauders",
+  guard: "Guards",
+  boss: "Boss",
+  pvp: "Raiders",
+  first_extract: "First extract today",
+  daily_cap: "Daily limit",
+};
+
+export interface XpInput {
+  exit: ExitType;
+  onMapMs: number;
+  /** Junk CR of this exit's autosell receipt, dog tags excluded. */
+  haulCr: number;
+  /** RaidStats.containersSearched. */
+  containers: number;
+  /** npcKillCount(report) − guardKills. */
+  marauders: number;
+  guards: number;
+  bosses: number;
+  rankedPvp: number;
+  /** Σ raid_exits.xp_grind today (UTC), this entry excluded. */
+  grindToday: number;
+  firstExtractToday: boolean;
+}
+
+const cnt = (v: number): number => (Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0);
+
+/**
+ * XP of one exit (D23):
+ *   qualifies = exit === "extract" && onMapMs ≥ MIN_ONMAP_MS
+ *   extract = qualifies ? EXTRACT_BASE + EXTRACT_PER_MIN × min(EXTRACT_MAX_MIN, floor(onMapMs / 60000)) : 0
+ *   haul    = qualifies ? min(HAUL_MAX, floor(haulCr / HAUL_CR_PER_XP)) : 0
+ *   containers = CONTAINER × min(CONTAINER_MAX, containers); npc = NPC × marauders; guard = GUARD × guards
+ *   (exit "mia": containers = 0 — D9, a wiped player gets the kill lines only)
+ *   raw = extract + haul + containers + npc + guard
+ *   room = max(0, DAILY_SOFT_CAP − grindToday); grind = min(raw, room) + floor(max(0, raw − room) × DAILY_OVER_MULT)
+ *   subtotal = grind + BOSS × bosses + PVP × rankedPvp
+ *   first = qualifies && firstExtractToday ? min(FIRST_EXTRACT_MAX, subtotal) : 0
+ * Lines: every non-zero term in that order; "daily_cap" = grind − raw (negative) when the cap bit.
+ * `grind` is what raid_exits.xp_grind stores (counts toward later grindToday).
+ */
+export function xpForExit(i: XpInput): { total: number; grind: number; lines: XpLine[] } {
+  const onMap = Number.isFinite(i.onMapMs) ? Math.max(0, i.onMapMs) : 0;
+  const qualifies = i.exit === "extract" && onMap >= XP.MIN_ONMAP_MS;
+  const minutes = Math.min(XP.EXTRACT_MAX_MIN, Math.floor(onMap / 60_000));
+  const extract = qualifies ? XP.EXTRACT_BASE + XP.EXTRACT_PER_MIN * minutes : 0;
+  const haulCr = cnt(i.haulCr);
+  const haul = qualifies ? Math.min(XP.HAUL_MAX, Math.floor(haulCr / XP.HAUL_CR_PER_XP)) : 0;
+  const nCont = i.exit === "mia" ? 0 : Math.min(XP.CONTAINER_MAX, cnt(i.containers));
+  const containers = XP.CONTAINER * nCont;
+  const nNpc = cnt(i.marauders), nGuard = cnt(i.guards), nBoss = cnt(i.bosses), nPvp = cnt(i.rankedPvp);
+  const npc = XP.NPC * nNpc;
+  const guard = XP.GUARD * nGuard;
+  const raw = extract + haul + containers + npc + guard;
+  const room = Math.max(0, XP.DAILY_SOFT_CAP - cnt(i.grindToday));
+  const grind = Math.min(raw, room) + Math.floor(Math.max(0, raw - room) * XP.DAILY_OVER_MULT);
+  const boss = XP.BOSS * nBoss;
+  const pvp = XP.PVP * nPvp;
+  const subtotal = grind + boss + pvp;
+  const first = qualifies && i.firstExtractToday ? Math.min(XP.FIRST_EXTRACT_MAX, subtotal) : 0;
+  const lines: XpLine[] = [];
+  const push = (key: XpKey, qty: number, xp: number): void => {
+    if (xp !== 0) lines.push({ key, qty, xp });
+  };
+  push("extract", minutes, extract);
+  push("haul", haulCr, haul);
+  push("containers", nCont, containers);
+  push("npc", nNpc, npc);
+  push("guard", nGuard, guard);
+  push("daily_cap", 1, grind - raw);
+  push("boss", nBoss, boss);
+  push("pvp", nPvp, pvp);
+  push("first_extract", 1, first);
+  return { total: subtotal + first, grind, lines };
+}
 
 /** XP from level L to L+1. ~180 XP/raid: L5 ≈ 14 raids, L10 ≈ 50, L15 ≈ 105. */
 export function xpToNext(level: number): number {
@@ -905,6 +1177,21 @@ export function levelForXp(xp: number): number {
     need = xpToNext(l);
   }
   return l;
+}
+
+/**
+ * Level bar of `xp` total: level = levelForXp(xp), into = XP earned inside that level, need =
+ * xpToNext(level) (into < need), total = xp.
+ */
+export function levelProgress(xp: number): { level: number; into: number; need: number; total: number } {
+  const total = Number.isFinite(xp) ? Math.max(0, Math.floor(xp)) : 0;
+  let level = 1, need = xpToNext(1), into = total;
+  while (into >= need) {
+    into -= need;
+    level++;
+    need = xpToNext(level);
+  }
+  return { level, into, need, total };
 }
 
 export const STASH_CAPACITY = [20, 35, 55, 80] as const;
