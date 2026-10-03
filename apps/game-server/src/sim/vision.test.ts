@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { NPC, SERVER_TICK_MS, VISION, generateMap, mulberry32, visionRangeMult } from "@extract/shared";
+import { NPC, SERVER_TICK_MS, VISION, WORLD, generateMap, mulberry32, visionRangeMult } from "@extract/shared";
 import { damagePlayer } from "./combat.js";
 import { envNow } from "./environment.js";
 import { Match } from "./match.js";
-import { counterUid, humans, ids, npcOpts, npcsOf, place, pl, rtOf, testMap, testMatch, testPost } from "./test-utils.js";
+import { counterUid, enter, humans, ids, jump, npcOpts, npcsOf, place, pl, rtOf, testMap, testMatch, testPost, worldMatch } from "./test-utils.js";
 import type { PlayerRuntime } from "./types.js";
 
 /** A wall from (1300, 600) to (1324, 1400): splits the arena left / right around y = 1000. */
@@ -220,4 +220,23 @@ test("vision: flipping aim between θ and θ+π every input does not give 360° 
   assert.ok(run((k) => (k % 2 ? Math.PI : 0), 500) >= 60, "the front stays seen");
   assert.ok(Math.abs(turnToward(0, Math.PI - 0.01, VIEW_TURN_PER_INPUT) - VIEW_TURN_PER_INPUT) < 1e-9);
   assert.equal(turnToward(3, -3, 1), Math.atan2(Math.sin(-3), Math.cos(-3)), "short way across ±π");
+});
+
+test("WORLD v6: vision capacity is fixed at MAX_RUNTIMES_PER_SHARD; late entrants see each other; rows stop at the last runtime", () => {
+  const { m, wall } = worldMatch({ envSeed: 2 });
+  assert.equal(m.vision.n, WORLD.MAX_RUNTIMES_PER_SHARD);
+  jump(m, wall, 1000);
+  const a = enter(m, "ua");
+  const b = enter(m, "ub");
+  a.pub.x = 1500; a.pub.y = 1500; a.pub.aim = 0;
+  b.pub.x = 1800; b.pub.y = 1500; b.pub.aim = Math.PI;
+  jump(m, wall, 50);
+  assert.equal(m.vision.sees(a.rosterIndex, b.rosterIndex), true);
+  assert.equal(m.vision.sees(b.rosterIndex, a.rosterIndex), true);
+  assert.deepEqual(m.vision.row(a.rosterIndex), [b.rosterIndex]);
+  assert.equal(m.vision.sees(a.rosterIndex, 200), false);
+  const c = enter(m, "uc");
+  c.pub.x = 1500; c.pub.y = 1700; c.pub.aim = -Math.PI / 2;
+  jump(m, wall, 50);
+  assert.ok(m.vision.row(c.rosterIndex).includes(a.rosterIndex), "a later runtime joins the matrix");
 });

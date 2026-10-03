@@ -22,7 +22,8 @@ import { extractPlayer } from "./extraction.js";
 import { makeItem } from "./items.js";
 import { Match } from "./match.js";
 import type { MatchEvent } from "./types.js";
-import { counterUid, giveItem, giveStack, giveWeapon, humans, ids, pl, place, rtOf, run, selfOf, testMap, testMatch, type Timed } from "./test-utils.js";
+import { counterUid, enter, giveItem, giveStack, giveWeapon, humans, ids, jump, pl, place, rtOf, run, selfOf, testMap, testMatch, worldMatch, type Timed } from "./test-utils.js";
+import { killPlayer } from "./death.js";
 
 const CRATE: ContainerSpot = { x: 1100, y: 1500, kind: "crate", tier: 1, zone: null };
 const OPEN_MS = containerOpenMs(CRATE);
@@ -372,4 +373,32 @@ test("v4 zoning: floor loot spawns by spot tier (FLOOR_LOOT.SPAWN_CHANCE), medki
   // Legacy (no zones): every spot spawns as in v1.
   const legacy = new Match({ roster: humans(1), rng: mulberry32(3), mapSeed: 3, mapId: "legacy", newUid: counterUid, npcBrains: false, mode: "live" });
   assert.equal([...legacy.ground.all()].length, legacy.map.lootSpots.length);
+});
+
+test("T14 own-corpse lock (WORLD v6 D11): a user cannot search the body of their own earlier entry (own_body); someone else can", () => {
+  const { m, wall } = worldMatch();
+  jump(m, wall, 1000);
+  const a1 = enter(m, "ua");
+  place(m, a1.id, 1500, 1500);
+  killPlayer(m, a1, null, "rifle");
+  const a2 = enter(m, "ua");
+  const b = enter(m, "ub");
+  place(m, a2.id, 1540, 1500);
+  place(m, b.id, 1500, 1540);
+  const key = `k${a1.rosterIndex}`;
+  m.drainEvents();
+  assert.equal(m.containers.nearestOpenable(a2), -1, "F skips the own body");
+  assert.equal(m.interact(a2.id), false);
+  assert.equal(m.openSearch(a2.id, key), false);
+  const errs = m.drainEvents().filter((e): e is Extract<MatchEvent, { type: "invErr" }> => e.type === "invErr" && e.to === a2.rosterIndex);
+  assert.deepEqual(errs.map((e) => e.msg.code), ["own_body", "own_body"]);
+  assert.equal(a2.search, null);
+  assert.ok(m.openSearch(b.id, key), "another user may search it");
+  // Legacy roster matches: one runtime per user, the lock never triggers.
+  const lm = testMatch(2);
+  const [x, y] = ids(lm);
+  place(lm, x!, 1500, 1500);
+  place(lm, y!, 1540, 1500);
+  killPlayer(lm, rtOf(lm, x!), null, "rifle");
+  assert.ok(lm.openSearch(y!, `k${rtOf(lm, x!).rosterIndex}`));
 });

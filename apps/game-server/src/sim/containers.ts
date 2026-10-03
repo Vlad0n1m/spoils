@@ -38,6 +38,7 @@ import {
   SOLID,
   SOUND,
   SoundKind,
+  WORLD,
   accepts,
   bossKindOfLootKey,
   containerLootKey,
@@ -51,6 +52,7 @@ import {
   parseNpcCarrierKey,
   pickWeighted,
   planPlace,
+  poolContainerEligible,
   revealMs,
   rollContainerFungibles,
   type BossKind,
@@ -91,6 +93,10 @@ export interface SearchTarget {
   corpse: Corpse | null;
   /** Roster index of the dead player (corpses), -1 otherwise. */
   owner: number;
+  /** Corpses: the dead human's userId (own-corpse lock, D11); null for NPCs and containers. */
+  ownerUser: string | null;
+  /** Corpses: the dead runtime was an NPC (A6 expiry: pool items → pool, not treasury). */
+  npcCorpse: boolean;
   x: number;
   y: number;
   openMs: number;
@@ -113,8 +119,13 @@ export interface SearchTarget {
 }
 
 export class ContainerSystem {
-  /** Live-mode pool uniques allocated to a container, by index (registered at match start). */
+  /** Live-mode pool uniques allocated to a container, by index (registered at match start / placed, v6). */
   private readonly pool = new Map<number, ItemLike[]>();
+  /** WORLD v6 (D18): containers that got a placed pool item this cycle (one per container per cycle). */
+  readonly poolPlaced = new Set<number>();
+  /** WORLD v6 (A6): corpses in death order = expiry order (constant CORPSE_EXPIRE_MS), consumed from `expHead`. */
+  private readonly expQueue: SearchTarget[] = [];
+  private expHead = 0;
   /** Live-mode pool uniques allocated to a boss that has not taken them (yet / did not spawn). */
   private readonly bossPool = new Map<BossKind, ItemLike[]>();
   private readonly legacyBossPool: ItemLike[] = [];
@@ -225,6 +236,22 @@ export class ContainerSystem {
   }
 
   /**
+   * WORLD v6 (D18, pool-place.ts): may a released pool item go into container `idx` now? Untouched,
+   * pool-eligible (kind + tier) and no pool item placed in it this cycle.
+   */
+  poolTargetOk(idx: number): boolean {
+    const spot = this.m.map.containers[idx];
+    return !!spot && poolContainerEligible(spot) && !this.poolPlaced.has(idx) && !this.pool.has(idx) &&
+      this.stateOf(idx) === CONTAINER_STATE.UNTOUCHED && !this.targets.has(containerLootKey(idx));
+  }
+
+  /** WORLD v6: put an (already registered) pool item into untouched container `idx` (rolled in on first open). */
+  placePoolItem(idx: number, it: ItemLike): void {
+    this.pool.set(idx, [...(this.pool.get(idx) ?? []), it]);
+    this.poolPlaced.add(idx);
+  }
+
+  /**
    * Contents of container `idx` (called once, on first open). Demo uniques are minted here, so a
    * container nobody opens never creates items.
    */
@@ -249,22 +276,24 @@ export class ContainerSystem {
           out.push(makeItem(r.def, { qty: r.qty, rarity: r.rarity }));
         }
       }
-    } else {
-      out.push(...(this.pool.get(idx) ?? []));
-      this.pool.delete(idx);
     }
+    // Live allocations, and (WORLD v6) server-placed pool items in either mode.
+    out.push(...(this.pool.get(idx) ?? []));
+    this.pool.delete(idx);
     for (const f of rollContainerFungibles(m.lootSeed, idx, spot)) {
       out.push(makeItem(f.def, { qty: f.qty, rarity: f.rarity }));
     }
     return out;
   }
 
-  private createTarget(t: Omit<SearchTarget, "loot" | "searchers" | "ready" | "searchedBy" | "initial" | "emptied">): SearchTarget {
+  private createTarget(t: Omit<SearchTarget, "loot" | "searchers" | "ready" | "searchedBy" | "initial" | "emptied" | "ownerUser" | "npcCorpse"> & Partial<Pick<SearchTarget, "ownerUser" | "npcCorpse">>): SearchTarget {
     const loot = new ContainerLoot();
     // uint8 on the wire: a corpse holds ≤ 4 + 4 + 16 + 1 entries, a container a handful.
     loot.total = Math.min(255, t.items.length);
     if (t.items.length > 255) t.items.length = 255;
     const target: SearchTarget = {
+      ownerUser: null,
+      npcCorpse: false,
       ...t,
       initial: t.items.map(toPlain),
       loot,
@@ -309,13 +338,43 @@ export class ContainerSystem {
     c.label = rt.nickname;
     c.color = p.color;
     c.rot = p.aim;
+    // WORLD v6 (A6): the body and what is left in it vanish CORPSE_EXPIRE_MS after the death.
+    if (this.m.world) c.expiresAt = this.m.clock + WORLD.CORPSE_EXPIRE_MS;
     const t = this.createTarget({
       key: corpseLootKey(c.id), kind: "corpse", idx: -1, corpse: c, owner: rt.rosterIndex, x: p.x, y: p.y,
-      openMs: SEARCH.OPEN_MS.corpse, items,
+      openMs: SEARCH.OPEN_MS.corpse, items, ownerUser: rt.isNpc ? null : rt.userId, npcCorpse: rt.isNpc,
     });
     this.corpseList.push(t);
+    if (this.m.world) this.expQueue.push(t);
     this.m.state.corpses.set(c.id, c);
     return t;
+  }
+
+  /**
+   * WORLD v6 (A6): remove every corpse whose time is up (expiry order = death order, so this only
+   * looks at the head of the queue). Open searches close first (nothing is half-moved). Returns what
+   * was still inside: tracked uniques by destination; fungibles are destroyed (not returned).
+   */
+  expireCorpses(clock: number): { treasury: ItemLike[]; pool: ItemLike[] } {
+    const out = { treasury: [] as ItemLike[], pool: [] as ItemLike[] };
+    while (this.expHead < this.expQueue.length) {
+      const t = this.expQueue[this.expHead]!;
+      if (t.corpse!.expiresAt > clock) break;
+      this.expHead++;
+      for (const rt of [...t.searchers]) closeSearch(this.m, rt, "expired");
+      for (const it of this.remaining(t)) if (isTrackedUnique(it)) (t.npcCorpse ? out.pool : out.treasury).push(it);
+      this.targets.delete(t.key);
+      this.active.delete(t);
+      const k = this.corpseList.indexOf(t);
+      if (k >= 0) this.corpseList.splice(k, 1);
+      this.m.state.loot.delete(t.key);
+      if (this.m.state.corpses.get(t.corpse!.id) === t.corpse) this.m.state.corpses.delete(t.corpse!.id);
+    }
+    if (this.expHead > 64 && this.expHead * 2 > this.expQueue.length) {
+      this.expQueue.splice(0, this.expHead);
+      this.expHead = 0;
+    }
+    return out;
   }
 
   corpseOf(rosterIndex: number): SearchTarget | undefined {
@@ -351,9 +410,24 @@ export class ContainerSystem {
       consider(i, c.x, c.y);
     }
     this.corpseList.forEach((t, k) => {
-      if (!t.emptied) consider(n + k, t.x, t.y);
+      if (!t.emptied && !this.ownBody(rt, t)) consider(n + k, t.x, t.y);
     });
     return best;
+  }
+
+  /**
+   * WORLD v6 (D11): the corpse of the searcher's own earlier entry (same user, another runtime).
+   * Never searchable by that user (InvErr "own_body"); alts still can (vulture rule later).
+   */
+  ownBody(rt: PlayerRuntime, t: SearchTarget): boolean {
+    return t.ownerUser !== null && t.ownerUser === rt.userId && t.owner !== rt.rosterIndex;
+  }
+
+  /** An own body (ownBody) within open range and line of sight: F answers "own_body" when nothing else is there. */
+  ownBodyNear(rt: PlayerRuntime): boolean {
+    const p = rt.pub;
+    return this.corpseList.some((t) => !t.emptied && this.ownBody(rt, t) &&
+      (t.x - p.x) ** 2 + (t.y - p.y) ** 2 <= SEARCH.OPEN_RANGE ** 2 && hasLineOfSight(this.m.idx, p.x, p.y, t.x, t.y, SOLID.MOVE));
   }
 
   /**
@@ -378,6 +452,10 @@ export class ContainerSystem {
       const k = this.corpseList.findIndex((t) => t.key === key);
       const t = this.corpseList[k];
       if (!t || t.emptied) return false;
+      if (this.ownBody(rt, t)) {
+        invErr(m, rt, "own_body", key);
+        return false;
+      }
       n = nc + k;
       x = t.x;
       y = t.y;
@@ -414,6 +492,7 @@ export class ContainerSystem {
       if (t.kind === "corpse") rt.stats.corpsesSearched++;
       else rt.stats.containersSearched++;
     }
+    if (t.kind === "corpse" && this.ownBody(rt, t)) return;
     if (t.corpse && !t.corpse.opened) {
       const c = t.corpse;
       m.disclosure.defer(`o${t.key}`, t.x, t.y, [rt], () => {

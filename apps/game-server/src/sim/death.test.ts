@@ -10,7 +10,7 @@ import { carriedItems } from "./bag.js";
 import { damagePlayer } from "./combat.js";
 import { Match } from "./match.js";
 import type { PlayerRuntime } from "./types.js";
-import { clearDef, counterUid, giveItem, giveStack, giveWeapon, ids, npcOpts, npcsOf, pl, place, rtOf, run, send, testMap, testMatch, testPost } from "./test-utils.js";
+import { advance, clearDef, counterUid, enter, giveItem, giveStack, giveWeapon, ids, jump, npcOpts, npcsOf, pl, place, rtOf, run, send, testMap, testMatch, testPost, worldMatch } from "./test-utils.js";
 
 /** Kill outright (no armor absorb, so durabilities stay as given). */
 function kill(m: Match, id: string, by: string | null = null) {
@@ -95,6 +95,7 @@ test("another player searches the corpse, carries the dog tag out, and the repor
   const rep = rt.exitReport!;
   const tag = rep.extracted.find((i) => i.def === "junk_dogtag")!;
   assert.deepEqual([tag.label, tag.lvl, tag.victim], ["P1", 3, victimUser]);
+  assert.equal(tag.by, rt.userId, "D22: the killer is named on the tag (full price for them only)");
   assert.ok(rep.extracted.some((i) => i.uid === vest));
   assert.equal(m.ledger.resolved.get(vest), "extract");
   const out = rt.outcome!;
@@ -272,4 +273,80 @@ test("a kill by a bullet still in flight after its shooter died reaches the shoo
   assert.equal(exits.length, 1, "exactly one exit report");
   assert.equal(exits[0]!.kills, 1, "the posted report carries the late kill");
   assert.equal(B.outcome!.kills, 1);
+});
+
+test("T14 dog tag `by` (D22): a non-killer carrying the tag out still names the killer; no human killer → no `by`", () => {
+  const m = testMatch(4);
+  const [a, b, c, d] = ids(m);
+  place(m, a!, 1500, 1500);
+  place(m, b!, 1560, 1500);
+  place(m, c!, 1500, 1560);
+  place(m, d!, 1440, 1500);
+  m.rng = () => 0.99;
+  kill(m, b!, a!);
+  assert.equal(rtOf(m, b!).killerUserId, rtOf(m, a!).userId);
+  assert.deepEqual(rtOf(m, a!).victims, [rtOf(m, b!).userId]);
+  const C = rtOf(m, c!);
+  assert.ok(m.openSearch(c!, `k${rtOf(m, b!).rosterIndex}`));
+  run(m, 6_000);
+  assert.equal(takeAll(m, C).code, null);
+  extractPlayer(m, C);
+  const tag = C.exitReport!.extracted.find((i) => i.def === "junk_dogtag")!;
+  assert.equal(tag.victim, rtOf(m, b!).userId);
+  assert.equal(tag.by, rtOf(m, a!).userId, "the killer, not the extractor");
+  // Died without a human killer: the tag names nobody.
+  kill(m, d!);
+  assert.equal(rtOf(m, d!).killerUserId, null);
+});
+
+test("T14 guests drop no dog tag (DOG_TAG.GUEST_TAG); world exit reports carry entryId, enteredAtMs and victims", () => {
+  const { m, wall } = worldMatch();
+  jump(m, wall, 1000);
+  const k = enter(m, "killer");
+  const g = enter(m, "guest-1", { guest: true, level: 0 });
+  place(m, k.id, 1500, 1500);
+  place(m, g.id, 1560, 1500);
+  killPlayer(m, g, k, "rifle");
+  const inside = m.containers.corpseOf(g.rosterIndex)!.items;
+  assert.ok(!inside.some((i) => i.def === "junk_dogtag"), "no tag on a guest body");
+  assert.equal(g.outcome!.guest, true);
+  assert.equal(g.exitReport!.entryId, g.entryId);
+  assert.equal(g.exitReport!.enteredAtMs, g.enteredAtMs);
+  assert.deepEqual(g.exitReport!.victims, []);
+  // A registered victim keeps the tag.
+  const v = enter(m, "victim");
+  place(m, v.id, 1500, 1560);
+  killPlayer(m, v, k, "rifle");
+  assert.ok(m.containers.corpseOf(v.rosterIndex)!.items.some((i) => i.def === "junk_dogtag"));
+  assert.deepEqual(k.victims, ["guest-1", "victim"], "guests included (the web filters)");
+});
+
+test("T14 victims on the held-bullet path: a kill by a bullet in flight after its shooter died is in the shooter's posted exit report", () => {
+  const { m, wall } = worldMatch({ envSeed: 2 });
+  jump(m, wall, 1000);
+  const A = enter(m, "ua");
+  const B = enter(m, "ub");
+  const C = enter(m, "uc");
+  place(m, A.id, 1000, 3000);
+  place(m, B.id, 1000, 2000);
+  place(m, C.id, 2400, 2000);
+  C.pub.hp = 5;
+  giveWeapon(m, B.id, "w2", "sniper", 0, 5);
+  m.switchSlot(B.id, "w2");
+  advance(m, wall, 50);
+  m.drainEvents();
+  send(m, B.id, { aim: 0, fire: true });
+  advance(m, wall, 50);
+  assert.ok(m.bullets.some((x) => x.owner === B), "B's bullet is in flight");
+  killPlayer(m, B, A, "rifle");
+  const posted: string[][] = [];
+  const take = (ev: ReturnType<typeof advance>) => {
+    for (const e of ev) if (e.type === "exit" && e.report.entryId === B.entryId) posted.push(e.report.victims ?? []);
+  };
+  take(m.drainEvents().map((e) => ({ ...e, at: m.clock })));
+  assert.equal(posted.length, 0, "held while the bullet flies");
+  for (let k = 0; k < 80 && posted.length === 0; k++) take(advance(m, wall, 50));
+  assert.equal(C.pub.alive, false, "the in-flight bullet killed C");
+  assert.deepEqual(posted, [["uc"]], "the posted report lists the late victim");
+  assert.equal(C.killerUserId, "ub");
 });

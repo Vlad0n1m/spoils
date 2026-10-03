@@ -8,6 +8,7 @@
  */
 
 import type {
+  BossKind,
   HitMsg,
   InputSample,
   InvErrMsg,
@@ -23,6 +24,7 @@ import type {
   ShotMsg,
   SlotKey,
   SoundKind,
+  SettledItem,
   SoundMsg,
   WeaponId,
 } from "@extract/shared";
@@ -46,8 +48,30 @@ export interface RosterEntry {
 
 /** Where a known unique uid came from (ledger, inventory memo §2.6). */
 export type UidOrigin = "loadout" | "pool" | "minted";
-/** How a known uid left the match; every known uid ends in exactly one of these. */
-export type UidResolution = "extract" | "lost" | "destroyed" | "left";
+/**
+ * How one life of a known uid left the match; every life ends in exactly one of these.
+ * WORLD v6: "returned" = an entry's pool item never placed (extract before POOL.APPLY_AFTER_MS,
+ * PlayerExitReport.unplaced); "expired" = vanished with a player corpse / player-dropped ground item
+ * (MatchEndReport.expired → treasury); "expired_pool" = vanished with an NPC corpse
+ * (MatchEndReport.expiredToPool → pool, untaxed). Addendum A6.
+ */
+export type UidResolution = "extract" | "lost" | "destroyed" | "left" | "returned" | "expired" | "expired_pool";
+
+/** WORLD v6 (spec §3.4): one admitted entry (web raids/enter accepted) to put on the map. */
+export interface EntryInit {
+  entryId: string;
+  userId: string;
+  nickname: string;
+  /** "" = free kit. */
+  loadoutId: string;
+  guest: boolean;
+  level: number;
+  snapshot: LoadoutSnapshot | null;
+  /** Lost-pool items released for this entry (placed by pool-place.ts after POOL.APPLY_AFTER_MS). */
+  pool: SettledItem[];
+  /** Boss bag items (D19), stowed on the event boss once it is not engaged. */
+  bossFill: SettledItem[];
+}
 
 /**
  * Per-player server-only bookkeeping (input queue, trigger edges, report lists). The public Player
@@ -138,6 +162,24 @@ export interface PlayerRuntime {
   /** Set once the player left the map (extract / death / timeout). NPCs get one too (never posted). */
   exitReport: PlayerExitReport | null;
   outcome: OutcomeMsg | null;
+
+  // ---- WORLD v6 (spec §3.4). Legacy roster humans and NPCs: "", 0, false, [], null, [], 0, false.
+  /** Entry id minted by the web (one stay of one user on the map); "" for roster humans and NPCs. */
+  entryId: string;
+  /** Match clock at admission (roster humans 0): NPC peace window, XP onMapMs, extract arm. */
+  enteredAtMs: number;
+  /** Guest entry (no dog tag on death, DOG_TAG.GUEST_TAG). */
+  guest: boolean;
+  /** userIds of humans this runtime killed (PlayerExitReport.victims). */
+  victims: string[];
+  /** userId of the human who killed this one (dog tag SettledItem.by); null otherwise. */
+  killerUserId: string | null;
+  /** Pool items released for this entry and not placed yet (pool-place.ts). */
+  pendingPool: ItemLike[];
+  /** Match clock when pendingPool goes to placement (enteredAtMs + POOL.APPLY_AFTER_MS). */
+  poolApplyAt: number;
+  /** The web applied this entry's exit (the room merges the receipt into the outcome). */
+  exitSettled: boolean;
 }
 
 export interface Bullet {
@@ -175,6 +217,8 @@ export type MatchEvent =
   /** A human left the map: POST /api/raids/exit. */
   | { type: "exit"; report: PlayerExitReport }
   | { type: "invErr"; to: number; msg: InvErrMsg }
+  /** WORLD v6: the event boss died (POST /api/world/event). `by` = killer nickname, "" if not a human. */
+  | { type: "world"; kind: "boss_killed"; boss: BossKind; by: string }
   | { type: "ended"; report: MatchEndReport; summary: MatchSummaryMsg };
 
 /** Loadouts accepted by raids/start, by userId. */

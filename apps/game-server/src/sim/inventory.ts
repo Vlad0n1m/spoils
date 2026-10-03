@@ -38,6 +38,12 @@ export class GroundStore {
   readonly grid: UniformGrid;
   private seq = 0;
   private readonly scratch: number[] = [];
+  /**
+   * WORLD v6 (A6): player-dropped items in drop order = expiry order (constant GROUND_EXPIRE_MS).
+   * Consumed from `expHead`; entries already picked up are skipped (no per-tick scan of all items).
+   */
+  private readonly expQueue: GroundRt[] = [];
+  private expHead = 0;
 
   constructor(width: number, height: number) {
     this.grid = new UniformGrid(width, height, 256);
@@ -57,6 +63,12 @@ export class GroundStore {
     g.qty = item.qty;
     g.rarity = item.rarity;
     const rt: GroundRt = { n, schema: g, item: toPlain(item) };
+    // WORLD v6 (A6): what a player drops / spills vanishes GROUND_EXPIRE_MS after it hit the ground
+    // (a pick-up and re-drop is a new ground item with a new timer). Map floor loot never expires.
+    if (m.world && actor) {
+      g.expiresAt = m.clock + WORLD.GROUND_EXPIRE_MS;
+      this.expQueue.push(rt);
+    }
     this.byId.set(g.id, rt);
     this.byN.set(n, rt);
     this.grid.set(n, x, y);
@@ -116,6 +128,27 @@ export class GroundStore {
 
   all(): IterableIterator<GroundRt> {
     return this.byId.values();
+  }
+
+  /**
+   * WORLD v6 (A6): remove every player-dropped item whose time is up. Returns the tracked uniques
+   * among them (→ treasury, MatchEndReport.expired); fungibles are destroyed.
+   */
+  expire(m: Match, clock: number): ItemLike[] {
+    const out: ItemLike[] = [];
+    while (this.expHead < this.expQueue.length) {
+      const rt = this.expQueue[this.expHead]!;
+      if (rt.schema.expiresAt > clock) break;
+      this.expHead++;
+      if (this.byId.get(rt.schema.id) !== rt) continue; // picked up meanwhile
+      if (isTrackedUnique(rt.item)) out.push(rt.item);
+      this.remove(m, rt.schema.id);
+    }
+    if (this.expHead > 256 && this.expHead * 2 > this.expQueue.length) {
+      this.expQueue.splice(0, this.expHead);
+      this.expHead = 0;
+    }
+    return out;
   }
 }
 

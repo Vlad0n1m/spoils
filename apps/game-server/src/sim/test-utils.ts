@@ -3,6 +3,7 @@
 import {
   Extract,
   ITEM_FLAG,
+  WORLD,
   LEGACY_WORLD,
   MAP_GEN_VERSION,
   SERVER_TICK_MS,
@@ -13,20 +14,23 @@ import {
   legacyMapData,
   mulberry32,
   type ContainerSpot,
+  type BossKind,
   type InputSample,
+  type LoadoutSnapshot,
   type MapData,
   type MapRect,
   type NpcPost,
   type Player,
   type Rarity,
   type SelfState,
+  type SettledItem,
   type SlotKey,
   type WeaponId,
 } from "@extract/shared";
 import { placeItem, syncPublic } from "./bag.js";
 import { cloneItem, makeItem, type ItemInit } from "./items.js";
 import { Match, type MatchOptions } from "./match.js";
-import type { MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
+import type { EntryInit, MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
 
 export interface TestMapOpts {
   walls?: Array<{ x: number; y: number; w: number; h: number }>;
@@ -223,3 +227,88 @@ export type Timed = MatchEvent & { at: number };
 export const shotsBy = (events: Timed[], m: Match, id: string) =>
   events.filter((e): e is Extract2<Timed, { type: "shot" }> => e.type === "shot" && e.src === rtOf(m, id).rosterIndex);
 type Extract2<T, U> = T extends U ? T : never;
+
+
+// ---------------------------------------------------------------- WORLD v6 helpers
+
+/** Wall ms of the test cycle's start (cycle 1000 × 45 min). */
+export const WORLD_T0 = 1000 * WORLD.CYCLE_MS;
+
+/** The injected wall clock of a world test match (`now()` reads `t`). */
+export interface WallClock {
+  t: number;
+}
+
+/**
+ * A world-mode match on a hand-made map (default: the open test arena), driven by an injected wall
+ * clock that starts `startOffsetMs` after the cycle start (negative = prewarmed). Strict ledger,
+ * deterministic rng / uids, no floor loot.
+ */
+export function worldMatch(opts: Partial<MatchOptions> & { startOffsetMs?: number; bossEvent?: BossKind | null } = {}): { m: Match; wall: WallClock } {
+  const { startOffsetMs = 0, bossEvent = null, ...rest } = opts;
+  const wall: WallClock = { t: WORLD_T0 + startOffsetMs };
+  const m = new Match({
+    roster: [],
+    rng: mulberry32(42),
+    map: testMap(),
+    newUid: counterUid,
+    now: () => wall.t,
+    emptyWorld: true,
+    strictLedger: true,
+    envSeed: 1,
+    weatherOverride: "clear",
+    world: { cycleId: 1000, shard: 0, cycleStartsAt: WORLD_T0, entryCloseMs: WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS, bossEvent },
+    ...rest,
+  });
+  return { m, wall };
+}
+
+/** Advance the wall clock by `ms` in server ticks, stepping the match each tick. Returns the events. */
+export function advance(m: Match, wall: WallClock, ms: number): Array<MatchEvent & { at: number }> {
+  const out: Array<MatchEvent & { at: number }> = [];
+  for (let t = 0; t < ms - 1e-6 && !m.ended; t += SERVER_TICK_MS) {
+    wall.t += SERVER_TICK_MS;
+    m.step(SERVER_TICK_MS);
+    for (const e of m.drainEvents()) out.push({ ...e, at: m.clock });
+  }
+  return out;
+}
+
+/** Jump the wall clock by `ms` and run one step (the world clock follows the wall). Returns the events. */
+export function jump(m: Match, wall: WallClock, ms: number): Array<MatchEvent & { at: number }> {
+  wall.t += ms;
+  m.step(SERVER_TICK_MS);
+  return m.drainEvents().map((e) => ({ ...e, at: m.clock }));
+}
+
+let entrySeq = 0;
+/** Admit an entry for `userId` (free kit unless a snapshot is given). */
+export function enter(m: Match, userId: string, o: Partial<EntryInit> = {}): PlayerRuntime {
+  return m.addHuman({
+    entryId: `entry-${(entrySeq++).toString().padStart(4, "0")}`,
+    userId,
+    nickname: userId.toUpperCase(),
+    loadoutId: o.snapshot?.loadoutId ?? "",
+    guest: false,
+    level: 3,
+    snapshot: null,
+    pool: [],
+    bossFill: [],
+    ...o,
+  });
+}
+
+/** A one-entry loadout snapshot (unique with a fresh uid unless given). */
+export function snapshotOf(userId: string, entries: Array<Partial<SettledItem> & { def: string; key: SlotKey }>): LoadoutSnapshot {
+  return {
+    loadoutId: `lo-${userId}-${entrySeq}`,
+    userId,
+    level: 3,
+    entries: entries.map((e) => ({ uid: "", qty: 1, rarity: 0, dur: 100, ...e })),
+  };
+}
+
+/** A settled pool item (unique) with uid `uid`. */
+export function poolItem(uid: string, def = "rifle", rarity = 2): SettledItem {
+  return { uid, def, qty: 1, rarity, dur: 100 };
+}

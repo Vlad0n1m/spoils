@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ACT, MATCH } from "@extract/shared";
+import { ACT, MATCH, WORLD } from "@extract/shared";
 import { damagePlayer } from "./combat.js";
 import { spawnGroundItem } from "./inventory.js";
 import { makeItem } from "./items.js";
-import { addExtract, giveItem, giveStack, giveWeapon, ids, npcOpts, npcsOf, pl, place, rtOf, run, selfOf, testMatch, testPost } from "./test-utils.js";
+import { extractAllowed } from "./extraction.js";
+import { addExtract, enter, giveItem, giveStack, giveWeapon, ids, jump, npcOpts, npcsOf, pl, place, rtOf, run, selfOf, testMatch, testPost, worldMatch } from "./test-utils.js";
 
 const CH = MATCH.EXTRACT_CHANNEL_MS;
 
@@ -194,4 +195,20 @@ test("end report lists uniques left on the map (ground, armor with its points) a
   assert.deepEqual(left, expected.sort((x, y) => x.uid.localeCompare(y.uid)));
   assert.deepEqual(r.minted.map((x) => x.uid).sort(), [ground.uid, worn.uid].sort());
   assert.deepEqual(m.ledgerGaps(), []);
+});
+
+test("WORLD v6 (D8): extractAllowed waits for SelfState.extractArmAt; legacy roster humans are armed from 0", () => {
+  const { m, wall } = worldMatch();
+  const e = addExtract(m, 1500, 1500, 0, 0);
+  jump(m, wall, 1000);
+  const a = enter(m, "ua");
+  assert.equal(extractAllowed(m, a, e), false);
+  jump(m, wall, WORLD.EXTRACT_ARM_MS - 100);
+  assert.equal(extractAllowed(m, a, e), false);
+  jump(m, wall, 200);
+  assert.equal(extractAllowed(m, a, e), true);
+  const lm = testMatch(1);
+  const le = addExtract(lm, 1500, 1500, 0, 0);
+  assert.equal(selfOf(lm, ids(lm)[0]!).extractArmAt, 0);
+  assert.equal(extractAllowed(lm, rtOf(lm, ids(lm)[0]!), le), true);
 });
