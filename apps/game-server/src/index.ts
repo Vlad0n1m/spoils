@@ -6,15 +6,22 @@ import { NET } from "@extract/shared";
 // is imported dynamically below, after this line has run.
 Encoder.BUFFER_SIZE = NET.ENCODER_BUFFER_BYTES;
 
+// Loads .env and refuses to boot in production without GAME_SERVER_ID (D29).
 await import("./env.js");
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
-const { Server, matchMaker } = await import("@colyseus/core");
+const { Server } = await import("@colyseus/core");
 const { WebSocketTransport } = await import("@colyseus/ws-transport");
 const { monitor } = await import("@colyseus/monitor");
-const { BattleRoom } = await import("./rooms/battle-room.js");
-const { MatchmakingRoom } = await import("./rooms/matchmaking-room.js");
-const { ROOMS } = await import("@extract/shared");
+const { defineRooms } = await import("./rooms/define.js");
+const { announceBoot } = await import("./net/web-api.js");
+const { worldDirectory } = await import("./world/directory.js");
+
+// The directory's timers and the web posts never throw by design; anything that still slips
+// through must not take down every map on this process.
+process.on("unhandledRejection", (reason) => {
+  console.error("[game-server] unhandled rejection:", reason);
+});
 
 const port = Number(process.env.GAME_SERVER_PORT ?? 2567);
 
@@ -23,20 +30,17 @@ app.get("/healthz", (_req, res) => res.json({ ok: true }));
 // The monitor exposes every room's state and lets anyone dispose rooms: dev only.
 if (process.env.NODE_ENV !== "production") app.use("/colyseus", monitor());
 
-// Clients only queue (joinOrCreate "mm") and enter their battle by id; "create" / "join" would let
-// anyone spawn queues at will. Battle creation is additionally gated by LAUNCH_KEY.
-matchMaker.controller.exposedMethods = ["joinOrCreate", "joinById", "reconnect"];
-
 const httpServer = createServer(app);
 const gameServer = new Server({
   transport: new WebSocketTransport({ server: httpServer }),
 });
 
-gameServer.define(ROOMS.MATCHMAKING, MatchmakingRoom);
-gameServer.define(ROOMS.BATTLE, BattleRoom);
+// WORLD v6: one room type (the world shard), clients may only joinById (D4).
+defineRooms(gameServer);
 
 await gameServer.listen(port);
 console.log(`[game-server] listening on :${port}`);
-// Raids of a previous (crashed) process can never settle: have the web void them now.
-const { announceBoot } = await import("./net/web-api.js");
-void announceBoot();
+// Shards of a previous (crashed) process can never settle: have the web void them first, then open
+// the current cycle's shard (fresh matchId and loot, same boss event) and run the world timers.
+await announceBoot();
+await worldDirectory.start();

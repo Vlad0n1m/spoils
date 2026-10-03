@@ -1,8 +1,8 @@
 /**
- * Matchmaking guards shared by the rooms. Colyseus exposes POST /matchmake/* to everyone and
- * reserves a seat (which counts toward maxClients) before the WebSocket join, so the checks have
- * to happen before that: the static onAuth (runs before any room is found, created or reserved)
- * and _reserveSeat (runs inside the chosen room, so it can see the roster).
+ * Join guards of the battle room. Colyseus exposes POST /matchmake/* (only joinById, rooms/define.ts)
+ * and reserves a seat before the WebSocket join, so the checks have to happen before that: the
+ * static onAuth (ticket, map hash, world admission; runs before any seat is reserved) and
+ * _reserveSeat (runs inside the chosen room, so it can see who stands on its map).
  */
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -11,8 +11,8 @@ import type { JoinTicket } from "@extract/shared";
 import { verifyJoinTicket } from "../auth/ticket.js";
 
 /**
- * Process-local secret that only MatchmakingRoom passes to matchMaker.createRoom: battle rooms
- * refuse to be created without it, so a client can never create one or write its roster.
+ * Process-local secret that only the WorldDirectory passes to matchMaker.createRoom: battle rooms
+ * refuse to be created without it, so a client can never create one or choose its options.
  */
 export const LAUNCH_KEY = randomBytes(32).toString("hex");
 const LAUNCH_KEY_BUF = Buffer.from(LAUNCH_KEY, "utf8");
@@ -39,8 +39,7 @@ interface SeatBook {
 
 /**
  * One pending (not yet connected) seat per user: a newer reservation by the same user cancels the
- * older one, exactly as its timeout would. With the "second tab replaces the first" rule in onJoin
- * a user holds at most two seats, which is what maxClients is sized for.
+ * older one, exactly as its timeout would, so retries of one user never pile up seats.
  */
 export async function releasePendingSeatsOf(room: Room, userId: string): Promise<void> {
   const book = room as unknown as SeatBook;
