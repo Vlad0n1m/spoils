@@ -1,0 +1,107 @@
+{
+  "style": "Game art in exactly the art style of the reference image (bright stylized cartoon like ZombsRoyale, flat colors, soft shading, thick dark outlines, chunky readable shapes).",
+  "isolate": "Centered, single isolated subject, on a perfectly flat solid pure magenta background (#FF00FF), no gradient, no ground, no cast shadow, no text, no letters, no logos, no flags. Do not use any pink, magenta or purple colors on the subject.",
+  "ref": "art/style-test/1-cartoon.png",
+  "items": [
+    {
+      "id": "lobby_bg",
+      "out": "bg.webp",
+      "gen": "1536x1024",
+      "kind": "background",
+      "width": 1536,
+      "maxBytes": 300000,
+      "prompt": "Wide game lobby background, three-quarter front view at eye level. A raiders' forward camp at dusk on the edge of an abandoned countryside. In the middle foreground an EMPTY round concrete pad with a glowing lime-green dashed ring painted on it, where a character will stand later (keep it empty). Sandbag walls and stacked wooden crates on the left and right, a camouflage tarp tent, a folding table with a field radio and a lamp, a small campfire, a wooden watchtower far left. In the far distance on the right, silhouettes of a tall grain elevator and a radar dish against a warm orange-to-teal dusk sky. The left and right thirds are darker and calmer so UI buttons read well on top; the centre is the brightest. No people, no text, no letters, no logos, no flags, no national symbols."
+    },
+    {
+      "id": "hero_0",
+      "out": "hero_0.png",
+      "gen": "1024x1536",
+      "kind": "cutout",
+      "box": [512, 768],
+      "prompt": "Full-body game character in three-quarter front view, standing in a confident idle pose, facing the viewer slightly to the left. A young raider in a rounded light-gray helmet with goggles pushed up, olive field jacket, cargo pants, tan boots, fingerless gloves, a small radio on the chest strap, both hands gripping the shoulder straps of a small backpack. NO weapon in the hands. Friendly cartoon proportions: slightly big head, chunky hands and boots, tough but cheerful face. The character fills about 85% of the frame height, the whole body from helmet to boots is visible with a margin on every side."
+    },
+    {
+      "id": "hero_1",
+      "out": "hero_1.png",
+      "gen": "1024x1536",
+      "kind": "cutout",
+      "box": [512, 768],
+      "refs": ["art/raw/lobby/hero_0.png"],
+      "prompt": "The exact same character as the second reference image: same face, pose, helmet, clothes, colors and framing. Now wearing a light tan soft armor vest with two front pouches over the jacket."
+    },
+    {
+      "id": "hero_2",
+      "out": "hero_2.png",
+      "gen": "1024x1536",
+      "kind": "cutout",
+      "box": [512, 768],
+      "refs": ["art/raw/lobby/hero_0.png"],
+      "prompt": "The exact same character as the second reference image: same face, pose, helmet, clothes, colors and framing. Now wearing a medium dark-olive plate carrier with shoulder pads and magazine pouches."
+    },
+    {
+      "id": "hero_3",
+      "out": "hero_3.png",
+      "gen": "1024x1536",
+      "kind": "cutout",
+      "box": [512, 768],
+      "refs": ["art/raw/lobby/hero_0.png"],
+      "prompt": "The exact same character as the second reference image: same face, pose, clothes, colors and framing. Now wearing heavy dark-gray assault armor: thick chest plate, big shoulder plates, armored collar, and a heavier helmet with a raised visor."
+    },
+    {
+      "id": "menu_inventory",
+      "out": "menu_inventory.png",
+      "gen": "1024x1024",
+      "kind": "cutout",
+      "box": [256, 256],
+      "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a stuffed olive military backpack with straps and a rolled sleeping mat on top."
+    },
+    {
+      "id": "menu_shop",
+      "out": "menu_shop.png",
+      "gen": "1024x1024",
+      "kind": "cutout",
+      "box": [256, 256],
+      "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a small wooden trader's crate stall with a striped cloth awning, a pile of gold coins and a blank paper price tag in front."
+    },
+    {
+      "id": "menu_leaderboards",
+      "out": "menu_leaderboards.png",
+      "gen": "1024x1024",
+      "kind": "cutout",
+      "box": [256, 256],
+      "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a shiny golden trophy cup with two handles and a blank steel dog tag on a chain hanging from one handle."
+    },
+    {
+      "id": "menu_news",
+      "out": "menu_news.png",
+      "gen": "1024x1024",
+      "kind": "cutout",
+      "box": [256, 256],
+      "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a rugged olive handheld field radio with a long antenna and a glowing red signal light."
+    },
+    {
+      "id": "menu_info",
+      "out": "menu_info.png",
+      "gen": "1024x1024",
+      "kind": "cutout",
+      "box": [256, 256],
+      "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a folded paper field map with a red route drawn on it and a brass compass lying on top."
+    },
+    {
+      "id": "menu_friends",
+      "out": "menu_friends.png",
+      "gen": "1024x1024",
+      "kind": "cutout",
+      "box": [256, 256],
+      "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: two cartoon gloved hands doing a fist bump, one olive glove and one tan glove."
+    },
+    {
+      "id": "menu_guilds",
+      "out": "menu_guilds.png",
+      "gen": "1024x1024",
+      "kind": "cutout",
+      "box": [256, 256],
+      "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a plain heraldic shield with a blank lime-green field and crossed wooden spears behind it, no symbols on the shield."
+    }
+  ]
+}
