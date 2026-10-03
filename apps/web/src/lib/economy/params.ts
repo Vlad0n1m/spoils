@@ -1,4 +1,5 @@
 import { eq, sql } from "drizzle-orm";
+import { POOL } from "@extract/shared";
 import { economyParams } from "../../db/schema";
 import type { Db, Tx } from "../inventory/db";
 
@@ -10,11 +11,22 @@ export const PARAM = {
   TAX_ACC: "tax_acc",
   /** ISO timestamp of the last seed-economy run. */
   SEEDED_AT: "seeded_at",
+  /**
+   * Pool release factor k: risk part = round(k × riskUnits) (v4 default POOL.RISK_K = 1.0, clamped
+   * 0..2). The lever if the pool swells (economy memo §13): 1.25. Never a free floor.
+   */
+  POOL_RISK_K: "pool_risk_k",
+  /** Cap of pool items released into one match (v4 default POOL.MAX_PER_MATCH = 8, clamped 0..16). */
+  POOL_MAX_PER_MATCH: "pool_max_per_match",
+  /** UTC day (YYYY-MM-DD) the daily regulator last ran (runEconomyDaily, once per day). */
+  DAILY_RAN_ON: "daily_ran_on",
 } as const;
 
 const DEFAULTS: Record<string, number> = {
   [PARAM.AUTOSELL_MULT]: 1,
   [PARAM.TAX_ACC]: 0,
+  [PARAM.POOL_RISK_K]: POOL.RISK_K,
+  [PARAM.POOL_MAX_PER_MATCH]: POOL.MAX_PER_MATCH,
 };
 
 /** Reads a numeric param (no lock). Missing or malformed rows fall back to the default. */

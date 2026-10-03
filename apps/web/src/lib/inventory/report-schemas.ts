@@ -1,7 +1,9 @@
 import { z } from "zod";
 import {
+  BOSS_KINDS,
   CONTAINER_KINDS,
   MAP_IDS,
+  type BossKind,
   type ContainerKind,
   type GameServerBoot,
   type MapId,
@@ -47,9 +49,27 @@ export const raidStartRequestSchema = z.object({
     )
     .max(64),
   containers: z
-    .array(z.object({ idx: z.number().int().min(0).max(100_000), kind: containerKind, tier: z.number().int().min(0).max(4) }))
+    .array(
+      z.object({
+        idx: z.number().int().min(0).max(100_000),
+        kind: containerKind,
+        tier: z.number().int().min(0).max(4),
+        guarded: z.boolean().optional(),
+      }),
+    )
     .max(4096),
-  bossSlots: z.number().int().min(0).max(8),
+  /** Legacy Σ boss slots (kept during the v4 rollout); the pool uses `bosses`. */
+  bossSlots: z.number().int().min(0).max(16),
+  /** v4: spawned bosses with their pool slots (min uniqueTierScore 0..2 per slot). */
+  bosses: z
+    .array(
+      z.object({
+        kind: z.enum(BOSS_KINDS as unknown as [BossKind, ...BossKind[]]),
+        slots: z.array(z.number().int().min(0).max(2)).max(8),
+      }),
+    )
+    .max(8)
+    .optional(),
   instanceId: z.string().min(1).max(64).optional(),
   serverId: z.string().min(1).max(64).optional(),
 }) as unknown as z.ZodType<RaidStartRequest>;

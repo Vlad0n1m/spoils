@@ -6,16 +6,19 @@
  *    tier colours, YOUR allowed extracts (SelfState.extractMask) bright with names and closing
  *    times, the others greyed, your spawn side, a compass and your own arrow — never other players.
  *  - ZoneTracker (pure) + ZoneToast: "Grain Elevator · T3" when you enter a POI, with a short dwell
- *    so walking along a zone edge does not spam, and no repeat for the same zone within 45 s.
+ *    so walking along a zone edge does not spam, and no repeat for the same zone within 45 s. A boss
+ *    POI adds a red skull line ("Foreman's turf"); the full map marks boss spots with named skulls.
  *  - createMapOverlaySystem(): both wrapped as a GameSystem (systems.ts) with the M / Esc keys, so
  *    the renderer only has to list it in its system factories.
  */
 
 import { Container, Graphics, Sprite, Text, type TextStyleOptions } from "pixi.js";
-import { MAPS, zoneAt, type ExtractSpot, type LootTier, type MapData, type MapSide, type Zone, type ZoneKind } from "@extract/shared";
+import { BOSSES, MAPS, zoneAt, type BossSpot, type ExtractSpot, type LootTier, type MapData, type MapSide, type Zone, type ZoneKind } from "@extract/shared";
 import { COLORS } from "./assets";
 import type { GameContext, GameSystem } from "./systems";
 import { acquireOverview, releaseOverview } from "./minimap";
+import { BOSS_COLOR, turfLine } from "./boss";
+import { skullContext } from "./boss-icons";
 
 const FONT = "ui-rounded, 'Trebuchet MS', system-ui, sans-serif";
 
@@ -123,11 +126,11 @@ export class ZoneTracker {
 const TOAST = { IN_MS: 250, HOLD_MS: 2200, OUT_MS: 650 } as const;
 
 /** Toast alpha at `t` ms after it was shown (0 when finished). */
-export function toastAlpha(t: number): number {
+export function toastAlpha(t: number, holdMs: number = TOAST.HOLD_MS): number {
   if (t < 0) return 0;
   if (t < TOAST.IN_MS) return t / TOAST.IN_MS;
-  if (t < TOAST.IN_MS + TOAST.HOLD_MS) return 1;
-  const o = t - TOAST.IN_MS - TOAST.HOLD_MS;
+  if (t < TOAST.IN_MS + holdMs) return 1;
+  const o = t - TOAST.IN_MS - holdMs;
   return o < TOAST.OUT_MS ? 1 - o / TOAST.OUT_MS : 0;
 }
 
@@ -135,8 +138,12 @@ export class ZoneToast {
   readonly root = new Container();
   private readonly title: Text;
   private readonly sub: Text;
+  /** Boss POI line ("FOREMAN'S TURF") with a skull, hidden for ordinary zones. */
+  private readonly turf: Text;
+  private readonly skull = new Graphics(skullContext(BOSS_COLOR, 10));
   private readonly bar = new Graphics();
   private shownAt = -Infinity;
+  private holdMs: number = TOAST.HOLD_MS;
 
   constructor() {
     this.title = new Text({
@@ -147,10 +154,18 @@ export class ZoneToast {
       text: "",
       style: { fontFamily: FONT, fontSize: 15, fontWeight: "800", fill: 0xffffff, stroke: { color: 0x101010, width: 4 }, letterSpacing: 2 },
     });
+    this.turf = new Text({
+      text: "",
+      style: { fontFamily: FONT, fontSize: 16, fontWeight: "900", fill: BOSS_COLOR, stroke: { color: 0x101010, width: 4 }, letterSpacing: 3 },
+    });
     this.title.anchor.set(0.5, 0);
     this.sub.anchor.set(0.5, 0);
     this.sub.y = 40;
-    this.root.addChild(this.bar, this.title, this.sub);
+    this.turf.anchor.set(0.5, 0);
+    this.turf.y = 80;
+    this.turf.visible = false;
+    this.skull.visible = false;
+    this.root.addChild(this.bar, this.title, this.sub, this.turf, this.skull);
     this.root.visible = false;
     this.root.eventMode = "none";
   }
@@ -159,11 +174,23 @@ export class ZoneToast {
     this.title.text = z.name;
     this.sub.text = zoneSubtitle(z).toUpperCase();
     this.sub.style.fill = TIER_COLORS[z.tier];
-    const w = Math.max(this.title.width, this.sub.width) + 48;
+    const boss = z.boss ?? null;
+    this.turf.visible = !!boss;
+    this.skull.visible = !!boss;
+    if (boss) {
+      this.turf.text = turfLine(boss).toUpperCase();
+      // Skull + text centred together.
+      const tw = this.turf.width + 26;
+      this.turf.x = 13;
+      this.skull.position.set(-tw / 2 + 10, this.turf.y + this.turf.height / 2);
+    }
+    const w = Math.max(this.title.width, this.sub.width, boss ? this.turf.width + 34 : 0) + 48;
+    const h = boss ? 112 : 84;
     this.bar.clear();
-    this.bar.roundRect(-w / 2, -8, w, 84, 12).fill({ color: 0x0c120a, alpha: 0.55 });
+    this.bar.roundRect(-w / 2, -8, w, h, 12).fill({ color: boss ? 0x1a0606 : 0x0c120a, alpha: boss ? 0.65 : 0.55 });
     this.bar.rect(-w / 2 + 14, 66, w - 28, 3).fill({ color: TIER_COLORS[z.tier], alpha: 0.9 });
     this.shownAt = nowMs;
+    this.holdMs = boss ? TOAST.HOLD_MS + 1200 : TOAST.HOLD_MS;
   }
 
   layout(screenW: number, screenH: number) {
@@ -171,7 +198,7 @@ export class ZoneToast {
   }
 
   frame(nowMs: number) {
-    const a = toastAlpha(nowMs - this.shownAt);
+    const a = toastAlpha(nowMs - this.shownAt, this.holdMs);
     this.root.visible = a > 0;
     this.root.alpha = a;
   }
@@ -206,6 +233,8 @@ export class FullMapOverlay {
   private readonly labels = new Container();
   private readonly zoneLabels: Array<{ z: Zone; t: Text }> = [];
   private readonly extracts: ExtractMark[] = [];
+  /** Boss spots: skull + name ("FOREMAN"); the boss may not have spawned this match. */
+  private readonly bossMarks: Array<{ b: BossSpot; g: Graphics; label: Text }> = [];
   private readonly me = new Graphics();
   private readonly compass = new Container();
   private readonly title: Text;
@@ -237,6 +266,13 @@ export class FullMapOverlay {
       label.anchor.set(0.5, 0);
       this.labels.addChild(g, label);
       this.extracts.push({ e, g, label, allowed: null });
+    }
+    for (const b of map.bosses ?? []) {
+      const g = new Graphics(skullContext(BOSS_COLOR, 12));
+      const label = new Text({ text: BOSSES[b.kind]?.name.toUpperCase() ?? b.kind.toUpperCase(), style: { ...labelStyle(BOSS_COLOR, 13), letterSpacing: 2 } });
+      label.anchor.set(0, 0.5);
+      this.labels.addChild(g, label);
+      this.bossMarks.push({ b, g, label });
     }
     this.me.circle(0, 0, 12).fill({ color: 0xffffff, alpha: 0.3 });
     this.me.poly([13, 0, -8, -9, -4, 0, -8, 9]).fill({ color: 0xffffff }).stroke({ width: 2.5, color: 0x111111 });
@@ -290,7 +326,13 @@ export class FullMapOverlay {
     this.zones.rect(0, 0, this.map.width * k, this.map.height * k).stroke({ width: 3, color: 0xffffff, alpha: 0.6 });
     const fontScale = Math.max(0.7, Math.min(1.2, size / 800));
     for (const { z, t } of this.zoneLabels) {
-      t.position.set((z.rect.x + z.rect.w / 2) * k, (z.rect.y + z.rect.h / 2) * k);
+      // A boss POI's skull sits near its centre: its name goes to the bottom edge instead.
+      if (z.boss) {
+        t.anchor.set(0.5, 1);
+        t.position.set((z.rect.x + z.rect.w / 2) * k, (z.rect.y + z.rect.h) * k - 4);
+      } else {
+        t.position.set((z.rect.x + z.rect.w / 2) * k, (z.rect.y + z.rect.h / 2) * k);
+      }
       t.scale.set(fontScale);
     }
     for (const m of this.extracts) {
@@ -302,6 +344,12 @@ export class FullMapOverlay {
       const [ax, ay, dx, dy] = LABEL_PLACEMENT[m.e.side];
       m.label.anchor.set(ax, ay);
       m.label.position.set(ex + dx, ey + dy);
+    }
+    for (const m of this.bossMarks) {
+      m.g.position.set(m.b.x * k, m.b.y * k);
+      m.g.scale.set(fontScale);
+      m.label.scale.set(fontScale);
+      m.label.position.set(m.b.x * k + 15 * fontScale, m.b.y * k);
     }
     this.compass.position.set(size - 28, 34);
     this.title.position.set(screenW / 2, this.panel.y - 6);

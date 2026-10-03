@@ -8,7 +8,7 @@ import type { Rect } from "../geometry.js";
 import type { Rng } from "../rng.js";
 import type { GenCtx } from "./context.js";
 import { floodWalk, getCollisionIndex, getWalkGrid, nearestWalkCell, reachedNear, walkCellOf } from "./query.js";
-import { BOSS_CHANCE, EXTRACT_RADIUS, STEPPE_EXTRACTS } from "./steppe.js";
+import { BOSS_BUILDING_PREFS, BOSS_CHANCE, BOSS_GUARD_COUNT, EXTRACT_RADIUS, STEPPE_EXTRACTS } from "./steppe.js";
 import { ROAD_MASK } from "./terrain.js";
 import {
   TERRAIN,
@@ -226,7 +226,8 @@ export function placeBosses(ctx: GenCtx): void {
   for (const z of ctx.zones) {
     if (!z.boss) continue;
     const kind: BossKind = z.boss;
-    const pref: BuildingArch[] = kind === "foreman" ? ["office", "warehouse"] : ["office", "bunker", "barracks"];
+    const pref: readonly BuildingArch[] = BOSS_BUILDING_PREFS[kind];
+    const nGuards = BOSS_GUARD_COUNT[kind];
     let b: Building | undefined;
     for (const arch of pref) {
       b = ctx.buildings.find((q) => q.zone === z.id && q.arch === arch);
@@ -237,12 +238,12 @@ export function placeBosses(ctx: GenCtx): void {
     const main = rooms[0]!;
     const guards: Array<{ x: number; y: number }> = [];
     for (const r of rooms.slice(1)) {
-      if (guards.length >= (kind === "foreman" ? 2 : 3)) break;
+      if (guards.length >= nGuards) break;
       guards.push({ x: Math.round(r.x + r.w / 2), y: Math.round(r.y + r.h / 2) });
     }
     // Not enough rooms: post the rest outside the exterior doors.
     for (const d of b.doors) {
-      if (guards.length >= (kind === "foreman" ? 2 : 3)) break;
+      if (guards.length >= nGuards) break;
       const onEdge = d.x === b.floor.x || d.y === b.floor.y || d.x + d.w === b.floor.x + b.floor.w || d.y + d.h === b.floor.y + b.floor.h;
       if (!onEdge) continue;
       const cx = d.x + d.w / 2, cy = d.y + d.h / 2;

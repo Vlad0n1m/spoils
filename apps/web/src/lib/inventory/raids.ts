@@ -79,9 +79,10 @@ async function ensureRaid(tx: Tx, matchId: string, mapId: string, matchSeed: num
  * is inserted first (a concurrent retry blocks on the primary key), and a replay returns the
  * stored response unchanged. Per player: the loadout must be `locked`, belong to the user and be
  * younger than LOADOUT_LOCK_TTL_MS; accepted loadouts move locked → in_raid and their items get
- * match_id. Then the lost pool is released into containers (live mode only): risk units of the
- * accepted loadouts decide the count, topped up to the per-match floor (POOL.MIN_RELEASE_PER_MATCH,
- * T3/T4 containers only) so even a lobby of free kits finds some uniques.
+ * match_id. Then the lost pool is released (live mode only, allocatePool, LOOT ECONOMY v4): risk
+ * units of the accepted loadouts decide the count (round(k × risk), capped), the spawned bosses
+ * (req.bosses) get the best items first plus a display top-up while someone risked gear, the rest
+ * lands only in T3/T4 containers. A lobby of free kits gets no uniques at all.
  */
 export async function startRaid(db: Db, req: RaidStartRequest, now = new Date()): Promise<RaidStartResponse> {
   return db.transaction(async (tx) => {
@@ -163,10 +164,10 @@ export async function startRaid(db: Db, req: RaidStartRequest, now = new Date())
             matchId: req.matchId,
             matchSeed: req.matchSeed,
             containers: req.containers,
-            bossSlots: req.bossSlots,
+            bosses: req.bosses,
             riskUnits,
           })
-        : { containerLoot: {}, released: 0, floor: 0 };
+        : { containerLoot: {}, released: 0, boss: 0, risk: 0 };
     const response: RaidStartResponse = {
       accepted,
       rejected,

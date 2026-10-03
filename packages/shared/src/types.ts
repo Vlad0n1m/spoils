@@ -9,7 +9,7 @@
  */
 
 import type { InvErrCode, SlotKey } from "./inventory.js";
-import type { ContainerKind, LootTier, MapId } from "./map/types.js";
+import { BOSS_KINDS, type BossKind, type ContainerKind, type LootTier, type MapId } from "./map/types.js";
 
 export type ExitType = "extract" | "dead" | "timeout";
 
@@ -41,6 +41,25 @@ export interface LoadoutSnapshot {
 export type RaidMode = "live" | "demo";
 
 /** Game server (MatchmakingRoom) → web. Idempotent per matchId (the stored response is replayed). */
+/** One spawned boss and its pool slots (RaidStartRequest.bosses). */
+export interface RaidBossSlots {
+  kind: BossKind;
+  /** One entry per slot: the minimum uniqueTierScore wanted (fallback: best available). */
+  slots: number[];
+}
+
+/** RaidStartResponse.containerLoot key of a boss's pool items (v4; the legacy key was "boss"). */
+export type BossLootKey = `boss:${BossKind}`;
+export function bossLootKey(kind: BossKind): BossLootKey {
+  return `boss:${kind}`;
+}
+/** The boss kind of a containerLoot key, or null for container keys / the legacy "boss". */
+export function bossKindOfLootKey(key: string): BossKind | null {
+  if (!key.startsWith("boss:")) return null;
+  const k = key.slice(5);
+  return (BOSS_KINDS as readonly string[]).includes(k) ? (k as BossKind) : null;
+}
+
 export interface RaidStartRequest {
   matchId: string;
   mode: RaidMode;
@@ -48,10 +67,22 @@ export interface RaidStartRequest {
   matchSeed: number;
   /** loadoutId "" = free kit (no pool loot for that player). */
   players: Array<{ userId: string; loadoutId: string }>;
-  /** Static containers eligible for pool items (MapData.containers index). */
-  containers: Array<{ idx: number; kind: ContainerKind; tier: LootTier }>;
-  /** Boss stashes spawned this match (cut 3 → 0). */
+  /**
+   * Static containers eligible for pool items (MapData.containers index). v4: `guarded` = within
+   * POOL.GUARDED_RADIUS_PX of a BossSpot (containerGuarded), weight × POOL.GUARDED_WEIGHT.
+   */
+  containers: Array<{ idx: number; kind: ContainerKind; tier: LootTier; guarded?: boolean }>;
+  /**
+   * Legacy: Σ pool slots of the spawned bosses (bossSlotCount(bosses)); kept during the v4
+   * rollout. 0 = no boss.
+   */
   bossSlots: number;
+  /**
+   * v4: bosses that spawned this match (rollBossSpawns(matchSeed, map.bosses), raidBossSlots), each
+   * with its pool slots (minimum uniqueTierScore per slot). Their items come back under
+   * containerLoot[bossLootKey(kind)].
+   */
+  bosses?: RaidBossSlots[];
   /**
    * Game server process that runs the match (GameServerBoot.instanceId). On its next boot the
    * server calls POST /api/raids/void-orphans and raids of an older instance are voided at once.
@@ -80,7 +111,8 @@ export interface RaidStartResponse {
   rejected: Array<{ userId: string; reason: "not_locked" | "wrong_user" | "expired" }>;
   /**
    * Lost-pool uniques allocated to containers, keyed by container index (decimal string in JSON);
-   * key "boss" = the boss stash share. Fungibles are rolled by the server itself.
+   * v4 key bossLootKey(kind) ("boss:<kind>") = that boss's bag (pool slots, never break); legacy
+   * key "boss" = the old boss stash share. Fungibles are rolled by the server itself.
    */
   containerLoot: Record<string, SettledItem[]>;
   /** Current autosell multiplier (shown in the outcome receipt). */

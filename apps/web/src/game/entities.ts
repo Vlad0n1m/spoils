@@ -20,6 +20,7 @@ import {
   WEAPONS,
   WORLD,
   itemDef,
+  type BossSpot,
   type ContainerSpot,
   type EventsMsg,
   type WeaponId,
@@ -35,6 +36,8 @@ import {
   type SpriteName,
   type Textures,
 } from "./assets";
+import { BOSS_COLOR, BOSS_SCALE, GUARD_COLOR, GUARD_SCALE, GUARD_TINT, hpFraction, kindOfNpc, npcNameTag, npcRole, type NpcRole } from "./boss";
+import { guardBadgeContext } from "./boss-icons";
 import { SnapshotBuffer } from "./prediction";
 import type { GameContext, GameSystem } from "./systems";
 
@@ -146,11 +149,21 @@ export class PlayerView {
   /** Above the head: heal / loot status; around the feet: extract ring. */
   private readonly status = new Graphics(statusContexts().heal);
   private readonly extractRing = new Graphics(statusContexts().extract);
+  /** Guard badge left of the name tag (boss NPCs, loot economy v4). */
+  private readonly badge = new Graphics(guardBadgeContext());
   readonly buffer = new SnapshotBuffer();
 
   private weaponId = "";
   private barsKey = "";
-  private colorIndex = -1;
+  private colorKey = "";
+  /** Boss / guard presentation (Player.role); null = a player or a regular bot. */
+  private role: NpcRole = null;
+  private roleSet = false;
+  private roleNick = "";
+  private bossTexReady = false;
+  /** Sprite size multiplier for the role (boss 1.4, guard 1.08). */
+  private scaleK = 1;
+  private statusY = -PLAYER.RADIUS - 44;
   private bpLevel = -1;
   private act = 0;
   private rollStartedAt = -Infinity;
@@ -197,7 +210,8 @@ export class PlayerView {
     });
     this.name.anchor.set(0.5, 1);
     this.name.position.set(0, -PLAYER.RADIUS - 16);
-    this.label.addChild(this.name, this.bars);
+    this.badge.visible = false;
+    this.label.addChild(this.name, this.bars, this.badge);
     this.label.visible = !isSelf;
     this.status.position.set(0, -PLAYER.RADIUS - 44);
     this.status.visible = false;
@@ -209,6 +223,7 @@ export class PlayerView {
   /** Reuse a pooled view for another (or the same, re-added) player. */
   reset(sessionId: string, nickname: string) {
     this.sessionId = sessionId;
+    this.setRole(0, nickname);
     this.setNickname(nickname);
     this.buffer.clear();
     this.barsKey = "";
@@ -221,17 +236,70 @@ export class PlayerView {
   }
 
   setColor(index: number) {
-    if (index === this.colorIndex) return;
-    this.colorIndex = index;
-    const c = playerColor(index);
+    const key = `${index}|${this.role ?? ""}`;
+    if (key === this.colorKey) return;
+    this.colorKey = key;
+    const c = this.role === "boss" ? BOSS_COLOR : this.role === "guard" ? GUARD_COLOR : playerColor(index);
+    const r = PLAYER.RADIUS * (this.role === "boss" ? 1.25 : 1) + 3;
     this.ring.clear();
-    this.ring.circle(0, 0, PLAYER.RADIUS + 3).fill({ color: c, alpha: 0.28 });
-    this.ring.circle(0, 0, PLAYER.RADIUS + 3).stroke({ width: 4, color: c, alpha: 0.95 });
+    this.ring.circle(0, 0, r).fill({ color: c, alpha: this.role === "boss" ? 0.22 : 0.28 });
+    this.ring.circle(0, 0, r).stroke({ width: this.role === "boss" ? 5 : 4, color: c, alpha: 0.95 });
     this.name.style.fill = this.isSelf ? 0xffffff : c;
   }
 
   setNickname(nick: string) {
+    // Bosses and guards show their role tag (setRole) instead of the raw nickname.
+    if (this.role) return;
     if (this.name.text !== nick) this.name.text = nick;
+  }
+
+  /**
+   * Player.role (NPC_ROLE): a boss gets the boss sprite (bigger, red ring, "FOREMAN" tag, wide HP
+   * bar), a guard a khaki tint, an amber ring and a badge. `bosses` (map.bosses) resolves the kind
+   * when the nickname does not name it. Cheap when nothing changed; retries until boss.png loaded.
+   */
+  setRole(role: number, nickname: string, bosses?: readonly BossSpot[], x = 0, y = 0) {
+    const r = npcRole(role);
+    // Per-frame fast path: no allocation when nothing changed.
+    if (this.roleSet && r === this.role && nickname === this.roleNick && (r !== "boss" || this.bossTexReady)) return;
+    const bossTex = r === "boss" ? this.icons.get("boss") : null;
+    const ready = !!bossTex && bossTex !== Texture.EMPTY;
+    if (this.roleSet && r === this.role && nickname === this.roleNick && ready === this.bossTexReady) return;
+    this.roleSet = true;
+    this.roleNick = nickname;
+    this.bossTexReady = ready;
+    this.role = r;
+    this.scaleK = r === "boss" ? BOSS_SCALE : r === "guard" ? GUARD_SCALE : 1;
+    this.sprite.texture = r === "boss" && ready ? bossTex! : this.tex.player;
+    // Until boss.png decoded, a red tint keeps the boss readable.
+    this.sprite.tint = r === "guard" ? GUARD_TINT : r === "boss" && this.sprite.texture === this.tex.player ? 0xff8a80 : 0xffffff;
+    this.sprite.width = PLAYER_SPRITE_SIZE * this.scaleK;
+    this.sprite.height = PLAYER_SPRITE_SIZE * this.scaleK;
+    // The boss sprite carries its own pack.
+    if (r === "boss") this.backpack.visible = false;
+    this.bpLevel = -1;
+    // Bigger body: the hands sit further forward, so does the gun.
+    const id = this.weaponId;
+    this.weaponId = "";
+    this.setWeapon(id);
+
+    const kind = r ? kindOfNpc({ nickname, x, y }, bosses ?? []) : null;
+    this.name.text = npcNameTag(r, kind, nickname);
+    this.name.style.fontSize = r === "boss" ? 16 : 13;
+    this.name.style.letterSpacing = r === "boss" ? 2 : 0;
+    const head = -PLAYER.RADIUS * (r === "boss" ? 1.35 : 1);
+    this.name.position.set(r === "guard" ? 8 : 0, head - 16);
+    this.badge.visible = r === "guard";
+    if (r === "guard") this.badge.position.set(8 - this.name.width / 2 - 9, head - 16 - this.name.height / 2 + 1);
+    this.colorKey = "";
+    this.barsKey = "";
+    this.statusY = head - 44;
+    this.status.position.set(0, this.statusY);
+  }
+
+  /** Boss / guard role of this view (null = player or regular bot). */
+  get npc(): NpcRole {
+    return this.role;
   }
 
   setWeapon(weapon: string) {
@@ -245,11 +313,12 @@ export class PlayerView {
     this.weapon.texture = this.tex[weapon];
     const len = WEAPON_HELD_LENGTH[weapon];
     fitWidth(this.weapon, len);
-    this.weapon.position.set(WEAPONS[weapon].muzzle - len, 0);
+    this.weapon.position.set(WEAPONS[weapon].muzzle - len + (this.scaleK - 1) * PLAYER_SPRITE_SIZE * 0.4, 0);
   }
 
   /** Backpack level 0..3 (Player.bp); the icon loads lazily, so this retries until it has one. */
   setBackpack(level: number) {
+    if (this.role === "boss") return;
     const lvl = Math.max(0, Math.min(3, Math.floor(level)));
     if (lvl === this.bpLevel && (lvl === 0 || this.backpack.texture !== Texture.EMPTY)) return;
     if (lvl === 0) {
@@ -272,21 +341,24 @@ export class PlayerView {
     this.backpack.visible = true;
   }
 
-  setBars(hp: number, armor: number, armorDur: number, armorMax: number) {
-    const key = `${Math.ceil(hp)}|${armor}|${Math.ceil(armorDur)}`;
+  /** HP (against maxHp: bosses and guards have more than PLAYER.MAX_HP) and armor bars. */
+  setBars(hp: number, armor: number, armorDur: number, armorMax: number, maxHp: number = PLAYER.MAX_HP) {
+    const key = `${Math.ceil(hp)}|${armor}|${Math.ceil(armorDur)}|${maxHp}|${this.role ?? ""}`;
     if (key === this.barsKey) return;
     this.barsKey = key;
-    const W = 44;
-    const y = -PLAYER.RADIUS - 13;
+    const boss = this.role === "boss";
+    const W = boss ? 84 : this.role === "guard" ? 52 : 44;
+    const H = boss ? 7 : 5;
+    const y = -PLAYER.RADIUS * (boss ? 1.35 : 1) - 13;
     const g = this.bars;
     g.clear();
-    g.roundRect(-W / 2 - 2, y - 2, W + 4, 9, 3).fill({ color: 0x111111, alpha: 0.85 });
-    const k = Math.max(0, Math.min(1, hp / PLAYER.MAX_HP));
-    const hpColor = k > 0.6 ? 0x5ee35a : k > 0.3 ? 0xffc533 : 0xff4b4b;
-    if (k > 0) g.roundRect(-W / 2, y, W * k, 5, 2).fill({ color: hpColor });
+    g.roundRect(-W / 2 - 2, y - 2, W + 4, H + 4, 3).fill({ color: 0x111111, alpha: 0.85 });
+    const k = hpFraction(hp, maxHp);
+    const hpColor = boss ? BOSS_COLOR : k > 0.6 ? 0x5ee35a : k > 0.3 ? 0xffc533 : 0xff4b4b;
+    if (k > 0) g.roundRect(-W / 2, y, W * k, H, 2).fill({ color: hpColor });
     if (armor > 0 && armorMax > 0) {
       const a = Math.max(0, Math.min(1, armorDur / armorMax));
-      g.rect(-W / 2, y + 5, W * a, 2).fill({ color: COLORS.hitArmor });
+      g.rect(-W / 2, y + H, W * a, 2).fill({ color: COLORS.hitArmor });
     }
   }
 
@@ -316,7 +388,7 @@ export class PlayerView {
     this.setStatus(act & ACT.HEAL ? "heal" : act & ACT.LOOT ? "loot" : "");
     this.extractRing.visible = (act & ACT.EXTRACT) !== 0;
     if (this.status.visible) {
-      this.status.y = -PLAYER.RADIUS - 44 + Math.sin(nowMs / 160) * 2;
+      this.status.y = this.statusY + Math.sin(nowMs / 160) * 2;
     }
     if (this.extractRing.visible) {
       const p = (nowMs % 1200) / 1200;

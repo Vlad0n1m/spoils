@@ -16,7 +16,9 @@
  * (matchSeed, idx) alone, so the open order never changes what is inside and an audit can re-roll:
  * - fungibles (junk / ammo / meds) from the shared CONTAINER_LOOT tables (rollContainerFungibles);
  * - uniques: live mode = the lost-pool allocation from raids/start (registered in the ledger at
- *   match start); demo mode = minted from CHEST_TABLES (registered as "minted" when rolled).
+ *   match start); demo mode = minted from CHEST_TABLES (registered as "minted" when rolled), only
+ *   in containers of tier >= CONTAINER.DEMO_UNIQUE_MIN_TIER (v4 zoning, same as the live pool).
+ * Boss pool items (containerLoot "boss:<kind>") are held here until boss.ts hands them to the boss.
  *
  * A session closes on SEARCH_CLOSE, distance > SEARCH.CANCEL_RANGE (checked every tick; 128 vs the
  * 96 px open range is the hysteresis), firing (combat.ts), roll start, death, extract, disconnect
@@ -26,6 +28,7 @@
 import {
   BACKPACK_SLOTS,
   CHEST_TABLES,
+  CONTAINER,
   CONTAINER_STATE,
   ContainerLoot,
   Corpse,
@@ -35,6 +38,7 @@ import {
   SOUND,
   SoundKind,
   accepts,
+  bossKindOfLootKey,
   containerLootKey,
   containerOpenMs,
   corpseLootKey,
@@ -47,6 +51,7 @@ import {
   planPlace,
   revealMs,
   rollContainerFungibles,
+  type BossKind,
   type ContainerSpot,
   type InvErrCode,
   type InvItem,
@@ -108,6 +113,9 @@ export interface SearchTarget {
 export class ContainerSystem {
   /** Live-mode pool uniques allocated to a container, by index (registered at match start). */
   private readonly pool = new Map<number, ItemLike[]>();
+  /** Live-mode pool uniques allocated to a boss that has not taken them (yet / did not spawn). */
+  private readonly bossPool = new Map<BossKind, ItemLike[]>();
+  private readonly legacyBossPool: ItemLike[] = [];
   /** Opened containers and every corpse, by loot key. */
   readonly targets = new Map<string, SearchTarget>();
   /** Corpses in creation order (nearestOpenable's index space after the static containers). */
@@ -142,20 +150,56 @@ export class ContainerSystem {
     });
   }
 
-  /** Lost-pool items from raids/start ("boss" and unknown indexes are ignored until bosses exist). */
+  /**
+   * Lost-pool items from raids/start, registered in the ledger as "pool":
+   * - "<idx>": a static container (rolled into it on first open);
+   * - bossLootKey(kind) = "boss:<kind>": that boss's bag (boss.ts takes them at spawn; a boss that
+   *   did not spawn leaves them here → leftOnMap, back to the pool with no wear);
+   * - legacy "boss" (pre-v4 web): given to the first boss that spawns, else leftOnMap.
+   * Unknown keys / indexes are ignored (never registered: the web sweeps them back to the pool).
+   */
   allocatePool(containerLoot: Readonly<Record<string, SettledItem[]>>): void {
-    for (const [key, items] of Object.entries(containerLoot)) {
-      const idx = Number(key);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= this.m.map.containers.length) continue;
-      const list = this.pool.get(idx) ?? [];
+    const toItems = (items: readonly SettledItem[]): ItemLike[] => {
+      const out: ItemLike[] = [];
       for (const s of items) {
         if (!itemDef(s.def)) continue;
         const it = makeItem(s.def, { uid: s.uid, qty: s.qty, rarity: s.rarity, dur: s.dur, label: s.label, lvl: s.lvl });
         this.m.ledger.register(it, "pool");
-        list.push(it);
+        out.push(it);
       }
-      this.pool.set(idx, list);
+      return out;
+    };
+    for (const [key, items] of Object.entries(containerLoot)) {
+      const kind = bossKindOfLootKey(key);
+      if (kind) {
+        this.bossPool.set(kind, [...(this.bossPool.get(kind) ?? []), ...toItems(items)]);
+        continue;
+      }
+      if (key === "boss") {
+        this.legacyBossPool.push(...toItems(items));
+        continue;
+      }
+      const idx = Number(key);
+      if (!/^\d+$/.test(key) || !Number.isInteger(idx) || idx < 0 || idx >= this.m.map.containers.length) continue;
+      this.pool.set(idx, [...(this.pool.get(idx) ?? []), ...toItems(items)]);
     }
+  }
+
+  /** The pool items allocated to boss `kind` (removed from here: the boss carries them now). */
+  takeBossPool(kind: BossKind): ItemLike[] {
+    const out = this.bossPool.get(kind) ?? [];
+    this.bossPool.delete(kind);
+    return out;
+  }
+
+  /** Legacy "boss" key items (pre-v4 web), removed from here. */
+  takeLegacyBossPool(): ItemLike[] {
+    return this.legacyBossPool.splice(0);
+  }
+
+  /** Legacy items no boss took: they stay on the map (leftOnMap). */
+  returnLegacyBossPool(items: ItemLike[]): void {
+    this.legacyBossPool.push(...items);
   }
 
   /**
@@ -169,10 +213,13 @@ export class ContainerSystem {
     if (m.mode === "demo") {
       const table = CHEST_TABLES[demoChestRarity(spot)];
       const rng = mulberry32(uniqueSeed(m.state.mapSeed, idx));
+      // v4 zoning: demo uniques only in T3/T4 containers, like the live pool (draws unchanged).
+      const uniquesHere = spot.tier >= CONTAINER.DEMO_UNIQUE_MIN_TIER;
       for (let i = 0; i < table.rolls; i++) {
         const r = lootRollToItem(pickWeighted(rng, table.loot));
         const d = itemDef(r.def)!;
         if (d.unique) {
+          if (!uniquesHere) continue;
           const it = makeItem(r.def, { uid: m.newUid(), rarity: r.rarity });
           m.ledger.register(it, "minted");
           out.push(it);
@@ -441,11 +488,12 @@ export class ContainerSystem {
 
   /**
    * Uniques still on the map inside containers and corpses (MatchEndReport.leftOnMap): unopened
-   * live pool allocations plus the remaining contents of every target. Broken items never sit in
+   * live pool allocations (containers, and bosses that did not spawn) plus the remaining contents
+   * of every target. Broken items never sit in
    * a corpse (they were reported lost at death).
    */
   leftInside(): ItemLike[] {
-    const out = [...this.pool.values()].flat();
+    const out = [...this.pool.values(), ...this.bossPool.values(), this.legacyBossPool].flat();
     for (const t of this.targets.values()) for (const it of this.remaining(t)) if (isTrackedUnique(it)) out.push(it);
     return out;
   }

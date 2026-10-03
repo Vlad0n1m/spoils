@@ -1,12 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  CONTAINER,
   CONTAINER_STATE,
+  FLOOR_LOOT,
   ITEM_FLAG,
   SEARCH,
   containerOpenMs,
   countOf,
+  generateMap,
+  itemDef,
+  mulberry32,
   revealMs,
+  rollContainerFungibles,
   type ContainerSpot,
   type ItemLike,
 } from "@extract/shared";
@@ -14,9 +20,9 @@ import { damagePlayer } from "./combat.js";
 import { closeSearch, invTakeAllOp, invTakeOp, takeAll, takeFromLoot } from "./containers.js";
 import { extractPlayer } from "./extraction.js";
 import { makeItem } from "./items.js";
-import type { Match } from "./match.js";
+import { Match } from "./match.js";
 import type { MatchEvent } from "./types.js";
-import { giveItem, giveStack, giveWeapon, ids, pl, place, rtOf, run, selfOf, testMap, testMatch, type Timed } from "./test-utils.js";
+import { counterUid, giveItem, giveStack, giveWeapon, humans, ids, pl, place, rtOf, run, selfOf, testMap, testMatch, type Timed } from "./test-utils.js";
 
 const CRATE: ContainerSpot = { x: 1100, y: 1500, kind: "crate", tier: 1, zone: null };
 const OPEN_MS = containerOpenMs(CRATE);
@@ -317,4 +323,53 @@ test("a search survives taking damage; closing twice is harmless", () => {
   closeSearch(m, rtOf(m, a!), "close");
   assert.equal(selfOf(m, a!).searching, "");
   assert.equal(giveStack(m, a!, "bandage", 1), 1);
+});
+
+// ---------------------------------------------------------------- loot economy v4 zoning
+
+test("v4 zoning: demo uniques only in containers of tier >= DEMO_UNIQUE_MIN_TIER; fungibles stay the deterministic roll", () => {
+  const map = generateMap("steppe");
+  const m = new Match({ roster: humans(1), rng: mulberry32(1), mapSeed: 1234, mapId: "steppe", newUid: counterUid, botBrains: false, emptyWorld: true, mode: "demo" });
+  const byTier = [0, 0, 0, 0, 0];
+  map.containers.forEach((spot, idx) => {
+    const items = m.containers.roll(idx);
+    const uniques = items.filter((i) => i.uid);
+    if (spot.tier < CONTAINER.DEMO_UNIQUE_MIN_TIER) assert.equal(uniques.length, 0, `T${spot.tier} container ${idx} minted ${uniques.map((u) => u.def)}`);
+    byTier[spot.tier] += uniques.length;
+    const fung = items.filter((i) => !i.uid).map((i) => [i.def, i.qty]);
+    assert.deepEqual(fung.slice(fung.length - rollContainerFungibles(1234, idx, spot).length), rollContainerFungibles(1234, idx, spot).map((f) => [f.def, f.qty]));
+  });
+  assert.ok(byTier[3]! + byTier[4]! > 0, `T3/T4 still mint in demo: ${byTier}`);
+  for (const it of m.ledger.minted) assert.ok(itemDef(it.def)?.unique);
+});
+
+test("v4 zoning: floor loot spawns by spot tier (FLOOR_LOOT.SPAWN_CHANCE), medkits only on T3/T4 spots; the zoneless legacy map keeps v1", () => {
+  const map = generateMap("steppe");
+  const spots = [0, 0, 0, 0, 0];
+  for (const s of map.lootSpots) spots[s.tier]!++;
+  const items = [0, 0, 0, 0, 0];
+  const seeds = 12;
+  for (let seed = 1; seed <= seeds; seed++) {
+    const m = new Match({ roster: humans(1), rng: mulberry32(seed), mapSeed: seed, mapId: "steppe", newUid: counterUid, botBrains: false, mode: "live", bosses: false });
+    const tierAt = new Map(map.lootSpots.map((s) => [`${s.x},${s.y}`, s.tier]));
+    for (const g of m.ground.all()) {
+      const t = tierAt.get(`${g.schema.x},${g.schema.y}`);
+      assert.ok(t !== undefined, "floor items sit on loot spots");
+      items[t]!++;
+      if (g.item.def === "medkit") assert.ok(t >= 3, `medkit on a T${t} spot`);
+      if (g.item.def === "ammo_heavy") assert.ok(t >= 2, `heavy ammo on a T${t} spot`);
+      assert.equal(g.item.uid, "", "live floor loot never holds a unique");
+    }
+  }
+  for (let t = 0; t <= 4; t++) {
+    if (spots[t]! < 10) continue;
+    const rate = items[t]! / (spots[t]! * seeds);
+    const want = FLOOR_LOOT.SPAWN_CHANCE[t]!;
+    assert.ok(Math.abs(rate - want) < Math.max(0.03, want * 0.3), `T${t}: ${rate.toFixed(3)} vs ${want}`);
+  }
+  // Wilds: almost nothing (≈ 5 % of spots).
+  assert.ok(items[0]! / seeds < spots[0]! * 0.1, `wild floor items ${items[0]! / seeds}/${spots[0]}`);
+  // Legacy (no zones): every spot spawns as in v1.
+  const legacy = new Match({ roster: humans(1), rng: mulberry32(3), mapSeed: 3, mapId: "legacy", newUid: counterUid, botBrains: false, mode: "live" });
+  assert.equal([...legacy.ground.all()].length, legacy.map.lootSpots.length);
 });

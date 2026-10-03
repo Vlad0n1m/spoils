@@ -1044,12 +1044,14 @@ export class GameRenderer implements GameRendererApi {
       v.root.alpha = v.alpha;
       v.root.visible = v.alpha > 0.01 && inView(v.x, v.y);
       if (!v.root.visible) continue;
+      // Bosses / guards (loot economy v4): sprite, ring, tag and HP bar against Player.maxHp.
+      v.setRole(p.role ?? 0, p.nickname, this.mapData?.bosses, p.x, p.y);
       v.setColor(p.color);
       v.setNickname(p.nickname);
       v.setWeapon(p.weapon);
       v.setBackpack(p.bp);
       const armorMax = p.armor >= 1 && p.armor <= 3 ? ARMOR[p.armor as 1 | 2 | 3].durability : 0;
-      v.setBars(p.hp, p.armor, p.armorDur, armorMax);
+      v.setBars(p.hp, p.armor, p.armorDur, armorMax, p.maxHp || undefined);
       const bush = this.bushes ? bushIndexAt(this.bushes, v.x, v.y) : -1;
       v.setLabelVisible(bush < 0 || bush === selfBush);
     }

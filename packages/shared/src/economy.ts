@@ -8,12 +8,17 @@
  * armor absorb points — convert at the API boundary with armorPoints / armorPct.
  * REPAIR, SCRAP and BOUND_OFFERS are cut for v2 (cut list 2): exported but unused.
  * Junk values, DOG_TAG and dogTagCr live in item-defs.ts (one source for the server and the API).
+ * LOOT ECONOMY v4 ("risk drives reward"): CONTAINER / CONTAINER_LOOT / containerLootFor zone the
+ * fungibles by tier, FLOOR_LOOT / rollFloorLoot replace the server's flat floor table, the pool
+ * releases round(1.0 × riskUnits) with a boss-only top-up (poolReleasePlanV4), and BOSSES carry
+ * the top pool items and the high-value junk.
  */
 
-import { DOG_TAG, dogTagCr, itemDef } from "./item-defs.js";
-import type { Rarity, WeaponId } from "./items.js";
-import type { ContainerKind, LootTier } from "./map/types.js";
-import { mulberry32, pickWeighted } from "./rng.js";
+import { DOG_TAG, ammoDefOf, dogTagCr, itemDef } from "./item-defs.js";
+import { ARMOR, WEAPONS, type Rarity, type WeaponId } from "./items.js";
+import { BOSS_CHANCE } from "./map/steppe.js";
+import { BOSS_KINDS, type BossKind, type BossSpot, type ContainerKind, type LootTier } from "./map/types.js";
+import { mulberry32, pickWeighted, type Rng } from "./rng.js";
 
 export const CR = { CODE: "CR", START_BALANCE: 1000 } as const;
 
@@ -71,18 +76,33 @@ export function dogTagPairMult(priorSamePair: number): 0 | 1 {
 }
 
 /**
- * Container contents rolls (owned by the economy owner, retuned after econ-sim with the slot
- * capacities). Indexed by LootTier 0..4. FILL_CHANCE: a container rolls empty otherwise (Tarkov).
- * Hackathon retune (playtest: "loot feels empty"): ≈12 % of Steppe containers roll empty
- * (was ≈37 %) and T2+ get more junk lines, close to the demo-mode CHEST_TABLES item count
- * (2–3 rolls per chest). Per-tier empty rate ≈ 1 − FILL × (1 − EMPTY^ROLLS): T0 19 %, T1 13 %,
- * T2 12 %, T3 8 %, T4 5 %.
+ * Container contents rolls, LOOT ECONOMY v4 ("risk drives reward"; scratchpad econ4/v4model.mts).
+ * Indexed by LootTier 0..4 (zone class: 0 wilds, 1 dachas/fuel/hunter cabins, 2 ordinary POIs,
+ * 3 Grain Elevator, 4 Radar Base). Value is zoned by tier: the wilds and T1 give almost nothing,
+ * T2 pays a small wage, only T3/T4 hold high-value container loot.
+ * - FILL_CHANCE: the container rolls empty otherwise; then ROLLS rolls, each empty with EMPTY_CHANCE.
+ *   Empty rate ≈ 1 − FILL × (1 − EMPTY^ROLLS): T0 ≈ 79 %, T1 62 %, T2 58 %, T3 17 %, T4 12 %.
+ * - JUNK_VALUE_CAP: junk entries whose unit value is above the tier cap are dropped from the table
+ *   (weights renormalise over what is left; the draw count stays the same).
+ * - AMMO_QTY_MULT: ammo stacks are scaled, qty = max(1, round(qty × mult)) (30 → 10 rounds in T0).
+ * - MEDKIT_MIN_TIER: medkits come only from T3/T4 containers.
+ * Model EV per container (junk CR / consumables CR-eq): T0 6.7 / 0.9, T1 12.8 / 1.0,
+ * T2 19.2 / 2.1, T3 169 / 15, T4 173 / 30. Per match: ≈ 20k junk CR (was 77k), ≈ 79 % of it in
+ * the elevator and the radar base; ≈ 2.5k CR-eq of consumables (was 13.1k).
  */
 export const CONTAINER = {
-  ROLLS: [1, 2, 3, 3, 4] as readonly number[],
-  FILL_CHANCE: [0.88, 0.88, 0.88, 0.92, 0.95] as readonly number[],
+  ROLLS: [1, 1, 1, 2, 2] as readonly number[],
+  FILL_CHANCE: [0.25, 0.45, 0.5, 0.85, 0.9] as readonly number[],
   /** Chance an individual roll is empty. */
-  EMPTY_CHANCE: 0.08,
+  EMPTY_CHANCE: 0.15,
+  /** Max junk unit value (CR) a container of this tier can hold. */
+  JUNK_VALUE_CAP: [55, 55, 110, Infinity, Infinity] as readonly number[],
+  /** Ammo stack multiplier by tier. */
+  AMMO_QTY_MULT: [0.34, 0.5, 0.5, 0.67, 0.5] as readonly number[],
+  /** Medkits only in containers of at least this tier. */
+  MEDKIT_MIN_TIER: 3,
+  /** Demo mode: CHEST_TABLES unique rolls only in containers of at least this tier. */
+  DEMO_UNIQUE_MIN_TIER: 3,
 } as const;
 
 /** One weighted fungible entry of a container table (junk, ammo or meds; qty per roll). */
@@ -94,10 +114,11 @@ export interface ContainerLootEntry {
 
 /**
  * Fungibles by container kind (map memo §7: "a fridge gives food and a PC gives computer parts").
- * Junk weights are the economy memo's JUNK spawn weights (its zones mapped onto map container
- * kinds), so the econ-sim calibration carries over; consumables are new. Uniques never come from
- * here: in live mode they come only from the lost pool (RaidStartResponse.containerLoot), in demo
- * mode from CHEST_TABLES. Retuned by the economy owner together with CONTAINER.ROLLS.
+ * v4: high-value junk (gold chain, GPU, cold wallet) left the ordinary containers — it drops from
+ * bosses (BOSSES[kind].junk), and a little gold chain / GPU stays in safes (T3/T4 only on the
+ * Steppe). Per-tier filtering and ammo scaling: containerLootFor. Uniques never come from here: in
+ * live mode they come only from the lost pool (RaidStartResponse.containerLoot), in demo mode from
+ * CHEST_TABLES (tier >= CONTAINER.DEMO_UNIQUE_MIN_TIER).
  */
 export const CONTAINER_LOOT: Readonly<Record<ContainerKind, readonly ContainerLootEntry[]>> = {
   // Generic cache: village + industrial junk, a little ammo.
@@ -105,7 +126,7 @@ export const CONTAINER_LOOT: Readonly<Record<ContainerKind, readonly ContainerLo
     { def: "junk_apple", weight: 100, qty: 1 }, { def: "junk_water", weight: 80, qty: 1 },
     { def: "junk_canned", weight: 70, qty: 1 }, { def: "junk_bolts", weight: 90, qty: 1 },
     { def: "junk_wires", weight: 60, qty: 1 }, { def: "junk_battery", weight: 40, qty: 1 },
-    { def: "junk_fuel", weight: 25, qty: 1 }, { def: "junk_goldchain", weight: 4, qty: 1 },
+    { def: "junk_fuel", weight: 25, qty: 1 },
     { def: "ammo_light", weight: 40, qty: 30 }, { def: "ammo_shell", weight: 20, qty: 10 },
     { def: "bandage", weight: 25, qty: 1 },
   ],
@@ -120,36 +141,61 @@ export const CONTAINER_LOOT: Readonly<Record<ContainerKind, readonly ContainerLo
     { def: "junk_apple", weight: 100, qty: 1 }, { def: "junk_water", weight: 80, qty: 1 },
     { def: "junk_canned", weight: 70, qty: 1 }, { def: "junk_pills", weight: 40, qty: 1 },
   ],
-  // Office: computer parts and the rare high-value junk.
+  // Office: computer parts (GPU / cold wallet moved to bosses).
   pc: [
     { def: "junk_wires", weight: 60, qty: 1 }, { def: "junk_circuit", weight: 20, qty: 1 },
     { def: "junk_hdd", weight: 14, qty: 1 }, { def: "junk_keycard", weight: 5, qty: 1 },
-    { def: "junk_gpu", weight: 3, qty: 1 }, { def: "junk_coldwallet", weight: 1, qty: 1 },
   ],
   med_case: [
-    { def: "bandage", weight: 60, qty: 1 }, { def: "medkit", weight: 25, qty: 1 },
-    { def: "junk_pills", weight: 40, qty: 1 },
+    { def: "bandage", weight: 40, qty: 1 }, { def: "medkit", weight: 8, qty: 1 },
+    { def: "junk_pills", weight: 50, qty: 1 },
   ],
   // Military.
   weapon_box: [
-    { def: "ammo_light", weight: 60, qty: 30 }, { def: "ammo_shell", weight: 35, qty: 10 },
-    { def: "ammo_heavy", weight: 20, qty: 10 }, { def: "junk_battery", weight: 40, qty: 1 },
-    { def: "junk_keycard", weight: 5, qty: 1 }, { def: "junk_gpu", weight: 3, qty: 1 },
-    { def: "junk_coldwallet", weight: 1, qty: 1 },
+    { def: "ammo_light", weight: 40, qty: 30 }, { def: "ammo_shell", weight: 25, qty: 10 },
+    { def: "ammo_heavy", weight: 15, qty: 10 }, { def: "junk_bolts", weight: 30, qty: 1 },
+    { def: "junk_battery", weight: 40, qty: 1 }, { def: "junk_keycard", weight: 5, qty: 1 },
   ],
-  // Long search, valuables only.
+  // Long search, valuables only (T3/T4 safes keep a little gold chain and GPU).
   safe: [
-    { def: "junk_goldchain", weight: 4, qty: 1 }, { def: "junk_keycard", weight: 5, qty: 1 },
-    { def: "junk_hdd", weight: 14, qty: 1 }, { def: "junk_gpu", weight: 3, qty: 1 },
-    { def: "junk_coldwallet", weight: 1, qty: 1 },
+    { def: "junk_keycard", weight: 5, qty: 1 }, { def: "junk_hdd", weight: 14, qty: 1 },
+    { def: "junk_goldchain", weight: 4, qty: 1 }, { def: "junk_gpu", weight: 2, qty: 1 },
   ],
-  // Wilderness ground stash (economy memo "forest" zone + survival kit).
+  // Wilderness ground stash: survival kit only.
   stash: [
     { def: "junk_apple", weight: 100, qty: 1 }, { def: "junk_water", weight: 80, qty: 1 },
-    { def: "junk_canned", weight: 70, qty: 1 }, { def: "junk_goldchain", weight: 4, qty: 1 },
-    { def: "ammo_light", weight: 30, qty: 30 }, { def: "bandage", weight: 30, qty: 1 },
+    { def: "junk_canned", weight: 70, qty: 1 }, { def: "ammo_light", weight: 15, qty: 30 },
+    { def: "bandage", weight: 15, qty: 1 },
   ],
 };
+
+const lootForCache = new Map<string, readonly ContainerLootEntry[]>();
+
+/**
+ * The effective fungible table of a container of `kind` in a `tier` zone: CONTAINER_LOOT[kind]
+ * without junk above CONTAINER.JUNK_VALUE_CAP[tier] and without medkits below MEDKIT_MIN_TIER,
+ * ammo quantities scaled by AMMO_QTY_MULT[tier]. Memoized; may be empty (then the container is
+ * always empty). Weights are the table's own (pickWeighted renormalises).
+ */
+export function containerLootFor(spot: { kind: ContainerKind; tier: number }): readonly ContainerLootEntry[] {
+  const tier = Math.max(0, Math.min(4, Math.floor(spot.tier)));
+  const key = `${spot.kind}:${tier}`;
+  let t = lootForCache.get(key);
+  if (!t) {
+    const out: ContainerLootEntry[] = [];
+    for (const e of CONTAINER_LOOT[spot.kind]) {
+      const d = itemDef(e.def);
+      if (!d) continue;
+      if (d.cat === "junk" && (d.value ?? 0) > CONTAINER.JUNK_VALUE_CAP[tier]!) continue;
+      if (e.def === "medkit" && tier < CONTAINER.MEDKIT_MIN_TIER) continue;
+      const qty = d.cat === "ammo" ? Math.max(1, Math.round(e.qty * CONTAINER.AMMO_QTY_MULT[tier]!)) : e.qty;
+      out.push({ def: e.def, weight: e.weight, qty: Math.min(qty, d.stack) });
+    }
+    t = Object.freeze(out);
+    lootForCache.set(key, t);
+  }
+  return t;
+}
 
 /** A fungible rolled into a container (uid "" — never a DB item). */
 export interface RolledFungible {
@@ -158,11 +204,21 @@ export interface RolledFungible {
   rarity: Rarity;
 }
 
+/** Adds `qty` of `def` to `out`, merging into a stack with room (never two half stacks of apples). */
+function addFungible(out: RolledFungible[], def: string, qty: number): void {
+  const d = itemDef(def);
+  if (!d || qty <= 0) return;
+  const prev = out.find((o) => o.def === def && o.qty + qty <= d.stack);
+  if (prev) prev.qty += qty;
+  else out.push({ def, qty: Math.min(qty, d.stack), rarity: d.rarity });
+}
+
 /**
  * Contents of static container `idx` for this match, fungibles only. Rolled lazily on first open
  * (critique) and deterministic in (matchSeed, idx) alone, so the order containers are opened in
- * never changes what is inside, and a ledger audit can re-roll any container. Same-def rolls merge
- * up to the def's stack size so a container never shows two half stacks of apples.
+ * never changes what is inside, and a ledger audit can re-roll any container. Draw order: fill roll,
+ * then per roll an empty roll and a pickWeighted over containerLootFor(spot). Same-def rolls merge
+ * up to the def's stack size.
  */
 export function rollContainerFungibles(
   matchSeed: number,
@@ -173,18 +229,73 @@ export function rollContainerFungibles(
   const rng = mulberry32((Math.imul((matchSeed ^ 0x9e3779b9) >>> 0, 0x01000193) ^ Math.imul(idx + 1, 0x85ebca6b)) >>> 0);
   const tier = Math.max(0, Math.min(4, spot.tier));
   if (rng() >= CONTAINER.FILL_CHANCE[tier]!) return [];
-  const table = CONTAINER_LOOT[spot.kind];
+  const table = containerLootFor({ kind: spot.kind, tier });
+  if (table.length === 0) return [];
   const out: RolledFungible[] = [];
   for (let i = 0; i < CONTAINER.ROLLS[tier]!; i++) {
     if (rng() < CONTAINER.EMPTY_CHANCE) continue;
     const e = pickWeighted(rng, table);
-    const d = itemDef(e.def);
-    if (!d) continue;
-    const prev = out.find((o) => o.def === e.def && o.qty + e.qty <= d.stack);
-    if (prev) prev.qty += e.qty;
-    else out.push({ def: e.def, qty: Math.min(e.qty, d.stack), rarity: d.rarity });
+    addFungible(out, e.def, e.qty);
   }
   return out;
+}
+
+// ---------------------------------------------------------------- floor loot (MapData.lootSpots)
+
+/** One weighted floor-loot entry (one ground stack). */
+export interface FloorLootEntry {
+  def: string;
+  qty: number;
+  weight: number;
+}
+
+/**
+ * Loose floor loot, v4 (moved here from the game server's match.ts). Most spots stay empty: each
+ * spot spawns with SPAWN_CHANCE[spot.tier], then rolls its tier's table. Loot spots are tier 0 in
+ * the wilds, tier zone−1 outdoors in a POI and the zone tier indoors, so floor loot concentrates
+ * inside contested buildings. Per match (Steppe): wilds ≈ 9 items / ≈ 200 CR-eq (was 185 items /
+ * 15.6k), whole map ≈ 3.5k CR-eq of consumables (was 46k), medkits only on tier 3/4 spots (≈ 2.6).
+ * Demo mode: the common floor gun only on spots of tier >= DEMO_GUN_MIN_TIER.
+ */
+export const FLOOR_LOOT = {
+  SPAWN_CHANCE: [0.05, 0.12, 0.2, 0.4, 0.45] as readonly number[],
+  /** Tiers 0–1. */
+  LOW: [
+    { def: "ammo_light", qty: 10, weight: 45 }, { def: "ammo_shell", qty: 4, weight: 20 },
+    { def: "bandage", qty: 1, weight: 15 }, { def: "junk_apple", qty: 1, weight: 10 },
+    { def: "junk_bolts", qty: 1, weight: 10 },
+  ] as readonly FloorLootEntry[],
+  /** Tier 2. */
+  MID: [
+    { def: "ammo_light", qty: 15, weight: 40 }, { def: "ammo_shell", qty: 5, weight: 20 },
+    { def: "ammo_heavy", qty: 5, weight: 5 }, { def: "bandage", qty: 1, weight: 12 },
+    { def: "junk_wires", qty: 1, weight: 10 }, { def: "junk_pills", qty: 1, weight: 5 },
+  ] as readonly FloorLootEntry[],
+  /** Tiers 3–4. */
+  HIGH: [
+    { def: "ammo_light", qty: 30, weight: 35 }, { def: "ammo_shell", qty: 10, weight: 18 },
+    { def: "ammo_heavy", qty: 10, weight: 12 }, { def: "bandage", qty: 1, weight: 20 },
+    { def: "medkit", qty: 1, weight: 8 }, { def: "junk_battery", qty: 1, weight: 7 },
+  ] as readonly FloorLootEntry[],
+  /** Demo mode: chance of a common rifle/shotgun instead, on spots of tier >= DEMO_GUN_MIN_TIER. */
+  DEMO_GUN_CHANCE: 0.1,
+  DEMO_GUN_MIN_TIER: 3,
+} as const;
+
+/** The floor table of a loot spot tier (LOW for 0–1, MID for 2, HIGH for 3–4). */
+export function floorLootTable(tier: number): readonly FloorLootEntry[] {
+  return tier <= 1 ? FLOOR_LOOT.LOW : tier === 2 ? FLOOR_LOOT.MID : FLOOR_LOOT.HIGH;
+}
+
+/**
+ * Floor loot of one spot: a spawn roll, then (if it spawned) a pickWeighted over the tier's table.
+ * Uses the caller's match rng (two draws when it spawns, one otherwise). null = nothing spawns.
+ */
+export function rollFloorLoot(rng: Rng, tier: number): { def: string; qty: number } | null {
+  const t = Math.max(0, Math.min(4, Math.floor(tier)));
+  if (rng() >= FLOOR_LOOT.SPAWN_CHANCE[t]!) return null;
+  const e = pickWeighted(rng, floorLootTable(t));
+  return { def: e.def, qty: e.qty };
 }
 
 // ---------------------------------------------------------------- items & durability
@@ -260,23 +371,37 @@ export const SCRAP_CR = { weapon: [300, 700, 1600, 3500], armor: [0, 200, 500, 1
 export const POOL = {
   /** A unique that breaks on death enters the pool with −8 dur. */
   BREAK_DUR_LOSS: 8,
-  /** Items released per match = round(RISK_K × riskUnits), capped. */
-  RISK_K: 1.5,
-  MAX_PER_MATCH: 10,
+  /**
+   * v4: items released per match = round(RISK_K × riskUnits), capped. K = 1.0 (was 1.5): container
+   * uniques never exceed the gear at stake, and a lobby of free kits gets none. If the pool swells,
+   * raise K to 1.25 or MAX to 10 (economy memo §13); never reintroduce a free floor.
+   */
+  RISK_K: 1.0,
+  MAX_PER_MATCH: 8,
   /** 1% of the value entering the pool accrues to the treasury. */
   TAX_SHARE: 0.01,
-  /** Best N released items go to the boss stash when a boss spawns. */
-  BOSS_SHARE: 2,
   /**
-   * Release FLOOR per match (hackathon tunable, see docs): even a lobby of free kits gets at least
-   * this many pool uniques, but only in dangerous spots (containers of tier >= FLOOR_MIN_TIER and
-   * boss stashes), so farming them still means fighting through T3/T4 POIs. Drawn only while the
-   * pool holds more than FLOOR_MIN_POOL items (the seeded reserve is never drained to zero by it).
-   * The web may override it with POOL_MIN_RELEASE_PER_MATCH.
+   * Boss display top-up (poolReleasePlanV4): bosses that spawned get their poolSlots filled even
+   * beyond the risk count, but only when someone in the lobby risked gear (riskUnits >=
+   * BOSS_MIN_RISK) and the pool keeps more than BOSS_MIN_POOL items after the risk release.
+   * Unlooted boss items return to the pool with no wear (leftOnMap): on display, not minted.
    */
-  MIN_RELEASE_PER_MATCH: 6,
-  FLOOR_MIN_POOL: 100,
+  BOSS_MIN_RISK: 1,
+  BOSS_MIN_POOL: 150,
+  /** Container uniques only in containers of at least this tier (T3 elevator, T4 radar). */
+  CONTAINER_MIN_TIER: 3,
+  /** A container within this distance of a BossSpot is "guarded"… */
+  GUARDED_RADIUS_PX: 1600,
+  /** …and gets this weight multiplier in planAllocation (≈ 68 % of container uniques on the Steppe). */
+  GUARDED_WEIGHT: 4,
+  /** @deprecated v4 removed the free release floor (0 = risk-only); kept for the legacy poolReleasePlan. */
+  MIN_RELEASE_PER_MATCH: 0,
+  /** @deprecated v4: use BOSS_MIN_POOL. */
+  FLOOR_MIN_POOL: 150,
+  /** @deprecated v4: use CONTAINER_MIN_TIER. */
   FLOOR_MIN_TIER: 3,
+  /** @deprecated v4: boss slots come from BOSSES[kind].poolSlots (raidBossSlots). */
+  BOSS_SHARE: 2,
 } as const;
 
 /** Durability the item enters the pool with, or null if it does not enter (bound or worn out). */
@@ -292,9 +417,9 @@ export function poolReleaseCount(poolSize: number, riskUnits: number): number {
 }
 
 /**
- * Pool items released into one match: the risk-driven count (poolReleaseCount) topped up to the
- * floor `minRelease` while the pool is above FLOOR_MIN_POOL (never below it because of the floor).
- * `floor` = how many of `total` are floor items (placed only in tier >= FLOOR_MIN_TIER / boss).
+ * @deprecated v4 — use poolReleasePlanV4. Legacy shape: the risk count topped up to `minRelease`
+ * (default POOL.MIN_RELEASE_PER_MATCH = 0, i.e. risk-only) while the pool stays above
+ * FLOOR_MIN_POOL.
  */
 export function poolReleasePlan(
   poolSize: number,
@@ -306,6 +431,61 @@ export function poolReleasePlan(
   const want = Math.max(0, Math.min(POOL.MAX_PER_MATCH, Math.floor(minRelease)) - risk);
   const floor = Math.max(0, Math.min(want, above));
   return { total: risk + floor, risk, floor };
+}
+
+/**
+ * Pool items released into one match, v4 ("risk drives reward"). P = pool size, R = riskUnits,
+ * B = bossNeed (Σ poolSlots of the bosses that spawned, raidBossSlots):
+ *   risk  = min(P, MAX_PER_MATCH, round(RISK_K × R))
+ *   gate  = R >= BOSS_MIN_RISK && P − risk > BOSS_MIN_POOL
+ *   boss  = gate ? max(0, min(B, MAX_PER_MATCH) − risk) : 0     (display top-up for bosses only)
+ *   total = risk + boss
+ * Allocation: boss slots first (best tier score), the rest of `risk` to T3/T4 containers. A free-kit
+ * lobby (R = 0) gets nothing, not even on its bosses.
+ */
+export function poolReleasePlanV4(
+  poolSize: number,
+  riskUnits: number,
+  bossNeed: number,
+): { total: number; risk: number; boss: number } {
+  const P = Math.max(0, Math.floor(poolSize));
+  const R = Math.max(0, riskUnits);
+  const risk = poolReleaseCount(P, R);
+  const gate = R >= POOL.BOSS_MIN_RISK && P - risk > POOL.BOSS_MIN_POOL;
+  const boss = gate ? Math.max(0, Math.min(Math.max(0, Math.floor(bossNeed)), POOL.MAX_PER_MATCH) - risk) : 0;
+  return { total: risk + boss, risk, boss };
+}
+
+/**
+ * Pool tier score of a unique: 2 = top (weapon of rarity >= 2, armor_3, backpack_3), 1 = rare
+ * (weapon r1, armor_2, backpack_2), 0 = everything else (incl. non-uniques). Boss slots are filled
+ * `order by tier score desc, random()`, falling back to the best available.
+ */
+export function uniqueTierScore(def: string, rarity: number): 0 | 1 | 2 {
+  const d = itemDef(def);
+  if (!d?.unique) return 0;
+  if (d.cat === "weapon") return rarity >= 2 ? 2 : rarity >= 1 ? 1 : 0;
+  const lvl = d.cat === "armor" ? d.armorLevel : d.cat === "backpack" ? d.bpLevel : undefined;
+  return lvl === 3 ? 2 : lvl === 2 ? 1 : 0;
+}
+
+/** Container kinds that may hold a pool unique (no fridge / PC / med case, no wild stash). */
+export const POOL_CONTAINER_KINDS: readonly ContainerKind[] = ["crate", "toolbox", "weapon_box", "safe"];
+
+/** True when the container lies within POOL.GUARDED_RADIUS_PX of any of `bosses` (BossSpot x/y). */
+export function containerGuarded(c: { x: number; y: number }, bosses: ReadonlyArray<{ x: number; y: number }>): boolean {
+  const r2 = POOL.GUARDED_RADIUS_PX * POOL.GUARDED_RADIUS_PX;
+  return bosses.some((b) => (b.x - c.x) * (b.x - c.x) + (b.y - c.y) * (b.y - c.y) <= r2);
+}
+
+/** May a pool unique be placed in this container (kind in POOL_CONTAINER_KINDS, tier >= CONTAINER_MIN_TIER)? */
+export function poolContainerEligible(c: { kind: ContainerKind; tier: number }): boolean {
+  return c.tier >= POOL.CONTAINER_MIN_TIER && POOL_CONTAINER_KINDS.includes(c.kind);
+}
+
+/** planAllocation weight of an eligible container: (tier + 1)² × (guarded ? GUARDED_WEIGHT : 1). */
+export function poolContainerWeight(c: { tier: number; guarded?: boolean }): number {
+  return (c.tier + 1) * (c.tier + 1) * (c.guarded ? POOL.GUARDED_WEIGHT : 1);
 }
 
 /**
@@ -326,6 +506,207 @@ export function takeTreasuryTax(
   }
   return { taken, acc: a };
 }
+
+// ---------------------------------------------------------------- bosses (v4: top loot on bosses)
+
+/** A boss guard's kit. Its gear is FREE (vanishes on death); it drops rollGuardLoot. */
+export interface BossGuardDef {
+  weapon: WeaponId;
+  rarity: Rarity;
+  /** Armor level 0..3 (0 = none). */
+  armor: 0 | 1 | 2 | 3;
+  hp: number;
+}
+
+/** One boss-only junk roll: `qty` of `def` with `chance`. */
+export interface BossJunkRoll {
+  def: string;
+  qty: number;
+  chance: number;
+}
+
+export interface BossDef {
+  kind: BossKind;
+  /** Display name (Player.nickname of the boss). */
+  name: string;
+  /** Display name of its guards. */
+  guardName: string;
+  /** false = the boss never spawns (rollBossSpawns still draws for it, so others do not shift). */
+  enabled: boolean;
+  /** Spawn chance per match (= BOSS_CHANCE[kind], copied into BossSpot.chance by the generator). */
+  spawnChance: number;
+  /** Max HP (above PLAYER.MAX_HP: needs the per-runtime maxHp; heals cap at this). */
+  hp: number;
+  /** Armor level 1..3; the boss's armor is FREE (vanishes), so no pool item ever breaks on it. */
+  armor: 1 | 2 | 3;
+  /** Weapon it uses when no pool weapon sits in its bag (FREE). */
+  weapon: WeaponId;
+  weaponRarity: Rarity;
+  guards: readonly BossGuardDef[];
+  /**
+   * Pool slots, one per entry: the minimum uniqueTierScore wanted for that slot (fallback: best
+   * available). Filled first by allocatePool (key bossLootKey(kind)), never break on death.
+   */
+  poolSlots: readonly (0 | 1 | 2)[];
+  /** Boss-only junk (rollBossJunk), the only map source of cold wallets. */
+  junk: readonly BossJunkRoll[];
+  /** Meds it carries (uses medkits below BOSS_AI.HEAL_BELOW_FRAC; leftovers drop, non-FREE). */
+  meds: { medkit: number; bandage: number };
+  /** Rounds of its weapon's ammo it carries (leftovers drop, non-FREE). */
+  ammo: number;
+}
+
+/**
+ * The three Steppe bosses (scratchpad design §2). Spawn is rolled once per match from the match
+ * seed (rollBossSpawns), never respawns, never extracts, never loots. Effective HP (damage to kill,
+ * effectiveHp): Commander 580, Foreman 430, Warden 312.
+ * Boss junk EV: Commander ≈ 2,980 CR, Foreman ≈ 2,150 CR, Warden ≈ 925 CR.
+ */
+export const BOSSES: Readonly<Record<BossKind, BossDef>> = {
+  commander: {
+    kind: "commander", name: "Commander", guardName: "Radar guard", enabled: true,
+    spawnChance: BOSS_CHANCE.commander, hp: 400, armor: 3, weapon: "rifle", weaponRarity: 2,
+    guards: [
+      { weapon: "rifle", rarity: 1, armor: 2, hp: 120 },
+      { weapon: "rifle", rarity: 1, armor: 2, hp: 120 },
+      { weapon: "sniper", rarity: 0, armor: 1, hp: 120 },
+    ],
+    poolSlots: [2, 1, 1],
+    junk: [
+      { def: "junk_coldwallet", qty: 1, chance: 0.35 }, { def: "junk_gpu", qty: 1, chance: 0.5 },
+      { def: "junk_goldchain", qty: 1, chance: 0.6 }, { def: "junk_keycard", qty: 1, chance: 1 },
+    ],
+    meds: { medkit: 2, bandage: 0 },
+    ammo: 90,
+  },
+  foreman: {
+    kind: "foreman", name: "Foreman", guardName: "Elevator thug", enabled: true,
+    spawnChance: BOSS_CHANCE.foreman, hp: 300, armor: 2, weapon: "shotgun", weaponRarity: 1,
+    guards: [
+      { weapon: "rifle", rarity: 0, armor: 1, hp: 110 },
+      { weapon: "shotgun", rarity: 0, armor: 1, hp: 110 },
+    ],
+    poolSlots: [2, 1],
+    junk: [
+      { def: "junk_goldchain", qty: 1, chance: 0.6 }, { def: "junk_gpu", qty: 1, chance: 0.35 },
+      { def: "junk_keycard", qty: 1, chance: 0.5 }, { def: "junk_hdd", qty: 2, chance: 1 },
+    ],
+    meds: { medkit: 1, bandage: 0 },
+    ammo: 30,
+  },
+  warden: {
+    kind: "warden", name: "Warden", guardName: "Depot watchman", enabled: true,
+    spawnChance: BOSS_CHANCE.warden, hp: 250, armor: 1, weapon: "shotgun", weaponRarity: 0,
+    guards: [
+      { weapon: "rifle", rarity: 0, armor: 0, hp: 100 },
+      { weapon: "pistol", rarity: 0, armor: 0, hp: 100 },
+    ],
+    poolSlots: [1],
+    junk: [
+      { def: "junk_goldchain", qty: 1, chance: 0.4 }, { def: "junk_keycard", qty: 1, chance: 0.3 },
+      { def: "junk_battery", qty: 3, chance: 1 },
+    ],
+    meds: { medkit: 0, bandage: 2 },
+    ammo: 20,
+  },
+};
+
+/** Boss / guard AI tuning (server sim/boss.ts). */
+export const BOSS_AI = {
+  /** Aim sloppiness (regular bots 0.85–1.25). */
+  BOSS_SLOPPINESS: 0.7,
+  GUARD_SLOPPINESS: 0.85,
+  REACT_MS: [300, 550] as readonly [number, number],
+  /** Leash around the BossSpot (boss) / the guard's post (guards). */
+  LEASH_BOSS_PX: 600,
+  LEASH_GUARD_PX: 900,
+  /** A gunshot within this distance of a group member alerts the whole group… */
+  ALERT_HEAR_PX: 1200,
+  /** …for this long, with the last-known position. */
+  ALERT_MS: 25_000,
+  /** The boss heals (medkit) below this HP fraction. */
+  HEAL_BELOW_FRAC: 0.5,
+  /** PMC bots drop any goal within this distance of a living boss. */
+  BOT_AVOID_PX: 1500,
+  /** Boss and guard bags are exempt from BREAK_CHANCE_ON_DEATH. */
+  NO_BREAK: true,
+} as const;
+
+/** Salt of the boss spawn roll: mulberry32(matchSeed ^ BOSS_SALT). */
+export const BOSS_SALT = 0xb055_5a17;
+
+/**
+ * Which of the map's boss spots spawn this match. One draw per spot in array order (also for a
+ * disabled boss, so toggling one never shifts the others): spawned when BOSSES[kind].enabled and
+ * the draw < spot.chance. Deterministic in matchSeed: the matchmaking room (raids/start bosses[])
+ * and the match setup must call it with the same seed and get the same answer.
+ */
+export function rollBossSpawns(matchSeed: number, spots: readonly BossSpot[]): BossSpot[] {
+  const rng = mulberry32((matchSeed ^ BOSS_SALT) >>> 0);
+  const out: BossSpot[] = [];
+  for (const s of spots) {
+    const r = rng();
+    if (BOSSES[s.kind]?.enabled && r < s.chance) out.push(s);
+  }
+  return out;
+}
+
+/** RaidStartRequest.bosses for the spawned bosses: their poolSlots (min tier scores). */
+export function raidBossSlots(spawned: ReadonlyArray<{ kind: BossKind }>): Array<{ kind: BossKind; slots: number[] }> {
+  return spawned.map((b) => ({ kind: b.kind, slots: [...BOSSES[b.kind].poolSlots] }));
+}
+
+/** Σ pool slots of the spawned bosses (poolReleasePlanV4's bossNeed; legacy RaidStartRequest.bossSlots). */
+export function bossSlotCount(bosses: ReadonlyArray<{ slots: readonly number[] }>): number {
+  return bosses.reduce((n, b) => n + b.slots.length, 0);
+}
+
+function bossRng(matchSeed: number, kind: BossKind, salt: number): Rng {
+  const k = BOSS_KINDS.indexOf(kind) + 1;
+  return mulberry32((Math.imul((matchSeed ^ BOSS_SALT) >>> 0, 0x01000193) ^ Math.imul(k * 31 + salt, 0x85ebca6b)) >>> 0);
+}
+
+/** Boss-only junk on the boss's corpse: one draw per BOSSES[kind].junk entry; deterministic in (matchSeed, kind). */
+export function rollBossJunk(matchSeed: number, kind: BossKind): RolledFungible[] {
+  const rng = bossRng(matchSeed, kind, 0);
+  const out: RolledFungible[] = [];
+  for (const j of BOSSES[kind].junk) if (rng() < j.chance) addFungible(out, j.def, j.qty);
+  return out;
+}
+
+/**
+ * Non-FREE drop of guard `guardIdx` of `kind` standing in a `tier` zone: one roll of the tier's
+ * crate table (containerLootFor), one pickup of its weapon's ammo (light 30 / shells 10 / heavy 10)
+ * and one bandage. Its own gear is FREE and vanishes. Deterministic in (matchSeed, kind, guardIdx).
+ */
+export function rollGuardLoot(matchSeed: number, kind: BossKind, guardIdx: number, tier: number): RolledFungible[] {
+  const rng = bossRng(matchSeed, kind, 1 + guardIdx);
+  const out: RolledFungible[] = [];
+  const table = containerLootFor({ kind: "crate", tier });
+  if (table.length > 0) {
+    const e = pickWeighted(rng, table);
+    addFungible(out, e.def, e.qty);
+  }
+  const g = BOSSES[kind].guards[guardIdx];
+  if (g) addFungible(out, ammoDefOf(g.weapon), GUARD_AMMO[WEAPONS[g.weapon].ammo]);
+  addFungible(out, "bandage", 1);
+  return out;
+}
+const GUARD_AMMO = { light: 30, shell: 10, heavy: 10 } as const;
+
+/**
+ * Damage needed to kill `hp` behind fresh armor of `armorLevel` (ARMOR absorb / durability):
+ * the armor takes `absorb` of each hit until its points run out, the rest goes to HP.
+ */
+export function effectiveHp(hp: number, armorLevel: 0 | 1 | 2 | 3): number {
+  if (armorLevel === 0) return hp;
+  const a = ARMOR[armorLevel];
+  const hpWhileArmored = (a.durability / a.absorb) * (1 - a.absorb);
+  return hp <= hpWhileArmored ? hp / (1 - a.absorb) : hp + a.durability;
+}
+
+/** Spawn-kit light ammo of every bot (FREE: vanishes, never extracts; humans keep FREE_KIT). */
+export const BOT_FREE_AMMO_LIGHT = 90;
 
 // ---------------------------------------------------------------- market (minor units, bigint)
 

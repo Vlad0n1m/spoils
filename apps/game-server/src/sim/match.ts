@@ -15,9 +15,11 @@ import { randomInt, randomUUID } from "node:crypto";
 import {
   BattleState,
   Extract,
+  FLOOR_LOOT,
   INPUT_DT_MS,
   MATCH,
   MAX_QUEUED_INPUTS,
+  NPC_ROLE,
   PLAYER,
   Player,
   SOLID,
@@ -37,8 +39,10 @@ import {
   junkCredits,
   legacyMapData,
   mulberry32,
-  pickWeighted,
   readRoll,
+  pickWeighted,
+  rollBossSpawns,
+  rollFloorLoot,
   sanitizeInput,
   selfKeyOf,
   stepMovement,
@@ -48,6 +52,7 @@ import {
   dogTagCr,
   type BushIndex,
   type CollisionIndex,
+  type BossSpot,
   type ExitType,
   type HealKind,
   type InvDropMsg,
@@ -71,6 +76,7 @@ import { AoiSystem } from "./aoi.js";
 import { Disclosure } from "./disclosure.js";
 import { fixActive, giveFreeKit, moveOwn, removeForDrop, syncPublic, takeOpToken } from "./bag.js";
 import { BotBrain } from "./bot.js";
+import { BossSystem, bossNpcCount, type NpcSpawn } from "./boss.js";
 import { stepBullets, tryFire } from "./combat.js";
 import { ContainerSystem, closeSearch, invTakeAllOp, invTakeOp, stepSearches } from "./containers.js";
 import { envNow, initEnvironment, type EnvRuntime } from "./environment.js";
@@ -139,8 +145,9 @@ export const MAX_ALLOWANCE_MS = 200;
 /** A frozen event loop must not turn into one giant simulation step. */
 const MAX_STEP_MS = 250;
 
-/** Floor loot at MapData.lootSpots: mostly ammo and meds; demo mode also ~10% a common weapon. */
-const FLOOR_LOOT = [
+
+/** v1 floor loot of maps without zones (the legacy 4800 px test layout; its whole-match tests are tuned to it). */
+const LEGACY_FLOOR_LOOT = [
   { def: "ammo_light", qty: 30, weight: 36 },
   { def: "ammo_shell", qty: 10, weight: 18 },
   { def: "ammo_heavy", qty: 10, weight: 8 },
@@ -174,6 +181,11 @@ export interface MatchOptions {
   strictLedger?: boolean;
   envSeed?: number;
   weatherOverride?: string;
+  /**
+   * Spawn the map's bosses and guards (rollBossSpawns(mapSeed, map.bosses), boss.ts). Default: on
+   * unless emptyWorld. Pool items for bosses come in containerLoot["boss:<kind>"].
+   */
+  bosses?: boolean;
 }
 
 export class Match {
@@ -201,6 +213,8 @@ export class Match {
   readonly extractBit = new Map<string, number>();
   bullets: Bullet[] = [];
   readonly bots: BotBrain[] = [];
+  /** Bosses and their guards (NPC runtimes after the roster; their brains are not in `bots`). */
+  readonly bosses: BossSystem;
   /** Exit reports of every participant (humans are also emitted as `exit` events), in exit order. */
   readonly exitReports: PlayerExitReport[] = [];
 
@@ -236,12 +250,16 @@ export class Match {
     this.state.durationMs = MATCH.DURATION_MS;
     this.env = initEnvironment(this, opts.envSeed ?? Math.floor(this.rng() * 2 ** 32) >>> 0, opts.weatherOverride ?? "");
     this.hasHumans = opts.roster.some((r) => !r.isBot);
-    this.vision = new VisionSystem(opts.roster.length);
+    // Bosses are rolled from the match seed alone (the matchmaking room made the same roll for raids/start).
+    const bossSpawns: BossSpot[] = (opts.bosses ?? !opts.emptyWorld) ? rollBossSpawns(seed, this.map.bosses) : [];
+    this.vision = new VisionSystem(opts.roster.length + bossNpcCount(bossSpawns));
     this.containers = new ContainerSystem(this);
+    this.bosses = new BossSystem(this);
     if (opts.containerLoot && this.mode === "live") this.containers.allocatePool(opts.containerLoot);
 
     if (!opts.emptyWorld) this.setupWorld();
     this.setupPlayers(opts.roster, opts.botBrains ?? true, loadoutMap(opts.loadouts));
+    this.setupBosses(bossSpawns, opts.botBrains ?? true);
     this.updateCounters();
   }
 
@@ -303,19 +321,27 @@ export class Match {
     });
 
     for (const spot of this.map.lootSpots) {
-      const it = this.rollFloorLoot();
+      const it = this.rollFloorLoot(spot.tier);
       if (it) spawnGroundItem(this, it, spot.x, spot.y);
     }
   }
 
-  private rollFloorLoot(): ItemLike | null {
-    if (this.mode === "demo" && this.rng() < 0.1) {
+  /**
+   * Floor loot of one loot spot (v4 zoning, shared FLOOR_LOOT): most spots stay empty, the rest roll
+   * their tier's table (wilds almost nothing, medkits only on T3/T4 spots). Demo mode: a common gun
+   * with DEMO_GUN_CHANCE, only on spots of tier >= DEMO_GUN_MIN_TIER. Maps without zones (the v1
+   * legacy test layout) keep the v1 flat table and demo gun.
+   */
+  private rollFloorLoot(tier: number): ItemLike | null {
+    // A map without zones (the v1 legacy test layout, every spot "tier 1") has no zoning: v1 rules.
+    const zoneless = this.map.zones.length === 0;
+    if (this.mode === "demo" && (zoneless || tier >= FLOOR_LOOT.DEMO_GUN_MIN_TIER) && this.rng() < FLOOR_LOOT.DEMO_GUN_CHANCE) {
       const it = makeItem(this.rng() < 0.55 ? "rifle" : "shotgun", { uid: this.newUid(), rarity: 0 });
       this.ledger.register(it, "minted");
       return it;
     }
-    const roll = pickWeighted(this.rng, FLOOR_LOOT);
-    return makeItem(roll.def, { qty: roll.qty });
+    const roll = zoneless ? pickWeighted(this.rng, LEGACY_FLOOR_LOOT) : rollFloorLoot(this.rng, tier);
+    return roll ? makeItem(roll.def, { qty: roll.qty }) : null;
   }
 
   private setupPlayers(roster: RosterEntry[], botBrains: boolean, loadouts: LoadoutMap): void {
@@ -351,50 +377,7 @@ export class Match {
       this.state.self.set(selfKey, s);
 
       const snap = entry.userId ? loadouts.get(entry.userId) : undefined;
-      const rt: PlayerRuntime = {
-        id,
-        rosterIndex: i,
-        selfKey,
-        userId: entry.isBot ? null : entry.userId,
-        nickname: entry.nickname,
-        isBot: entry.isBot,
-        connected: false,
-        loadoutId: snap?.loadoutId ?? "",
-        level: snap?.level ?? 0,
-        pub: p,
-        self: s,
-        queue: [],
-        lastQueuedSeq: -1,
-        allowanceMs: 0,
-        triggerHeld: false,
-        pressPending: false,
-        pressAt: 0,
-        nextFireAt: 0,
-        lastShotAt: -Infinity,
-        movedAt: 0,
-        prevX: p.x,
-        prevY: p.y,
-        vx: 0,
-        vy: 0,
-        stepAcc: 0,
-        stepRunAcc: 0,
-        viewAim: p.aim,
-        viewAimSrc: p.aim,
-        exitHeld: false,
-        lastHitBy: null,
-        lastHitAt: -Infinity,
-        reloadKey: "",
-        nextExtractSoundAt: 0,
-        nextSearchSoundAt: 0,
-        search: null,
-        opsBucket: { tokens: 20, at: 0 },
-        destroyed: [],
-        dropped: [],
-        stats: { shotsFired: 0, dmgDealt: 0, containersSearched: 0, corpsesSearched: 0, bossKills: 0 },
-        killedBy: "",
-        exitReport: null,
-        outcome: null,
-      };
+      const rt = newRuntime(id, i, selfKey, entry, p, s, snap);
       if (snap) this.loadLoadout(rt, snap);
       giveFreeKit(rt);
       syncPublic(rt);
@@ -402,6 +385,40 @@ export class Match {
       this.ordered.push(rt);
       if (entry.isBot && botBrains) this.bots.push(new BotBrain(this, rt));
     });
+  }
+
+  // ---------------------------------------------------------------- bosses (loot economy v4, boss.ts)
+
+  /**
+   * Boss groups after the roster: each NPC gets the next roster index (vision / sound / views are
+   * all by roster index), a Player with role / maxHp, no free kit (boss.ts equips it), no extract
+   * mask (NPCs never extract), and a BotBrain with its NpcInfo (kept in bosses.brains).
+   */
+  private setupBosses(spawned: readonly BossSpot[], botBrains: boolean): void {
+    if (spawned.length === 0) return;
+    const add = (n: NpcSpawn): PlayerRuntime => {
+      const i = this.ordered.length;
+      const id = `bot${i}`;
+      const p = new Player();
+      p.sessionId = id;
+      p.nickname = n.nickname;
+      p.color = i % 256;
+      p.x = n.x;
+      p.y = n.y;
+      p.hp = PLAYER.MAX_HP;
+      p.alive = true;
+      const s = new SelfState();
+      s.isBot = true;
+      s.extractMask = 0;
+      const selfKey = selfKeyOf(i);
+      this.state.players.set(id, p);
+      this.state.self.set(selfKey, s);
+      const rt = newRuntime(id, i, selfKey, { userId: null, nickname: n.nickname, isBot: true }, p, s, undefined);
+      this.runtimes.set(id, rt);
+      this.ordered.push(rt);
+      return rt;
+    };
+    this.bosses.spawn(spawned, add, botBrains ? (rt, info) => new BotBrain(this, rt, info) : null);
   }
 
   /**
@@ -594,6 +611,7 @@ export class Match {
       rt.prevY = rt.pub.y;
     }
     for (const bot of this.bots) bot.update(dt);
+    this.bosses.update(dt);
 
     for (const rt of this.ordered) {
       if (!rt.pub.alive) continue;
@@ -624,7 +642,8 @@ export class Match {
     let humansAlive = false;
     let anyAlive = false;
     for (const rt of this.ordered) {
-      if (!rt.pub.alive) continue;
+      // Bosses and guards never leave: they do not keep a bots-only match running.
+      if (!rt.pub.alive || rt.pub.role !== NPC_ROLE.NONE) continue;
       anyAlive = true;
       if (!rt.isBot) humansAlive = true;
     }
@@ -632,11 +651,17 @@ export class Match {
     if (this.clock >= MATCH.DURATION_MS || (this.hasHumans ? !humansAlive : !anyAlive)) this.end();
   }
 
+  /** HUD player counts: roster players only (bosses and guards are not players, and must not leak). */
   private updateCounters(): void {
     let alive = 0;
-    for (const rt of this.ordered) if (rt.pub.alive) alive++;
+    let total = 0;
+    for (const rt of this.ordered) {
+      if (rt.pub.role !== NPC_ROLE.NONE) continue;
+      total++;
+      if (rt.pub.alive) alive++;
+    }
     if (this.state.aliveCount !== alive) this.state.aliveCount = alive;
-    if (this.state.totalPlayers !== this.ordered.length) this.state.totalPlayers = this.ordered.length;
+    if (this.state.totalPlayers !== total) this.state.totalPlayers = total;
   }
 
   private applyInputs(rt: PlayerRuntime, dt: number): void {
@@ -808,6 +833,62 @@ export class Match {
       },
     });
   }
+}
+
+/** Fresh server-side bookkeeping of one participant (roster player or boss NPC). */
+function newRuntime(
+  id: string,
+  rosterIndex: number,
+  selfKey: string,
+  entry: RosterEntry,
+  p: Player,
+  s: SelfState,
+  snap: LoadoutSnapshot | undefined,
+): PlayerRuntime {
+  return {
+    id,
+    rosterIndex,
+    selfKey,
+    userId: entry.isBot ? null : entry.userId,
+    nickname: entry.nickname,
+    isBot: entry.isBot,
+    connected: false,
+    loadoutId: snap?.loadoutId ?? "",
+    level: snap?.level ?? 0,
+    pub: p,
+    self: s,
+    queue: [],
+    lastQueuedSeq: -1,
+    allowanceMs: 0,
+    triggerHeld: false,
+    pressPending: false,
+    pressAt: 0,
+    nextFireAt: 0,
+    lastShotAt: -Infinity,
+    movedAt: 0,
+    prevX: p.x,
+    prevY: p.y,
+    vx: 0,
+    vy: 0,
+    stepAcc: 0,
+    stepRunAcc: 0,
+    viewAim: p.aim,
+    viewAimSrc: p.aim,
+    exitHeld: false,
+    lastHitBy: null,
+    lastHitAt: -Infinity,
+    reloadKey: "",
+    nextExtractSoundAt: 0,
+    nextSearchSoundAt: 0,
+    search: null,
+    opsBucket: { tokens: 20, at: 0 },
+    destroyed: [],
+    dropped: [],
+    stats: { shotsFired: 0, dmgDealt: 0, containersSearched: 0, corpsesSearched: 0, bossKills: 0 },
+    killedBy: "",
+    exitReport: null,
+    outcome: null,
+  };
 }
 
 function loadoutMap(l: MatchOptions["loadouts"]): LoadoutMap {
