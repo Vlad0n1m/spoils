@@ -32,7 +32,10 @@ export type ZoneKind =
   | "village" | "farm" | "lumber" | "industrial" | "gas" | "rail" | "military" | "checkpoint" | "quarry";
 /** 0 = wilderness … 4 = the best POI cores. Drives container fill chance and pool placement. */
 export type LootTier = 0 | 1 | 2 | 3 | 4;
-export type BossKind = "foreman" | "commander";
+/** Bosses (economy BOSSES): Foreman holds the Grain Elevator, Commander the Radar Base, Warden the Rail Depot. */
+export type BossKind = "foreman" | "commander" | "warden";
+/** Fixed order (boss rng streams index it): never reorder, only append. */
+export const BOSS_KINDS: readonly BossKind[] = ["foreman", "commander", "warden"];
 
 export interface Zone {
   id: string;

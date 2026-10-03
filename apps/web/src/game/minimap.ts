@@ -8,13 +8,15 @@
  * window and a handful of markers.
  *
  * Shows a 4096 px window around the local player, extraction points by state (allowed ones
- * brighter; off-window allowed extracts as edge pips) and the local player only — never other
- * players.
+ * brighter; off-window allowed extracts as edge pips), boss POI skulls (an edge skull when a boss
+ * spot is near but off-window) and the local player only — never other players.
  */
 
 import { CanvasSource, Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
 import { TERRAIN_KIND_MASK, type MapData, type Terrain } from "@extract/shared";
 import { COLORS } from "./assets";
+import { minimapBossHint } from "./boss";
+import { skullContext } from "./boss-icons";
 import { TERRAIN_COLOR, groundKinds } from "./terrain-tiles";
 
 /** Overview canvas size (px). 24,576 / 1024 = 24 world px per texel. */
@@ -180,6 +182,8 @@ export class Minimap {
   private readonly windowTex: Texture;
   private readonly markers = new Container();
   private readonly marks: Marker[] = [];
+  /** One skull per map.bosses spot (inside the window, or an edge hint when near). */
+  private readonly skulls: Graphics[] = [];
   private readonly me = new Graphics();
   private readonly north: Text;
   private readonly k: number;
@@ -204,6 +208,13 @@ export class Minimap {
     });
     this.north.anchor.set(0.5, 0);
     this.north.position.set(BASE / 2, 2);
+
+    for (let i = 0; i < (map.bosses?.length ?? 0); i++) {
+      const g = new Graphics(skullContext(undefined, 7));
+      g.visible = false;
+      this.skulls.push(g);
+      this.markers.addChild(g);
+    }
 
     this.root.addChild(this.frame, this.view, this.markers, this.me, this.north);
     this.root.eventMode = "none";
@@ -273,6 +284,18 @@ export class Minimap {
       m.g.visible = true;
       m.g.position.set(p.x, p.y);
       m.g.scale.set(e.status === "open" && allowed && !edge ? 1 + 0.25 * Math.sin(nowMs / 250) : 1);
+    }
+
+    const bosses = map.bosses ?? [];
+    for (let i = 0; i < this.skulls.length; i++) {
+      const g = this.skulls[i]!;
+      const spot = bosses[i];
+      const hint = spot ? minimapBossHint(win, spot, self, BASE) : null;
+      g.visible = !!hint;
+      if (!hint) continue;
+      g.position.set(hint.x, hint.y);
+      g.scale.set(hint.edge ? 0.8 + 0.1 * Math.sin(nowMs / 300) : 1);
+      g.alpha = hint.edge ? 0.95 : 0.85;
     }
 
     this.me.visible = !!self;

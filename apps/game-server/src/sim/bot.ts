@@ -23,6 +23,13 @@
  * rect), fight anyone they see inside it, investigate every noise there and leave its containers
  * to the players (they loot bodies and the floor). The rest ("PMCs") roam from POI to POI.
  *
+ * Bosses and guards (loot economy v4, boss.ts) are BotBrains with an NpcInfo: they hold an area
+ * (leash around the BossSpot / guard post), never loot or extract, share a group alert (sight, hits,
+ * gunshots within BOSS_AI.ALERT_HEAR_PX), fight anyone non-local within full vision range, react
+ * faster (BOSS_AI.REACT_MS) and aim better (BOSS_AI sloppiness); the boss holds its room and heals
+ * with its medkits. Scavs, bosses and guards are "locals" and never start a fight with each other.
+ * PMC bots drop goals within BOSS_AI.BOT_AVOID_PX of a living boss (humans get the boss first).
+ *
  * Cost (perf memo): paths come from the region PathPlanner (2 ms/tick budget, windowed routes);
  * decisions run at 10 Hz near humans or in contact and at 2 Hz otherwise (LOD), while steering
  * along the current path stays at 10 Hz so LOD never makes a bot walk into walls.
@@ -30,11 +37,13 @@
 
 import {
   AMMO,
+  BOSS_AI,
   CONTAINER_STATE,
   HEAL,
   INPUT_DT_MS,
   ITEM_FLAG,
   MATCH,
+  NPC_ROLE,
   PLAYER,
   SEARCH,
   SOLID,
@@ -62,6 +71,7 @@ import {
   type WeaponId,
 } from "@extract/shared";
 import { activeWeapon, ammoCount, medCount, weaponDefOf } from "./bag.js";
+import { startNpcHeal, type NpcInfo } from "./boss.js";
 import { currentTarget, lootItems, type SearchTarget } from "./containers.js";
 import { envNow } from "./environment.js";
 import { extractAllowed, extractIsOpen } from "./extraction.js";
@@ -192,7 +202,14 @@ function isCombatSound(k: SoundKind): boolean {
   return k === SoundKind.shot || k === SoundKind.hurt || k === SoundKind.death || k === SoundKind.bodyFall;
 }
 
-export type BotRole = "pmc" | "scav";
+export type BotRole = "pmc" | "scav" | "boss" | "guard";
+
+/** NPC: a hit / shot older than this no longer keeps the boss from healing. */
+const NPC_HEAL_CALM_MS = 2500;
+/** Boss: idles within this distance of its spot (it "holds the room"). */
+const BOSS_HOLD_PX = 220;
+/** Guard: idle time at each patrol point. */
+const GUARD_IDLE_MS: readonly [number, number] = [3000, 8000];
 
 type Goal =
   /** A static container (idx ≥ 0) or a corpse (idx −1); id = its loot key c<idx> / k<id>. */
@@ -316,9 +333,30 @@ export class BotBrain {
   rollChance: number;
   private readonly big: boolean;
 
-  constructor(private readonly m: Match, readonly rt: PlayerRuntime) {
-    this.sloppiness = 0.85 + m.rng() * 0.4;
+  /** Boss / guard (boss.ts): null for regular bots. */
+  readonly npc: NpcInfo | null;
+  /** NPC patrol: current point and idle-until clock. */
+  private npcDest: Pt | null = null;
+  private npcIdleUntil = 0;
+  /** Guard converging on an alert: share of the way to go (shrinks while the route leaves the leash). */
+  private npcFrac = 1;
+  private npcFracFor: Pt | null = null;
+
+  constructor(private readonly m: Match, readonly rt: PlayerRuntime, npc: NpcInfo | null = null) {
+    this.npc = npc;
     this.big = m.map.width > BIG_MAP_PX;
+    if (npc) {
+      // Boss / guard: sharper, never extracts, fights anyone non-local it can see.
+      this.sloppiness = npc.role === "boss" ? BOSS_AI.BOSS_SLOPPINESS : BOSS_AI.GUARD_SLOPPINESS;
+      this.role = npc.role;
+      this.home = null;
+      this.extractAt = Infinity;
+      this.pickFightRange = BOT_VIEW_RANGE;
+      this.curiosity = 1;
+      this.rollChance = npc.role === "boss" ? 0 : Math.min(0.6, BOT_ROLL_ON_HIT / this.sloppiness);
+      return;
+    }
+    this.sloppiness = 0.85 + m.rng() * 0.4;
     // The n-th bot of the match (bots are pushed right after construction).
     const nth = m.bots.length;
     const zones = m.map.zones.filter((z) => z.tier >= 1);
@@ -469,6 +507,7 @@ export class BotBrain {
     const clock = this.m.clock;
     let urgent = false;
     for (const s of list) {
+      if (this.npc && s.kind === SoundKind.shot) this.npcHeardShot(this.npc, s, hear);
       if (!s.hidden) {
         // Seen sources are handled by sight; a visible shotgun blast right next to us is a burst.
         if (s.kind === SoundKind.shot && s.variant === SHOTGUN_VARIANT) {
@@ -574,6 +613,10 @@ export class BotBrain {
   }
 
   private think(): void {
+    if (this.npc) {
+      this.thinkNpc(this.npc);
+      return;
+    }
     const p = this.rt.pub;
     const s = this.rt.self;
     const clock = this.m.clock;
@@ -672,6 +715,11 @@ export class BotBrain {
 
   /** Between LOD decisions: keep walking the current route (no scans, no new decisions). */
   private move(): void {
+    if (this.npc) {
+      if (this.npcDest && this.rt.self.healUntil === 0) this.navigate(this.npcDest.x, this.npcDest.y);
+      else this.stop();
+      return;
+    }
     if (this.rt.search) {
       this.stop();
       return;
@@ -710,7 +758,9 @@ export class BotBrain {
   }
 
   private mayInvestigate(h: HeardNote): boolean {
+    if (this.npc) return false;
     if (this.m.clock < BOT_PEACE_MS) return false;
+    if (this.role === "pmc" && this.m.bosses.livingBossWithin(h.x, h.y, BOSS_AI.BOT_AVOID_PX)) return false;
     if (this.goal?.kind === "extract" || this.shouldExtract()) return false;
     if (this.rt.pub.hp < 50 || !this.armed()) return false;
     if (this.home) return h.prio >= 2 && inRect(this.home.rect, h.x, h.y, SCAV_LEASH_PX);
@@ -993,9 +1043,10 @@ export class BotBrain {
       const o = ort.pub;
       let d = Math.hypot(o.x - p.x, o.y - p.y);
       // Starting a fight (vs. answering one or keeping the current target) has a shorter reach.
-      // Scavs are one faction: they never start a fight with another scav.
+      // Scavs are one faction with the bosses and guards ("locals"): they never start a fight with them.
       const answer = ort === attacker || ort.id === this.enemyId;
-      if (!answer && this.home && this.isScav(ort)) continue;
+      // Bosses and guards are never fought by scavs, not even after a stray bullet (crossfire).
+      if (this.home && (ort.pub.role !== NPC_ROLE.NONE || (!answer && this.isScav(ort)))) continue;
       const reach = answer ? Infinity : pick;
       if (d > reach) continue;
       // Stick to the current target unless someone is much closer; answer an attacker first.
@@ -1015,6 +1066,11 @@ export class BotBrain {
     return false;
   }
 
+  /** Locals: scavs, bosses and guards (never start a fight with each other). */
+  private isLocal(o: PlayerRuntime): boolean {
+    return o.pub.role !== NPC_ROLE.NONE || this.isScav(o);
+  }
+
   private fight(ert: PlayerRuntime): void {
     const p = this.rt.pub;
     const e = ert.pub;
@@ -1029,7 +1085,7 @@ export class BotBrain {
       this.enemyId = ert.id;
       this.enemySeen = null;
       this.enemySpeed = 0;
-      this.reactAt = clock + this.rand(REACT_MIN_MS, REACT_MAX_MS);
+      this.reactAt = clock + (this.npc ? this.rand(BOSS_AI.REACT_MS[0], BOSS_AI.REACT_MS[1]) : this.rand(REACT_MIN_MS, REACT_MAX_MS));
     }
     // Target speed from what the bot saw (smoothed), not from hidden state.
     if (this.enemySeen && clock > this.enemySeen.at) {
@@ -1059,7 +1115,7 @@ export class BotBrain {
 
     // Badly hurt with meds in the pocket: break line of sight and patch up (heal runs once the
     // enemy is out of view). Only shoot back when cornered.
-    if (p.hp < FLEE_BELOW_HP && medCount(this.rt, "bandage") + medCount(this.rt, "medkit") > 0 && dist > 220) {
+    if (!this.npc && p.hp < FLEE_BELOW_HP && medCount(this.rt, "bandage") + medCount(this.rt, "medkit") > 0 && dist > 220) {
       this.wantFire = false;
       const W = this.m.map.width;
       const H = this.m.map.height;
@@ -1073,6 +1129,7 @@ export class BotBrain {
       this.followGoal();
       return;
     }
+    if (this.npc && this.npcHold(this.npc, e.x, e.y, dist > engage * 0.85)) return;
     if (dist > engage * 0.85) {
       // Only healthy bots go hunting (scavs at home with less); others keep doing their thing.
       const atHome = !!this.home && inRect(this.home.rect, p.x, p.y, SCAV_LEASH_PX);
@@ -1256,9 +1313,12 @@ export class BotBrain {
     let best: Goal | null = null;
     let bestScore = Infinity;
     const wary = this.seen.length > 0 && this.wary();
+    const avoidBoss = this.role === "pmc" && this.m.bosses.groups.length > 0;
     const consider = (g: Goal, score: number) => {
       if (wary && this.crowded(g.x, g.y)) score *= 4;
       if (this.blacklist.has(g.id) || score >= bestScore || !this.leashed(g.x, g.y)) return;
+      // PMCs leave the boss's ground to the humans while the boss lives.
+      if (avoidBoss && this.m.bosses.livingBossWithin(g.x, g.y, BOSS_AI.BOT_AVOID_PX)) return;
       best = g;
       bestScore = score;
     };
@@ -1328,6 +1388,17 @@ export class BotBrain {
       x = p.x + this.rand(-hop, hop) + (W / 2 - p.x) * 0.3;
       y = p.y + this.rand(-hop, hop) + (H / 2 - p.y) * 0.3;
     }
+    if (this.role === "pmc") {
+      // Not into a living boss's ground: push the point out to just past the avoid radius.
+      for (const grp of this.m.bosses.groups) {
+        const b = grp.boss.pub;
+        const d = Math.hypot(x - b.x, y - b.y);
+        if (!b.alive || d > BOSS_AI.BOT_AVOID_PX) continue;
+        const a = d > 1 ? Math.atan2(y - b.y, x - b.x) : Math.atan2(p.y - b.y, p.x - b.x);
+        x = b.x + Math.cos(a) * (BOSS_AI.BOT_AVOID_PX + 300);
+        y = b.y + Math.sin(a) * (BOSS_AI.BOT_AVOID_PX + 300);
+      }
+    }
     x = Math.max(300, Math.min(W - 300, x));
     y = Math.max(300, Math.min(H - 300, y));
     const g = this.m.planner.regions;
@@ -1373,6 +1444,222 @@ export class BotBrain {
       default:
         return 0;
     }
+  }
+
+  // ------------------------------------------------------------------ bosses and guards (boss.ts)
+
+  /** Inside this NPC's leash. */
+  private npcInLeash(npc: NpcInfo, x: number, y: number, pad = 0): boolean {
+    return Math.hypot(x - npc.anchor.x, y - npc.anchor.y) <= npc.leash + pad;
+  }
+
+  /** (x, y) pulled back onto the leash circle when it lies outside. */
+  private npcClamp(npc: NpcInfo, x: number, y: number): Pt {
+    const d = Math.hypot(x - npc.anchor.x, y - npc.anchor.y);
+    if (d <= npc.leash) return { x, y };
+    const k = npc.leash / d;
+    return { x: npc.anchor.x + (x - npc.anchor.x) * k, y: npc.anchor.y + (y - npc.anchor.y) * k };
+  }
+
+  /**
+   * Walk toward (x, y) inside the leash. A route that would leave the leash (around a wall, out of
+   * the building) is not taken: the NPC holds where it is. Returns true while moving.
+   */
+  private npcGo(npc: NpcInfo, x: number, y: number): boolean {
+    this.navigate(x, y);
+    for (let k = this.pathIdx; k < this.path.length; k++) {
+      const q = this.path[k]!;
+      if (!this.npcInLeash(npc, q.x, q.y, 100)) {
+        this.stop();
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * A heard gunshot within BOSS_AI.ALERT_HEAR_PX alerts the group: a visible shooter at its real
+   * position (never a local), a hidden one at the estimate from sector + distance band.
+   */
+  private npcHeardShot(npc: NpcInfo, s: ReturnType<typeof heardBy>[number], hear: number): void {
+    const p = this.rt.pub;
+    if (!s.hidden) {
+      const src = this.m.runtime(s.id);
+      if (!src || src === this.rt || this.isLocal(src)) return;
+      if (Math.hypot(src.pub.x - p.x, src.pub.y - p.y) <= BOSS_AI.ALERT_HEAR_PX) this.m.bosses.alert(npc.group, src.pub.x, src.pub.y);
+      return;
+    }
+    const R = baseSoundRadius(s.kind, s.variant) * hear;
+    const dist = (bandMid(s.b) * R) / (s.occluded ? SOUND.OCCLUSION_MULT : 1);
+    if (dist > BOSS_AI.ALERT_HEAR_PX) return;
+    const a = sectorAngle(s.a);
+    this.m.bosses.alert(npc.group, p.x + Math.cos(a) * dist, p.y + Math.sin(a) * dist);
+  }
+
+  /** The nearest visible non-local enemy (full vision range); before BOT_PEACE_MS only an attacker. */
+  private findEnemyNpc(): PlayerRuntime | null {
+    const p = this.rt.pub;
+    const by = this.rt.lastHitBy;
+    const attacker = by && by.pub.alive && this.m.clock - this.rt.lastHitAt <= BOT_RETALIATE_MS && !this.isLocal(by) ? by : null;
+    if (this.m.clock < BOT_PEACE_MS) return attacker && this.canSee(attacker) ? attacker : null;
+    let best: PlayerRuntime | null = null;
+    let bestD = Infinity;
+    for (const j of this.m.vision.row(this.rt.rosterIndex)) {
+      const o = this.m.rosterRuntime(j);
+      if (!o || !o.pub.alive || this.isLocal(o)) continue;
+      let d = Math.hypot(o.pub.x - p.x, o.pub.y - p.y);
+      if (d > BOT_VIEW_RANGE) continue;
+      if (o.id === this.enemyId) d *= 0.7;
+      if (o === attacker) d *= 0.5;
+      if (d < bestD) {
+        best = o;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Fight movement of an NPC. The boss holds its room (strafes but never chases out of the leash);
+   * a guard chases only while the enemy is inside its leash, and walks back when pulled out.
+   * Returns true when it handled the movement (fight() then skips its own chase / strafe).
+   */
+  private npcHold(npc: NpcInfo, ex: number, ey: number, far: boolean): boolean {
+    const p = this.rt.pub;
+    if (!this.npcInLeash(npc, p.x, p.y, 60)) {
+      this.navigate(npc.anchor.x, npc.anchor.y);
+      return true;
+    }
+    if (far && (npc.role === "boss" || !this.npcInLeash(npc, ex, ey, 150))) {
+      // Out of reach: hold position facing the enemy, shooting when in range.
+      if (npc.role === "boss" && Math.hypot(p.x - npc.anchor.x, p.y - npc.anchor.y) > BOSS_HOLD_PX) this.navigate(npc.anchor.x, npc.anchor.y);
+      else this.stop();
+      return true;
+    }
+    if (far) {
+      // A guard closes in, but only to the leash edge (a route around a wall must not drag it out).
+      const to = this.npcClamp(npc, ex, ey);
+      this.npcGo(npc, to.x, to.y);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * One decision of a boss / guard: heal (boss), fight, react to the group alert, else patrol
+   * (guards between their post and the boss room) or hold the room (boss). Never loots, never
+   * extracts, never equips (pool armor in its bag must not be worn and shot to pieces).
+   */
+  private thinkNpc(npc: NpcInfo): void {
+    const rt = this.rt;
+    const p = rt.pub;
+    const s = rt.self;
+    const clock = this.m.clock;
+    const g = npc.group;
+    this.walk = false;
+    this.wantFire = false;
+    if (s.healUntil > 0) {
+      // Patching up (the channel lands in boss.ts, capped at maxHp): stand still.
+      this.stop();
+      return;
+    }
+    const enemy = this.findEnemyNpc();
+    this.manageWeapons(enemy);
+    if (enemy) this.m.bosses.alert(g, enemy.pub.x, enemy.pub.y);
+    else if (clock - rt.lastHitAt < 300 && rt.lastHitBy && !this.isLocal(rt.lastHitBy)) {
+      // Hit from out of sight: the group goes for where the shot came from.
+      this.m.bosses.alert(g, rt.lastHitBy.pub.x, rt.lastHitBy.pub.y);
+    }
+    const calm = clock - rt.lastHitAt > NPC_HEAL_CALM_MS;
+    if (npc.role === "boss" && p.hp < p.maxHp * BOSS_AI.HEAL_BELOW_FRAC && (calm || !enemy) && startNpcHeal(this.m, rt)) {
+      this.stop();
+      return;
+    }
+    if (enemy && this.armed()) {
+      this.fight(enemy);
+      return;
+    }
+    if (this.enemyId !== "") {
+      const seen = this.enemySeen;
+      if (seen) this.m.bosses.alert(g, seen.x, seen.y);
+      this.enemyId = "";
+      this.enemySeen = null;
+    }
+    const w = activeWeapon(rt);
+    const def = weaponDefOf(w);
+    if (w && def && s.reloadUntil === 0 && w.mag < def.magSize * 0.6 && ammoCount(rt, def.ammo) > 0) this.m.reload(rt.id);
+    this.processHeard();
+
+    if (g.alertUntil > clock && g.alertAt) {
+      const at = g.alertAt;
+      const look = Math.atan2(at.y - p.y, at.x - p.x);
+      if (npc.role === "guard") {
+        // Converge on the last-known position, inside the leash, sneaking the last stretch.
+        // A target whose route leaves the leash is shortened (toward the guard) on the next decisions.
+        const full = this.npcClamp(npc, at.x, at.y);
+        if (!this.npcFracFor || Math.hypot(this.npcFracFor.x - full.x, this.npcFracFor.y - full.y) > 80) {
+          this.npcFrac = 1;
+          this.npcFracFor = full;
+        }
+        const f = this.npcFrac;
+        const to = !this.npcInLeash(npc, p.x, p.y, 60) ? npc.anchor : { x: p.x + (full.x - p.x) * f, y: p.y + (full.y - p.y) * f };
+        const d = Math.hypot(to.x - p.x, to.y - p.y);
+        this.npcDest = null;
+        if (d < 90) this.stop();
+        else {
+          this.walk = d < SNEAK_RANGE;
+          if (to === npc.anchor) this.navigate(to.x, to.y);
+          else if (this.npcGo(npc, to.x, to.y)) this.npcDest = to;
+          else this.npcFrac = Math.max(0.25, f - 0.25);
+        }
+        this.aim = clock < this.lookUntil ? this.lookAngle : look;
+      } else {
+        // The boss holds its room and covers the threat direction.
+        const d = Math.hypot(npc.anchor.x - p.x, npc.anchor.y - p.y);
+        this.npcDest = d > BOSS_HOLD_PX ? npc.anchor : null;
+        if (this.npcDest) this.navigate(npc.anchor.x, npc.anchor.y);
+        else this.stop();
+        this.aim = look;
+      }
+      return;
+    }
+    this.npcPatrol(npc);
+  }
+
+  /** Calm: guards walk between their post and the boss room, the boss idles near its spot. */
+  private npcPatrol(npc: NpcInfo): void {
+    const p = this.rt.pub;
+    const clock = this.m.clock;
+    const dest = this.npcDest;
+    if (dest && Math.hypot(dest.x - p.x, dest.y - p.y) > 60 && this.npcInLeash(npc, dest.x, dest.y, 1)) {
+      this.navigate(dest.x, dest.y);
+      this.aim = clock < this.lookUntil ? this.lookAngle : Math.atan2(this.my, this.mx);
+      return;
+    }
+    if (dest) {
+      // Arrived: idle a while, looking around.
+      this.npcDest = null;
+      this.npcIdleUntil = clock + this.rand(GUARD_IDLE_MS[0], GUARD_IDLE_MS[1]);
+    }
+    this.stop();
+    if (clock >= this.scanAt) {
+      this.scanAt = clock + this.rand(1200, 2600);
+      this.aim += this.rand(-2, 2);
+    }
+    if (clock < this.npcIdleUntil) return;
+    const spot = npc.group.spot;
+    let to: Pt;
+    if (npc.role === "boss") {
+      const a = this.rand(-Math.PI, Math.PI);
+      const r = this.rand(0, BOSS_HOLD_PX * 0.7);
+      to = { x: spot.x + Math.cos(a) * r, y: spot.y + Math.sin(a) * r };
+    } else {
+      // Post ↔ boss room (the boss spot when it lies inside the leash, else the leash edge toward it).
+      const atPost = Math.hypot(p.x - npc.anchor.x, p.y - npc.anchor.y) < 200;
+      to = atPost ? this.npcClamp(npc, spot.x + this.rand(-120, 120), spot.y + this.rand(-120, 120)) : npc.anchor;
+    }
+    this.npcDest = to;
+    this.navigate(to.x, to.y);
   }
 
   // ------------------------------------------------------------------ movement

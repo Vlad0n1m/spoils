@@ -92,10 +92,12 @@ test("poolEntry: bound never enters; a break costs 8 dur; worn out items are des
   assert.equal(poolEntry({ dur: 0, bound: false }, false), null);
 });
 
-test("poolReleaseCount = round(1.5 × riskUnits), capped by MAX_PER_MATCH and the pool", () => {
+test("poolReleaseCount = round(1.0 × riskUnits), capped by MAX_PER_MATCH and the pool", () => {
+  assert.equal(POOL.RISK_K, 1);
+  assert.equal(POOL.MAX_PER_MATCH, 8);
   assert.equal(poolReleaseCount(100, 0), 0, "free-kit lobby: no pool loot");
-  assert.equal(poolReleaseCount(100, 1), 2);
-  assert.equal(poolReleaseCount(100, 3), 5);
+  assert.equal(poolReleaseCount(100, 1), 1);
+  assert.equal(poolReleaseCount(100, 3), 3);
   assert.equal(poolReleaseCount(100, 50), POOL.MAX_PER_MATCH);
   assert.equal(poolReleaseCount(3, 50), 3);
   assert.equal(poolReleaseCount(0, 5), 0);
@@ -196,37 +198,31 @@ test("tables reference real item defs with valid quantities", () => {
   for (const p of CONTAINER.FILL_CHANCE) assert.ok(p > 0 && p <= 1);
 });
 
-test("poolReleasePlan: risk count topped up to the floor while the pool is above FLOOR_MIN_POOL", () => {
-  const big = POOL.FLOOR_MIN_POOL + 500;
-  assert.deepEqual(poolReleasePlan(big, 0), { total: POOL.MIN_RELEASE_PER_MATCH, risk: 0, floor: POOL.MIN_RELEASE_PER_MATCH }, "free-kit lobby gets the floor");
-  assert.deepEqual(poolReleasePlan(big, 2), { total: POOL.MIN_RELEASE_PER_MATCH, risk: 3, floor: POOL.MIN_RELEASE_PER_MATCH - 3 });
-  assert.deepEqual(poolReleasePlan(big, 50), { total: POOL.MAX_PER_MATCH, risk: POOL.MAX_PER_MATCH, floor: 0 }, "risk above the floor: no top-up");
-  assert.deepEqual(poolReleasePlan(POOL.FLOOR_MIN_POOL, 0), { total: 0, risk: 0, floor: 0 }, "reserve is never drawn by the floor");
-  assert.deepEqual(poolReleasePlan(POOL.FLOOR_MIN_POOL + 2, 0), { total: 2, risk: 0, floor: 2 }, "only down to the reserve");
-  assert.equal(poolReleasePlan(big, 0, 0).total, 0, "floor 0 = the old risk-only rule");
-  assert.equal(poolReleasePlan(big, 0, 99).total, POOL.MAX_PER_MATCH, "floor capped by MAX_PER_MATCH");
+test("legacy poolReleasePlan: v4 has no free floor (risk-only by default)", () => {
+  assert.equal(POOL.MIN_RELEASE_PER_MATCH, 0);
+  assert.deepEqual(poolReleasePlan(700, 0), { total: 0, risk: 0, floor: 0 }, "free-kit lobby gets nothing");
+  assert.deepEqual(poolReleasePlan(700, 3), { total: 3, risk: 3, floor: 0 });
+  assert.deepEqual(poolReleasePlan(700, 50), { total: POOL.MAX_PER_MATCH, risk: POOL.MAX_PER_MATCH, floor: 0 });
+  // An explicit floor still works for old callers, never below FLOOR_MIN_POOL.
+  assert.deepEqual(poolReleasePlan(POOL.FLOOR_MIN_POOL + 2, 0, 6), { total: 2, risk: 0, floor: 2 });
 });
 
-test("container fungibles: ~10-15% of containers roll empty, T2+ hold more lines", () => {
-  const kinds = ["crate", "toolbox", "fridge", "pc", "med_case", "weapon_box", "safe", "stash"] as const;
-  // Steppe tier mix (80/48/159/52/41).
-  const mix = [80, 48, 159, 52, 41];
-  let empty = 0;
-  let n = 0;
+test("container fungibles: wilds mostly empty, T3/T4 mostly full and hold more lines", () => {
+  // No safe: below T3 its whole table is above the junk cap, so a T0–T2 safe is always empty
+  // (the Steppe has none there).
+  const kinds = ["crate", "toolbox", "fridge", "pc", "med_case", "weapon_box", "stash"] as const;
+  const empty = [0, 0, 0, 0, 0];
   const lines = [0, 0, 0, 0, 0];
-  const per = [0, 0, 0, 0, 0];
-  for (let seed = 1; seed <= 40; seed++) {
-    mix.forEach((count, tier) => {
-      for (let i = 0; i < count; i++) {
-        const f = rollContainerFungibles(seed * 7919, tier * 1000 + i, { kind: kinds[i % kinds.length]!, tier: tier as 0 });
-        n++;
-        if (f.length === 0) empty++;
-        lines[tier]! += f.length;
-        per[tier]!++;
-      }
-    });
+  const n = 4000;
+  for (let tier = 0; tier <= 4; tier++) {
+    for (let i = 0; i < n; i++) {
+      const f = rollContainerFungibles(7919 + i * 31, tier * 100_000 + i, { kind: kinds[i % kinds.length]!, tier: tier as 0 });
+      if (f.length === 0) empty[tier]!++;
+      lines[tier]! += f.length;
+    }
   }
-  const rate = empty / n;
-  assert.ok(rate >= 0.08 && rate <= 0.16, `empty rate ${rate.toFixed(3)}`);
-  assert.ok(lines[3]! / per[3]! > lines[0]! / per[0]! + 0.8, "T3 has clearly more lines than T0");
+  // Empty ≈ 1 − FILL × (1 − EMPTY^ROLLS): T0 79 %, T1 62 %, T2 58 %, T3 17 %, T4 12 %.
+  const want = [0.79, 0.62, 0.58, 0.17, 0.12];
+  want.forEach((w, t) => assert.ok(Math.abs(empty[t]! / n - w) < 0.03, `T${t} empty ${(empty[t]! / n).toFixed(3)} vs ${w}`));
+  assert.ok(lines[3]! / n > lines[0]! / n + 0.8, "T3 has clearly more lines than T0");
 });

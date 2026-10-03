@@ -122,7 +122,8 @@ export function runSoak(o: SoakOptions): SoakResult {
   const deaths: number[] = [];
   let timeouts = 0;
   for (const rt of m.allRuntimes()) {
-    if (!rt.isBot) continue;
+    // Roster bots only: bosses and guards (Player.role != 0) never extract (they hold their POI).
+    if (!rt.isBot || rt.pub.role !== 0) continue;
     const r = rt.exitReport;
     if (!r) continue;
     if (r.exit === "extract") extracts.push(r.atMs);

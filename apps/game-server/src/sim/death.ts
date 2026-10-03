@@ -10,7 +10,7 @@
  * whose contents go through the searchers' loot entry k<id> (containers.ts).
  */
 
-import { BREAK_CHANCE_ON_DEATH, ITEM_FLAG, SoundKind, type ItemLike, type WeaponId } from "@extract/shared";
+import { BOSS_AI, BREAK_CHANCE_ON_DEATH, ITEM_FLAG, NPC_ROLE, SoundKind, type ItemLike, type WeaponId } from "@extract/shared";
 import { cancelHeal, cancelReload } from "./actions.js";
 import { carriedItems, clearSlots, syncPublic } from "./bag.js";
 import { closeSearch } from "./containers.js";
@@ -38,9 +38,14 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
   if (killer && killer !== rt) {
     killer.self.kills = Math.min(255, killer.self.kills + 1);
     rt.killedBy = killer.nickname;
+    // Boss kill credit (web: PROGRESSION.XP_BOSS). Guards do not count.
+    if (p.role === NPC_ROLE.BOSS) killer.stats.bossKills++;
     // A bullet still in flight can kill after its shooter already extracted or died: keep their
     // frozen result in line and resend it.
-    if (killer.exitReport) killer.exitReport.kills = killer.self.kills;
+    if (killer.exitReport) {
+      killer.exitReport.kills = killer.self.kills;
+      killer.exitReport.stats = { ...killer.stats };
+    }
     if (killer.outcome) {
       killer.outcome = { ...killer.outcome, kills: killer.self.kills };
       if (!killer.isBot) m.emit({ type: "outcome", to: killer.rosterIndex, msg: killer.outcome });
@@ -62,10 +67,14 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
   m.finishPlayer(rt, "dead", { lost, dropped });
 }
 
-/** What happens to a carried list on death; pure apart from the rng draws (one per unique). */
+/**
+ * What happens to a carried list on death; pure apart from the rng draws (one per unique, none
+ * with `noBreak`: boss / guard bags, BOSS_AI.NO_BREAK — every pool item reaches the corpse).
+ */
 export function deathSplit(
   carried: readonly ItemLike[],
   rng: () => number,
+  noBreak = false,
 ): { lost: ItemLike[]; dropped: ItemLike[]; remains: ItemLike[] } {
   const lost: ItemLike[] = [];
   const dropped: ItemLike[] = [];
@@ -73,7 +82,7 @@ export function deathSplit(
   for (const item of carried) {
     if (item.flags & ITEM_FLAG.FREE) continue;
     if (isTrackedUnique(item)) {
-      if (rng() < BREAK_CHANCE_ON_DEATH) {
+      if (!noBreak && rng() < BREAK_CHANCE_ON_DEATH) {
         lost.push({ ...item, flags: item.flags | ITEM_FLAG.BROKEN });
         continue;
       }
@@ -90,7 +99,8 @@ export function deathSplit(
  * for the outcome screen: "left in your body").
  */
 export function buildCorpse(m: Match, rt: PlayerRuntime): { lost: ItemLike[]; dropped: ItemLike[] } {
-  const { lost, dropped, remains } = deathSplit(carriedItems(rt).map((c) => c.item), m.rng);
+  const noBreak = BOSS_AI.NO_BREAK && rt.pub.role !== NPC_ROLE.NONE;
+  const { lost, dropped, remains } = deathSplit(carriedItems(rt).map((c) => c.item), m.rng, noBreak);
   clearSlots(rt);
   if (!rt.isBot) remains.push(makeItem("junk_dogtag", { label: rt.nickname, lvl: rt.level, ref: rt.selfKey }));
   m.containers.addCorpse(rt, remains);

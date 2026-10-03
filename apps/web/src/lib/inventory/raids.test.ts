@@ -16,14 +16,18 @@ import {
   dogTagCr,
   itemDef,
   mulberry32,
+  ITEM_IDS,
   poolReleaseCount,
+  uniqueTierScore,
   type MatchEndReport,
   type PlayerExitReport,
   type RaidStartRequest,
   type SettledItem,
 } from "@extract/shared";
 import { creditLedger, itemEvents, items, loadouts, matchResults, raids, stashStacks, users } from "../../db/schema";
-import { PARAM, setParam } from "../economy/params";
+import { PARAM, getNumberParam, setParam } from "../economy/params";
+import { TIER_SCORE_SQL } from "../economy/pool";
+import { runEconomyDaily } from "../economy/daily";
 import { addStack } from "./transition";
 import { lockLoadout, unlockLoadout, saveDraft } from "./loadout";
 import {
@@ -255,17 +259,18 @@ describe("raid start", () => {
     assert.equal((await item(p.rifle)).state, "in_stash");
   });
 
-  test("pool release: risk units decide the count, free kits get nothing, boss takes the best", async () => {
+  test("pool release: risk units decide the count, free kits get nothing, only T3/T4 pool containers", async () => {
     for (let i = 0; i < 20; i++) await makeItem(db, { def: i % 2 ? "rifle" : "armor_1", rarity: i % 4, state: "lost_pool", dur: 80 });
     const free = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }]));
     assert.deepEqual(free.containerLoot, {});
 
-    const p = await lockedPlayer(); // 3 uniques → round(1.5 × 3) = 5 (≤ 10)
-    const res = await startRaid(db, startReq([{ userId: p.userId, loadoutId: p.loadoutId }], { bossSlots: 1 }));
+    const p = await lockedPlayer(); // 3 uniques → round(1.0 × 3) = 3; pool of 20 < BOSS_MIN_POOL
+    const res = await startRaid(db, startReq([{ userId: p.userId, loadoutId: p.loadoutId }]));
     const all = Object.values(res.containerLoot).flat();
     assert.equal(all.length, poolReleaseCount(20, 3));
-    assert.equal(res.containerLoot.boss?.length, POOL.BOSS_SHARE);
-    assert.equal(res.containerLoot["4"], undefined, "no pool loot in a fridge");
+    assert.equal(all.length, 3);
+    // CONTAINERS: only idx 2 (weapon_box T3) and 3 (safe T4) may hold pool items.
+    assert.ok(Object.keys(res.containerLoot).every((k) => k === "2" || k === "3"), Object.keys(res.containerLoot).join(","));
     for (const it of all) {
       const row = await item(it.uid);
       assert.equal(row.state, "in_raid");
@@ -513,44 +518,164 @@ describe("void", () => {
   });
 });
 
-/** `n` lost-pool rifles in one insert (the floor needs a pool above POOL.FLOOR_MIN_POOL). */
+/** `n` lost-pool items in one insert: rifles of rarity 1 / 3 (rare / top) and armor_1 (score 0). */
 async function bulkPool(n: number) {
   await db.insert(items).values(
     Array.from({ length: n }, (_, i) => ({ defId: i % 2 ? "rifle" : "armor_1", rarity: i % 4, durability: 80, state: "lost_pool" as const, origin: "seed" as const })),
   );
 }
 
-describe("pool floor", () => {
-  test("a free-kit lobby gets POOL.MIN_RELEASE_PER_MATCH uniques, only in T3/T4 containers", async () => {
-    await bulkPool(POOL.FLOOR_MIN_POOL + 50);
-    const res = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }]));
-    const keys = Object.keys(res.containerLoot);
+const BOSSES_CF: RaidStartRequest["bosses"] = [
+  { kind: "commander", slots: [2, 1, 1] },
+  { kind: "foreman", slots: [2, 1] },
+];
+
+async function allocEvents(matchId: string, reason: string) {
+  return db.select().from(itemEvents).where(and(eq(itemEvents.reason, reason), eq(itemEvents.refId, matchId)));
+}
+
+describe("pool release v4 (bosses first, no free floor)", () => {
+  test("R = 0 lobby: nothing at all, not even for the bosses", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const res = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }], { bosses: BOSSES_CF, bossSlots: 5 }));
+    assert.deepEqual(res.containerLoot, {});
+    assert.equal(await poolCount(), POOL.BOSS_MIN_POOL + 50);
+  });
+
+  test("R = 3 lobby: risk 3 + boss top-up 2, all in boss bags, best tier first, journaled alloc_boss", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const p = await lockedPlayer();
+    const req = startReq([{ userId: p.userId, loadoutId: p.loadoutId }], { bosses: BOSSES_CF, bossSlots: 5 });
+    const res = await startRaid(db, req);
+    assert.deepEqual(Object.keys(res.containerLoot).sort(), ["boss:commander", "boss:foreman"]);
+    const cmd = res.containerLoot["boss:commander"]!;
+    const fore = res.containerLoot["boss:foreman"]!;
+    assert.equal(cmd.length, 3);
+    assert.equal(fore.length, 2);
+    // The pool holds top rifles (rarity 3) and rare rifles (rarity 1): every slot gets its tier.
+    assert.equal(uniqueTierScore(cmd[0]!.def, cmd[0]!.rarity), 2);
+    assert.equal(uniqueTierScore(fore[0]!.def, fore[0]!.rarity), 2);
+    for (const it of [...cmd.slice(1), ...fore.slice(1)]) assert.ok(uniqueTierScore(it.def, it.rarity) >= 1, `${it.def} r${it.rarity}`);
+    assert.equal((await allocEvents(req.matchId, "alloc_boss")).length, 5);
+    assert.equal((await allocEvents(req.matchId, "alloc")).length, 0);
+    const raid = (await db.select().from(raids).where(eq(raids.matchId, req.matchId)))[0]!;
+    assert.deepEqual([raid.riskUnits, raid.poolReleased], [3, 5]);
+    assert.equal(await poolCount(), POOL.BOSS_MIN_POOL + 50 - 5);
+  });
+
+  test("pool at or below BOSS_MIN_POOL after the risk release: no top-up, the risk items still go to bosses first", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL);
+    const p = await lockedPlayer();
+    const res = await startRaid(db, startReq([{ userId: p.userId, loadoutId: p.loadoutId }], { bosses: BOSSES_CF, bossSlots: 5 }));
+    assert.equal(Object.values(res.containerLoot).flat().length, 3);
+    assert.equal(res.containerLoot["boss:commander"]?.length, 2, "commander:2 and commander:1");
+    assert.equal(res.containerLoot["boss:foreman"]?.length, 1, "foreman:2");
+  });
+
+  test("R = 9 (three geared players): 8 released, bosses filled, the rest only into T3/T4 containers", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const ps = [await lockedPlayer(), await lockedPlayer(), await lockedPlayer()];
+    const res = await startRaid(
+      db,
+      startReq(ps.map((p) => ({ userId: p.userId, loadoutId: p.loadoutId })), { bosses: BOSSES_CF, bossSlots: 5 }),
+    );
     const all = Object.values(res.containerLoot).flat();
-    assert.equal(all.length, POOL.MIN_RELEASE_PER_MATCH);
-    // CONTAINERS: idx 2 = weapon_box T3, idx 3 = safe T4.
-    assert.ok(keys.every((k) => k === "2" || k === "3"), `floor landed in ${keys.join(",")}`);
-    assert.equal(await poolCount(), POOL.FLOOR_MIN_POOL + 50 - all.length);
-    const ev = await db.select().from(itemEvents).where(eq(itemEvents.reason, "alloc_floor"));
-    assert.equal(ev.length, all.length);
+    assert.equal(all.length, POOL.MAX_PER_MATCH);
+    assert.equal(res.containerLoot["boss:commander"]?.length, 3);
+    assert.equal(res.containerLoot["boss:foreman"]?.length, 2);
+    const cont = Object.entries(res.containerLoot).filter(([k]) => !k.startsWith("boss:"));
+    assert.equal(cont.flatMap(([, v]) => v).length, 3);
+    assert.ok(cont.every(([k]) => k === "2" || k === "3"), cont.map(([k]) => k).join(","));
+    assert.equal(new Set(all.map((i) => i.uid)).size, all.length, "no item twice");
   });
 
-  test("risk releases above the floor add nothing; the floor stops at FLOOR_MIN_POOL", async () => {
-    await bulkPool(POOL.FLOOR_MIN_POOL + 2);
-    const res = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }]));
-    assert.equal(Object.values(res.containerLoot).flat().length, 2, "only down to the reserve");
-    const res2 = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }]));
-    assert.deepEqual(res2.containerLoot, {}, "reserve untouched by the floor");
+  test("no bosses[] (older game server, legacy bossSlots only): no boss keys, risk items to containers", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const p = await lockedPlayer();
+    const res = await startRaid(db, startReq([{ userId: p.userId, loadoutId: p.loadoutId }], { bossSlots: 2 }));
+    assert.equal(Object.values(res.containerLoot).flat().length, 3);
+    assert.ok(Object.keys(res.containerLoot).every((k) => k === "2" || k === "3"));
   });
 
-  test("POOL_MIN_RELEASE_PER_MATCH=0 restores the risk-only rule", async () => {
-    await bulkPool(POOL.FLOOR_MIN_POOL + 50);
-    process.env.POOL_MIN_RELEASE_PER_MATCH = "0";
-    try {
-      const res = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }]));
-      assert.deepEqual(res.containerLoot, {});
-    } finally {
-      delete process.env.POOL_MIN_RELEASE_PER_MATCH;
+  test("no T3/T4 container and no boss: the risk release stays in the pool", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const p = await lockedPlayer();
+    const low: RaidStartRequest["containers"] = [{ idx: 1, kind: "crate", tier: 2 }, { idx: 5, kind: "stash", tier: 4 }];
+    const res = await startRaid(db, startReq([{ userId: p.userId, loadoutId: p.loadoutId }], { containers: low }));
+    assert.deepEqual(res.containerLoot, {});
+    assert.equal(await poolCount(), POOL.BOSS_MIN_POOL + 50);
+  });
+
+  test("TIER_SCORE_SQL agrees with uniqueTierScore for every unique def and rarity", async () => {
+    const defs = ITEM_IDS.filter((id) => itemDef(id)?.unique);
+    for (const def of defs) for (let r = 0; r < 4; r++) await makeItem(db, { def, rarity: r, state: "lost_pool" });
+    const rows = await db.execute<{ def_id: string; rarity: number; s: number }>(
+      sql`select def_id, rarity, ${TIER_SCORE_SQL} as s from items`,
+    );
+    assert.equal(rows.rows.length, defs.length * 4);
+    for (const row of rows.rows) assert.equal(Number(row.s), uniqueTierScore(row.def_id, Number(row.rarity)), `${row.def_id} r${row.rarity}`);
+  });
+
+  test("boss items: unlooted return to the pool with no wear; a human who kills the boss keeps what he extracts", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const p = await lockedPlayer();
+    const req = startReq([{ userId: p.userId, loadoutId: p.loadoutId }], { bosses: BOSSES_CF, bossSlots: 5 });
+    const res = await startRaid(db, req);
+    const [loot, ...rest] = [...res.containerLoot["boss:commander"]!, ...res.containerLoot["boss:foreman"]!];
+    const ex = await applyExit(
+      db,
+      exitReport(req.matchId, p.userId, {
+        extracted: [
+          { uid: p.rifle, def: "rifle", qty: 1, rarity: 1, dur: 100 },
+          { uid: p.armor, def: "armor_2", qty: 1, rarity: 1, dur: ARMOR[2].durability / 2 },
+          { uid: p.bp, def: "backpack_1", qty: 1, rarity: 0, dur: 100 },
+          loot!,
+        ],
+        stats: { shotsFired: 40, dmgDealt: 600, containersSearched: 0, corpsesSearched: 1, bossKills: 1 },
+      }),
+    );
+    assert.equal(ex.xp, PROGRESSION.XP_RAID + PROGRESSION.XP_EXTRACT + PROGRESSION.XP_BOSS);
+    const e = await applyEnd(db, endReport(req.matchId, { leftOnMap: rest }));
+    assert.equal(e.swept, 0);
+    assert.equal((await item(loot!.uid)).ownerId, p.userId);
+    for (const it of rest) {
+      const row = await item(it.uid);
+      assert.deepEqual([row.state, row.durability], ["lost_pool", 80], `${it.def} back unworn`);
     }
+  });
+});
+
+describe("economy daily", () => {
+  /** `n` veterans (account 30 days old, one raid exit yesterday) with `credits` CR each. */
+  async function veterans(n: number, cr: number, now: Date) {
+    const matchId = randomUUID();
+    for (let i = 0; i < n; i++) {
+      const u = await makeUser(db);
+      await db.execute(sql`update users set credits = ${cr}, created_at = ${new Date(now.getTime() - 30 * 86_400_000)} where id = ${u}`);
+      await db.execute(sql`insert into raid_exits (match_id, user_id, exit, report, at)
+        values (${matchId}, ${u}, 'extract', '{}'::jsonb, ${new Date(now.getTime() - 86_400_000)})`);
+    }
+  }
+
+  test("steers autosell once per UTC day from the veterans' median CR; small samples change nothing", async () => {
+    const now = new Date("2026-10-03T03:00:00Z");
+    await veterans(10, 500, now);
+    await bulkPool(12);
+    const small = await runEconomyDaily(db, now);
+    assert.equal(small.status, "applied");
+    assert.deepEqual(small.autosell, { from: 1, to: 1 }, "10 veterans < MIN_SAMPLE");
+    assert.deepEqual(small.pool, { size: 12, top: 3, rare: 3 });
+
+    await veterans(50, 500, now);
+    const again = await runEconomyDaily(db, new Date("2026-10-03T23:00:00Z"));
+    assert.equal(again.status, "already", "same UTC day");
+    const next = await runEconomyDaily(db, new Date("2026-10-04T03:00:00Z"));
+    assert.equal(next.status, "applied");
+    assert.equal(next.veterans.sample, 60);
+    assert.equal(next.autosell.to, 1.03, "poor veterans: junk pays 3 % more");
+    assert.equal(await getNumberParam(db, PARAM.AUTOSELL_MULT), 1.03);
+    const snap = await db.execute<{ n: number }>(sql`select count(*)::int as n from economy_daily`);
+    assert.equal(Number(snap.rows[0]!.n), 2);
   });
 });
 

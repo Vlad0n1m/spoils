@@ -15,7 +15,7 @@ import {
   walkCellOf,
   zoneAt,
 } from "./query.js";
-import { STEPPE_CROSSINGS } from "./steppe.js";
+import { BOSS_CHANCE, BOSS_GUARD_COUNT, STEPPE_CROSSINGS } from "./steppe.js";
 import { REACH_PX } from "./spots.js";
 import { TERRAIN, TERRAIN_INDOOR, TERRAIN_KIND_MASK, type MapData, type MapSide } from "./types.js";
 
@@ -76,8 +76,8 @@ test("content counts match the memo targets", () => {
   assert.ok(m.lootSpots.length >= 450, `loot spots ${m.lootSpots.length}`);
   assert.equal(m.zones.length, 10);
   assert.ok(m.buildings.length >= 60, `buildings ${m.buildings.length}`);
-  assert.deepEqual(m.bosses.map((b) => b.kind).sort(), ["commander", "foreman"]);
-  for (const b of m.bosses) assert.ok(b.guards.length >= 2, `${b.kind} guards`);
+  assert.deepEqual(m.bosses.map((b) => b.kind).sort(), ["commander", "foreman", "warden"]);
+  for (const b of m.bosses) assert.equal(b.guards.length, BOSS_GUARD_COUNT[b.kind], `${b.kind} guards`);
   const amb = new Set(m.ambient.map((a) => a.k));
   for (const k of ["river", "sawmill", "generator", "forest"] as const) assert.ok(amb.has(k), `ambient ${k}`);
   // Every container kind but the boss stash appears.
@@ -158,6 +158,15 @@ test("zones: containers carry their zone and tier; wilderness is tier 0–1", ()
   const radar = m.zones.find((z) => z.id === "radar")!;
   assert.equal(radar.tier, 4);
   assert.equal(radar.boss, "commander");
+  // Loot economy v4: three bosses hold contested POIs (Warden: the Rail Depot between the south spawns).
+  assert.equal(m.zones.find((z) => z.id === "elevator")!.boss, "foreman");
+  assert.equal(m.zones.find((z) => z.id === "depot")!.boss, "warden");
+  for (const b of m.bosses) {
+    assert.equal(zoneAt(m, b.x, b.y)?.id, b.zone, `${b.kind} inside its zone`);
+    assert.equal(b.chance, BOSS_CHANCE[b.kind]);
+    const inside = m.buildings.some((q) => q.zone === b.zone && b.x >= q.floor.x && b.x < q.floor.x + q.floor.w && b.y >= q.floor.y && b.y < q.floor.y + q.floor.h);
+    assert.ok(inside, `${b.kind} sits in a building`);
+  }
 });
 
 // ───────────────────────── reachability (memo §4.9, §11)

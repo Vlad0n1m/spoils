@@ -27,7 +27,7 @@ export const STEPPE_ZONES: readonly ZoneTemplate[] = [
   { id: "fuel", name: "Fuel Stop", kind: "gas", tier: 1, rect: [6.5, 10.4, 2.4, 2.2] },
   { id: "sawmill", name: "Sawmill", kind: "lumber", tier: 2, rect: [10.6, 1.4, 4.4, 3.4] },
   { id: "elevator", name: "Grain Elevator", kind: "industrial", tier: 3, rect: [9.5, 7.6, 6, 5.6], boss: "foreman" },
-  { id: "depot", name: "Rail Depot", kind: "rail", tier: 2, rect: [6.5, 17.3, 8.5, 4.3] },
+  { id: "depot", name: "Rail Depot", kind: "rail", tier: 2, rect: [6.5, 17.3, 8.5, 4.3], boss: "warden" },
   { id: "checkpoint", name: "Bridge Checkpoint", kind: "checkpoint", tier: 2, rect: [17.4, 11.0, 2.4, 2.4] },
   { id: "radar", name: "Radar Base", kind: "military", tier: 4, rect: [18.2, 2.0, 5, 5], boss: "commander" },
   { id: "quarry", name: "Quarry", kind: "quarry", tier: 2, rect: [18.6, 14.4, 4.4, 4.4] },
@@ -115,4 +115,18 @@ export const STEPPE_EXTRACTS: readonly ExtractTemplate[] = [
 
 export const EXTRACT_RADIUS = 150;
 
-export const BOSS_CHANCE: Record<BossKind, number> = { foreman: 0.6, commander: 0.4 };
+/**
+ * Boss spawn chance per match (loot economy v4; BossSpot.chance, BOSSES[kind].spawnChance). Bosses
+ * are not part of mapHash, so these never change the layout.
+ */
+export const BOSS_CHANCE: Readonly<Record<BossKind, number>> = { foreman: 0.8, commander: 0.7, warden: 0.6 };
+
+/** Guard posts per boss (= BOSSES[kind].guards.length; the Commander's third post is the watch post). */
+export const BOSS_GUARD_COUNT: Readonly<Record<BossKind, number>> = { foreman: 2, commander: 3, warden: 2 };
+
+/** Building archetypes a boss prefers for its room, in order (placeBosses). */
+export const BOSS_BUILDING_PREFS: Readonly<Record<BossKind, readonly ("office" | "warehouse" | "bunker" | "barracks")[]>> = {
+  foreman: ["office", "warehouse"],
+  commander: ["office", "bunker", "barracks"],
+  warden: ["warehouse"],
+};

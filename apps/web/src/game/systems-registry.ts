@@ -5,6 +5,7 @@
  */
 
 import { createGameAudioSystem } from "./audio/game-audio";
+import { createBossHudSystem } from "./boss-hud";
 import { createCameraSystem } from "./camera";
 import { createCinematicSystem, createHitmarkerSystem, createLowHpSystem } from "./cinematics";
 import { createAmbientSystem, createWorldFxSystem } from "./effects";
@@ -36,6 +37,8 @@ export const SYSTEM_FACTORIES: readonly SystemFactory[] = [
   () => createIntroSystem(),
   // Extraction letterbox / stamp / auto-sell total and the death cam, screen layer.
   () => createCinematicSystem(),
+  // Boss bar (screen layer), boss alert sting and boss-turf tension swell (loot economy v4).
+  () => createBossHudSystem(),
   // Full map (M) and the zone toast; drawn last so the opened map covers the indicators.
   () => createMapOverlaySystem(),
   // Positional audio, ambience, own-action cues. Draws nothing.

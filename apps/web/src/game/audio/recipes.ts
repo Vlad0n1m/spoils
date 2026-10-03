@@ -581,6 +581,64 @@ export const misc = {
     burst(c, out, r, 0, { type: "lowpass", f: 1200, a: 0.002, d: 0.05, peak: 0.5, color: "pink" });
     burst(c, out, r, 0.035, { f: 3400, Q: 3, a: 0.0003, d: 0.006, peak: 0.6 });
   },
+  /**
+   * Boss alert sting, ~1.6 s: a detuned low brass stab (saw cluster a semitone apart through a
+   * closing lowpass), a sub boom and a metal clang. Loud and non-spatial: "you've been spotted".
+   */
+  boss_sting(c, out, r) {
+    const lp = filt(c, "lowpass", 2400, 2);
+    lp.frequency.setValueAtTime(2400, 0);
+    lp.frequency.exponentialRampToValueAtTime(260, 1.3);
+    const g = gain(c);
+    g.gain.setValueAtTime(0, 0);
+    g.gain.linearRampToValueAtTime(0.55, 0.02);
+    g.gain.linearRampToValueAtTime(0.4, 0.25);
+    g.gain.exponentialRampToValueAtTime(EPS, 1.45);
+    g.gain.setValueAtTime(0, 1.46);
+    chain(lp, g, out);
+    for (const f of [55, 58.27, 110, 155.56]) {
+      const o = osc(c, "sawtooth", f * (0.995 + r() * 0.01), 0, 1.5);
+      const k = gain(c, f < 100 ? 0.35 : 0.22);
+      chain(o, k, lp);
+    }
+    tone(c, out, 0, { f0: 90, f1: 32, glide: 0.35, a: 0.004, d: 0.9, peak: 0.9 });
+    burst(c, out, r, 0, { type: "lowpass", f: 900, a: 0.003, d: 0.25, peak: 0.6, color: "brown" });
+    metal(c, out, r, 0.01, 420 + r() * 40, 0.25, 0.6);
+  },
+  /**
+   * Boss-turf tension swell, ~6 s, no melody: a low two-tone drone (a minor-sixth apart) with a
+   * slow tremolo, a rumble bed that breathes in and out, and two muffled heartbeat thumps.
+   */
+  boss_tension(c, out, r) {
+    const dur = 5.8;
+    const env = gain(c);
+    env.gain.setValueAtTime(0, 0);
+    env.gain.linearRampToValueAtTime(0.7, 2.2);
+    env.gain.linearRampToValueAtTime(0.55, 4.0);
+    env.gain.linearRampToValueAtTime(0, dur);
+    const trem = gain(c, 0.75);
+    chain(osc(c, "sine", 0.9 + r() * 0.3, 0, dur), gain(c, 0.25), trem.gain);
+    chain(trem, env, out);
+    const lp = filt(c, "lowpass", 420, 0.9);
+    lp.connect(trem);
+    for (const [f, k] of [
+      [41.2, 0.5],
+      [65.4, 0.28],
+      [82.4, 0.12],
+    ] as const) {
+      chain(osc(c, "triangle", f * (0.997 + r() * 0.006), 0, dur), gain(c, k), lp);
+    }
+    chain(noise(c, "brown", r, 0, dur), filt(c, "lowpass", 180, 0.7), gain(c, 0.35), env);
+    // Lub-dub, twice.
+    for (const [t, peak] of [
+      [1.6, 0.45],
+      [1.85, 0.3],
+      [3.9, 0.45],
+      [4.15, 0.3],
+    ] as const) {
+      tone(c, out, t, { f0: 70, f1: 40, glide: 0.08, a: 0.004, d: 0.18, peak });
+    }
+  },
   thunder_near(c, out, r) {
     burst(c, out, r, 0, { type: "highpass", f: 1500, a: 0.002, d: 0.12, peak: 0.9 });
     burst(c, out, r, 0.03, { type: "lowpass", f: 2500, a: 0.004, d: 0.4, peak: 0.6 });
@@ -720,6 +778,9 @@ export const SFX = {
   extract_beep: ui(misc.extract_beep, 0.2, -10),
   extract_success: ui(misc.extract_success, 0.9, -6),
   heartbeat: ui(misc.heartbeat, 0.35, -8),
+  // Boss presentation (boss-hud.ts): the alert sting and the boss-turf tension swell.
+  boss_sting: ui(misc.boss_sting, 1.6, -6),
+  boss_tension: sfx(misc.boss_tension, 6, -14, "extract", 2, { jitter: 0 }),
 
   ui_click: ui(misc.ui_click, 0.08, -14),
   ui_hover: ui(misc.ui_hover, 0.05, -24),

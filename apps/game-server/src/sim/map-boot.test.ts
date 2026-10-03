@@ -74,7 +74,8 @@ test("extract masks: Tarkov side rule (both opposite + one per adjacent side, ne
     assert.deepEqual(new Set(ids), new Set(allowedExtracts(map, side).map((e) => e.id)));
   }
   const m = new Match({ roster: roster(4, MATCH_PLAYERS), rng: mulberry32(5), newUid: counterUid, botBrains: false });
-  for (const rt of m.allRuntimes()) {
+  // Roster players only: bosses and guards (Player.role != 0) stand at their posts and never extract.
+  for (const rt of m.allRuntimes().filter((r) => r.pub.role === 0)) {
     assert.equal(rt.self.extractMask, extractMask(map, rt.self.side as MapSide), `${rt.nickname} side ${rt.self.side}`);
     assert.ok(rt.self.extractMask !== 0);
   }
@@ -130,7 +131,7 @@ test("side-aware spawns on the Steppe: humans first, spread over sides, farthest
   const m = new Match({ roster: roster(4, MATCH_PLAYERS), rng: mulberry32(9), newUid: counterUid, botBrains: false });
   const humanSides = m.allRuntimes().filter((r) => !r.isBot).map((r) => r.self.side).sort();
   assert.deepEqual(humanSides, [0, 1, 2, 3]);
-  for (const rt of m.allRuntimes()) {
+  for (const rt of m.allRuntimes().filter((r) => r.pub.role === 0)) {
     const s = map.spawns.find((p) => p.x === rt.pub.x && p.y === rt.pub.y);
     assert.ok(s, `${rt.nickname} stands on a spawn spot`);
     assert.equal(rt.self.side, s.side);
