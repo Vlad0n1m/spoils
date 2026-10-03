@@ -253,7 +253,7 @@ export interface WorldOptions {
 
 /** Human palette slots (Player.color) handed out least-used first among living humans. */
 const HUMAN_COLORS = 16;
-/** worldTick period (pool placement, expiry). */
+/** worldTick period (pool placement, NPC respawn checks, expiry). */
 const WORLD_TICK_MS = 1_000;
 
 export class Match {
@@ -634,32 +634,45 @@ export class Match {
    * off (rule tests drive NPC players by hand).
    */
   private setupNpcs(bosses: readonly BossSpot[], squads: readonly NpcSquadSpawn[], posts: readonly NpcPost[], brains: boolean): void {
-    const add = (n: NpcSpawn): PlayerRuntime => {
-      const i = this.ordered.length;
-      const id = `npc${i}`;
-      const p = new Player();
-      p.sessionId = id;
-      p.nickname = n.nickname;
-      // A fixed NPC palette slot (never a player color index; the client tints by role).
-      p.color = 255;
-      p.x = n.x;
-      p.y = n.y;
-      p.hp = PLAYER.MAX_HP;
-      p.alive = true;
-      const s = new SelfState();
-      s.isBot = true;
-      s.extractMask = 0;
-      const selfKey = selfKeyOf(i);
-      this.state.players.set(id, p);
-      this.state.self.set(selfKey, s);
-      const rt = newRuntime(id, i, selfKey, { userId: null, nickname: n.nickname }, true, p, s, undefined);
-      this.runtimes.set(id, rt);
-      this.ordered.push(rt);
-      return rt;
-    };
-    this.npcs.spawnBosses(bosses, add);
-    this.npcs.spawnSquads(squads, posts, add);
+    this.npcs.spawnBosses(bosses);
+    this.npcs.spawnSquads(squads, posts);
     if (brains) this.npcs.startBrains();
+  }
+
+  /** Runtime indexes this match can hold (the vision capacity; world mode WORLD.MAX_RUNTIMES_PER_SHARD). */
+  get runtimeCapacity(): number {
+    return this.vision.n;
+  }
+
+  /**
+   * One NPC runtime at the next roster index (spec §3.6): a Player at (x, y) with the fixed NPC
+   * palette slot, a bot SelfState without extract mask; npc.ts / boss.ts equip it. Used at match
+   * creation and by world respawns (NpcSystem.respawnTick). Throws at the runtime capacity
+   * (indexes are never reused, D16).
+   */
+  addNpc(n: NpcSpawn): PlayerRuntime {
+    const i = this.ordered.length;
+    if (i >= this.runtimeCapacity) throw new Error(`addNpc: runtime capacity ${this.runtimeCapacity} reached`);
+    const id = `npc${i}`;
+    const p = new Player();
+    p.sessionId = id;
+    p.nickname = n.nickname;
+    // A fixed NPC palette slot (never a player color index; the client tints by role).
+    p.color = 255;
+    p.x = n.x;
+    p.y = n.y;
+    p.hp = PLAYER.MAX_HP;
+    p.alive = true;
+    const s = new SelfState();
+    s.isBot = true;
+    s.extractMask = 0;
+    const selfKey = selfKeyOf(i);
+    this.state.players.set(id, p);
+    this.state.self.set(selfKey, s);
+    const rt = newRuntime(id, i, selfKey, { userId: null, nickname: n.nickname }, true, p, s, undefined);
+    this.runtimes.set(id, rt);
+    this.ordered.push(rt);
+    return rt;
   }
 
   /**
@@ -914,9 +927,14 @@ export class Match {
     if (this.clock >= MATCH.DURATION_MS || (!humansAlive && this.clock >= this.npcOnlyUntilMs)) this.end();
   }
 
-  /** Once a second in world mode: pool placement / boss bag (pool-place.ts), then ground and corpse expiry (A6). */
+  /**
+   * Once a second in world mode: pool placement / boss bag (pool-place.ts), marauder respawns
+   * (npc.ts, every RESPAWN_CHECK_MS, spec §3.6), then ground and corpse expiry (A6). The event
+   * boss's HP reset runs in NpcSystem.update.
+   */
   private worldTick(): void {
     poolTick(this);
+    this.npcs.respawnTick();
     this.expireTick();
   }
 

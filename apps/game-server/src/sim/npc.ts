@@ -7,11 +7,18 @@
  *   road camp in the wilds), rolled per match by the shared rollNpcSpawns.
  *
  * NPCs never loot (containers, corpses, ground), never extract (extractMask 0), never roam outside
- * leash + chase, never respawn, never heal (except the boss, v4), never fight another NPC (one
+ * leash + chase, never heal (except the boss, v4), never fight another NPC (one
  * "locals" faction; NPC → NPC bullets do no damage, combat.ts). Their gear is FREE (never in a
  * corpse, never extracted, never in the ledger); what they drop is a small non-FREE bag
  * (rollNpcLoot, boss / guard drops) plus at most one stowed pool unique on a T3/T4 marauder
  * (carrier, allocated by the web from the same risk-tied release — never minted).
+ *
+ * WORLD v6 (spec §3.6, step S3b): a world map lives 45 minutes, so a fully cleared marauder squad
+ * respawns once at its post (D15, NpcSystem.respawnTick: NPC.RESPAWN.AFTER_MS after its last member
+ * died, no human within MIN_HUMAN_DIST_PX, ≥ MIN_CYCLE_LEFT_MS left; fresh FREE kit, bag from a
+ * re-salted stream with consumables × CONSUMABLE_MULT, no pool item at spawn). Bosses and guards
+ * never respawn; the event boss returns to full HP after BOSS_EVENT.RESET_AFTER_MS without a hit
+ * and with no human inside its leash (D14). Legacy roster matches never respawn or reset.
  *
  * NpcBrain drives its Player through exactly the same pipeline as a client (InputSamples at
  * INPUT_HZ, reload / switch / heal intents) and gets no extra powers: sight is the server vision
@@ -54,6 +61,7 @@
 import {
   BOSSES,
   BOSS_AI,
+  BOSS_EVENT,
   INPUT_DT_MS,
   ITEM_FLAG,
   MARAUDER,
@@ -71,6 +79,7 @@ import {
   circleIsFree,
   hasLineOfSight,
   itemDef,
+  mulberry32,
   npcCarrierKey,
   npcClassOfPost,
   npcLeashPx,
@@ -87,6 +96,7 @@ import {
   type MarauderKit,
   type NpcClass,
   type NpcCounts,
+  type NpcLootItem,
   type NpcPost,
   type NpcSquadSpawn,
   type NpcSummary,
@@ -135,6 +145,8 @@ const TRAIL_STEP_PX = 100;
 const TRAIL_MAX = 120;
 /** Walking home may cut a corner this far beyond the chase radius (never more). */
 const HOME_SLACK_PX = 30;
+/** WORLD v6 (spec §3.6): how often cleared marauder squads are checked for a respawn. */
+export const RESPAWN_CHECK_MS = 10_000;
 
 /** How interesting a heard sound kind is (0 / absent = ignored). Shots are handled as alerts. */
 const HEAR_PRIO: Partial<Record<SoundKind, number>> = {
@@ -172,6 +184,10 @@ export interface NpcSquad {
   post: NpcPost | null;
   /** Some living human within NPC.WAKE_PX of a member (or an alert): the squad thinks. */
   awake: boolean;
+  /** WORLD v6 (D15): respawn generation at its post (0 = spawned with the match; boss groups 0). */
+  gen: number;
+  /** A respawned squad replaced this one at its post (it is never checked again). */
+  retired: boolean;
 }
 
 /** A boss group: the boss squad of a spawned BossSpot. */
@@ -265,6 +281,9 @@ export class NpcSystem {
   private readonly spawned = ZERO_COUNTS();
   private readonly killed = ZERO_COUNTS();
   private wakeAt = 0;
+  /** Brains are on (startBrains ran): respawned NPCs get one too. */
+  private brainsOn = false;
+  private nextRespawnAt = 0;
 
   constructor(private readonly m: Match) {}
 
@@ -304,7 +323,7 @@ export class NpcSystem {
   }
 
   /** Create the boss groups of the spawned BossSpots (pool items from containerLoot "boss:<kind>"). */
-  spawnBosses(spawned: readonly BossSpot[], add: (n: NpcSpawn) => PlayerRuntime): void {
+  spawnBosses(spawned: readonly BossSpot[], add: (n: NpcSpawn) => PlayerRuntime = (n) => this.m.addNpc(n)): void {
     const m = this.m;
     let legacy = m.containers.takeLegacyBossPool();
     for (const spot of spawned) {
@@ -313,7 +332,7 @@ export class NpcSystem {
       const boss = add({ nickname: def.name, x: spot.x, y: spot.y });
       const group: BossGroup = {
         id: this.squads.length, type: "boss", members: [boss], alertUntil: 0, alertAt: null, post: null, awake: true,
-        kind: spot.kind, spot, tier, boss, guards: [],
+        gen: 0, retired: false, kind: spot.kind, spot, tier, boss, guards: [],
       };
       const pool = [...m.containers.takeBossPool(spot.kind), ...legacy];
       legacy = [];
@@ -353,42 +372,56 @@ export class NpcSystem {
    * unique the web allocated to its carrier key (at most NPC_CARRIER.MAX_PER_NPC; stowed, never
    * worn or wielded). Carrier items of members that did not spawn stay in the containers (leftOnMap).
    */
-  spawnSquads(spawns: readonly NpcSquadSpawn[], posts: readonly NpcPost[], add: (n: NpcSpawn) => PlayerRuntime): void {
-    const m = this.m;
+  spawnSquads(spawns: readonly NpcSquadSpawn[], posts: readonly NpcPost[], add: (n: NpcSpawn) => PlayerRuntime = (n) => this.m.addNpc(n)): void {
     const byId = new Map(posts.map((p) => [p.id, p]));
     for (const s of spawns) {
       const post = byId.get(s.postId);
       if (!post || s.members <= 0) continue;
-      const cls = npcClassOfPost(post);
-      const def = MARAUDER[cls];
-      const leash = npcLeashPx(post);
-      const kits = rollMarauderKit(m.lootSeed, post.id, s.members, cls);
-      const squad: NpcSquad = { id: this.squads.length, type: "marauder", members: [], alertUntil: 0, alertAt: null, post, awake: true };
-      const base: Pt = { x: post.x, y: post.y };
-      const route: Pt[] = [base, ...post.patrol.map((q) => ({ x: q.x, y: q.y }))];
-      // The squad sniper (top class, at most one) holds the post point farthest from the post anchor.
-      const far = route.reduce((a, b) => (Math.hypot(b.x - base.x, b.y - base.y) > Math.hypot(a.x - base.x, a.y - base.y) ? b : a), base);
-      for (let k = 0; k < s.members; k++) {
-        const kit = kits[k]!;
-        const sniper = kit.weapon === "sniper";
-        const anchor = memberSpot(m, sniper ? far : base, sniper ? 0 : k);
-        const rt = add({ nickname: def.name, x: anchor.x, y: anchor.y });
-        this.equipMarauder(rt, post, k, cls, kit);
-        squad.members.push(rt);
-        // Patrol squads: members walk the route starting at different points; snipers hold.
-        const own = sniper || route.length < 2 ? [anchor] : [anchor, ...route.slice(1)];
-        const start = own.length > 1 ? k % own.length : 0;
-        this.register(rt, {
-          role: "marauder", squad, kind: null, group: null, guardIdx: -1, member: k, cls,
-          anchor, leash, chase: leash + NPC.CHASE_EXTRA_PX, route: [...own.slice(start), ...own.slice(0, start)],
-          sloppiness: def.sloppiness, reactMs: def.reactMs,
-        });
-      }
-      this.squads.push(squad);
+      this.spawnSquad(post, s.members, 0, add);
     }
   }
 
-  private equipMarauder(rt: PlayerRuntime, post: NpcPost, member: number, cls: NpcClass, kit: MarauderKit): void {
+  /**
+   * One marauder squad of `members` at `post`, generation `gen` (0 = with the match, from lootSeed;
+   * a respawn uses respawnSeed(lootSeed, gen)): FREE kit, bag, carrier pool item (gen 0 only),
+   * member spots, routes and NpcInfo exactly as at match start.
+   */
+  private spawnSquad(post: NpcPost, members: number, gen: number, add: (n: NpcSpawn) => PlayerRuntime): NpcSquad {
+    const m = this.m;
+    const seed = gen === 0 ? m.lootSeed : respawnSeed(m.lootSeed, gen);
+    const cls = npcClassOfPost(post);
+    const def = MARAUDER[cls];
+    const leash = npcLeashPx(post);
+    const kits = rollMarauderKit(seed, post.id, members, cls);
+    const squad: NpcSquad = {
+      id: this.squads.length, type: "marauder", members: [], alertUntil: 0, alertAt: null, post, awake: true, gen, retired: false,
+    };
+    const base: Pt = { x: post.x, y: post.y };
+    const route: Pt[] = [base, ...post.patrol.map((q) => ({ x: q.x, y: q.y }))];
+    // The squad sniper (top class, at most one) holds the post point farthest from the post anchor.
+    const far = route.reduce((a, b) => (Math.hypot(b.x - base.x, b.y - base.y) > Math.hypot(a.x - base.x, a.y - base.y) ? b : a), base);
+    for (let k = 0; k < members; k++) {
+      const kit = kits[k]!;
+      const sniper = kit.weapon === "sniper";
+      const anchor = memberSpot(m, sniper ? far : base, sniper ? 0 : k);
+      const rt = add({ nickname: def.name, x: anchor.x, y: anchor.y });
+      const bag = gen === 0 ? rollNpcLoot(seed, post.id, k, cls) : respawnBag(seed, post.id, k, cls);
+      this.equipMarauder(rt, post, k, cls, kit, bag, gen === 0);
+      squad.members.push(rt);
+      // Patrol squads: members walk the route starting at different points; snipers hold.
+      const own = sniper || route.length < 2 ? [anchor] : [anchor, ...route.slice(1)];
+      const start = own.length > 1 ? k % own.length : 0;
+      this.register(rt, {
+        role: "marauder", squad, kind: null, group: null, guardIdx: -1, member: k, cls,
+        anchor, leash, chase: leash + NPC.CHASE_EXTRA_PX, route: [...own.slice(start), ...own.slice(0, start)],
+        sloppiness: def.sloppiness, reactMs: def.reactMs,
+      });
+    }
+    this.squads.push(squad);
+    return squad;
+  }
+
+  private equipMarauder(rt: PlayerRuntime, post: NpcPost, member: number, cls: NpcClass, kit: MarauderKit, bag: readonly NpcLootItem[], carrier: boolean): void {
     const m = this.m;
     const def = MARAUDER[cls];
     const p = rt.pub;
@@ -403,9 +436,10 @@ export class NpcSystem {
     placeItem(rt, makeItem(ammoDefOf(kit.weapon), { qty: def.freeAmmo, flags: free }));
     giveSidearm(rt);
     // The bag: non-FREE, lootable from the corpse.
-    for (const it of rollNpcLoot(m.lootSeed, post.id, member, cls)) placeItem(rt, makeItem(it.def, { qty: it.qty, rarity: it.rarity }));
+    for (const it of bag) placeItem(rt, makeItem(it.def, { qty: it.qty, rarity: it.rarity }));
     // A pool unique (carrier): T3/T4 POI posts only, at most one; never minted, never breaks.
-    const carried = m.containers.takeCarrierPool(npcCarrierKey(post.id, member));
+    // A respawned squad gets none at spawn (world placement may stow one later, pool-place.ts).
+    const carried = carrier ? m.containers.takeCarrierPool(npcCarrierKey(post.id, member)) : [];
     if (carried.length) {
       const eligible = post.kind !== "road" && post.tier >= NPC_CARRIER.MIN_TIER;
       const keep = eligible ? carried.slice(0, NPC_CARRIER.MAX_PER_NPC) : [];
@@ -418,18 +452,86 @@ export class NpcSystem {
     syncPublic(rt);
   }
 
+  /**
+   * WORLD v6 (D15, spec §3.6), every RESPAWN_CHECK_MS from Match.worldTick: a marauder squad with
+   * every member dead respawns at the same post (same class, size re-rolled) when its generation is
+   * below NPC.RESPAWN.MAX_PER_POST, its last member died ≥ AFTER_MS ago, ≥ MIN_CYCLE_LEFT_MS of the
+   * cycle remain, no living human is within MIN_HUMAN_DIST_PX of the post, and the living NPCs stay
+   * within NPC.MAX_PER_RAID (and the runtime capacity) with it. Boss groups never respawn. Returns
+   * the squads that respawned (tests).
+   */
+  respawnTick(): NpcSquad[] {
+    const m = this.m;
+    const R = NPC.RESPAWN;
+    if (!m.world || !R.ENABLED || m.ended || m.clock < this.nextRespawnAt) return [];
+    this.nextRespawnAt = m.clock + RESPAWN_CHECK_MS;
+    if (m.world.durationMs - m.clock < R.MIN_CYCLE_LEFT_MS) return [];
+    const humans: Pt[] = [];
+    let aliveNpcs = 0;
+    for (const rt of m.allRuntimes()) {
+      if (!rt.pub.alive) continue;
+      if (rt.isNpc) aliveNpcs++;
+      else humans.push(rt.pub);
+    }
+    const far2 = R.MIN_HUMAN_DIST_PX * R.MIN_HUMAN_DIST_PX;
+    const out: NpcSquad[] = [];
+    for (const sq of [...this.squads]) {
+      const post = sq.post;
+      if (sq.type !== "marauder" || !post || sq.retired || sq.gen >= R.MAX_PER_POST || sq.members.length === 0) continue;
+      let wipedAt = -Infinity;
+      let anyAlive = false;
+      for (const rt of sq.members) {
+        if (rt.pub.alive) anyAlive = true;
+        else wipedAt = Math.max(wipedAt, rt.pub.diedAt);
+      }
+      if (anyAlive || m.clock - wipedAt < R.AFTER_MS) continue;
+      if (humans.some((h) => (h.x - post.x) ** 2 + (h.y - post.y) ** 2 < far2)) continue;
+      const gen = sq.gen + 1;
+      const size = respawnSize(respawnSeed(m.lootSeed, gen), post);
+      if (aliveNpcs + size > NPC.MAX_PER_RAID || m.allRuntimes().length + size > m.runtimeCapacity) continue;
+      sq.retired = true;
+      const fresh = this.spawnSquad(post, size, gen, (n) => m.addNpc(n));
+      if (this.brainsOn) for (const rt of fresh.members) this.addBrain(rt);
+      aliveNpcs += size;
+      out.push(fresh);
+    }
+    return out;
+  }
+
+  /**
+   * WORLD v6 (D14): the event boss returns to full HP once it took no hit for
+   * BOSS_EVENT.RESET_AFTER_MS and no living human is inside its leash (BOSS_AI.LEASH_BOSS_PX around
+   * its spot). Guards never heal back; legacy matches have no event boss.
+   */
+  private resetEventBoss(): void {
+    const m = this.m;
+    const boss = m.eventBoss();
+    if (!boss || !boss.pub.alive || boss.pub.hp >= boss.pub.maxHp) return;
+    if (m.clock - boss.lastHitAt < BOSS_EVENT.RESET_AFTER_MS) return;
+    const a = this.infos.get(boss)?.anchor ?? boss.pub;
+    const r2 = BOSS_AI.LEASH_BOSS_PX * BOSS_AI.LEASH_BOSS_PX;
+    for (const rt of m.allRuntimes()) {
+      if (rt.isNpc || !rt.pub.alive) continue;
+      if ((rt.pub.x - a.x) ** 2 + (rt.pub.y - a.y) ** 2 <= r2) return;
+    }
+    boss.pub.hp = boss.pub.maxHp;
+  }
+
   private register(rt: PlayerRuntime, info: NpcInfo): void {
     this.infos.set(rt, info);
     this.spawned[info.role]++;
   }
 
-  /** Build the brains (after every NPC exists). */
+  /** Build the brains (after every NPC exists); NPCs respawned later get theirs at spawn. */
   startBrains(): void {
-    for (const [rt, info] of this.infos) {
-      const b = new NpcBrain(this.m, rt, info, this);
-      this.brains.push(b);
-      this.brainOf.set(rt, b);
-    }
+    this.brainsOn = true;
+    for (const rt of this.infos.keys()) if (!this.brainOf.has(rt)) this.addBrain(rt);
+  }
+
+  private addBrain(rt: PlayerRuntime): void {
+    const b = new NpcBrain(this.m, rt, this.infos.get(rt)!, this);
+    this.brains.push(b);
+    this.brainOf.set(rt, b);
   }
 
   private wake(sq: NpcSquad): void {
@@ -482,6 +584,7 @@ export class NpcSystem {
     if (this.m.clock >= this.wakeAt) {
       this.wakeAt = this.m.clock + WAKE_CHECK_MS;
       this.refreshWake();
+      this.resetEventBoss();
     }
     for (const b of this.brains) if (!b.rt.dormant) b.update(dtMs);
   }
@@ -493,6 +596,37 @@ export class NpcSystem {
  */
 export function inPeace(m: Match, o: PlayerRuntime): boolean {
   return m.clock - o.enteredAtMs < NPC.PEACE_MS;
+}
+
+/** WORLD v6 (D15): seed of respawn generation `gen` (≥ 1) at every post; gen 0 = lootSeed itself. */
+export function respawnSeed(lootSeed: number, gen: number): number {
+  return (lootSeed ^ Math.imul(NPC.RESPAWN.SALT, gen)) >>> 0;
+}
+
+/** Size of a respawned squad at `post`: uniform in post.size (as rollNpcSpawns), one draw per post. */
+export function respawnSize(seed: number, post: Pick<NpcPost, "id" | "size">): number {
+  const r = mulberry32((seed ^ Math.imul(post.id + 1, 0x9e3779b1)) >>> 0)();
+  const lo = Math.max(1, Math.floor(post.size[0]));
+  const hi = Math.max(lo, Math.floor(post.size[1]));
+  return Math.min(hi, lo + Math.floor(r * (hi - lo + 1)));
+}
+
+/**
+ * Bag of a respawned marauder: the full rollNpcLoot table on the respawn seed, consumables (ammo,
+ * meds) × NPC.RESPAWN.CONSUMABLE_MULT (floored; a line that reaches 0 is dropped), junk unchanged.
+ */
+export function respawnBag(seed: number, postId: number, member: number, cls: NpcClass): NpcLootItem[] {
+  const out: NpcLootItem[] = [];
+  for (const it of rollNpcLoot(seed, postId, member, cls)) {
+    const cat = itemDef(it.def)?.cat;
+    if (cat !== "ammo" && cat !== "med") {
+      out.push(it);
+      continue;
+    }
+    const qty = Math.floor(it.qty * NPC.RESPAWN.CONSUMABLE_MULT);
+    if (qty > 0) out.push({ ...it, qty });
+  }
+  return out;
 }
 
 /** (x, y) pulled back onto the circle of radius r around `a` when it lies outside. */
