@@ -34,6 +34,7 @@ import {
   buildBushIndex,
   bushIndexAt,
   envConfigOf,
+  extractOpenAtFor,
   generateMap,
   getCollisionIndex,
   legacyMapData,
@@ -62,7 +63,8 @@ import { COLORS, destroyTextures, loadTextures, type Textures } from "./assets";
 import { Effects } from "./effects";
 import { ContainerLayer, CorpseView, ExtractView, IconCache, ItemView, PlayerView, containerSprite } from "./entities";
 import { FogOfWar, PLAYER_PAD, entityVisibility, fadeToward, fogLook, fogRange, type FogEye, type FogLook } from "./fog";
-import { buildHud, extractAllowed, extractStatus, stickyCounts, type PlayerCounts } from "./hud";
+import { buildHud, extractAllowed, personalExtractStatus, stickyCounts, type PlayerCounts } from "./hud";
+import { EXPIRE_FADE_TAU_MS, expiryBlink, expiryFading } from "./expiry";
 import { InputController } from "./input";
 import { Minimap, type MinimapExtract } from "./minimap";
 import { canStartHeal, decayFactor, inputCancelsHeal, moveFnFor, Predictor, readServerMove } from "./prediction";
@@ -1084,18 +1086,19 @@ export class GameRenderer implements GameRendererApi {
       v.setLabelVisible(bush < 0 || bush === selfBush);
     }
 
-    // Ground items and corpses: AOI-filtered by the server, faded by the fog here.
+    // Ground items and corpses: AOI-filtered by the server, faded by the fog here. WORLD v6 (A6):
+    // they blink in their last minute before expiry and fade out slower when they expire.
     for (const [id, e] of this.items) {
       const it = e.state;
       const v = e.view;
       const target = e.removing ? 0 : inView(it.x, it.y) ? vis(it.x, it.y, 0) : 0;
-      v.alpha = fadeToward(v.alpha, target, dt);
+      v.alpha = fadeToward(v.alpha, target, dt, e.removing && expiryFading(it.expiresAt, clock) ? EXPIRE_FADE_TAU_MS : undefined);
       if (e.removing && v.alpha <= 0) {
         v.destroy();
         this.items.delete(id);
         continue;
       }
-      v.root.alpha = v.alpha;
+      v.root.alpha = v.alpha * (e.removing ? 1 : expiryBlink(it.expiresAt, clock));
       v.root.visible = v.alpha > 0.01;
       if (!v.root.visible) continue;
       v.sync(it);
@@ -1105,14 +1108,14 @@ export class GameRenderer implements GameRendererApi {
       const c = e.state;
       const v = e.view;
       const target = e.removing ? 0 : inView(c.x, c.y) ? vis(c.x, c.y, PLAYER_PAD) : 0;
-      v.alpha = fadeToward(v.alpha, target, dt);
+      v.alpha = fadeToward(v.alpha, target, dt, e.removing && expiryFading(c.expiresAt, clock) ? EXPIRE_FADE_TAU_MS : undefined);
       if (e.removing && v.alpha <= 0) {
         v.destroy();
         this.corpses.delete(id);
         this.corpseNpc.delete(id);
         continue;
       }
-      v.root.alpha = v.alpha;
+      v.root.alpha = v.alpha * (e.removing ? 1 : expiryBlink(c.expiresAt, clock));
       v.root.visible = v.alpha > 0.01;
       if (v.root.visible) {
         const look = this.corpseLook(id, c.label);
@@ -1124,7 +1127,8 @@ export class GameRenderer implements GameRendererApi {
     const extractInfo: MinimapExtract[] = [];
     for (const [id, { state: e, view: v }] of this.extracts) {
       const allowed = extractAllowed(map, mask, id);
-      const status = allowed ? extractStatus(e, clock) : "closed";
+      // WORLD v6 (D8): this player's own arm on top of the map-level open / close times.
+      const status = allowed ? personalExtractStatus(e, self, clock) : "closed";
       extractInfo.push({ x: e.x, y: e.y, r: e.r, status, allowed });
       v.root.visible = Math.abs(e.x - this.camX) < halfW + e.r && Math.abs(e.y - this.camY) < halfH + e.r;
       if (!v.root.visible) continue;
@@ -1135,7 +1139,7 @@ export class GameRenderer implements GameRendererApi {
           progress = (clock - self.extractStartedAt) / MATCH.EXTRACT_CHANNEL_MS;
         }
       }
-      const caption = allowed ? extractCaption(status, e, clock) : "NOT YOUR EXIT";
+      const caption = allowed ? extractCaption(status, e, clock, extractOpenAtFor(e, self)) : "NOT YOUR EXIT";
       v.update(e.x, e.y, e.r, status, caption, progress, now);
     }
 
@@ -1154,6 +1158,7 @@ export class GameRenderer implements GameRendererApi {
           ? { x: this.selfRender.x, y: this.selfRender.y, aim: controllable ? this.aim : me.aim }
           : null,
         now,
+        state,
       );
     }
 
@@ -1358,9 +1363,10 @@ function fmtClock(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-function extractCaption(status: ReturnType<typeof extractStatus>, e: Extract, clock: number): string {
+/** `openAt` = when it opens for this player (extractOpenAtFor: map openAt or the personal arm). */
+export function extractCaption(status: ReturnType<typeof personalExtractStatus>, e: Pick<Extract, "closeAt">, clock: number, openAt: number): string {
   if (status === "closed") return "CLOSED";
-  if (status === "waiting") return `OPENS IN ${fmtClock(e.openAt - clock)}`;
+  if (status === "waiting") return `OPENS IN ${fmtClock(openAt - clock)}`;
   if (e.closeAt > 0 && e.closeAt - clock <= 60_000) return `CLOSES IN ${fmtClock(e.closeAt - clock)}`;
   return "EXTRACT";
 }

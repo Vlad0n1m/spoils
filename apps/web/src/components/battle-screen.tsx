@@ -1,12 +1,13 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import clsx from "clsx";
 import type { Room } from "colyseus.js";
 import {
   BattleState,
-  MATCH,
   ROOMS,
   S2C,
+  WORLD,
   generateMap,
   mapHash,
   type BattleJoinOptions,
@@ -31,13 +32,22 @@ interface Props {
   battleRoomId: string;
   nickname: string;
   onLeave: () => void;
+  /**
+   * Optional: the join was refused with a "retry" reason (RoomExit.action). The menu runs
+   * /api/world/join again for a fresh ticket. "exit_settling" calls it at once (the menu waits 2 s,
+   * at most 5 times); other retry reasons offer a "Try again" button. Without it only "Back to lobby".
+   */
+  onRetry?: (exit: RoomExit) => void;
 }
 
 const EMPTY_HUD: HudSnapshot = {
   phase: "drop",
   clockMs: 0,
-  durationMs: MATCH.DURATION_MS,
-  extractOpenAtMs: MATCH.EXTRACT_OPEN_AT_MS,
+  durationMs: WORLD.CYCLE_MS,
+  extractOpenAtMs: WORLD.EXTRACT_ARM_MS,
+  wipeWarn: 0,
+  boss: null,
+  enteredAtMs: 0,
   self: null,
   aliveCount: 0,
   totalPlayers: 0,
@@ -137,6 +147,8 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
   let room: Room<BattleState> | null = null;
   let renderer: GameRendererApi | null = null;
   let selfKey: string | null = null;
+  // The wipe close (CLOSE_CODES.WIPED) is benign once the player has a result on screen.
+  let hadOutcome = false;
   const overlays: BattleOverlayInstance[] = [];
 
   void (async () => {
@@ -158,10 +170,13 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
       joined.onMessage(S2C.JOINED, (msg: JoinedMsg) => {
         if (typeof msg?.selfKey === "string" && msg.selfKey) selfKey = msg.selfKey;
       });
-      joined.onMessage(S2C.OUTCOME, (msg: OutcomeMsg) => cb.onOutcome(msg));
+      joined.onMessage(S2C.OUTCOME, (msg: OutcomeMsg) => {
+        hadOutcome = true;
+        cb.onOutcome(msg);
+      });
       joined.onMessage(S2C.SETTLED, (msg: MatchSummaryMsg) => cb.onSettled(msg));
       joined.onLeave((code, reason) => {
-        if (!disposed) cb.onDisconnect(describeRoomExit(code, reason));
+        if (!disposed) cb.onDisconnect(describeRoomExit(code, reason, { hadOutcome }));
       });
 
       // Dynamic import keeps Pixi out of the server bundle and out of the lobby's first load.
@@ -246,12 +261,13 @@ function screenSlice(s: HudSnapshot) {
     /** Which canvas beat plays (cinematics.ts): the overlay waits for it. */
     selfExit: cineExitOf(self, null),
     phase: s.phase,
+    enteredAtMs: s.enteredAtMs,
   };
 }
 
 const killTallySlice = (s: HudSnapshot) => s.killTally ?? null;
 
-export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props) {
+export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<{ dispose: () => void } | null>(null);
   const disposeTimerRef = useRef<number | undefined>(undefined);
@@ -264,6 +280,15 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
   const [overlayNodes, setOverlayNodes] = useState<Array<{ id: string; node: ReactNode }>>([]);
   const [disconnected, setDisconnected] = useState(false);
   const [kick, setKick] = useState<RoomExit | null>(null);
+  const retryRef = useRef(onRetry);
+  useEffect(() => {
+    retryRef.current = onRetry;
+  });
+
+  // "Settling your last raid…": the menu re-runs the join by itself (after 2 s, at most 5 times).
+  useEffect(() => {
+    if (err?.code === "exit_settling") retryRef.current?.(err);
+  }, [err]);
 
   useEffect(() => {
     // StrictMode runs cleanup + effect back to back: the deferred dispose is cancelled by the
@@ -294,7 +319,7 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const { hasSelf, selfOut, selfExit, phase } = useHud(hudStore, screenSlice, shallowEqual);
+  const { hasSelf, selfOut, selfExit, phase, enteredAtMs } = useHud(hudStore, screenSlice, shallowEqual);
   // The renderer keeps the same tally object until a kill lands, so identity is enough here.
   const killTally = useHud(hudStore, killTallySlice);
   // The extraction / death cinematic plays on the canvas first; the overlay's dim and card would
@@ -324,7 +349,23 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
             <p className="font-body mt-4 break-words text-base leading-relaxed text-white/70" role="alert">
               {err.message}
             </p>
-            <button type="button" onClick={onLeave} className="toon-btn mt-8 min-h-12 w-full text-lg tracking-wide">
+            {err.action === "retry" && onRetry && err.code !== "exit_settling" && (
+              <button
+                type="button"
+                onClick={() => onRetry(err)}
+                className="toon-btn mt-8 min-h-12 w-full text-lg tracking-wide"
+              >
+                Try again
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onLeave}
+              className={clsx(
+                "toon-btn min-h-12 w-full text-lg tracking-wide",
+                err.action === "retry" && onRetry && err.code !== "exit_settling" ? "mt-3 opacity-80" : "mt-8",
+              )}
+            >
               Back to lobby
             </button>
           </div>
@@ -354,6 +395,7 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave }: Props)
         disconnected={disconnected}
         kick={kick}
         killTally={killTally}
+        enteredAtMs={enteredAtMs}
         onContinue={onLeave}
       />
     </div>

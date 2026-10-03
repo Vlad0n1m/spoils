@@ -8,7 +8,7 @@
  */
 
 import type { Room } from "colyseus.js";
-import type { HealKind, MapData, WeaponId } from "@extract/shared";
+import type { BossKind, HealKind, MapData, WeaponId } from "@extract/shared";
 import type { KillTally } from "./npc-labels";
 
 export interface HudSlot {
@@ -91,12 +91,33 @@ export interface HudExtract {
   open: boolean;
 }
 
+/** Wipe warning just crossed (seconds before the wipe: WORLD.WARN_AT_MS / 1000), 0 = none. */
+export type WipeWarn = 0 | 600 | 300 | 60;
+
+/** The map's event boss (BattleState.bossKind / bossZone / bossState). */
+export interface HudBoss {
+  kind: BossKind;
+  /** Display name of the boss spot's zone ("Grain Elevator"). */
+  zone: string;
+  /** 1 alive · 2 killed. */
+  state: 1 | 2;
+}
+
 export interface HudSnapshot {
   phase: "drop" | "open" | "ended";
   clockMs: number;
   durationMs: number;
-  /** Match clock when extraction points open. */
+  /**
+   * Match clock when THIS player's extraction points open: the personal arm (SelfState.extractArmAt,
+   * WORLD v6) or, on a legacy match, the earliest extract openAt.
+   */
   extractOpenAtMs: number;
+  /** WORLD v6: the wipe warning to show right now (shown WIPE_WARN_SHOW_MS after each threshold). */
+  wipeWarn: WipeWarn;
+  /** WORLD v6: the event boss of this map, null without one. */
+  boss: HudBoss | null;
+  /** WORLD v6: match clock when this player's entry started (SelfState.enteredAt), 0 = unknown / legacy. */
+  enteredAtMs: number;
   self: HudSelf | null;
   /**
    * Human players still on the map (alive and not extracted) — from BattleState.aliveCount, which

@@ -5,7 +5,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { allowedExtracts, extractMask, generateMap, type MapSide, type Zone } from "@extract/shared";
-import { TIER_COLORS, ZONE_KIND_LABEL, ZoneTracker, allowedFromMask, formatClock, toastAlpha, zoneSubtitle } from "./fullmap";
+import { TIER_COLORS, ZONE_KIND_LABEL, ZoneTracker, allowedFromMask, formatClock, fullMapExtractView, toastAlpha, zoneSubtitle } from "./fullmap";
+import { WORLD } from "@extract/shared";
+import { bossSpotShown, bossSpotsShown, liveBossTurf } from "./boss";
 
 const map = generateMap("steppe");
 
@@ -91,5 +93,48 @@ describe("allowed extracts on the full map", () => {
         if (e.side === side) assert.equal(flags[i], false);
       });
     }
+  });
+});
+
+describe("WORLD v6 full map: closeAt from the state, personal arm, live boss only", () => {
+  const close = WORLD.CYCLE_MS - WORLD.EXTRACT_EARLY_CLOSE_MS;
+  const enteredAt = 20 * 60_000;
+  const arm = enteredAt + WORLD.EXTRACT_ARM_MS;
+
+  it("waits for the personal arm although the map opened every extract at 0", () => {
+    const v = fullMapExtractView({}, { openAt: 0, closeAt: 0 }, arm, enteredAt + 60_000);
+    assert.equal(v.status, "waiting");
+    assert.equal(v.suffix, " · opens in 2:00");
+    assert.equal(fullMapExtractView({}, { openAt: 0, closeAt: 0 }, arm, arm).status, "open");
+    assert.equal(fullMapExtractView({}, { openAt: 0, closeAt: 0 }, arm, arm).suffix, "");
+  });
+
+  it("closes from the state's closeAt, not the map spot's closesAtMs", () => {
+    const spot = { closesAtMs: 25 * 60_000 };
+    const st = { openAt: 0, closeAt: close };
+    // The legacy map time (25:00) has passed, the world close (40:00) has not.
+    const v = fullMapExtractView(spot, st, 0, 30 * 60_000);
+    assert.equal(v.status, "open");
+    assert.equal(v.suffix, " · closes in 10:00");
+    assert.equal(fullMapExtractView(spot, st, 0, close).status, "closed");
+    // Unknown state: fall back to the spot.
+    assert.equal(fullMapExtractView(spot, undefined, 0, 26 * 60_000).status, "closed");
+  });
+
+  it("marks only the live event boss spot (first spot of its kind)", () => {
+    const bosses = [{ kind: "foreman" as const }, { kind: "commander" as const }, { kind: "foreman" as const }];
+    const world = (bossKind: string, bossState: number) => ({ bossKind, bossState, entryCloseMs: WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS });
+    assert.deepEqual(bossSpotsShown(bosses, world("foreman", 1)), [true, false, false]);
+    assert.deepEqual(bossSpotsShown(bosses, world("foreman", 2)), [false, false, false], "killed: no skull");
+    assert.deepEqual(bossSpotsShown(bosses, world("", 0)), [false, false, false], "no boss this map");
+    assert.deepEqual(bossSpotsShown(bosses, { bossKind: "", bossState: 0, entryCloseMs: 0 }), [true, true, true], "legacy");
+    assert.equal(bossSpotShown(bosses, 1, world("commander", 1)), true);
+    assert.equal(liveBossTurf("commander", world("foreman", 1)), null);
+    assert.equal(liveBossTurf("foreman", world("foreman", 1)), "foreman");
+    assert.equal(liveBossTurf("foreman", null), "foreman");
+  });
+
+  it("every Steppe extract gets a view", () => {
+    for (const e of map.extracts) assert.ok(fullMapExtractView(e, { openAt: 0, closeAt: 0 }, 0, 0).status === "open");
   });
 });

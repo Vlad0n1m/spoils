@@ -12,6 +12,7 @@ import {
   RARITY_COLORS,
   RARITY_NAMES,
   WEAPONS,
+  XP_LINE_LABEL,
   accepts,
   bagKeys,
   bpLevelOf,
@@ -28,6 +29,7 @@ import {
   type SlotStore,
   type SettledItem,
   type SoldLine,
+  type XpLine,
   type WeaponId,
 } from "@extract/shared";
 
@@ -204,6 +206,7 @@ export const INV_ERR_TEXT: Readonly<Record<InvErrCode, string>> = {
   bp_not_empty: "Empty the backpack first",
   rate: "Slow down",
   dead: "You're out of the raid",
+  own_body: "That's your own body — you can't search it",
 };
 
 /** Read-only view of a player's slots (a plain record works as a SlotStore for the engine). */
@@ -318,4 +321,18 @@ export function fmtClock(ms: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/**
+ * One line of the XP receipt on the outcome screen (WORLD v6): label from XP_LINE_LABEL, a short
+ * detail of what it counts ("12 min on the map", "640 CR", "×3") and the signed XP text.
+ */
+export function xpLineText(l: XpLine): { label: string; detail: string; xp: string } {
+  const qty = Math.max(0, Math.round(l.qty));
+  let detail = "";
+  if (l.key === "extract") detail = `${qty} min on the map`;
+  else if (l.key === "haul") detail = fmtCr(qty);
+  else if (l.key !== "first_extract" && l.key !== "daily_cap" && qty > 0) detail = `×${qty}`;
+  const xp = Math.round(l.xp);
+  return { label: XP_LINE_LABEL[l.key] ?? l.key, detail, xp: `${xp < 0 ? "−" : "+"}${Math.abs(xp)} XP` };
 }

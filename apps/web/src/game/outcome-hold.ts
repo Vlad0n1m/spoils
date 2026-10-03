@@ -16,7 +16,7 @@ export const OUTCOME_HOLD_MS: Readonly<Record<CineExit, number>> = { extract: 12
 /**
  * Which raid-ending beat is playing. The HUD's own state first (it is what starts the cinematic),
  * else the S2C.OUTCOME exit, which may land before the throttled HUD shows the change. A timeout
- * plays no beat.
+ * (legacy) or a "mia" (caught in the wipe, WORLD v6) plays no beat: the wipe ends the map for everyone.
  */
 export function cineExitOf(self: { alive: boolean; extractedAt: number } | null, outcomeExit: ExitType | null | undefined): CineExit | null {
   if (self && self.extractedAt > 0) return "extract";

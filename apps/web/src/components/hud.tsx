@@ -4,7 +4,7 @@ import { AudioSettingsButton } from "./audio-settings";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 import { BREAK_CHANCE_ON_DEATH, HEAL, WEAPONS, itemDef, type WeaponId } from "@extract/shared";
-import { deepEqual, shallowEqual, type HudStore } from "@/game/hud";
+import { WIPE_URGENT_MS, bossToastText, deepEqual, shallowEqual, wipeWarnText, type HudStore } from "@/game/hud";
 import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "@/game/types";
 import { NPC_TAG_COLOR, cssHex, killFeedNames, npcLabels, type FeedName } from "@/game/npc-labels";
 import { fmtClock, fmtCr, isWeaponId, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
@@ -12,8 +12,8 @@ import { fmtClock, fmtCr, isWeaponId, rarityHex, rarityName, armorIcon, weaponIc
 /** Kill feed lines stay this long (match clock). */
 const KILL_FEED_TTL_MS = 7_000;
 const KILL_FEED_MAX = 5;
-/** Timer turns red in the last minute of the raid. */
-const FINAL_MINUTE_MS = 60_000;
+/** Boss toast ("BOSS EVENT · Foreman holds the Grain Elevator") stays this long. */
+const BOSS_TOAST_MS = 6_000;
 /** Rough px → meters for the compass; only has to feel consistent. */
 const PX_PER_METER = 40;
 /** New key: the panel is collapsed by default now, so an old stored "open" must not reopen it. */
@@ -92,6 +92,8 @@ export const Hud = memo(function Hud({
       <div className="absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center gap-2">
         <PhaseTimer store={store} />
         {inPlay && <ExtractCompass store={store} />}
+        {inPlay && <WipeBanner store={store} />}
+        <BossToast store={store} />
       </div>
 
       {inPlay && (
@@ -117,20 +119,23 @@ export const Hud = memo(function Hud({
 
 /* ------------------------------------------------------------------ top */
 
-/** What the top bar shows; the countdown is whole seconds, so this changes about once a second. */
+/**
+ * What the top bar shows; the countdown is whole seconds, so this changes about once a second.
+ * WORLD v6: "Extraction opens in m:ss" counts down to THIS player's arm (extractOpenAtMs), then
+ * "Wipe in m:ss" to the end of the map (urgent in the last 5 minutes).
+ */
 function phaseTimerSlice(s: HudSnapshot) {
   const left = s.durationMs - s.clockMs;
   return {
     phase: s.phase,
     countdown: s.phase === "drop" ? fmtClock(s.extractOpenAtMs - s.clockMs) : s.phase === "open" ? fmtClock(left) : "",
-    urgent: s.phase === "open" && left <= FINAL_MINUTE_MS,
+    urgent: s.phase === "open" && left <= WIPE_URGENT_MS,
     aliveCount: s.aliveCount,
-    totalPlayers: s.totalPlayers,
   };
 }
 
 function PhaseTimer({ store }: { store: HudStore }) {
-  const { phase, countdown, urgent, aliveCount, totalPlayers } = useHud(store, phaseTimerSlice, shallowEqual);
+  const { phase, countdown, urgent, aliveCount } = useHud(store, phaseTimerSlice, shallowEqual);
 
   let label: React.ReactNode;
   if (phase === "drop") {
@@ -142,12 +147,11 @@ function PhaseTimer({ store }: { store: HudStore }) {
   } else if (phase === "open") {
     label = (
       <>
-        Extraction open —{" "}
-        <span className={clsx("tabular-nums", urgent ? "text-rose-400" : "text-zooa-lime")}>{countdown}</span> left
+        Wipe in <span className={clsx("tabular-nums", urgent ? "text-rose-400" : "text-zooa-lime")}>{countdown}</span>
       </>
     );
   } else {
-    label = "Raid over";
+    label = "Map wiped";
   }
 
   return (
@@ -168,16 +172,75 @@ function PhaseTimer({ store }: { store: HudStore }) {
       <span className="h-6 w-[3px] rounded bg-black/60" aria-hidden />
       <span
         className="flex items-center gap-1.5 whitespace-nowrap"
-        title="Players still on the map / players in this raid (NPCs are not counted)"
-        aria-label={`${npcLabels().players}: ${aliveCount} of ${totalPlayers}`}
+        title="Raiders on the map right now (NPCs are not counted)"
+        aria-label={`On map: ${aliveCount}`}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/sprites/player.png" alt="" className="h-6 w-6" draggable={false} />
         <span className="toon-text-thin tabular-nums">
+          <span className="text-white/60">On map </span>
           {aliveCount}
-          <span className="text-white/60">/{totalPlayers}</span>
         </span>
       </span>
+    </div>
+  );
+}
+
+const wipeWarnSlice = (s: HudSnapshot) => s.wipeWarn;
+
+/** "Wipe in 5:00 — head for an extract": shown for a few seconds after each threshold (D2). */
+function WipeBanner({ store }: { store: HudStore }) {
+  const warn = useHud(store, wipeWarnSlice);
+  if (!warn) return null;
+  return (
+    <div
+      role="alert"
+      className={clsx(
+        "toon-panel animate-outcome-enter px-5 py-2 text-base tracking-wide md:text-lg",
+        warn <= 60 ? "bg-[#3a1620]/95 text-rose-200" : "bg-[#3a2a10]/95 text-amber-200",
+      )}
+    >
+      <span className="toon-text-thin whitespace-nowrap">{wipeWarnText(warn)}</span>
+    </div>
+  );
+}
+
+/** Boss identity + state; changes only on join and when the boss dies. */
+function bossSlice(s: HudSnapshot) {
+  return s.boss ? `${s.boss.kind}|${s.boss.state}|${s.boss.zone}` : "";
+}
+
+/**
+ * Boss event toast (D13), derived from BattleState: on join ("BOSS EVENT · Foreman holds the
+ * Grain Elevator") and when the boss state changes ("Foreman is down").
+ */
+function BossToast({ store }: { store: HudStore }) {
+  const key = useHud(store, bossSlice);
+  const [shown, setShown] = useState<{ key: string; title: string; sub: string; down: boolean } | null>(null);
+  useEffect(() => {
+    const b = store.getSnapshot().boss;
+    if (!key || !b) {
+      setShown(null);
+      return;
+    }
+    const t = bossToastText(b);
+    setShown({ key, title: t.title, sub: t.sub, down: b.state === 2 });
+    const id = window.setTimeout(() => setShown((cur) => (cur?.key === key ? null : cur)), BOSS_TOAST_MS);
+    return () => window.clearTimeout(id);
+  }, [key, store]);
+  if (!shown) return null;
+  return (
+    <div
+      role="status"
+      className={clsx(
+        "toon-panel animate-outcome-enter flex flex-col items-center px-5 py-2 text-center",
+        shown.down ? "bg-[#161b28]/95" : "bg-[#2a0d10]/95",
+      )}
+    >
+      <span className={clsx("toon-text-thin text-lg tracking-[0.2em]", shown.down ? "text-zooa-lime" : "text-rose-400")}>
+        {shown.title}
+      </span>
+      {!shown.down && <span className="font-body text-sm font-semibold text-white/85">{shown.sub}</span>}
     </div>
   );
 }
