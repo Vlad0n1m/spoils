@@ -31,7 +31,7 @@ import {
   type AllocPick,
 } from "./pool";
 import { fromRaidDur, itemRefValueCr, toRaidDur } from "./value";
-import { matchEndReportSchema, playerExitReportSchema, raidStartRequestSchema } from "../inventory/report-schemas";
+import { matchEndReportSchema, playerExitReportSchema } from "../inventory/report-schemas";
 import { checkGameServerSignature, signGameServerBody } from "../game-server-hmac";
 import { rollStarterKit } from "../inventory/starter";
 
@@ -128,26 +128,6 @@ test("planAllocation on the Steppe: ≈68 % of container uniques in guarded (bos
   assert.equal(total, 30_000);
   const share = guarded / total;
   assert.ok(share > 0.6 && share < 0.76, `guarded share ${share.toFixed(3)}`);
-});
-
-test("raids/start schema keeps v4 bosses[] and containers[].guarded; rejects an unknown boss kind", () => {
-  const body = {
-    matchId: "6f1c2b9e-8a1d-4b7a-9c3e-2f5d6a7b8c9d",
-    mode: "live",
-    mapId: "steppe",
-    matchSeed: 7,
-    players: [],
-    containers: [{ idx: 3, kind: "safe", tier: 4, guarded: true }],
-    bossSlots: 6,
-    bosses: [{ kind: "commander", slots: [2, 1, 1] }, { kind: "warden", slots: [1] }],
-  };
-  const r = raidStartRequestSchema.safeParse(body);
-  assert.ok(r.success);
-  assert.deepEqual(r.data.bosses, body.bosses);
-  assert.equal(r.data.containers[0]!.guarded, true);
-  assert.equal(raidStartRequestSchema.safeParse({ ...body, bosses: [{ kind: "dragon", slots: [2] }] }).success, false);
-  const legacy = raidStartRequestSchema.safeParse({ ...body, bosses: undefined, containers: [{ idx: 3, kind: "safe", tier: 4 }] });
-  assert.ok(legacy.success, "an older game server still validates");
 });
 
 // ---------------------------------------------------------------- NPC MODEL v5: carriers
@@ -254,23 +234,8 @@ test("planAllocation on the Steppe with rolled carriers: share of the non-boss r
   assert.ok(share > 0.05 && share < 0.4, `carrier share ${share.toFixed(3)}`);
 });
 
-test("v5 report schemas: carriers, npcKills and npcSummary survive parsing; bad carriers are rejected", () => {
-  const start = {
-    matchId: "6f1c2b9e-8a1d-4b7a-9c3e-2f5d6a7b8c9d",
-    mode: "live",
-    mapId: "steppe",
-    matchSeed: 7,
-    players: [],
-    containers: [],
-    bossSlots: 0,
-    carriers: [{ key: "npc:12.0", tier: 4 }, { key: "npc:3.2", tier: 3 }],
-  };
-  const r = raidStartRequestSchema.safeParse(start);
-  assert.ok(r.success);
-  assert.deepEqual(r.data.carriers, start.carriers);
-  assert.equal(raidStartRequestSchema.safeParse({ ...start, carriers: [{ key: "npc:1.0", tier: 2 }] }).success, false, "T2 never carries");
-  assert.equal(raidStartRequestSchema.safeParse({ ...start, carriers: [{ key: "boss:commander", tier: 4 }] }).success, false);
-  assert.ok(raidStartRequestSchema.safeParse({ ...start, carriers: undefined }).success, "a pre-v5 server still validates");
+test("v5 report schemas: npcKills and npcSummary survive parsing", () => {
+  const start = { matchId: "6f1c2b9e-8a1d-4b7a-9c3e-2f5d6a7b8c9d" };
 
   const exit = playerExitReportSchema.safeParse({
     matchId: start.matchId,

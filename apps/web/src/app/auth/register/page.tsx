@@ -1,9 +1,10 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import { RegisterForm } from "@/components/register-form";
+import { BRAND } from "@/lib/brand";
 
 export const metadata: Metadata = {
-  title: "Register — EXTRACT",
+  title: `Register — ${BRAND.name}`,
 };
 
 function RegisterFallback() {

@@ -4,15 +4,15 @@
  * through the same NpcSystem / NpcBrain as the marauder squads (npc.ts): a boss group is a squad of
  * type "boss". This file holds what is boss-specific:
  *
- * - Spawn: rolled once per match from the match seed (shared rollBossSpawns(matchSeed, map.bosses),
- *   the same call the matchmaking room makes before raids/start, so the web's allocation and the
- *   sim agree on who exists). A boss stands at its BossSpot, each guard at its guard post. No
- *   respawn (WORLD v6: not even on a 45-minute world map, D15), no extraction, no container looting.
- *   World maps spawn only the cycle's event boss; it returns to full HP after
+ * - Spawn: legacy roster matches roll once per match from the match seed (shared
+ *   rollBossSpawns(matchSeed, map.bosses)). A boss stands at its BossSpot, each guard at its guard
+ *   post. No respawn (WORLD v6: not even on a 45-minute world map, D15), no extraction, no
+ *   container looting. World maps spawn only the cycle's event boss; it returns to full HP after
  *   BOSS_EVENT.RESET_AFTER_MS without a hit and with no human inside its leash (D14,
  *   NpcSystem.resetEventBoss in npc.ts). Guards never heal back.
- * - Boss kit (equipBoss): its pool items from raids/start (containerLoot[bossLootKey(kind)],
- *   registered as "pool" by ContainerSystem.allocatePool) — the best pool weapon is wielded
+ * - Boss kit (equipBoss): its pool items (legacy roster mode: containerLoot[bossLootKey(kind)],
+ *   registered as "pool" by ContainerSystem.allocatePool; world maps stow the boss bag later from
+ *   pool-place.ts) — the best pool weapon is wielded
  *   (non-FREE: it drops), everything else rides in storage, never worn (FREE armor / backpack are
  *   what get shot). Plus boss-only junk (rollBossJunk), its meds and BOSSES[kind].ammo rounds (all
  *   non-FREE: what is not used drops) and a FREE ammo reserve (consumed first, vanishes).

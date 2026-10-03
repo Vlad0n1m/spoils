@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import { TopBar } from "@/components/top-bar";
 import { ZooaAmbientBg } from "@/components/zooa-ambient-bg";
+import { BRAND } from "@/lib/brand";
 
 export const metadata: Metadata = {
-  title: "Account — EXTRACT",
-  description: "Sign in or create an EXTRACT account",
+  title: `Account — ${BRAND.name}`,
+  description: `Sign in or create a ${BRAND.name} account`,
 };
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {

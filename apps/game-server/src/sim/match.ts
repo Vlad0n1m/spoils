@@ -6,7 +6,7 @@
  *
  * NPC MODEL v5: the roster is humans only. NPCs (boss groups at their BossSpots, marauder squads at
  * MapData.npcPosts) are created by the match itself from the match seed (rollBossSpawns /
- * rollNpcSpawns, the same rolls the matchmaking room made for raids/start) and appended after the
+ * rollNpcSpawns; legacy roster mode, used by tests and the harness) and appended after the
  * roster. They never count as players and never keep a match alive.
  *
  * WORLD v6 (MatchOptions.world, spec §3.4): one shard-cycle of the persistent world. The clock is
@@ -182,8 +182,8 @@ export interface MatchOptions {
   mapSeed?: number;
   /**
    * Server-secret seed of everything a client must not be able to predict (v5 review): container
-   * contents, boss / marauder spawns, NPC kits and bags. Never synced to clients; the matchmaking
-   * room draws it per match (planLaunch) and makes the same NPC rolls with it for raids/start.
+   * contents, boss / marauder spawns, NPC kits and bags. Never synced to clients; the world
+   * directory draws a crypto-random one per shard (WORLD v6).
    * Default: mapSeed (tests and benches stay deterministic in one seed).
    */
   lootSeed?: number;
@@ -202,9 +202,9 @@ export interface MatchOptions {
   matchId?: string;
   /** "demo" (default): the server mints container uniques itself. "live": uniques only from loadouts + pool. */
   mode?: RaidMode;
-  /** raids/start accepted loadouts (by userId, or as the response array). */
+  /** Legacy roster mode (tests, harness): accepted loadouts (by userId, or as an array). World entries bring theirs via addHuman. */
   loadouts?: LoadoutMap | readonly LoadoutSnapshot[];
-  /** raids/start lost-pool allocation by container index. */
+  /** Legacy roster mode (tests, harness): lost-pool allocation by container key. World shards place pool items themselves (pool-place.ts). */
   containerLoot?: Readonly<Record<string, SettledItem[]>>;
   /** Throw on ledger violations (tests). Production logs them instead. */
   strictLedger?: boolean;
@@ -348,7 +348,7 @@ export class Match {
     this.npcOnlyUntilMs = opts.npcOnlyUntilMs ?? 0;
     // Humans only (NPC MODEL v5): a pre-v5 bot entry is skipped, never turned into a player.
     const roster = opts.roster.filter((r) => r.isBot !== true);
-    // NPCs are rolled from the secret loot seed alone (the matchmaking room made the same rolls for raids/start).
+    // NPCs are rolled from the secret loot seed alone (legacy roster mode).
     // World mode (D12): only the event boss's spot spawns (boss + guards), no roll; no event, no boss.
     const bossesOn = opts.bosses ?? !opts.emptyWorld;
     const ev = this.world?.bossEvent ?? null;
@@ -676,8 +676,8 @@ export class Match {
   }
 
   /**
-   * Put an accepted loadout into the slots (equipment first so the bag level is known). raids/start
-   * already validated it; entries that still do not fit are logged and skipped, never invented.
+   * Put an accepted loadout into the slots (equipment first so the bag level is known). The web
+   * (raids/enter) already validated it; entries that still do not fit are logged and skipped, never invented.
    */
   private loadLoadout(rt: PlayerRuntime, snap: LoadoutSnapshot): void {
     const s = rt.self.slots;

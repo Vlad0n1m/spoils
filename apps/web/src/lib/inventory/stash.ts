@@ -4,6 +4,7 @@ import { items, loadoutDrafts, loadouts, stashStacks, users, type ItemState, typ
 import type { Db } from "./db";
 import { expireStaleLocks } from "./loadout";
 import { voidStale, voidStaleForUser } from "./raids";
+import { worldClockOffsetMs } from "../world/clock";
 
 /** One unique as the lobby shows it. dur is the DB percentage. */
 export interface StashItemDto {
@@ -86,11 +87,14 @@ export async function getStash(db: Db, userId: string, now = new Date()): Promis
 
 /**
  * Expire this user's stale locks and void crashed raids (cheap: index lookups): first the raid
- * holding this user's gear when it is past MATCH.DURATION_MS + 5 min or its game server is gone
- * (voidStaleForUser), then every raid past the global stale timeout.
+ * holding this user's gear when it is past its ends_at + 5 min or its game server is gone
+ * (voidStaleForUser), then every raid past the global stale timeout. Lock TTLs run on `now` (real
+ * time, like locked_at); the voids compare against ends_at, which is world time, so they get `now`
+ * plus the dev clock offset (addendum A1; 0 in production).
  */
 export async function lazyMaintenance(db: Db, userId: string, now = new Date()): Promise<void> {
   await db.transaction((tx) => expireStaleLocks(tx, now, userId));
-  await voidStaleForUser(db, userId, now);
-  await voidStale(db, now);
+  const worldAt = new Date(now.getTime() + worldClockOffsetMs());
+  await voidStaleForUser(db, userId, worldAt);
+  await voidStale(db, worldAt);
 }

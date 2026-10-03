@@ -40,8 +40,8 @@ import { applyMove, isUuid, lockItem, lockLoadoutItems, lockMatchItems, addStack
 import { worldDate } from "../world/clock";
 
 /**
- * A raid still `running` this long after its `ends_at` (the wipe of a world shard, start +
- * MATCH.DURATION_MS of a legacy match) never reported its end: void it (spec §4.5, D29).
+ * A raid still `running` this long after its `ends_at` (the wipe of a world shard) never reported
+ * its end: void it (spec §4.5, D29).
  */
 export const RAID_VOID_GRACE_MS = 10 * 60_000;
 /**
@@ -49,10 +49,6 @@ export const RAID_VOID_GRACE_MS = 10 * 60_000;
  * whose game server crashed gets their gear back 5 min after the map would have wiped.
  */
 export const RAID_USER_VOID_GRACE_MS = 5 * 60_000;
-/** @deprecated legacy matches (ends_at = start + DURATION): the void delay counted from the start. */
-export const RAID_VOID_AFTER_MS = MATCH.DURATION_MS + RAID_VOID_GRACE_MS;
-/** @deprecated legacy matches: see RAID_VOID_AFTER_MS. */
-export const RAID_USER_VOID_AFTER_MS = MATCH.DURATION_MS + RAID_USER_VOID_GRACE_MS;
 /** economy_params key of the last boot of a game server (GameServerBoot), per serverId. */
 export const GS_BOOT_PARAM = (serverId: string) => `gs_boot:${serverId}`;
 
@@ -91,21 +87,24 @@ function freeKitSale(sale: { total: number; lines: JunkSellLine[] }): { total: n
 
 /**
  * An end report for a match whose raids/open never reached the web still settles: the row is created
- * lazily as a demo row with started=false. No item of such a match is in_raid in the DB, and it has
- * no entries, so nothing but the scoreboard is stored.
+ * lazily as a demo row with started=false (kind 'world' with its cycle when the report names one, so
+ * the KPIs and the events feed see the map it was). No item of such a match is in_raid in the DB, and
+ * it has no entries, so nothing but the scoreboard is stored.
  */
-async function ensureRaid(tx: Tx, matchId: string, mapId: string, matchSeed: number, now: Date): Promise<void> {
+async function ensureRaid(tx: Tx, report: MatchEndReport, now: Date): Promise<void> {
+  const cycleId = Number.isSafeInteger(report.cycleId) ? report.cycleId! : null;
   await tx
     .insert(raids)
     .values({
-      matchId,
+      matchId: report.matchId,
       mode: "demo",
-      mapId,
-      matchSeed,
+      mapId: report.mapId,
+      matchSeed: report.matchSeed >>> 0,
       status: "running",
       started: false,
       startedAt: now,
-      endsAt: new Date(now.getTime() + MATCH.DURATION_MS),
+      endsAt: cycleId !== null ? new Date((cycleId + 1) * WORLD.CYCLE_MS) : new Date(now.getTime() + MATCH.DURATION_MS),
+      ...(cycleId !== null ? { kind: "world" as const, cycleId, shard: report.shard ?? 0 } : {}),
     })
     .onConflictDoNothing();
 }
@@ -572,7 +571,7 @@ async function voidEntryTx(
  */
 export async function applyEnd(db: Db, report: MatchEndReport, now = new Date()): Promise<EndResult> {
   return db.transaction(async (tx) => {
-    await ensureRaid(tx, report.matchId, report.mapId, report.matchSeed, now);
+    await ensureRaid(tx, report, now);
     const raid = (await lockRaid(tx, report.matchId, "update"))!;
     const empty = { pooled: 0, destroyed: 0, swept: 0, skipped: [] as string[], voidedEntries: [] as string[], treasury: 0 };
     if (raid.status === "voided") return { status: "voided", ...empty };
@@ -717,7 +716,7 @@ export async function applyEnd(db: Db, report: MatchEndReport, now = new Date())
 /**
  * The humans of an end report (NPC MODEL v5: participants are humans only). Drops entries of
  * pre-v5 servers that still listed bots (isBot, or no userId), so match_results, the outcome
- * screen and the recent-raids list never show an NPC or a bot.
+ * screen and the world events feed never show an NPC or a bot.
  */
 export function humanParticipants<P extends { userId: string | null; isBot: boolean }>(ps: readonly P[]): P[] {
   return ps.filter((p) => !p.isBot && !!p.userId);
@@ -727,8 +726,8 @@ export function humanParticipants<P extends { userId: string | null; isBot: bool
 
 /**
  * Raids that never reported their end (server crash, lost end report; GDD §13), voided
- * RAID_VOID_GRACE_MS after `ends_at` (the wipe of a world shard; start + MATCH.DURATION_MS of a
- * legacy match): items still in_raid go back to their pre-raid owner when they came from a loadout,
+ * RAID_VOID_GRACE_MS after `ends_at` (the wipe of a world shard; start + MATCH.DURATION_MS of an
+ * old pre-v6 row): items still in_raid go back to their pre-raid owner when they came from a loadout,
  * pool allocations go back to the pool; loadouts still in_raid are voided and their fungibles
  * refunded; active entries are voided. Exits already applied stay applied ("void restores what is
  * unresolved"). Each raid is its own transaction with SKIP LOCKED, so the cron and a lazy call never

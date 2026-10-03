@@ -9,8 +9,6 @@ import type {
   MatchEndParticipant,
   MatchEndReport,
   PlayerExitReport,
-  RaidStartRequest,
-  RaidStartResponse,
   SettledItem,
   XpLine,
 } from "@extract/shared";
@@ -233,11 +231,11 @@ export const matchResults = pgTable(
 //
 // Item lifecycle (critique "Settlement and loadout flow", inventory memo §4.1):
 //   in_stash → listed → in_stash            (market list / cancel)
-//   in_stash → in_raid                      (loadout lock; match_id set by raids/start)
+//   in_stash → in_raid                      (loadout lock; match_id set by raids/enter)
 //   in_raid  → in_stash                     (extract: owner = extractor | unlock / void: owner kept)
 //   in_raid  → lost_pool                    (broke on death −8 dur, timeout, left on map, guest extract)
 //   in_raid  → destroyed                    (durability 0, or a bound item that would enter the pool)
-//   lost_pool → in_raid                     (raids/start pool allocation, owner NULL)
+//   lost_pool → in_raid                     (raids/enter pool release / boss bag, owner NULL)
 //   lost_pool → treasury                    (1% treasury tax)
 // Every transition is a guarded UPDATE (WHERE state = expected …) plus an item_events row that is
 // UNIQUE(item_id, reason, ref_id), so a replayed report can never apply twice.
@@ -363,7 +361,7 @@ export const stashStacks = pgTable(
   }),
 );
 
-/** Locked loadout entry: SettledItem with its slot; DB durability % (converted to armor points at raids/start). */
+/** Locked loadout entry: SettledItem with its slot; DB durability % (converted to armor points at raids/enter). */
 export type LoadoutRowEntry = LoadoutSnapshot["entries"][number];
 
 export const loadouts = pgTable(
@@ -398,10 +396,14 @@ export const loadoutDrafts = pgTable("loadout_drafts", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/** Body of the removed pre-v6 POST /api/raids/start, kept only to type old rows' `start_request`. */
+export type LegacyStartRequest = { serverId?: string; instanceId?: string } & Record<string, unknown>;
+
 /**
- * One row per raid: legacy roster matches (kind 'match', POST /api/raids/start, the stored response
- * makes start retry-safe) and WORLD v6 shard-cycles (kind 'world', POST /api/raids/open by the game
- * server's WorldDirectory). `ends_at` (= the wipe for world rows) drives the voids (spec §4.5).
+ * One row per raid: WORLD v6 shard-cycles (kind 'world', POST /api/raids/open by the game server's
+ * WorldDirectory) and old rows of legacy roster matches (kind 'match'; also rows created lazily by an
+ * end report whose raids/open never arrived). `ends_at` (= the wipe for world rows) drives the voids
+ * (spec §4.5).
  */
 export const raids = pgTable(
   "raids",
@@ -411,10 +413,12 @@ export const raids = pgTable(
     mapId: text("map_id").notNull(),
     matchSeed: bigint("match_seed", { mode: "number" }).notNull(),
     status: raidStatusEnum("status").notNull().default("running"),
-    /** false when the row was created lazily by an exit/end report (raids/start never reached us). */
+    /** false when the row was created lazily by an end report (raids/open never reached us). */
     started: boolean("started").notNull().default(true),
-    startRequest: jsonb("start_request").$type<RaidStartRequest>(),
-    startResponse: jsonb("start_response").$type<RaidStartResponse>(),
+    /** Legacy (pre-v6) raids/start body; the voids still read its serverId / instanceId for old rows. */
+    startRequest: jsonb("start_request").$type<LegacyStartRequest>(),
+    /** Legacy (pre-v6) raids/start response; no longer written. */
+    startResponse: jsonb("start_response").$type<Record<string, unknown>>(),
     riskUnits: integer("risk_units").notNull().default(0),
     poolReleased: integer("pool_released").notNull().default(0),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
@@ -451,8 +455,8 @@ export const raids = pgTable(
 );
 
 /**
- * Applied PlayerExitReport, one per entry (WORLD v6: entry_id is the idempotency guard; legacy
- * reports use legacyEntryId(matchId, userId)).
+ * Applied PlayerExitReport, one per entry (WORLD v6: entry_id is the idempotency guard; a report
+ * without entryId is refused as unknown_entry). Old pre-v6 rows got a generated entry_id.
  */
 export const raidExits = pgTable(
   "raid_exits",

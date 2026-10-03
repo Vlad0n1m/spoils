@@ -15,8 +15,8 @@
  * Contents of static containers roll lazily on first open and are deterministic in
  * (matchSeed, idx) alone, so the open order never changes what is inside and an audit can re-roll:
  * - fungibles (junk / ammo / meds) from the shared CONTAINER_LOOT tables (rollContainerFungibles);
- * - uniques: live mode = the lost-pool allocation from raids/start (registered in the ledger at
- *   match start); demo mode = minted from CHEST_TABLES (registered as "minted" when rolled), only
+ * - uniques: live mode = lost-pool items (legacy roster mode: the containerLoot allocation,
+ *   registered in the ledger at match start; world maps: placed by pool-place.ts); demo mode = minted from CHEST_TABLES (registered as "minted" when rolled), only
  *   in containers of tier >= CONTAINER.DEMO_UNIQUE_MIN_TIER (v4 zoning, same as the live pool).
  * Boss pool items (containerLoot "boss:<kind>") and marauder carrier items ("npc:<post>.<member>") are held
  * here until npc.ts hands them to the NPC.
@@ -166,7 +166,7 @@ export class ContainerSystem {
   }
 
   /**
-   * Lost-pool items from raids/start, registered in the ledger as "pool":
+   * Lost-pool items of a legacy roster match (MatchOptions.containerLoot), registered in the ledger as "pool":
    * - "<idx>": a static container (rolled into it on first open);
    * - bossLootKey(kind) = "boss:<kind>": that boss's bag (boss.ts takes them at spawn; a boss that
    *   did not spawn leaves them here → leftOnMap, back to the pool with no wear);

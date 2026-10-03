@@ -1,18 +1,14 @@
 import { z } from "zod";
 import {
   BOSS_KINDS,
-  NPC,
-  CONTAINER_KINDS,
   MAP_IDS,
   WORLD,
   type BossKind,
-  type ContainerKind,
   type EntryRequest,
   type GameServerBoot,
   type MapId,
   type MatchEndReport,
   type PlayerExitReport,
-  type RaidStartRequest,
   type SettledItem,
   type ShardOpenRequest,
   type WorldEventReport,
@@ -25,7 +21,6 @@ import {
 
 const uuid = z.string().uuid();
 const mapId = z.enum(MAP_IDS as unknown as [MapId, ...MapId[]]);
-const containerKind = z.enum(CONTAINER_KINDS as unknown as [ContainerKind, ...ContainerKind[]]);
 const exitType = z.enum(["extract", "dead", "timeout", "mia"]);
 const bossKind = z.enum(BOSS_KINDS as unknown as [BossKind, ...BossKind[]]);
 const npcCount = z.number().int().min(0).max(1000);
@@ -43,61 +38,6 @@ export const settledItemSchema = z.object({
   /** WORLD v6 (D22): dog tag killer userId. */
   by: z.string().max(64).optional(),
 }) satisfies z.ZodType<SettledItem>;
-
-export const raidStartRequestSchema = z.object({
-  matchId: uuid,
-  mode: z.enum(["live", "demo"]),
-  mapId,
-  matchSeed: z.number().int().min(0).max(0xffffffff),
-  /** Server-secret allocation seed (the game server's lootSeed); absent → matchSeed. */
-  allocSeed: z.number().int().min(0).max(0xffffffff).optional(),
-  players: z
-    .array(
-      z.object({
-        userId: z.string().min(1).max(64),
-        /** "" = free kit. */
-        loadoutId: z.union([z.literal(""), uuid]),
-      }),
-    )
-    .max(64),
-  containers: z
-    .array(
-      z.object({
-        idx: z.number().int().min(0).max(100_000),
-        kind: containerKind,
-        tier: z.number().int().min(0).max(4),
-        guarded: z.boolean().optional(),
-      }),
-    )
-    .max(4096),
-  /** Legacy Σ boss slots (kept during the v4 rollout); the pool uses `bosses`. */
-  bossSlots: z.number().int().min(0).max(16),
-  /** v4: spawned bosses with their pool slots (min uniqueTierScore 0..2 per slot). */
-  bosses: z
-    .array(
-      z.object({
-        kind: bossKind,
-        slots: z.array(z.number().int().min(0).max(2)).max(8),
-      }),
-    )
-    .max(8)
-    .optional(),
-  /**
-   * NPC MODEL v5 §3.3: spawned T3/T4 marauders that may carry one pool unique each
-   * (raidNpcCarriers). Absent = a pre-v5 server or no T3/T4 squad spawned.
-   */
-  carriers: z
-    .array(
-      z.object({
-        key: z.string().regex(/^npc:\d{1,5}\.\d{1,2}$/),
-        tier: z.union([z.literal(3), z.literal(4)]),
-      }),
-    )
-    .max(NPC.MAX_PER_RAID)
-    .optional(),
-  instanceId: z.string().min(1).max(64).optional(),
-  serverId: z.string().min(1).max(64).optional(),
-}) as unknown as z.ZodType<RaidStartRequest>;
 
 export const gameServerBootSchema = z.object({
   serverId: z.string().min(1).max(64),

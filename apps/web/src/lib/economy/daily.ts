@@ -21,32 +21,48 @@ export interface EconomyDailyResult {
   veterans: { sample: number; medianCr: number };
   /** Lost-pool stock by uniqueTierScore (the top tier is what the bosses hand out). */
   pool: { size: number; top: number; rare: number };
-  /** Raids that ended in the last 24 h (match_results), humans only (NPC MODEL v5). */
+  /** Raids of the last 24 h (world entries + legacy matches), humans only (NPC MODEL v5). */
   raids: RaidKpis;
 }
 
 export interface RaidKpis {
+  /**
+   * Raids in the last 24 h (WORLD v6, spec §4.9, same rule as the /economy page): world entries
+   * (raid_entries created in the window: one stay of one user) plus legacy roster matches that ended
+   * in it. A world shard-cycle is not itself a raid a player plays, so it adds nothing here.
+   */
   count: number;
-  /** Median humans per raid (participants with a userId that are not bots; NPCs never count). */
+  /**
+   * Median distinct humans per ended map (match_results rows in the window: world shard-cycles and
+   * legacy matches; participants with a userId that are not bots, NPCs never count). A world map's
+   * re-entries of one user count once.
+   */
   medianHumans: number;
-  /** Share of raids with exactly one human (a solo raid against NPCs). */
+  /** Share of those maps with exactly one human (a solo map against NPCs). */
   soloShare: number;
-  /** Σ npcSummary of those raids (v5 servers; older reports add nothing). */
+  /** Σ npcSummary of those maps (v5 servers; older reports add nothing). */
   npc: { spawned: NpcCounts; killedByHumans: NpcCounts };
 }
 
-/** RaidKpis over match_results that ended in (now − 24 h, now]. Bots of pre-v5 reports are skipped. */
+/**
+ * RaidKpis over (now − 24 h, now]: `count` from raid_entries + legacy match_results rows; the lobby
+ * size, solo share and NPC totals over every match_results row. Bots of pre-v5 reports are skipped.
+ */
 export async function raidKpis(db: Pick<Db, "execute">, now: Date): Promise<RaidKpis> {
   const since = new Date(now.getTime() - DAY_MS);
   const r = await db.execute<Record<string, number | null>>(sql`
     with r as (
       select m.payload,
-        (select count(*) from jsonb_array_elements(coalesce(m.payload->'participants', '[]'::jsonb)) p
+        coalesce(k.kind, 'match') as kind,
+        (select count(distinct p->>'userId') from jsonb_array_elements(coalesce(m.payload->'participants', '[]'::jsonb)) p
           where coalesce((p->>'isBot')::boolean, false) = false and coalesce(p->>'userId', '') <> '')::int as humans
       from match_results m
+      left join raids k on k.match_id = m.match_id
       where m.ended_at > ${since} and m.ended_at <= ${now}
     )
-    select count(*)::int as n,
+    select count(*)::int as maps,
+      count(*) filter (where kind <> 'world')::int as legacy,
+      (select count(*) from raid_entries e where e.created_at > ${since} and e.created_at <= ${now})::int as entries,
       percentile_cont(0.5) within group (order by humans)::float8 as median,
       count(*) filter (where humans = 1)::int as solo,
       coalesce(sum((payload#>>'{npcSummary,spawned,boss}')::int), 0)::int as sb,
@@ -58,11 +74,11 @@ export async function raidKpis(db: Pick<Db, "execute">, now: Date): Promise<Raid
     from r`);
   const row = r.rows[0] ?? {};
   const n = (k: string) => Number(row[k] ?? 0);
-  const count = n("n");
+  const maps = n("maps");
   return {
-    count,
-    medianHumans: count ? n("median") : 0,
-    soloShare: count ? Math.round((n("solo") / count) * 10_000) / 10_000 : 0,
+    count: n("legacy") + n("entries"),
+    medianHumans: maps ? n("median") : 0,
+    soloShare: maps ? Math.round((n("solo") / maps) * 10_000) / 10_000 : 0,
     npc: {
       spawned: { boss: n("sb"), guard: n("sg"), marauder: n("sm") },
       killedByHumans: { boss: n("kb"), guard: n("kg"), marauder: n("km") },
@@ -76,7 +92,7 @@ export async function raidKpis(db: Pick<Db, "execute">, now: Date): Promise<Raid
  * stamp: the veterans' (accounts older than VETERAN_DAYS with a raid exit in the last
  * VETERAN_DAYS) median CR balance steers the junk autosell multiplier with nextAutosellMult
  * (±3 %/day, 0.6..1.3, no change below AUTOSELL.MIN_SAMPLE veterans), and a KPI snapshot (autosell,
- * veterans, pool stock incl. top-tier count, raids of the last 24 h with humans-only lobby size,
+ * veterans, pool stock incl. top-tier count, raids of the last 24 h (world entries + legacy matches) with humans-only map size,
  * solo share and NPC totals) goes to economy_daily. Meant for a daily cron.
  */
 export async function runEconomyDaily(db: Db, now = new Date()): Promise<EconomyDailyResult> {

@@ -7,9 +7,10 @@ export const dynamic = "force-dynamic";
 
 /**
  * Game server → web, HMAC-signed, once per entry leaving the map (extract, death, MIA at the wipe).
- * Idempotent on the entry (raid_exits.entry_id; legacy reports: legacyEntryId(matchId, userId)): a
- * replay answers 200 with status "duplicate" and the stored receipt. 409 once the raid was voided,
- * or for an entry the web does not hold (`unknown_entry`), so the server stops retrying.
+ * Idempotent on the entry (raid_exits.entry_id): a replay answers 200 with status "duplicate" and
+ * the stored receipt. 409 once the raid was voided, or for an entry the web does not hold
+ * (`unknown_entry`, also every report without entryId from a pre-v6 server), so the server stops
+ * retrying.
  */
 export async function POST(req: Request) {
   const signed = await readSignedJson(req);

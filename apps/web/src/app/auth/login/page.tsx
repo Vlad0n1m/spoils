@@ -1,9 +1,10 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import { LoginForm } from "@/components/login-form";
+import { BRAND } from "@/lib/brand";
 
 export const metadata: Metadata = {
-  title: "Sign in — EXTRACT",
+  title: `Sign in — ${BRAND.name}`,
 };
 
 function LoginFallback() {

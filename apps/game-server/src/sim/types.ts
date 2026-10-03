@@ -221,5 +221,5 @@ export type MatchEvent =
   | { type: "world"; kind: "boss_killed"; boss: BossKind; by: string }
   | { type: "ended"; report: MatchEndReport; summary: MatchSummaryMsg };
 
-/** Loadouts accepted by raids/start, by userId. */
+/** Accepted loadouts by userId (legacy roster mode; world entries come through addHuman). */
 export type LoadoutMap = ReadonlyMap<string, LoadoutSnapshot>;

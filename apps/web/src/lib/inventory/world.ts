@@ -80,7 +80,7 @@ type LoadoutCheck =
   | { ok: false; reason: "not_locked" | "wrong_user" | "expired" };
 
 /**
- * The per-player block of the legacy startRaid for one entry: the loadout must be `locked`, belong
+ * Accepts one entry's loadout (raids/enter step 5): the loadout must be `locked`, belong
  * to the user and be younger than LOADOUT_LOCK_TTL_MS (expired → back to the stash); it moves
  * locked → in_raid (match_id set) and its items in_raid with match_id, journal `start` ref entryId.
  * Risk units = Σ riskUnitOf; maxTier = max uniqueTierScore among the risk items.
