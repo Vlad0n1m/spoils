@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { BREAK_CHANCE_ON_DEATH, MATCH, RARITY_NAMES, type WeaponId } from "@extract/shared";
+import { BREAK_CHANCE_ON_DEATH, MATCH, RARITY_NAMES, WORLD, type WeaponId } from "@extract/shared";
 import { Reveal } from "@/components/reveal";
+import { BRAND } from "@/lib/brand";
 import { rarityHex } from "@/lib/items-ui";
 
 const S = (name: string) => `/sprites/${name}.png`;
@@ -30,7 +31,7 @@ function LandingNav() {
   return (
     <header className="absolute left-0 right-0 top-0 z-50 flex min-h-14 items-center justify-between px-4 py-3 md:px-8">
       <Link href="/" className="toon-text-thin text-2xl tracking-wide text-zooa-lime md:text-3xl">
-        <span className="optical-center">EXTRACT</span>
+        <span className="optical-center">{BRAND.name}</span>
       </Link>
       <Link href="/play" className="toon-btn min-h-11 text-base tracking-wide">
         <span className="optical-center">Play</span>
@@ -82,7 +83,7 @@ function Hero() {
             className="toon-text text-[clamp(4rem,15vw,11rem)] leading-none tracking-wide text-zooa-lime"
             style={{ textShadow: "0 10px 0 #000" }}
           >
-            EXTRACT
+            {BRAND.name}
           </h1>
         </Reveal>
         <Reveal as="p" delay={120} className="toon-text-thin mt-4 text-2xl tracking-wide text-white md:text-3xl">
@@ -130,7 +131,7 @@ function Hero() {
             href="/play"
             className="toon-btn min-h-20 px-12 text-3xl tracking-wide md:min-h-24 md:px-16 md:text-4xl"
           >
-            <span className="optical-center">Play raid</span>
+            <span className="optical-center">Play</span>
           </Link>
           <p className="font-body text-sm font-semibold text-white/75">Free to play · no wallet needed · real players only</p>
         </Reveal>
@@ -139,11 +140,14 @@ function Hero() {
   );
 }
 
+const CYCLE_MIN = Math.round(WORLD.CYCLE_MS / 60_000);
+const ARM_MIN = Math.round(WORLD.EXTRACT_ARM_MS / 60_000);
+
 const HOW: { sprite: string; title: string; body: string }[] = [
   {
     sprite: "pistol",
-    title: "Drop with a free pistol",
-    body: "Everyone starts with the free kit: pistol, light ammo, a bandage. Nothing to lose on your first run.",
+    title: "Drop in any time",
+    body: `${BRAND.mapName} is always live: one map, wiped every ${CYCLE_MIN} minutes. Jump in whenever you like with the free kit — pistol, light ammo, a bandage.`,
   },
   {
     sprite: "chest_epic",
@@ -158,7 +162,7 @@ const HOW: { sprite: string; title: string; body: string }[] = [
   {
     sprite: "backpack",
     title: "Reach an extraction point",
-    body: `Points open after ${Math.round(MATCH.EXTRACT_OPEN_AT_MS / 1000)} s. Hold your ground for ${MATCH.EXTRACT_CHANNEL_MS / 1000} s and everything you carry is yours.`,
+    body: `Extracts open for you ${ARM_MIN} min after you drop in. Hold your ground for ${MATCH.EXTRACT_CHANNEL_MS / 1000} s and everything you carry is yours.`,
   },
 ];
 
@@ -209,8 +213,8 @@ function LootSection() {
             otherwise it drops by your body for the next raider to grab.
           </Reveal>
           <Reveal as="p" delay={140} className="font-body mt-4 max-w-[52ch] text-lg leading-relaxed text-white/80">
-            Still on the map when the {Math.round(MATCH.DURATION_MS / 60_000)}-minute clock runs out? Everything
-            you carry is lost.
+            The map wipes every {CYCLE_MIN} minutes. Still on it when the wipe hits? Everything you carry is
+            lost.
           </Reveal>
         </div>
         <div className="grid grid-cols-2 gap-4">
@@ -246,11 +250,11 @@ function ComingSoon() {
       <Reveal className="mx-auto flex max-w-4xl flex-col items-center">
         <Sprite name="chest_legendary" className="h-28 w-28 drop-shadow-[0_8px_0_rgba(0,0,0,0.25)]" />
         <h2 className="mt-4 text-balance text-4xl leading-[1.05] tracking-tight md:text-6xl">
-          Coming soon: a real item economy
+          A real item economy
         </h2>
         <p className="font-body mt-6 max-w-[56ch] text-base font-semibold leading-relaxed text-black/75 md:text-lg">
-          Your own stash, a player-to-player marketplace and items with real value, powered by iDos. This demo
-          is free: nothing costs money and nothing is paid out.
+          Your own stash, a player-to-player marketplace and items with real value, powered by iDos. Playing
+          is free, and the game never pays out: every valuable you find was once lost by another raider.
         </p>
       </Reveal>
     </section>
@@ -270,7 +274,7 @@ function Footer() {
           <span className="optical-center">Drop in now</span>
         </Link>
         <div className="flex w-full items-center justify-between border-t-[3px] border-black pt-6 text-sm text-white/50">
-          <span className="toon-text-thin text-lg tracking-wide text-zooa-lime">EXTRACT</span>
+          <span className="toon-text-thin text-lg tracking-wide text-zooa-lime">{BRAND.name}</span>
           <span className="font-body">Demo build</span>
         </div>
       </div>
