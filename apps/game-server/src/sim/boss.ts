@@ -7,7 +7,10 @@
  * - Spawn: rolled once per match from the match seed (shared rollBossSpawns(matchSeed, map.bosses),
  *   the same call the matchmaking room makes before raids/start, so the web's allocation and the
  *   sim agree on who exists). A boss stands at its BossSpot, each guard at its guard post. No
- *   respawn, no extraction, no container looting.
+ *   respawn (WORLD v6: not even on a 45-minute world map, D15), no extraction, no container looting.
+ *   World maps spawn only the cycle's event boss; it returns to full HP after
+ *   BOSS_EVENT.RESET_AFTER_MS without a hit and with no human inside its leash (D14,
+ *   NpcSystem.resetEventBoss in npc.ts). Guards never heal back.
  * - Boss kit (equipBoss): its pool items from raids/start (containerLoot[bossLootKey(kind)],
  *   registered as "pool" by ContainerSystem.allocatePool) — the best pool weapon is wielded
  *   (non-FREE: it drops), everything else rides in storage, never worn (FREE armor / backpack are
