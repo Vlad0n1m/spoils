@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm";
 import type {
+  BossKind,
+  EntryResponse,
   ExitType,
   JunkSellLine,
   LoadoutEntry,
@@ -10,6 +12,7 @@ import type {
   RaidStartRequest,
   RaidStartResponse,
   SettledItem,
+  XpLine,
 } from "@extract/shared";
 import {
   pgTable,
@@ -51,6 +54,7 @@ export const matchStatusEnum = pgEnum("match_status", [
   "settled",
 ]);
 
+/** Legacy match_participants only (unused); raid_exits.exit is text and also holds "mia". */
 export const exitTypeEnum = pgEnum("exit_type", [
   "extract",
   "dead",
@@ -88,6 +92,8 @@ export const users = pgTable(
     emailIdx: uniqueIndex("users_email_idx").on(t.email),
     nickIdx: uniqueIndex("users_nickname_idx").on(t.nickname),
     depositIdx: uniqueIndex("users_deposit_idx").on(t.depositAddress),
+    /** WORLD v6 level board (xp desc). */
+    xpIdx: index("users_xp_idx").on(t.xp.desc().nullsFirst()),
     creditsNonNeg: check("users_credits_non_negative", sql`${t.credits} >= 0`),
   }),
 );
@@ -392,7 +398,11 @@ export const loadoutDrafts = pgTable("loadout_drafts", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-/** One row per raid started through POST /api/raids/start; the stored response makes start retry-safe. */
+/**
+ * One row per raid: legacy roster matches (kind 'match', POST /api/raids/start, the stored response
+ * makes start retry-safe) and WORLD v6 shard-cycles (kind 'world', POST /api/raids/open by the game
+ * server's WorldDirectory). `ends_at` (= the wipe for world rows) drives the voids (spec §4.5).
+ */
 export const raids = pgTable(
   "raids",
   {
@@ -409,16 +419,45 @@ export const raids = pgTable(
     poolReleased: integer("pool_released").notNull().default(0),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     settledAt: timestamp("settled_at", { withTimezone: true }),
+    /** 'match' (legacy roster raid) | 'world' (WORLD v6 shard-cycle). */
+    kind: text("kind").$type<"match" | "world">().notNull().default("match"),
+    /** worldCycleOf cycle (world rows). */
+    cycleId: integer("cycle_id"),
+    shard: smallint("shard").notNull().default(0),
+    /** Colyseus room id of the shard (the lobby's joinById target). */
+    roomId: text("room_id"),
+    /** GameServerBoot.serverId / instanceId of the process running the shard (void-orphans). */
+    serverId: text("server_id"),
+    instanceId: text("instance_id"),
+    entryClosesAt: timestamp("entry_closes_at", { withTimezone: true }),
+    /** Wipe (world) / started_at + MATCH.DURATION_MS (legacy): the void clocks run from here. */
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    bossKind: text("boss_kind").$type<BossKind>(),
+    /** MapData zone id of the event boss's spot. */
+    bossZone: text("boss_zone"),
+    nextBossKind: text("next_boss_kind").$type<BossKind>(),
+    nextBossZone: text("next_boss_zone"),
+    /** Killer nickname (POST /api/world/event). */
+    bossKilledBy: text("boss_killed_by"),
+    bossKilledAt: timestamp("boss_killed_at", { withTimezone: true }),
+    /** The boss bag (D19) was filled for this shard-cycle. */
+    bossBagFilled: boolean("boss_bag_filled").notNull().default(false),
   },
   (t) => ({
     statusStarted: index("raids_status_started_idx").on(t.status, t.startedAt),
+    worldCycle: index("raids_world_cycle_idx").on(t.kind, t.cycleId),
+    statusEnds: index("raids_status_ends_idx").on(t.status, t.endsAt),
   }),
 );
 
-/** Applied PlayerExitReport, one per (match, user): the primary key is the idempotency guard. */
+/**
+ * Applied PlayerExitReport, one per entry (WORLD v6: entry_id is the idempotency guard; legacy
+ * reports use legacyEntryId(matchId, userId)).
+ */
 export const raidExits = pgTable(
   "raid_exits",
   {
+    entryId: uuid("entry_id").defaultRandom().primaryKey(),
     matchId: uuid("match_id").notNull(),
     /** Not a FK: guests have no users row but still report. */
     userId: uuid("user_id").notNull(),
@@ -431,10 +470,81 @@ export const raidExits = pgTable(
     xp: integer("xp").notNull().default(0),
     guest: boolean("guest").notNull().default(false),
     at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+    cycleId: integer("cycle_id"),
+    /** xpForExit lines (receipt / last-raid card). */
+    xpLines: jsonb("xp_lines").$type<XpLine[]>().notNull().default(sql`'[]'::jsonb`),
+    /** The grind part of xp (counts toward XP.DAILY_SOFT_CAP of later exits that day). */
+    xpGrind: integer("xp_grind").notNull().default(0),
+    onMapMs: integer("on_map_ms").notNull().default(0),
+    /** npcKillCount (marauders + guards) and boss kills of this exit (NPC board). */
+    npcKills: integer("npc_kills").notNull().default(0),
+    bossKills: integer("boss_kills").notNull().default(0),
+    /** Ranked PvP kills of this exit (D24). */
+    pvpRanked: integer("pvp_ranked").notNull().default(0),
   },
   (t) => ({
-    pk: primaryKey({ columns: [t.matchId, t.userId] }),
     user: index("raid_exits_user_idx").on(t.userId, t.at),
+    matchUser: index("raid_exits_match_user_idx").on(t.matchId, t.userId),
+    cycle: index("raid_exits_cycle_idx").on(t.cycleId),
+    at: index("raid_exits_at_idx").on(t.at),
+  }),
+);
+
+export type RaidEntryStatus = "active" | "exited" | "voided";
+
+/**
+ * WORLD v6 entry: one stay of one user on a shard (minted by /api/world/join, admitted by
+ * POST /api/raids/enter, idempotent per entry_id with the stored response replayed). One active
+ * entry per user (partial unique index).
+ */
+export const raidEntries = pgTable(
+  "raid_entries",
+  {
+    entryId: uuid("entry_id").primaryKey(),
+    matchId: uuid("match_id").notNull(),
+    cycleId: integer("cycle_id").notNull(),
+    /** Not a FK: guests. */
+    userId: uuid("user_id").notNull(),
+    loadoutId: uuid("loadout_id"),
+    guest: boolean("guest").notNull().default(false),
+    freeKit: boolean("free_kit").notNull().default(true),
+    status: text("status").$type<RaidEntryStatus>().notNull().default("active"),
+    riskUnits: smallint("risk_units").notNull().default(0),
+    /** Max uniqueTierScore among this entry's risk items. */
+    maxTier: smallint("max_tier").notNull().default(0),
+    /** Lost-pool items released for this entry (boss fill not counted). */
+    released: smallint("released").notNull().default(0),
+    /** Cycle clock at admission. */
+    atMs: integer("at_ms").notNull().default(0),
+    response: jsonb("response").$type<EntryResponse>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+  },
+  (t) => ({
+    oneActive: uniqueIndex("raid_entries_one_active").on(t.userId).where(sql`status = 'active'`),
+    match: index("raid_entries_match_idx").on(t.matchId, t.status),
+    cycleUser: index("raid_entries_cycle_user_idx").on(t.cycleId, t.userId),
+    userDay: index("raid_entries_user_day_idx").on(t.userId, t.createdAt),
+  }),
+);
+
+/** WORLD v6: one row per human kill by a registered user (D24 ranked rule; Kills board). */
+export const pvpKills = pgTable(
+  "pvp_kills",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    killerId: uuid("killer_id").notNull(),
+    victimId: uuid("victim_id").notNull(),
+    matchId: uuid("match_id").notNull(),
+    entryId: uuid("entry_id").notNull(),
+    cycleId: integer("cycle_id"),
+    ranked: boolean("ranked").notNull(),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pair: index("pvp_kills_pair_idx").on(t.killerId, t.victimId, t.at),
+    board: index("pvp_kills_board_idx").on(t.ranked, t.at),
+    cycle: index("pvp_kills_cycle_idx").on(t.cycleId),
   }),
 );
 
@@ -587,6 +697,8 @@ export type ItemEvent = typeof itemEvents.$inferSelect;
 export type Loadout = typeof loadouts.$inferSelect;
 export type Raid = typeof raids.$inferSelect;
 export type RaidExit = typeof raidExits.$inferSelect;
+export type RaidEntry = typeof raidEntries.$inferSelect;
+export type PvpKill = typeof pvpKills.$inferSelect;
 export type CreditLedgerRow = typeof creditLedger.$inferSelect;
 export type Listing = typeof listings.$inferSelect;
 export type Trade = typeof trades.$inferSelect;

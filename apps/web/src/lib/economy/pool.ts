@@ -3,6 +3,9 @@ import {
   BOSSES,
   ITEM_IDS,
   POOL,
+  WORLD,
+  bossFillPlan,
+  poolReleaseForEntry,
   bossKindOfLootKey,
   bossLootKey,
   bossSlotCount,
@@ -36,8 +39,16 @@ export interface PoolCandidate {
   reportedPct?: number;
   /** Broke on death: enters at −POOL.BREAK_DUR_LOSS. Left on map / timeout: no wear. */
   broke: boolean;
-  /** item_events reason: break | timeout | left | sweep | guest. */
+  /** item_events reason: break | timeout | mia | left | sweep | guest | return | expire. */
   reason: string;
+  /** item_events ref_id of the move (WORLD v6: the entryId for exit settlement); default the matchId. */
+  refId?: string;
+  /**
+   * Counts toward the 1% treasury tax (default true). WORLD v6 D20: items that never belonged to a
+   * player in this match (pool allocations left on the map, unplaced, swept, voided-entry
+   * allocations, NPC-corpse expiry) re-enter untaxed.
+   */
+  taxable?: boolean;
 }
 
 export interface PoolEntryResult {
@@ -64,11 +75,13 @@ export async function enterPool(tx: Tx, matchId: string, cands: readonly PoolCan
       out.skipped.push(c.id);
       continue;
     }
-    const moved = await poolOne(tx, it, c, matchId);
+    const moved = await poolOne(tx, it, c, c.refId ?? matchId);
     if (moved.state === "destroyed") out.destroyed.push(it.id);
     else {
       out.pooled.push(it.id);
-      entering.push({ uid: it.id, value: itemRefValueCr({ def: it.defId, rarity: it.rarity, dur: moved.durability }) });
+      if (c.taxable !== false) {
+        entering.push({ uid: it.id, value: itemRefValueCr({ def: it.defId, rarity: it.rarity, dur: moved.durability }) });
+      }
     }
   }
   if (entering.length > 0) out.taxed = await applyTreasuryTax(tx, matchId, entering);
@@ -110,6 +123,206 @@ async function applyTreasuryTax(
   }
   await setParam(tx, PARAM.TAX_ACC, res.acc);
   return res.taken;
+}
+
+// ---------------------------------------------------------------- expiry (WORLD v6, addendum A6)
+
+export interface ExpireCandidate {
+  id: string;
+  /** Durability % reported by the game server (min with the DB value). */
+  reportedPct?: number;
+}
+
+/**
+ * A6: uniques that vanished with an expired player corpse or as loose ground items a player dropped
+ * go to the treasury at once — no wear, no 1% tax step (the treasury sells them on the market like a
+ * player). Guarded like enterPool (in_raid in `matchId`); journal reason `expire`, ref = matchId.
+ * A bound item never reaches the market: it is destroyed instead (as poolEntry would). Worn-out
+ * items (0 %) are destroyed too.
+ */
+export async function expireToTreasury(
+  tx: Tx,
+  matchId: string,
+  cands: readonly ExpireCandidate[],
+): Promise<{ treasury: string[]; destroyed: string[]; skipped: string[] }> {
+  const out = { treasury: [] as string[], destroyed: [] as string[], skipped: [] as string[] };
+  for (const c of cands) {
+    const it = await lockItem(tx, c.id);
+    if (!it || it.state !== "in_raid" || it.matchId !== matchId) {
+      out.skipped.push(c.id);
+      continue;
+    }
+    const dur =
+      c.reportedPct !== undefined && Number.isFinite(c.reportedPct) ? Math.min(it.durability, c.reportedPct) : it.durability;
+    if (it.bound || !(dur > 0)) {
+      await applyMove(
+        tx,
+        it,
+        { state: "destroyed", ownerId: null, matchId: null, loadoutId: null, durability: Math.max(0, dur) },
+        { reason: "destroy", refId: matchId },
+      );
+      out.destroyed.push(it.id);
+      continue;
+    }
+    await applyMove(
+      tx,
+      it,
+      { state: "treasury", ownerId: null, matchId: null, loadoutId: null, durability: dur },
+      { reason: "expire", refId: matchId },
+    );
+    out.treasury.push(it.id);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- WORLD v6 release (raids/enter)
+
+/** Counts of the lost pool: size and top items (tier score 2). */
+export async function poolCounts(tx: Tx): Promise<{ size: number; top: number }> {
+  const r = await tx.execute<{ size: number; top: number }>(sql`
+    select count(*)::int as size, count(*) filter (where ${TIER_SCORE_SQL} = 2)::int as top
+    from items where state = 'lost_pool'`);
+  return { size: Number(r.rows[0]?.size ?? 0), top: Number(r.rows[0]?.top ?? 0) };
+}
+
+/**
+ * Takes `n` random lost-pool rows with tier score ≤ maxTier (FOR UPDATE SKIP LOCKED, so two
+ * entries never share an item; order `random()` or best tier first) and moves them lost_pool →
+ * in_raid (owner NULL, match set) with `reason`, ref = entryId. Returns them as SettledItems.
+ */
+async function takeFromPool(
+  tx: Tx,
+  a: { matchId: string; entryId: string; n: number; maxTier: number; reason: "alloc" | "alloc_boss"; bestFirst: boolean },
+): Promise<SettledItem[]> {
+  const n = Math.max(0, Math.floor(a.n));
+  if (n === 0) return [];
+  const maxTier = Math.max(0, Math.min(2, Math.floor(a.maxTier)));
+  const rows = (
+    await tx.execute<PoolRow>(sql`
+      select id, def_id, rarity, durability from items
+      where state = 'lost_pool' and ${TIER_SCORE_SQL} <= ${maxTier}
+      order by ${a.bestFirst ? sql`${TIER_SCORE_SQL} desc, random()` : sql`random()`}
+      limit ${n}
+      for update skip locked`)
+  ).rows;
+  const out: SettledItem[] = [];
+  for (const r of rows) {
+    const it = await lockItem(tx, r.id);
+    if (!it || it.state !== "lost_pool") continue;
+    const moved = await applyMove(
+      tx,
+      it,
+      { state: "in_raid", ownerId: null, matchId: a.matchId, loadoutId: null },
+      { reason: a.reason, refId: a.entryId },
+    );
+    out.push({ uid: moved.id, def: moved.defId, qty: 1, rarity: moved.rarity, dur: toRaidDur(moved.defId, moved.durability) });
+  }
+  return out;
+}
+
+export interface ReleaseForEntryArgs {
+  matchId: string;
+  cycleId: number;
+  entryId: string;
+  userId: string;
+  /** This entry's risk units / max tier score of its risk items. */
+  riskUnits: number;
+  maxTier: number;
+  /** Cycle clock at admission. */
+  atMs: number;
+  /** Valid pool targets on the map (Match.poolTargetCount()). */
+  targets: number;
+  now: Date;
+}
+
+export interface ReleaseForEntryResult {
+  items: SettledItem[];
+  n: number;
+  plan: ReturnType<typeof poolReleaseForEntry>;
+  /** Pool size before the release. */
+  poolSize: number;
+}
+
+/**
+ * WORLD v6 release for one entry (spec §4.2 step 6, D17). The caller holds the shard's raids row
+ * lock (`for no key update`) so only this part serializes per shard, and has already written the
+ * entry's risk_units / max_tier. Aggregates: the user's earlier entries this cycle (max risk, max
+ * tier, Σ released), the user's Σ released since UTC midnight, the shard's Σ released and its
+ * distinct users with risk ≥ 1 (this entry included). Items: tier score ≤ max(user cycle max tier,
+ * entry max tier), random, reason `alloc`, ref entryId.
+ */
+export async function releaseForEntry(tx: Tx, a: ReleaseForEntryArgs): Promise<ReleaseForEntryResult> {
+  const u = await tx.execute<{ max_risk: number; max_tier: number; released: number }>(sql`
+    select coalesce(max(risk_units), 0)::int as max_risk, coalesce(max(max_tier), 0)::int as max_tier,
+           coalesce(sum(released), 0)::int as released
+    from raid_entries where cycle_id = ${a.cycleId} and user_id = ${a.userId} and entry_id <> ${a.entryId}`);
+  const dayStart = new Date(Date.UTC(a.now.getUTCFullYear(), a.now.getUTCMonth(), a.now.getUTCDate()));
+  const d = await tx.execute<{ released: number }>(sql`
+    select coalesce(sum(released), 0)::int as released
+    from raid_entries where user_id = ${a.userId} and created_at >= ${dayStart} and entry_id <> ${a.entryId}`);
+  const sh = await tx.execute<{ released: number; risk_users: number }>(sql`
+    select coalesce(sum(released), 0)::int as released,
+           count(distinct user_id) filter (where risk_units >= 1)::int as risk_users
+    from raid_entries where match_id = ${a.matchId} and entry_id <> ${a.entryId}`);
+  const userRow = u.rows[0];
+  const shardRow = sh.rows[0];
+  const otherRiskUser = await tx.execute<{ n: number }>(sql`
+    select count(*)::int as n from raid_entries
+    where match_id = ${a.matchId} and user_id = ${a.userId} and risk_units >= 1 and entry_id <> ${a.entryId}`);
+  const riskUsers =
+    Number(shardRow?.risk_users ?? 0) + (a.riskUnits >= 1 && Number(otherRiskUser.rows[0]?.n ?? 0) === 0 ? 1 : 0);
+  const { size } = await poolCounts(tx);
+  const k = (await readReleaseParams(tx)).k;
+  const plan = poolReleaseForEntry({
+    poolSize: size,
+    entryRisk: a.riskUnits,
+    userCycleMaxRisk: Number(userRow?.max_risk ?? 0),
+    userCycleReleased: Number(userRow?.released ?? 0),
+    userDayReleased: Number(d.rows[0]?.released ?? 0),
+    shardReleased: Number(shardRow?.released ?? 0),
+    riskUsers,
+    atMs: a.atMs,
+    entryCloseMs: WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS,
+    targets: a.targets,
+    k,
+  });
+  const maxTier = Math.max(Number(userRow?.max_tier ?? 0), a.maxTier);
+  const items = await takeFromPool(tx, { matchId: a.matchId, entryId: a.entryId, n: plan.n, maxTier, reason: "alloc", bestFirst: false });
+  return { items, n: items.length, plan, poolSize: size };
+}
+
+export interface FillBossBagArgs {
+  matchId: string;
+  entryId: string;
+  boss: BossKind;
+  /** raids.boss_bag_filled. */
+  filled: boolean;
+}
+
+/**
+ * WORLD v6 boss bag (spec §4.2 step 7, D19), once per shard-cycle; the caller holds the raids row
+ * lock and sets boss_bag_filled when items come back. Gate: bossFillPlan over Σ (max risk of each
+ * distinct user on the shard), any entrant's max_tier = 2, the pool size and its top items. Picks
+ * `order by tier score desc, random()` with tier score ≤ maxTier, reason `alloc_boss`, ref entryId.
+ */
+export async function fillBossBag(tx: Tx, a: FillBossBagArgs): Promise<SettledItem[]> {
+  const def = BOSSES[a.boss];
+  if (!def?.enabled || a.filled) return [];
+  const r = await tx.execute<{ risk_sum: number; any_top: boolean }>(sql`
+    select coalesce(sum(m), 0)::int as risk_sum, coalesce(bool_or(t), false) as any_top from (
+      select user_id, max(risk_units) as m, bool_or(max_tier = 2) as t
+      from raid_entries where match_id = ${a.matchId} and status <> 'voided' group by user_id) x`);
+  const { size, top } = await poolCounts(tx);
+  const plan = bossFillPlan({
+    slots: def.poolSlots,
+    shardRiskSum: Number(r.rows[0]?.risk_sum ?? 0),
+    anyTopRisk: !!r.rows[0]?.any_top,
+    poolSize: size,
+    topInPool: top,
+    filled: a.filled,
+  });
+  if (plan.n === 0) return [];
+  return takeFromPool(tx, { matchId: a.matchId, entryId: a.entryId, n: plan.n, maxTier: plan.maxTier, reason: "alloc_boss", bestFirst: true });
 }
 
 // ---------------------------------------------------------------- pool release (raids/start)
