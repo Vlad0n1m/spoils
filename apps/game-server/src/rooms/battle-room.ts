@@ -17,7 +17,7 @@ import { IntentLimiter } from "./intent-limit.js";
 import { authenticate, isLaunchKey, releasePendingSeatsOf } from "./room-auth.js";
 import { reportEnd, reportExit } from "../net/web-api.js";
 import { buildBatches } from "../sim/audience.js";
-import { withBotSettlement } from "../sim/items.js";
+import { withNpcSettlement } from "../sim/items.js";
 import { Match, expectedMapHash, warmMatchMap } from "../sim/match.js";
 import type { MatchEvent, RosterEntry } from "../sim/types.js";
 import { ViewSync } from "../sim/views.js";
@@ -102,7 +102,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     this.views = new ViewSync(this.match);
     this.setState(this.match.state);
     // Double the humans: a reconnecting player may join before their stale socket is dropped.
-    this.maxClients = Math.max(1, roster.filter((r) => !r.isBot).length * 2);
+    this.maxClients = Math.max(1, roster.length * 2);
     this.setMetadata({ matchId: this.match.state.matchId });
 
     this.onMessage(C2S.INPUT, (client, raw: unknown) => {
@@ -155,7 +155,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
   ): Promise<boolean> {
     if (!allowReconnection) {
       const userId = (authData as JoinTicket | undefined)?.userId;
-      if (!userId || !this.match.allRuntimes().some((rt) => !rt.isBot && rt.userId === userId)) return false;
+      if (!userId || !this.match.allRuntimes().some((rt) => !rt.isNpc && rt.userId === userId)) return false;
       await releasePendingSeatsOf(this, userId);
     }
     return super._reserveSeat(sessionId, joinOptions, authData, seconds, allowReconnection, devModeReconnection);
@@ -260,28 +260,30 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     if (this.finishing) return;
     this.finishing = true;
     this.summary = summary;
-    // Uniques bots carried out / broke / wore out have no exit report: they ride on the end report.
-    const full = withBotSettlement(report, this.match.allRuntimes());
+    // NPCs have no exit report: anything one still lists rides on the end report (leftOnMap).
+    const full = withNpcSettlement(report, this.match.allRuntimes());
     await Promise.race([reportEnd(full), new Promise((r) => setTimeout(r, SETTLE_WAIT_MS))]);
     this.broadcast(S2C.SETTLED, summary);
     this.clock.setTimeout(() => void this.disconnect(), MATCH.DISPOSE_AFTER_END_MS);
   }
 }
 
+/**
+ * The battle roster: humans only (NPC MODEL v5), 1..MATCH.MAX_HUMANS distinct userIds. A roster
+ * with a bot entry (`isBot: true`) is refused as a whole: NPCs are never roster players.
+ */
 export function sanitizeRoster(raw: unknown): RosterEntry[] | null {
-  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MATCH.MAX_PLAYERS) return null;
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MATCH.MAX_HUMANS) return null;
   const out: RosterEntry[] = [];
   const seen = new Set<string>();
   for (const r of raw) {
     if (!r || typeof r !== "object") return null;
     const { userId, nickname, isBot, loadoutId } = r as Record<string, unknown>;
-    if (typeof nickname !== "string" || typeof isBot !== "boolean") return null;
-    if (!isBot) {
-      if (typeof userId !== "string" || !userId || seen.has(userId)) return null;
-      seen.add(userId);
-    }
-    const lid = typeof loadoutId === "string" && loadoutId.length <= 64 && !isBot ? loadoutId : "";
-    out.push({ userId: isBot ? null : (userId as string), nickname: nickname.slice(0, 24), isBot, loadoutId: lid });
+    if (typeof nickname !== "string" || (isBot !== undefined && isBot !== false)) return null;
+    if (typeof userId !== "string" || !userId || seen.has(userId)) return null;
+    seen.add(userId);
+    const lid = typeof loadoutId === "string" && loadoutId.length <= 64 ? loadoutId : "";
+    out.push({ userId, nickname: nickname.slice(0, 24), loadoutId: lid });
   }
   return out;
 }

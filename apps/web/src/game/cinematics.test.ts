@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, it, mock } from "node:test";
 import { Container } from "pixi.js";
-import { MATCH, type EventsMsg, type KillMsg } from "@extract/shared";
+import { MATCH, NPC_ROLE, type EventsMsg, type KillMsg } from "@extract/shared";
 import { createCameraSystem, getCameraRig } from "./camera";
 import type { GameContext } from "./systems";
 import { heartbeatFor, LOW_HP } from "./audio/game-audio";
@@ -139,10 +139,21 @@ describe("cards", () => {
     assert.equal(autosellLine({ credits: 0, guest: true, sold: [] }), "Guest raid · nothing kept");
   });
   it("kill card names the killer, the gun and the distance", () => {
-    assert.deepEqual(killCard({ killer: "Bot_3", weapon: "rifle" }, 34 * PX_PER_METER), { kicker: "KILLED BY", name: "Bot_3", sub: "Assault rifle · 34 m" });
-    assert.deepEqual(killCard({ killer: "Bot_3", weapon: "" }, null), { kicker: "KILLED BY", name: "Bot_3", sub: "" });
+    assert.deepEqual(killCard({ killer: "Vlad", weapon: "rifle" }, 34 * PX_PER_METER), { kicker: "KILLED BY", name: "Vlad", sub: "Assault rifle · 34 m" });
+    assert.deepEqual(killCard({ killer: "Vlad", weapon: "" }, null), { kicker: "KILLED BY", name: "Vlad", sub: "" });
+    // A human killer never gets the zone line, even when one is passed.
+    assert.equal(killCard({ killer: "Vlad", weapon: "" }, null, "Grain Elevator").sub, "");
     assert.deepEqual(killCard({ killer: "", weapon: "" }, null).kicker, "YOU DIED");
     assert.deepEqual(killCard(null, 100).name, "K.I.A.");
+  });
+  it("kill card names an NPC killer by role and adds the zone", () => {
+    const m = killCard({ killer: "Marauder", weapon: "shotgun", killerRole: NPC_ROLE.MARAUDER }, 12 * PX_PER_METER, "Grain Elevator");
+    assert.equal(m.name, "Marauder");
+    assert.match(m.sub, /12 m · Grain Elevator$/);
+    // Role from the name alone (older servers without killerRole).
+    assert.equal(killCard({ killer: "Foreman", weapon: "" }, null, "Grain Elevator").name, "FOREMAN");
+    assert.equal(killCard({ killer: "Foreman", weapon: "" }, null, "Grain Elevator").sub, "Grain Elevator");
+    assert.equal(killCard({ killer: "Radar guard", weapon: "", killerRole: NPC_ROLE.GUARD }, null).name, "Radar guard");
   });
 });
 

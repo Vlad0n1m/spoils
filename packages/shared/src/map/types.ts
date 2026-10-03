@@ -25,7 +25,7 @@ export const TERRAIN_KIND_MASK = 0x7f;
 export type MapId = "steppe";
 export const MAP_IDS: readonly MapId[] = ["steppe"];
 export const MAPS: Record<MapId, { layoutSeed: number; name: string }> = {
-  steppe: { layoutSeed: 0x5eed_2026, name: "Steppe Outskirts" },
+  steppe: { layoutSeed: 0x5eed_2026, name: "The Outskirts" },
 };
 
 export type ZoneKind =
@@ -162,6 +162,32 @@ export interface BossSpot {
   chance: number;
 }
 
+/** NpcPost.kind: a yard in front of a POI building, a road entering a zone, or a wild road camp. */
+export type NpcPostKind = "poi" | "gate" | "road";
+
+/**
+ * A marauder squad post (NPC MODEL v5, placeNpcPosts). Not part of mapHash: posts are generated
+ * from their own rng stream after everything else and reserve nothing, so they never move geometry.
+ * The squad holds `x/y` (or walks `patrol`, 0–3 points within leash/2) and leashes to it.
+ */
+export interface NpcPost {
+  /** Index in MapData.npcPosts (stable: rollNpcSpawns / carrier keys "npc:<id>.<member>" use it). */
+  id: number;
+  /** Zone id, null for road camps in the wilds. */
+  zone: string | null;
+  /** Zone tier (marauder class via npcClassOfPost); road camps are 0. */
+  tier: LootTier;
+  kind: NpcPostKind;
+  x: number;
+  y: number;
+  /** Patrol points (empty = the squad holds the post). */
+  patrol: Array<{ x: number; y: number }>;
+  /** Squad size [min, max], uniform. */
+  size: [number, number];
+  /** Spawn chance per match (one draw per post, rollNpcSpawns). */
+  chance: number;
+}
+
 export type AmbientKind = "river" | "sawmill" | "generator" | "forest" | "wind";
 /** Positional ambient sound source for the client audio. */
 export interface AmbientEmitter {
@@ -204,6 +230,11 @@ export interface MapData {
   extracts: ExtractSpot[];
   bosses: BossSpot[];
   ambient: AmbientEmitter[];
+  /**
+   * Marauder posts (NPC MODEL v5). Always set by generateMap; optional only so hand-built test
+   * maps still type-check (read it through npcPostsOf). Not hashed.
+   */
+  npcPosts?: NpcPost[];
 }
 
 /** Walkability grid (shared so tests and server nav use the same definition). */

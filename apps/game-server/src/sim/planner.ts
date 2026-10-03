@@ -1,5 +1,5 @@
 /**
- * PathPlanner: the one place bots get paths from (map memo §8, critique "region nav + planner").
+ * PathPlanner: the one place NPCs and scripted humans get paths from (map memo §8, critique "region nav + planner").
  *
  * A request runs coarse A* over the region graph, then fine A* restricted to a *window* of the
  * region path (the first regions until WINDOW_MIN_PX of centroid travel, at least WINDOW_MIN and at
@@ -27,7 +27,7 @@ import type { RegionGraph } from "./regions.js";
 export const WORK_PER_MS = 6_000;
 /** Window: at least this many regions ahead (map memo K = 4) … */
 export const WINDOW_MIN = 4;
-/** … and at least this much centroid travel, so a window outlasts the bots' 2.5 s replan period. */
+/** … and at least this much centroid travel, so a window outlasts the walkers' 3 s replan period. */
 export const WINDOW_MIN_PX = 1800;
 export const WINDOW_MAX = 12;
 /** Start / goal points this close to a walkable cell still plan (players hug walls, chests sit in them). */

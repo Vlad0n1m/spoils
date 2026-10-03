@@ -44,6 +44,7 @@ import {
 import { containerTitle } from "../lib/items-ui";
 import type { ExtractStatus } from "./entities";
 import type { HudExtract, HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "./types";
+import { bodyTitle, type KillTally } from "./npc-labels";
 
 export function extractStatus(e: Pick<Extract, "openAt" | "closeAt">, clockMs: number): ExtractStatus {
   if (e.closeAt > 0 && clockMs >= e.closeAt) return "closed";
@@ -91,8 +92,8 @@ export function searchTitle(key: string, map: Pick<MapData, "containers"> | null
     return spot ? containerTitle(spot.kind) : "Container";
   }
   if (key.startsWith("k")) {
-    const label = state?.corpses.get(key.slice(1))?.label;
-    return label ? `${label}'s body` : "Body";
+    // NPC bodies read by role ("Marauder's body"), never as a nickname.
+    return bodyTitle(state?.corpses.get(key.slice(1))?.label);
   }
   return "";
 }
@@ -260,7 +261,7 @@ export function interactHint({ state, map, x, y, idx = null }: InteractInput): s
 export interface PlayerCounts {
   /** Players still on the map: alive and not extracted. */
   alive: number;
-  /** Roster size (humans + bots), never shrinks. */
+  /** Human roster size (NPCs never count as players), never shrinks. */
   total: number;
 }
 
@@ -292,6 +293,8 @@ export interface HudInput {
   selfPos: { x: number; y: number } | null;
   clockMs: number;
   killFeed: KillFeedEntry[];
+  /** The local player's kills by victim kind (renderer tally of its own KillMsgs). */
+  killTally?: KillTally;
   pingMs: number | null;
   /** Map collision index, for the interact hint's line-of-sight check (null before the map is built). */
   idx?: CollisionIndex | null;
@@ -300,7 +303,7 @@ export interface HudInput {
 }
 
 export function buildHud({
-  state, sessionId, selfKey, selfPos, clockMs, killFeed, pingMs, idx = null, map = null, move = null,
+  state, sessionId, selfKey, selfPos, clockMs, killFeed, killTally, pingMs, idx = null, map = null, move = null,
 }: HudInput): HudSnapshot {
   const me = state.players.get(sessionId) ?? null;
   const priv = selfKey ? (state.self.get(selfKey) ?? null) : null;
@@ -341,6 +344,7 @@ export function buildHud({
     extracts: onMap ? extracts : [],
     interactHint: canInteract ? interactHint({ state, map, x: selfPos!.x, y: selfPos!.y, idx }) : null,
     killFeed,
+    ...(killTally ? { killTally } : {}),
     pingMs,
   };
 }

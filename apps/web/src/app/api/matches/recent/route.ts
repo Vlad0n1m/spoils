@@ -10,8 +10,8 @@ const MATCH_LIMIT = 10;
 const ROW_LIMIT = 12;
 
 /**
- * Lobby board: latest human results from settled raids. Bots are left out — they fill demo
- * lobbies and would drown the real players.
+ * Lobby board: latest human results from settled raids. Participants are humans only (NPC MODEL
+ * v5); the isBot filter only drops rows of pre-v5 raids that still listed bots.
  */
 export async function GET() {
   try {

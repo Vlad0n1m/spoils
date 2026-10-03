@@ -153,6 +153,8 @@ function autoPicked(def: string): boolean {
  * then empty slots); whatever does not fit stays on the ground with the reduced quantity.
  */
 export function autoPickup(m: Match, rt: PlayerRuntime): void {
+  // NPCs never pick anything up (NPC MODEL v5): their ammo is a FREE reserve.
+  if (rt.isNpc) return;
   const p = rt.pub;
   for (const g of m.ground.near(p.x, p.y, PLAYER.AUTO_PICKUP_RADIUS)) {
     if (!autoPicked(g.item.def)) continue;
@@ -184,6 +186,7 @@ export function nearestGroundItem(m: Match, rt: PlayerRuntime): GroundRt | null 
  * one goes to storage or the ground), otherwise stored. Everything else is auto-placed.
  */
 export function pickupGround(m: Match, rt: PlayerRuntime, g: GroundRt): boolean {
+  if (rt.isNpc) return false;
   const it = g.item;
   const d = itemDef(it.def);
   if (!d) return false;

@@ -68,10 +68,14 @@ test("range: 1000 (+ target radius) is seen, 1030 is not; env multiplier and muz
   assert.equal(canSee(fog, V(1000, 2000), T(1600, 2000)), false);
   assert.equal(canSee(fog, V(1000, 2000), T(1600, 2000, { sinceShotMs: 200 })), true, "flash ignores weather");
   assert.equal(canSee(fog, V(1000, 2000), T(1600, 2000, { sinceShotMs: 300 })), false, "flash is over");
-  // Bots: the range cap applies even to a muzzle flash.
-  const bot = { ...open, rangeCap: VISION.BOT_RANGE_CAP };
-  assert.equal(canSee(bot, V(1000, 2000), T(1900, 2000, { sinceShotMs: 0 })), false);
-  assert.equal(canSee(bot, V(1000, 2000), T(1800, 2000)), true);
+  // NPCs: the calm sight cap hides a quiet target beyond it, but a muzzle flash is seen to the full
+  // VISION.RANGE (v5 review fix: no shooting NPCs from beyond their cap without being seen back).
+  const npc = { ...open, rangeCap: 800 };
+  assert.equal(canSee(npc, V(1000, 2000), T(1900, 2000)), false);
+  assert.equal(canSee(npc, V(1000, 2000), T(1800, 2000)), true);
+  assert.equal(canSee(npc, V(1000, 2000), T(1900, 2000, { sinceShotMs: 0 })), true, "flash beats the NPC cap");
+  assert.equal(canSee(npc, V(1000, 2000), T(2030, 2000, { sinceShotMs: 0 })), false, "never beyond VISION.RANGE");
+  assert.equal(canSee({ ...npc, rangeMult: 0.55 }, V(1000, 2000), T(1900, 2000, { sinceShotMs: 100 })), true);
 });
 
 test("visionRangeMult clamps env.vis to [MIN_RANGE_MULT, 1]", () => {

@@ -4,7 +4,7 @@ import { ACT, MATCH } from "@extract/shared";
 import { damagePlayer } from "./combat.js";
 import { spawnGroundItem } from "./inventory.js";
 import { makeItem } from "./items.js";
-import { addExtract, giveItem, giveStack, giveWeapon, ids, pl, place, rtOf, run, selfOf, testMatch } from "./test-utils.js";
+import { addExtract, giveItem, giveStack, giveWeapon, ids, npcOpts, npcsOf, pl, place, rtOf, run, selfOf, testMatch, testPost } from "./test-utils.js";
 
 const CH = MATCH.EXTRACT_CHANNEL_MS;
 
@@ -136,25 +136,34 @@ test("the phase opens at EXTRACT_OPEN_AT_MS (3:00); at DURATION_MS (30:00) every
   assert.equal(m.drainEvents().length, 0);
 });
 
-test("the match ends early once no human is left on the map", () => {
+test("the match ends early once no human is left on the map (NPCs never keep it alive); NPCs never extract", () => {
   const m = testMatch(1, {
-    roster: [
-      { userId: "u1", nickname: "Human", isBot: false },
-      { userId: null, nickname: "Bot", isBot: true },
-    ],
-    botBrains: false,
+    roster: [{ userId: "u1", nickname: "Human" }],
+    ...npcOpts([testPost(0, 3000, 1500)]),
+    npcBrains: false,
   });
-  const [h, bot] = ids(m);
+  const [h] = ids(m);
+  const [npc] = npcsOf(m);
+  assert.equal(npc!.self.extractMask, 0, "an NPC has no extract");
   addExtract(m, 1500, 1500);
+  // The NPC stands in an open extract the whole time: nothing happens to it.
+  addExtract(m, 3000, 1500);
   place(m, h!, 1500, 1500);
-  place(m, bot!, 3000, 1500);
   run(m, CH + 100);
   assert.ok(m.ended);
   const r = m.report!;
-  assert.equal(r.participants[0]!.exitType, "extract");
-  assert.equal(r.participants[1]!.exitType, "timeout");
-  assert.equal(r.participants[1]!.userId, null);
-  assert.equal(r.participants[1]!.isBot, true);
+  assert.deepEqual(r.participants.map((p) => [p.userId, p.exitType, p.isBot]), [["u1", "extract", false]], "humans only");
+  assert.notEqual(npc!.exitReport?.exit, "extract");
+  assert.deepEqual(r.npcSummary?.spawned, { boss: 0, guard: 0, marauder: 1 });
+});
+
+test("npcOnlyUntilMs: a rule test may run an NPC-only world for a while", () => {
+  const m = testMatch(1, { roster: [], ...npcOpts([testPost(0, 3000, 1500)]), npcOnlyUntilMs: 2000 });
+  run(m, 1500);
+  assert.equal(m.ended, false);
+  run(m, 600);
+  assert.ok(m.ended);
+  assert.deepEqual(m.report!.participants, []);
 });
 
 test("end report lists uniques left on the map (ground, armor with its points) and demo mints", () => {

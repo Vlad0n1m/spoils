@@ -71,6 +71,7 @@ import type { CameraView, GameContext, GameLayers, GameSystem } from "./systems"
 import { SYSTEM_FACTORIES } from "./systems-registry";
 import type { GameRendererApi, HudSnapshot, KillFeedEntry, RendererOptions } from "./types";
 import { WorldView, type ViewRect } from "./world";
+import { EMPTY_TALLY, bossKindOfLabel, corpseNpcRole, npcDisplayName, npcRoleName, tallyKill, type KillTally, type NpcRoleName } from "./npc-labels";
 import { getGameAudio } from "./audio/game-audio";
 import { getCameraRig } from "./camera";
 
@@ -245,6 +246,12 @@ export class GameRenderer implements GameRendererApi {
   private pingMs: number | null = null;
   private killFeed: Array<KillFeedEntry & { receivedAt: number }> = [];
   private killSeq = 0;
+  /** The local player's kills this raid by victim kind (outcome screen: players vs NPCs). */
+  private killTally: KillTally = { ...EMPTY_TALLY };
+  /** NPC display names this client has seen with their role (corpse labels → NPC body look). */
+  private readonly npcNames = new Map<string, NpcRoleName>();
+  /** Per corpse id: resolved NPC look (recomputed only when the label changes). */
+  private readonly corpseNpc = new Map<string, { label: string; npc: NpcRoleName | null; name: string }>();
   /** Last player counts taken while the raid was running (the end of the match clears "alive"). */
   private counts: PlayerCounts | null = null;
 
@@ -643,10 +650,22 @@ export class GameRenderer implements GameRendererApi {
       return;
     }
     const view = new CorpseView(this.icons);
-    view.sync(c);
+    const look = this.corpseLook(id, c.label);
+    view.sync(c, look.npc, look.name);
     view.root.alpha = 0;
     this.corpseLayer.addChild(view.root);
     this.corpses.set(id, { state: c, view, removing: false });
+  }
+
+  /** NPC look of a corpse (role + display name), cached per id until its label changes. */
+  private corpseLook(id: string, label: string): { npc: NpcRoleName | null; name: string } {
+    let l = this.corpseNpc.get(id);
+    if (!l || l.label !== label) {
+      const npc = corpseNpcRole(label, this.npcNames);
+      l = { label, npc, name: npc ? npcDisplayName(npc, bossKindOfLabel(label), label) : label };
+      this.corpseNpc.set(id, l);
+    }
+    return l;
   }
 
   private markRemoving<T, V>(m: Map<string, Fading<T, V>>, id: string) {
@@ -802,9 +821,14 @@ export class GameRenderer implements GameRendererApi {
       killer: m.killer,
       victim: m.victim,
       weapon: m.weapon,
+      killerRole: m.killerRole ?? 0,
+      victimRole: m.victimRole ?? 0,
       atMs: this.clockNow(now),
       receivedAt: now,
     });
+    this.killTally = tallyKill(this.killTally, m, this.selfId);
+    const vr = npcRoleName(m.victimRole);
+    if (vr && m.victim) this.npcNames.set(m.victim, vr);
     if (this.killFeed.length > KILL_FEED_MAX) this.killFeed.splice(0, this.killFeed.length - KILL_FEED_MAX);
     // Only bodies this client can see get the burst (KILL is broadcast with names only).
     const v = this.players.get(m.victimId)?.view;
@@ -1044,8 +1068,12 @@ export class GameRenderer implements GameRendererApi {
       v.root.alpha = v.alpha;
       v.root.visible = v.alpha > 0.01 && inView(v.x, v.y);
       if (!v.root.visible) continue;
-      // Bosses / guards (loot economy v4): sprite, ring, tag and HP bar against Player.maxHp.
+      // NPCs (bosses / guards v4, marauders v5): sprite, ring, tag and HP bar against Player.maxHp.
       v.setRole(p.role ?? 0, p.nickname, this.mapData?.bosses, p.x, p.y);
+      if (p.role && !this.npcNames.has(p.nickname)) {
+        const r = npcRoleName(p.role);
+        if (r) this.npcNames.set(p.nickname, r);
+      }
       v.setColor(p.color);
       v.setNickname(p.nickname);
       v.setWeapon(p.weapon);
@@ -1081,11 +1109,15 @@ export class GameRenderer implements GameRendererApi {
       if (e.removing && v.alpha <= 0) {
         v.destroy();
         this.corpses.delete(id);
+        this.corpseNpc.delete(id);
         continue;
       }
       v.root.alpha = v.alpha;
       v.root.visible = v.alpha > 0.01;
-      if (v.root.visible) v.sync(c);
+      if (v.root.visible) {
+        const look = this.corpseLook(id, c.label);
+        v.sync(c, look.npc, look.name);
+      }
     }
 
     const mask = self?.extractMask ?? 0;
@@ -1284,6 +1316,7 @@ export class GameRenderer implements GameRendererApi {
       selfPos: this.selfRender,
       clockMs: clock,
       killFeed: this.killFeed.map(({ receivedAt: _r, ...e }) => e),
+      killTally: this.killTally,
       pingMs: this.pingMs,
       idx: this.idx,
       map: this.mapData,

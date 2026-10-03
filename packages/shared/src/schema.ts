@@ -25,8 +25,13 @@ export const ACT = {
   WALK: 32,
 } as const;
 
-/** Player.role values (v4 bosses). The boss kind is in the nickname (BOSSES[kind].name / guardName). */
-export const NPC_ROLE = { NONE: 0, BOSS: 1, GUARD: 2 } as const;
+/**
+ * Player.role values. 0 = a human player; everything else is an NPC (v5: there are no player-bots).
+ * Boss / guard kind is in the nickname (BOSSES[kind].name / guardName); marauders are named
+ * NPC_TAG.marauder (npc.ts), never a human-like nickname.
+ */
+export const NPC_ROLE = { NONE: 0, BOSS: 1, GUARD: 2, MARAUDER: 3 } as const;
+export type NpcRole = (typeof NPC_ROLE)[keyof typeof NPC_ROLE];
 
 /** BattleState.containerState values per MapData.containers index. */
 export const CONTAINER_STATE = { UNTOUCHED: 0, OPENED: 1, EMPTIED: 2 } as const;
@@ -98,9 +103,9 @@ export class Player extends Schema {
   @type("uint8") act = 0;
   @type("boolean") alive = true;
   @type("number") diedAt = 0;
-  /** NPC_ROLE: 0 player / regular bot, 1 boss, 2 boss guard (loot economy v4; render + name color). */
+  /** NPC_ROLE: 0 human player, 1 boss, 2 boss guard, 3 marauder (render + name color + HP bar). */
   @type("uint8") role = 0;
-  /** HP bar maximum (PLAYER.MAX_HP; bosses and guards have more, BOSSES[kind].hp / guards[i].hp). */
+  /** HP bar maximum (PLAYER.MAX_HP; NPCs: BOSSES[kind].hp / guards[i].hp / MARAUDER[class].hp). */
   @type("uint16") maxHp = 100;
 }
 

@@ -1,13 +1,16 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   DOG_TAG,
+  FREE_KIT,
   MATCH,
+  NPC,
   PROGRESSION,
   dogTagCr,
   dogTagPairMult,
   itemDef,
   junkSellCr,
   levelForXp,
+  riskUnitOf,
   type GameServerBoot,
   type JunkSellLine,
   type LoadoutSnapshot,
@@ -61,6 +64,45 @@ async function lockRaid(tx: Tx, matchId: string, mode: "share" | "update"): Prom
 }
 
 /**
+ * Did `userId` enter this LIVE raid on the free kit (no accepted loadout, or one without any unique)?
+ * Demo raids (no raids/start, or the demo fallback) never count: everyone there is on free kits.
+ */
+export function freeKitRaid(raid: Pick<RaidRow, "mode" | "start_response">, userId: string): boolean {
+  if (raid.mode !== "live" || !raid.start_response) return false;
+  const acc = raid.start_response.accepted.find((a) => a.userId === userId);
+  return !acc || !acc.entries.some((e) => !!e.uid);
+}
+
+/**
+ * Did `userId` enter this LIVE raid without risking anything: the free kit, or only bound gear?
+ * (Demo raids: false — they allocate no pool items.)
+ */
+async function riskFreeRaider(tx: Tx, raid: Pick<RaidRow, "mode" | "start_response">, userId: string): Promise<boolean> {
+  if (raid.mode !== "live" || !raid.start_response) return false;
+  const acc = raid.start_response.accepted.find((a) => a.userId === userId);
+  const uids = (acc?.entries ?? []).map((e) => e.uid).filter((u): u is string => !!u && isUuid(u));
+  if (uids.length === 0) return true;
+  const r = await tx.execute<{ n: number }>(
+    sql`select count(*)::int as n from items where id in (${sql.join(uids.map((u) => sql`${u}::uuid`), sql`, `)}) and bound = false`,
+  );
+  return Number(r.rows[0]?.n ?? 0) === 0;
+}
+
+/** Items the pool allocation put into this match (containers, bosses, carriers). */
+async function poolAllocatedIds(tx: Tx, matchId: string): Promise<Set<string>> {
+  const r = await tx.execute<{ item_id: string }>(
+    sql`select item_id from item_events where ref_id = ${matchId} and reason in ('alloc', 'alloc_boss', 'alloc_npc')`,
+  );
+  return new Set(r.rows.map((x) => x.item_id));
+}
+
+/** Junk lines (not dog tags) of a free-kit raid's sale at FREE_KIT.AUTOSELL_MULT. */
+function freeKitSale(sale: { total: number; lines: JunkSellLine[] }): { total: number; lines: JunkSellLine[] } {
+  const lines = sale.lines.map((l) => (l.def === "junk_dogtag" ? l : { ...l, cr: Math.floor(l.cr * FREE_KIT.AUTOSELL_MULT) }));
+  return { total: lines.reduce((a, l) => a + l.cr, 0), lines };
+}
+
+/**
  * Exit/end reports for a match whose raids/start never reached the web (the game server fell back
  * to demo mode) still settle: the row is created lazily with started=false. No item of such a
  * match is in_raid in the DB, so only fungibles (junk CR, ammo, meds) and XP apply.
@@ -82,7 +124,10 @@ async function ensureRaid(tx: Tx, matchId: string, mapId: string, matchSeed: num
  * match_id. Then the lost pool is released (live mode only, allocatePool, LOOT ECONOMY v4): risk
  * units of the accepted loadouts decide the count (round(k × risk), capped), the spawned bosses
  * (req.bosses) get the best items first plus a display top-up while someone risked gear, the rest
- * lands only in T3/T4 containers. A lobby of free kits gets no uniques at all.
+ * lands only in T3/T4 containers and, NPC MODEL v5, on spawned T3/T4 marauders (req.carriers, one
+ * each). A lobby of free kits gets no uniques at all. v5 raids are humans only: `players` never
+ * holds an NPC, and only accepted loadouts add risk units. Demo mode releases nothing (the server
+ * never mints uniques onto NPCs).
  */
 export async function startRaid(db: Db, req: RaidStartRequest, now = new Date()): Promise<RaidStartResponse> {
   return db.transaction(async (tx) => {
@@ -152,7 +197,8 @@ export async function startRaid(db: Db, req: RaidStartRequest, now = new Date())
         if (!it || it.state !== "in_raid" || it.loadoutId !== lo.id || it.matchId !== null) continue;
         await applyMove(tx, it, { state: "in_raid", matchId: req.matchId }, { reason: "start", refId: req.matchId });
         entries.push({ key: e.key, uid: it.id, def: it.defId, qty: 1, rarity: it.rarity, dur: toRaidDur(it.defId, it.durability) });
-        riskUnits++;
+        // Bound or worn-out (< POOL.RISK_MIN_DUR_PCT) gear rides along but risks nothing for the pool.
+        riskUnits += riskUnitOf({ bound: it.bound, dur: it.durability });
       }
       const lv = await tx.execute<{ level: number }>(sql`select level from users where id = ${lo.user_id}`);
       accepted.push({ loadoutId: lo.id, userId: lo.user_id, level: Number(lv.rows[0]?.level ?? 1), entries });
@@ -163,11 +209,13 @@ export async function startRaid(db: Db, req: RaidStartRequest, now = new Date())
         ? await allocatePool(tx, {
             matchId: req.matchId,
             matchSeed: req.matchSeed,
+            allocSeed: req.allocSeed,
             containers: req.containers,
             bosses: req.bosses,
+            carriers: req.carriers,
             riskUnits,
           })
-        : { containerLoot: {}, released: 0, boss: 0, risk: 0 };
+        : { containerLoot: {}, released: 0, boss: 0, carrier: 0, risk: 0 };
     const response: RaidStartResponse = {
       accepted,
       rejected,
@@ -206,7 +254,8 @@ export interface ExitResult {
  * - extracted ammo/meds: stash_stacks; junk: autosell junkSellCr × autosell_mult, dog tags with
  *   the 24 h pair-repeat rule, one credit_ledger row (autosell, exit:<matchId>).
  * - lost: death = broke (−8 dur into the pool), timeout = no wear; destroyed: → destroyed.
- * - XP / level / matches_played; the user's loadout of this match → settled.
+ * - XP / level / matches_played (raid + extract + human kills + bosses + NPC MODEL v5 npcKills at
+ *   XP_NPC, capped at NPC.MAX_PER_RAID); the user's loadout of this match → settled.
  * Refused (status voided → HTTP 409) once the raid was voided, so the server stops retrying.
  */
 export async function applyExit(db: Db, report: PlayerExitReport, now = new Date()): Promise<ExitResult> {
@@ -249,6 +298,11 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
     const skipped: string[] = [];
     const pool: PoolCandidate[] = [];
     const junk: SettledItem[] = [];
+    // v5 review (risk ties reward per player): a pool unique released into this match (container,
+    // boss or carrier allocation) that a player who risked nothing extracts arrives BOUND — usable,
+    // never sellable. Alt farms on free / bound kits cannot turn other players' risk into SOL.
+    const bindPool = !guest && (await riskFreeRaider(tx, raid, report.userId));
+    const allocated = bindPool ? await poolAllocatedIds(tx, report.matchId) : new Set<string>();
 
     for (const s of report.extracted) {
       const d = itemDef(s.def);
@@ -274,6 +328,7 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
             loadoutId: null,
             durability: Math.min(it.durability, fromRaidDur(s.def, s.dur)),
             lockRaidsDelta: -1,
+            bind: allocated.has(it.id),
           },
           { reason: "extract", refId: report.matchId },
         );
@@ -318,6 +373,9 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
       const mults = await dogTagMults(tx, user!.id, report.matchId, junk, now);
       sale = junkSellCr(junk, autosellMult, 0, (i) => mults[i] ?? 1);
     }
+    // A live raid entered with no unique (the free kit): its junk sells at FREE_KIT.AUTOSELL_MULT
+    // (dog tags keep their price — they reward fights, not hauls).
+    if (freeKitRaid(raid, report.userId)) sale = freeKitSale(sale);
     let credited = 0;
     if (!guest && sale.total > 0) {
       const c = await credit(tx, user!.id, sale.total, "autosell", `exit:${report.matchId}`);
@@ -331,7 +389,8 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
         PROGRESSION.XP_RAID +
         (report.exit === "extract" ? PROGRESSION.XP_EXTRACT : 0) +
         Math.max(0, report.kills) * PROGRESSION.XP_KILL +
-        Math.max(0, report.stats?.bossKills ?? 0) * PROGRESSION.XP_BOSS;
+        Math.max(0, report.stats?.bossKills ?? 0) * PROGRESSION.XP_BOSS +
+        npcKillXp(report);
       const total = Number(user!.xp) + xp;
       level = levelForXp(total);
       await tx.execute(
@@ -349,6 +408,25 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
     if (skipped.length) console.warn(`[raids/exit] ${report.matchId} ${report.userId}: skipped uids ${skipped.join(",")}`);
     return { status: "applied", guest, credits: credited, sold: sale.lines, autosellMult, xp, level, skipped };
   });
+}
+
+/**
+ * XP for NPC kills (v5): marauders at XP_NPC, guards (RaidStats.guardKills, a subset of npcKills)
+ * at XP_GUARD; bosses are paid via bossKills. npcKillCount caps the total at NPC.MAX_PER_RAID.
+ */
+export function npcKillXp(report: Pick<PlayerExitReport, "stats">): number {
+  const n = npcKillCount(report);
+  const g = Math.min(n, Math.max(0, Math.floor(Number(report.stats?.guardKills ?? 0)) || 0));
+  return (n - g) * PROGRESSION.XP_NPC + g * PROGRESSION.XP_GUARD;
+}
+
+/**
+ * NPC MODEL v5: marauders + guards this human killed (RaidStats.npcKills; bosses count in
+ * bossKills), capped at NPC.MAX_PER_RAID so an NPC sweep's XP stays bounded.
+ */
+export function npcKillCount(report: Pick<PlayerExitReport, "stats">): number {
+  const n = Math.floor(Number(report.stats?.npcKills ?? 0));
+  return Number.isFinite(n) ? Math.max(0, Math.min(NPC.MAX_PER_RAID, n)) : 0;
 }
 
 /**
@@ -391,10 +469,12 @@ export interface EndResult {
 }
 
 /**
- * POST /api/raids/end. leftOnMap uniques enter the pool with no wear, then a defensive sweep moves
+ * POST /api/raids/end. leftOnMap uniques enter the pool with no wear (NPC MODEL v5: also pool
+ * uniques on living or unlooted NPCs, boss bags and carrier marauders), then a defensive sweep moves
  * anything of this match still in_raid into the pool (logged as an anomaly — every uid should
  * have been reported exactly once), remaining in_raid loadouts settle, the raid becomes `settled`
- * and the scoreboard goes to match_results. Idempotent on raids.status.
+ * and the scoreboard goes to match_results with humans only (humanParticipants; NPC totals ride in
+ * npcSummary). Idempotent on raids.status.
  * Contract for the game server: post every exit report BEFORE the end report, otherwise a late
  * exit finds its items already swept.
  */
@@ -416,8 +496,9 @@ export async function applyEnd(db: Db, report: MatchEndReport, now = new Date())
         .filter((s) => s.uid && itemDef(s.def)?.unique)
         .map((s) => ({ id: s.uid, reportedPct: fromRaidDur(s.def, s.dur), broke: false, reason: "left" })),
     );
-    // Bots get no exit report: what broke on a bot's death enters the pool with the death wear,
-    // armor worn out on a bot is destroyed (extracts / timeouts of bots come in leftOnMap).
+    // @deprecated (one release, NPC MODEL v5): only pre-v5 servers with player-bots send botLost /
+    // botDestroyed (in-flight and orphan reports). v5 NPCs never break (noBreak) nor wear pool
+    // gear, so a v5 report has neither and settles through leftOnMap alone.
     const botLost = await enterPool(
       tx,
       report.matchId,
@@ -461,9 +542,13 @@ export async function applyEnd(db: Db, report: MatchEndReport, now = new Date())
 
     const exits = await tx.select().from(raidExits).where(eq(raidExits.matchId, report.matchId));
     const extractedBy = new Map(exits.map((e) => [e.userId, e.report.extracted]));
+    // The deprecated bot fields are settlement input only, never part of the stored scoreboard.
+    const stored: MatchEndReport = { ...report };
+    delete stored.botLost;
+    delete stored.botDestroyed;
     const payload: MatchResultPayload = {
-      ...report,
-      participants: report.participants.map((p) => {
+      ...stored,
+      participants: humanParticipants(report.participants).map((p) => {
         const ex = p.userId ? extractedBy.get(p.userId) : undefined;
         return ex ? { ...p, extracted: ex } : p;
       }),
@@ -486,6 +571,15 @@ export async function applyEnd(db: Db, report: MatchEndReport, now = new Date())
       skipped: [...left.skipped, ...botLost.skipped],
     };
   });
+}
+
+/**
+ * The humans of an end report (NPC MODEL v5: participants are humans only). Drops entries of
+ * pre-v5 servers that still listed bots (isBot, or no userId), so match_results, the outcome
+ * screen and the recent-raids list never show an NPC or a bot.
+ */
+export function humanParticipants<P extends { userId: string | null; isBot: boolean }>(ps: readonly P[]): P[] {
+  return ps.filter((p) => !p.isBot && !!p.userId);
 }
 
 // ============================================================================ void

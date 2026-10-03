@@ -35,6 +35,11 @@ const STEPS: { title: string; body: string; icon: string }[] = [
     body: `Space rolls (${ROLL_CD_S} s cooldown). Shift walks quietly: half speed, short footstep range. Sounds you hear show up as markers around you — steps, shots, looting, extracts — with an arrow when it is behind you.`,
   },
   {
+    title: "Locals",
+    icon: "/sprites/boss.png",
+    body: `Everyone else in the raid is a real player — up to ${MATCH.MAX_HUMANS}, and nobody fills empty seats. The rest are NPCs: marauder squads hold the towns and road camps, and bosses sit in the top POIs with their guards. NPCs guard their post, fight whoever comes close and drop scarce loot; they never loot or extract.`,
+  },
+  {
     title: "Carry",
     icon: "/sprites/backpack_2.png",
     body: `${POCKET_SLOTS} pockets plus a backpack (${BAGS} slots); ammo, meds and junk stack in a slot. Heal with 3 (bandage) or 4 (medkit), switch guns with 1 / 2. Junk you bring out is auto-sold for CR.`,

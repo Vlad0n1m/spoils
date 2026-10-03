@@ -9,7 +9,8 @@
  *   3. extracts (fixed by the template), POI layouts (BSP buildings, props), hunter cabins;
  *   4. side spawns (before props so trees keep the circles clear);
  *   5. props: road car wrecks, forest/steppe scatter, bushes, decals;
- *   6. spots: room containers + loot, wilderness stashes + loot, bosses, ambient emitters;
+ *   6. spots: room containers + loot, wilderness stashes + loot, bosses, ambient emitters, then
+ *      marauder posts (NPC MODEL v5; own rng stream, no reservations, not part of mapHash);
  *   7. validation: flood-fill reachability drops/nudges unreachable spots (spots.ts).
  *
  * Determinism rules (types.ts header; determinism.test.ts greps these sources): mulberry32 only,
@@ -26,6 +27,7 @@ import {
   placeBosses,
   placeBuildingSpots,
   placeExtracts,
+  placeNpcPosts,
   placeSpawns,
   placeWildSpots,
   validateMap,
@@ -115,6 +117,8 @@ export function generateMapWithReport(
   placeWildSpots(ctx);
   placeBosses(ctx);
   placeAmbient(ctx);
+  // Last, from its own rng stream and reserving nothing: posts never move geometry (not hashed).
+  placeNpcPosts(ctx);
 
   const t = ctx.terrain;
   const map: MapData = {
@@ -141,6 +145,7 @@ export function generateMapWithReport(
     extracts: ctx.extracts,
     bosses: ctx.bosses,
     ambient: ctx.ambient,
+    npcPosts: ctx.npcPosts,
   };
   const validation = validateMap(map);
   // A template bug (unreachable extract, starved side) must never ship silently.
@@ -160,6 +165,7 @@ export function generateMapWithReport(
     extracts: map.extracts.length,
     bosses: map.bosses.length,
     ambient: map.ambient.length,
+    npcPosts: map.npcPosts?.length ?? 0,
   };
   return { map, report: { validation, counts } };
 }

@@ -166,10 +166,10 @@ function RaidCard({
       </div>
 
       <ul className="mt-6 flex flex-wrap gap-2 text-xs tracking-wide text-white/80">
-        <InfoChip>Up to {MATCH.MAX_PLAYERS} raiders</InfoChip>
+        <InfoChip>Up to {MATCH.MAX_HUMANS} real players</InfoChip>
         <InfoChip>{Math.round(MATCH.DURATION_MS / 60_000)} min raid</InfoChip>
         <InfoChip>Extracts open at {fmtClock(MATCH.EXTRACT_OPEN_AT_MS)}</InfoChip>
-        <InfoChip>Bots fill empty spots</InfoChip>
+        <InfoChip>NPC camps &amp; bosses</InfoChip>
       </ul>
 
       {error && (

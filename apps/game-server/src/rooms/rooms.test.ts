@@ -2,7 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { matchMaker, type Room } from "@colyseus/core";
-import { ROOMS, type JoinTicket } from "@extract/shared";
+import { MATCH, ROOMS, type JoinTicket } from "@extract/shared";
 import { signJoinTicket } from "../auth/ticket.js";
 import { BattleRoom, sanitizeRoster } from "./battle-room.js";
 import { MatchmakingRoom } from "./matchmaking-room.js";
@@ -23,8 +23,8 @@ const ticket = (userId: string): JoinTicket =>
   signJoinTicket({ userId, nickname: userId.slice(0, 12), issuedAt: Date.now() }, SECRET);
 
 const roster = [
-  { userId: "alice", nickname: "Alice", isBot: false },
-  { userId: null, nickname: "Bot", isBot: true },
+  { userId: "alice", nickname: "Alice" },
+  { userId: "bob", nickname: "Bob" },
 ];
 
 async function listing(roomId: string) {
@@ -80,15 +80,20 @@ test("battle patches are tick-driven (patchRate null) and a refused create throw
   assert.equal((room as unknown as { state?: unknown }).state, undefined);
 });
 
-test("roster sanitizing keeps a human's loadoutId and never gives one to a bot", () => {
+test("roster sanitizing: humans only (a bot entry refuses the roster), loadoutIds kept, ≤ MATCH.MAX_HUMANS distinct users", () => {
   const r = sanitizeRoster([
-    { userId: "alice", nickname: "Alice", isBot: false, loadoutId: "L-1" },
-    { userId: null, nickname: "Bot", isBot: true, loadoutId: "L-evil" },
+    { userId: "alice", nickname: "Alice", loadoutId: "L-1" },
     { userId: "bob", nickname: "Bob", isBot: false },
   ])!;
-  assert.deepEqual(r.map((e) => e.loadoutId), ["L-1", "", ""]);
+  assert.deepEqual(r.map((e) => e.loadoutId), ["L-1", ""]);
+  assert.ok(r.every((e) => !("isBot" in e)));
+  assert.equal(sanitizeRoster([{ userId: "alice", nickname: "Alice" }, { userId: null, nickname: "Bot", isBot: true, loadoutId: "L-evil" }]), null, "no bot entries");
   assert.equal(sanitizeRoster([{ userId: "a", nickname: "A", isBot: false }, { userId: "a", nickname: "B", isBot: false }]), null);
+  assert.equal(sanitizeRoster([{ userId: null, nickname: "Nobody" }]), null, "every seat is a user");
   assert.equal(sanitizeRoster([]), null);
+  const full = Array.from({ length: MATCH.MAX_HUMANS }, (_, i) => ({ userId: `u${i}`, nickname: `U${i}` }));
+  assert.equal(sanitizeRoster(full)!.length, MATCH.MAX_HUMANS);
+  assert.equal(sanitizeRoster([...full, { userId: "x", nickname: "X" }]), null, "never a bigger match");
 });
 
 test("a client cannot create a battle or choose its roster", async () => {
@@ -110,7 +115,8 @@ test("a client cannot create a battle or choose its roster", async () => {
 
 test("battle seats: only roster players with a ticket, one pending seat each", async () => {
   const roomId = await launchBattle();
-  assert.equal((await listing(roomId))?.maxClients, 2);
+  // Two humans in the roster, ×2 for a reconnect racing its stale socket.
+  assert.equal((await listing(roomId))?.maxClients, 4);
 
   await assert.rejects(matchMaker.joinById(roomId, {}, {} as never), /onAuth|invalid_ticket/);
   await assert.rejects(matchMaker.joinOrCreate(ROOMS.BATTLE, {}, {} as never), /onAuth|invalid_ticket/);

@@ -90,7 +90,7 @@ export function registerInventoryHandlers(room: Room, match: () => Match, intent
 
 /** Merge the web's settlement into the player's OUTCOME and resend it. Exported for tests. */
 export function applyExitSettled(room: Pick<Room, "clients">, m: Match, userId: string, r: ExitSettled): OutcomeMsg | null {
-  const rt = m.allRuntimes().find((x) => !x.isBot && x.userId === userId);
+  const rt = m.allRuntimes().find((x) => !x.isNpc && x.userId === userId);
   if (!rt?.outcome) return null;
   rt.outcome = { ...rt.outcome, credits: r.credits, sold: r.sold, guest: r.guest };
   const client = room.clients.find((c: Client) => c.sessionId === rt.id);
@@ -122,6 +122,8 @@ function devHook(m: Match, client: Client, raw: unknown): void {
 export interface RaidLaunchOptions {
   matchId: string;
   mapSeed: number;
+  /** Server-secret loot / NPC seed (Match.lootSeed; never synced to clients). */
+  lootSeed: number;
   mode: RaidMode;
   /** raids/start accepted snapshots (live only). */
   loadouts: LoadoutSnapshot[];
@@ -133,6 +135,12 @@ export interface RaidLaunchOptions {
 
 const MAX_ENTRIES = 4 + 4 + 16;
 const MAX_POOL_PER_CONTAINER = 16;
+/**
+ * containerLoot keys raids/start may use: a container index, a boss bag "boss:<kind>" (v4), the
+ * legacy "boss" share, or a marauder carrier "npc:<post>.<member>" (v5). Anything else is dropped
+ * (never registered: the web sweeps it back to the pool).
+ */
+const POOL_KEY_RE = /^(?:\d{1,6}|boss|boss:[a-z]{1,16}|npc:\d{1,5}\.\d{1,2})$/;
 
 function sanitizeItem(raw: unknown, seen: Set<string>, needUid: boolean): SettledItem | null {
   if (!raw || typeof raw !== "object") return null;
@@ -166,13 +174,14 @@ export function raidOptions(raw: unknown, roster: readonly RosterEntry[]): Parti
   const out: Partial<MatchOptions> = {};
   if (str(o.matchId, 64) && /^[0-9a-zA-Z-]{8,64}$/.test(o.matchId)) out.matchId = o.matchId;
   if (intIn(o.mapSeed, 0, 0xffffffff)) out.mapSeed = o.mapSeed;
+  if (intIn(o.lootSeed, 0, 0xffffffff)) out.lootSeed = o.lootSeed;
   const mode: RaidMode = o.mode === "live" ? "live" : "demo";
   out.mode = mode;
   if (mode !== "live") return out;
 
   const seen = new Set<string>();
   const loadouts: LoadoutSnapshot[] = [];
-  const byUser = new Map(roster.filter((r) => !r.isBot && r.userId).map((r) => [r.userId!, r.loadoutId ?? ""]));
+  const byUser = new Map(roster.filter((r) => r.isBot !== true && r.userId).map((r) => [r.userId!, r.loadoutId ?? ""]));
   for (const s of Array.isArray(o.loadouts) ? o.loadouts.slice(0, roster.length) : []) {
     if (!s || typeof s !== "object") continue;
     const snap = s as Record<string, unknown>;
@@ -196,7 +205,7 @@ export function raidOptions(raw: unknown, roster: readonly RosterEntry[]): Parti
   const pool: Record<string, SettledItem[]> = {};
   const cl = o.containerLoot && typeof o.containerLoot === "object" ? (o.containerLoot as Record<string, unknown>) : {};
   for (const [k, list] of Object.entries(cl)) {
-    if (!/^\d{1,6}$/.test(k) || !Array.isArray(list)) continue;
+    if (!POOL_KEY_RE.test(k) || !Array.isArray(list)) continue;
     const items: SettledItem[] = [];
     for (const raw of list.slice(0, MAX_POOL_PER_CONTAINER)) {
       const it = sanitizeItem(raw, seen, true);

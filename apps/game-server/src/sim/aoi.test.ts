@@ -5,7 +5,7 @@ import { AoiSystem, type AoiEntity } from "./aoi.js";
 import { spawnGroundItem } from "./inventory.js";
 import { makeItem } from "./items.js";
 import { Match } from "./match.js";
-import { counterUid, humans, ids, place, rtOf, testMatch } from "./test-utils.js";
+import { counterUid, humans, ids, npcOpts, npcsOf, place, rtOf, testMatch, testPost } from "./test-utils.js";
 
 const item = (m: Match, x: number, y: number): GroundItem => spawnGroundItem(m, makeItem("bandage", { qty: 1 }), x, y);
 const keys = (es: readonly AoiEntity[]) => es.map((e) => e.id).sort();
@@ -77,21 +77,22 @@ test("aoi: crossing a cell adds the entering cells and removes the leaving ones;
   assert.deepEqual(keys(m.aoi.ring(m, ra, 3000, 1000)), [far.id]);
 });
 
-test("aoi: bots are never viewers", () => {
-  const m = testMatch(1, { roster: [{ userId: null, nickname: "Bot", isBot: true }, ...humans(1)], botBrains: false });
+test("aoi: NPCs are never viewers", () => {
+  const m = testMatch(1, { ...npcOpts([testPost(0, 1000, 1100)]), npcBrains: false });
+  const npc = npcsOf(m)[0]!;
   item(m, 1000, 1000);
   m.step(SERVER_TICK_MS);
   item(m, 1001, 1000);
   m.step(SERVER_TICK_MS);
   const viewers = m.aoi.drainDiffs().map((d) => d.viewer);
-  assert.ok(!viewers.includes(0), "the bot (roster 0) gets no diffs");
+  assert.ok(!viewers.includes(npc.rosterIndex), "the NPC gets no diffs");
 });
 
 test("aoi: 3000 items × 32 viewers per tick is far below the budget", () => {
   const map = generateMap("steppe");
   const m = new Match({
     roster: humans(32), rng: mulberry32(5), map, newUid: counterUid, now: () => 0,
-    emptyWorld: true, botBrains: false, envSeed: 2, weatherOverride: "clear",
+    emptyWorld: true, npcBrains: false, envSeed: 2, weatherOverride: "clear",
   });
   const rng = mulberry32(1);
   for (let k = 0; k < 3000; k++) item(m, 200 + rng() * (map.width - 400), 200 + rng() * (map.height - 400));

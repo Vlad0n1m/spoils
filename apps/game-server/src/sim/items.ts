@@ -142,38 +142,27 @@ function isReportedUnique(s: SettledItem): boolean {
 }
 
 /**
- * Bots are never reported to the web (no PlayerExitReport), so uniques they picked up (lost-pool
- * allocations, a dead player's gear) would stay in_raid on the web and be swept as anomalies by
- * raids/end. Their resolutions ride on the MatchEndReport instead:
- * - extract / timeout: the items left the match with nobody to own them → leftOnMap (pool, no wear);
- * - death: uniques that broke → botLost (pool with the death wear; survivors are in the corpse,
- *   already in leftOnMap through the containers);
- * - armor worn to 0 → botDestroyed.
- * Returns a new report; leftOnMap keeps its order with the bot items appended. Idempotent per uid.
+ * NPCs are never reported to the web (no PlayerExitReport). Match.end already settles what they
+ * carry: a living NPC's pool uniques (boss bag, carrier) are leftOnMap (back to the pool, no wear),
+ * a dead NPC's are in its corpse (leftOnMap unless a human took them) and nothing of theirs ever
+ * breaks (NPC.NO_BREAK) or wears out (their armor is FREE). This is the safety net for anything an
+ * NPC exit report still lists (`lost` / `extracted` of a timeout): appended to leftOnMap, once per
+ * uid. It never produces the deprecated botLost / botDestroyed. Returns a new report.
  */
-export function withBotSettlement(
+export function withNpcSettlement(
   report: MatchEndReport,
-  bots: ReadonlyArray<{ isBot: boolean; exitReport: PlayerExitReport | null }>,
+  runtimes: ReadonlyArray<{ isNpc: boolean; exitReport: PlayerExitReport | null }>,
 ): MatchEndReport {
   const seen = new Set(report.leftOnMap.map((s) => s.uid).filter(Boolean));
   const left: SettledItem[] = [];
-  const lost: SettledItem[] = [...(report.botLost ?? [])];
-  const destroyed: SettledItem[] = [...(report.botDestroyed ?? [])];
-  for (const s of [...lost, ...destroyed]) seen.add(s.uid);
-  const add = (to: SettledItem[], list: readonly SettledItem[]) => {
-    for (const s of list) {
+  for (const rt of runtimes) {
+    const r = rt.exitReport;
+    if (!rt.isNpc || !r) continue;
+    for (const s of [...r.extracted, ...r.lost]) {
       if (!isReportedUnique(s) || seen.has(s.uid)) continue;
       seen.add(s.uid);
-      to.push(s);
+      left.push(s);
     }
-  };
-  for (const b of bots) {
-    const r = b.exitReport;
-    if (!b.isBot || !r) continue;
-    add(destroyed, r.destroyed);
-    if (r.exit === "extract") add(left, r.extracted);
-    else if (r.exit === "dead") add(lost, r.lost);
-    else add(left, r.lost);
   }
-  return { ...report, leftOnMap: [...report.leftOnMap, ...left], botLost: lost, botDestroyed: destroyed };
+  return left.length ? { ...report, leftOnMap: [...report.leftOnMap, ...left] } : report;
 }

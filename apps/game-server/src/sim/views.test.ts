@@ -37,7 +37,7 @@ import { AoiSystem } from "./aoi.js";
 import { CLIP_BLUR, buildBatches } from "./audience.js";
 import { Match } from "./match.js";
 import { CLIP_MIN_PX } from "./spatial.js";
-import { counterUid, giveWeapon, testMap } from "./test-utils.js";
+import { counterUid, giveWeapon, npcOpts, testMap, testPost } from "./test-utils.js";
 import { ViewSync } from "./views.js";
 
 Encoder.BUFFER_SIZE = NET.ENCODER_BUFFER_BYTES;
@@ -177,14 +177,15 @@ test("two clients + a hidden third + a reconnect: no client decodes what it may 
         { userId: "u1", nickname: "B", isBot: false },
         // C never connects: driven by hand, it must stay invisible unless in a client's vision row.
         { userId: "u2", nickname: "C", isBot: false },
-        { userId: null, nickname: "Bot", isBot: true },
       ],
+      // A marauder far away (roster index 3): an NPC, never a client.
+      ...npcOpts([testPost(0, 3800, 3800)]),
       rng: mulberry32(8),
       map: testMap({
         walls: [{ x: 1300, y: 600, w: 24, h: 800 }],
         containers: [{ x: 1200, y: 1100, kind: "weapon_box", tier: 4, zone: null }],
       }),
-      newUid: counterUid, now: () => 1_700_000_000_000, emptyWorld: true, strictLedger: true, botBrains: false,
+      newUid: counterUid, now: () => 1_700_000_000_000, emptyWorld: true, strictLedger: true, npcBrains: false,
       envSeed: 2, weatherOverride: "clear",
     });
     const rt = (k: number) => m.rosterRuntime(k)!;
@@ -251,7 +252,7 @@ test("behind a wall: neither client decodes the other, and footsteps arrive as h
     ],
     rng: mulberry32(1),
     map: testMap({ walls: [{ x: 1300, y: 600, w: 24, h: 800 }] }),
-    newUid: counterUid, now: () => 0, emptyWorld: true, strictLedger: true, botBrains: false,
+    newUid: counterUid, now: () => 0, emptyWorld: true, strictLedger: true, npcBrains: false,
     envSeed: 2, weatherOverride: "clear",
   });
   m.rosterRuntime(0)!.pub.x = 1000;

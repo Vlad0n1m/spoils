@@ -9,7 +9,6 @@ import { test } from "node:test";
 import {
   BOSSES,
   BOSS_AI,
-  BOT_FREE_AMMO_LIGHT,
   CONSUMABLES_CR,
   CONTAINER,
   CONTAINER_LOOT,
@@ -30,6 +29,7 @@ import {
   rollContainerFungibles,
   rollFloorLoot,
   rollGuardLoot,
+  GUARD_DROP,
   uniqueTierScore,
 } from "./economy.js";
 import { itemDef } from "./item-defs.js";
@@ -70,8 +70,8 @@ test("containerLootFor: junk capped by tier, medkits only T3+, ammo scaled, memo
   const ammo = (kind: "stash" | "weapon_box", tier: number, def: string) => containerLootFor({ kind, tier }).find((e) => e.def === def)!.qty;
   assert.equal(ammo("stash", 0, "ammo_light"), 10, "30 rounds → 10 in the wilds");
   assert.equal(ammo("weapon_box", 2, "ammo_light"), 15);
-  assert.equal(ammo("weapon_box", 3, "ammo_light"), 20);
-  assert.equal(ammo("weapon_box", 4, "ammo_light"), 15);
+  assert.equal(ammo("weapon_box", 3, "ammo_light"), 5, "v5 iteration 2: T3 ammo × 0.15");
+  assert.equal(ammo("weapon_box", 4, "ammo_light"), 3, "v5 iteration 2: T4 ammo × 0.1");
   assert.equal(ammo("weapon_box", 0, "ammo_shell"), 3);
   assert.deepEqual(containerLootFor({ kind: "safe", tier: 2 }), [], "a safe below T3 has nothing under the cap");
   assert.ok(containerLootFor({ kind: "med_case", tier: 3 }).some((e) => e.def === "medkit"));
@@ -133,15 +133,19 @@ test("Steppe container EV per zone class matches the v4 model (±10 %), value co
       }
     });
   }
-  const want: Record<string, number> = { wild: 6.7, T1: 12.8, T2: 19.2, T3: 169, T4: 173 };
+  // v5 tuning: wild FILL 0.25 → 0.18 (junk 6.7 → 5.2, empty 79 % → 83 %); T3/T4 ammo cut (consumables 2.4k → 1.9k).
+  // v5 iteration 2: T3/T4 ammo × 0.15 / 0.1, med_case bandage 40 → 10 / medkit 8 → 2 / pills 50 → 100,
+  // weapon_box heavy ammo 15 → 8, crate bandage 25 → 12, stash bandage 15 → 8 (consumables 1.9k → 0.69k;
+  // the extra pills lift T4 junk 173 → 191 and the match 20.2k → 21.3k).
+  const want: Record<string, number> = { wild: 5.3, T1: 13.0, T2: 20.7, T3: 176, T4: 191 };
   for (const [cls, w] of Object.entries(want)) {
     const a = acc[cls]!;
     assert.ok(near(a.junk / a.n, w, 0.1), `${cls} junk/container ${(a.junk / a.n).toFixed(1)} vs ${w}`);
   }
-  assert.ok(Math.abs(acc.wild!.empty / acc.wild!.n - 0.79) < 0.03, `wild empty ${(acc.wild!.empty / acc.wild!.n).toFixed(3)}`);
-  assert.ok(near(junk / SEEDS, 20_200, 0.1), `junk per match ${(junk / SEEDS).toFixed(0)}`);
+  assert.ok(Math.abs(acc.wild!.empty / acc.wild!.n - 0.83) < 0.03, `wild empty ${(acc.wild!.empty / acc.wild!.n).toFixed(3)}`);
+  assert.ok(near(junk / SEEDS, 21_300, 0.1), `junk per match ${(junk / SEEDS).toFixed(0)}`);
   assert.ok(junkHot / junk >= 0.75, `elevator + radar share ${(junkHot / junk).toFixed(2)}`);
-  assert.ok(near(cons / SEEDS, 2_400, 0.15), `container consumables per match ${(cons / SEEDS).toFixed(0)}`);
+  assert.ok(near(cons / SEEDS, 690, 0.15), `container consumables per match ${(cons / SEEDS).toFixed(0)}`);
   assert.equal(hvWild, 0, "no 650+ CR junk in the wilds");
   assert.ok(near(hv / SEEDS, 7.1, 0.2), `high-value junk per match ${(hv / SEEDS).toFixed(1)}`);
 });
@@ -178,7 +182,7 @@ test("floor loot: tiered spawn chance and tables; LOW has no medkit or heavy amm
   }
 });
 
-test("Steppe floor loot per match: ≈ 3.5k CR-eq total, wilds ≈ 9 items, medkits only on T3/T4 spots", () => {
+test("Steppe floor loot per match: ≈ 1.5k CR-eq total (v5 tuning), wilds ≈ 6 items, medkits only on T3/T4 spots", () => {
   const SEEDS = 300;
   const rng = mulberry32(99);
   let cons = 0, wildItems = 0, wildValue = 0, medkits = 0;
@@ -198,10 +202,12 @@ test("Steppe floor loot per match: ≈ 3.5k CR-eq total, wilds ≈ 9 items, medk
       }
     }
   }
-  assert.ok(near(cons / SEEDS, 3_500, 0.15), `floor consumables per match ${(cons / SEEDS).toFixed(0)}`);
+  // v5 iteration 2: T3/T4 spawn chance 0.15 / 0.2 → 0.1 / 0.12, HIGH heavy ammo 12 → 6, bandage 20 → 10,
+  // medkit 8 → 4 (1.9k → 1.5k, medkits ≈ 1.0 → 0.33).
+  assert.ok(near(cons / SEEDS, 1_510, 0.15), `floor consumables per match ${(cons / SEEDS).toFixed(0)}`);
   assert.ok(wildItems / SEEDS < 14, `wild floor items per match ${(wildItems / SEEDS).toFixed(1)}`);
   assert.ok(wildValue / SEEDS < 350, `wild floor value per match ${(wildValue / SEEDS).toFixed(0)}`);
-  assert.ok(near(medkits / SEEDS, 2.6, 0.3), `medkits per match ${(medkits / SEEDS).toFixed(2)}`);
+  assert.ok(near(medkits / SEEDS, 0.33, 0.3), `medkits per match ${(medkits / SEEDS).toFixed(2)}`);
 });
 
 // ───────────────────────── pool release
@@ -281,13 +287,14 @@ test("BOSSES agree with the map (chance, guard posts) and reference real defs", 
   assert.deepEqual(BOSSES.foreman.poolSlots, [2, 1]);
   assert.deepEqual(BOSSES.warden.poolSlots, [1]);
   assert.ok(BOSS_AI.NO_BREAK);
-  assert.equal(BOT_FREE_AMMO_LIGHT, 90);
 });
 
 test("effective HP and boss junk EV match the design", () => {
-  assert.equal(effectiveHp(BOSSES.commander.hp, BOSSES.commander.armor), 580);
-  assert.equal(effectiveHp(BOSSES.foreman.hp, BOSSES.foreman.armor), 430);
-  assert.equal(Math.round(effectiveHp(BOSSES.warden.hp, BOSSES.warden.armor)), 313);
+  // v5 tuning: Commander 400 HP / armor 3 → 310 / armor 2 → (iteration 2) 250 / armor 1, Foreman 300 → 240,
+  // Warden 250 → 300 (harness boss-kill bands).
+  assert.equal(Math.round(effectiveHp(BOSSES.commander.hp, BOSSES.commander.armor)), 313);
+  assert.equal(Math.round(effectiveHp(BOSSES.foreman.hp, BOSSES.foreman.armor)), 369);
+  assert.equal(Math.round(effectiveHp(BOSSES.warden.hp, BOSSES.warden.armor)), 375);
   assert.equal(effectiveHp(100, 0), 100);
   const ev = (k: keyof typeof BOSSES) => BOSSES[k].junk.reduce((a, j) => a + j.chance * j.qty * junkCr(j.def), 0);
   assert.equal(Math.round(ev("commander")), 2980);
@@ -325,10 +332,9 @@ test("boss and guard drops are deterministic and non-empty where promised", () =
   }
   const g = rollGuardLoot(42, "commander", 2, 4);
   assert.deepEqual(rollGuardLoot(42, "commander", 2, 4), g);
-  assert.ok(g.some((f) => f.def === "ammo_heavy" && f.qty === 10), "sniper guard: heavy ammo");
-  assert.ok(g.some((f) => f.def === "bandage"));
+  assert.ok(g.some((f) => f.def === "ammo_light" && f.qty >= GUARD_DROP.AMMO.light), "rifle guard (v5: no sniper guard): light ammo");
   const w = rollGuardLoot(7, "warden", 0, 2);
-  assert.ok(w.some((f) => f.def === "ammo_light" && f.qty >= 30));
+  assert.ok(w.some((f) => f.def === "ammo_light" && f.qty >= GUARD_DROP.AMMO.light));
   for (const f of w) if (itemDef(f.def)!.cat === "junk") assert.ok(junkCr(f.def) <= CONTAINER.JUNK_VALUE_CAP[2]!);
 });
 

@@ -23,6 +23,7 @@ import {
   MATCH,
   S2C,
   WEAPONS,
+  zoneAt,
   type EventsMsg,
   type KillMsg,
   type OutcomeMsg,
@@ -32,6 +33,7 @@ import { LOW_HP } from "./audio/game-audio";
 import { getSettings } from "./audio/settings";
 import { getCameraRig, PointerTracker, reducedMotion } from "./camera";
 import type { GameContext, GameSystem } from "./systems";
+import { npcNameOf, npcRoleName, npcRoleOfLabel } from "./npc-labels";
 
 const FONT = "ui-rounded, 'Trebuchet MS', system-ui, sans-serif";
 /** HUD convention (hud.tsx PX_PER_METER). */
@@ -375,14 +377,24 @@ export function autosellLine(o: Pick<OutcomeMsg, "credits" | "guest" | "sold"> |
   return "Gear secured";
 }
 
-/** Death card: "KILLED BY" / name / "Rifle · 34 m". */
-export function killCard(kill: Pick<KillMsg, "killer" | "weapon"> | null, distPx: number | null): { kicker: string; name: string; sub: string } {
+/**
+ * Death card: "KILLED BY" / name / "Rifle · 34 m". An NPC killer (KillMsg.killerRole, NPC MODEL v5)
+ * shows by its role name ("Marauder", "Elevator thug", "FOREMAN") with the zone where you fell
+ * (`zone`, from this client's own map at the death position): "Marauder" / "Rifle · 12 m · Grain Elevator".
+ */
+export function killCard(
+  kill: Pick<KillMsg, "killer" | "weapon" | "killerRole"> | null,
+  distPx: number | null,
+  zone = "",
+): { kicker: string; name: string; sub: string } {
   if (!kill || !kill.killer) return { kicker: "YOU DIED", name: "K.I.A.", sub: "" };
   const parts: string[] = [];
   const w = kill.weapon && kill.weapon in WEAPONS ? WEAPONS[kill.weapon as WeaponId].name : "";
   if (w) parts.push(w);
   if (distPx !== null && Number.isFinite(distPx)) parts.push(`${Math.max(1, Math.round(distPx / PX_PER_METER))} m`);
-  return { kicker: "KILLED BY", name: kill.killer, sub: parts.join(" · ") };
+  const npc = npcRoleName(kill.killerRole) ?? npcRoleOfLabel(kill.killer);
+  if (npc && zone) parts.push(zone);
+  return { kicker: "KILLED BY", name: npc ? npcNameOf(kill.killerRole, kill.killer) : kill.killer, sub: parts.join(" · ") };
 }
 
 /**
@@ -601,7 +613,10 @@ class CinematicSystem implements GameSystem {
       const p = ctx.selfPos();
       dist = Math.hypot(this.killerAt.x - p.x, this.killerAt.y - p.y);
     }
-    const card = killCard(kill, dist);
+    const map = ctx.map();
+    const at = ctx.selfPos();
+    const zone = map ? (zoneAt(map, at.x, at.y)?.name ?? "") : "";
+    const card = killCard(kill, dist, zone);
     if (!this.kicker || !this.name || !this.sub) return;
     this.kicker.text = card.kicker;
     this.name.text = card.name;

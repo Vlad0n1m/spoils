@@ -6,6 +6,7 @@ import clsx from "clsx";
 import { BREAK_CHANCE_ON_DEATH, HEAL, WEAPONS, itemDef, type WeaponId } from "@extract/shared";
 import { deepEqual, shallowEqual, type HudStore } from "@/game/hud";
 import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "@/game/types";
+import { NPC_TAG_COLOR, cssHex, killFeedNames, npcLabels, type FeedName } from "@/game/npc-labels";
 import { fmtClock, fmtCr, isWeaponId, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
 
 /** Kill feed lines stay this long (match clock). */
@@ -165,7 +166,11 @@ function PhaseTimer({ store }: { store: HudStore }) {
       />
       <span className="toon-text-thin whitespace-nowrap">{label}</span>
       <span className="h-6 w-[3px] rounded bg-black/60" aria-hidden />
-      <span className="flex items-center gap-1.5 whitespace-nowrap" title="Players alive on the map">
+      <span
+        className="flex items-center gap-1.5 whitespace-nowrap"
+        title="Players still on the map / players in this raid (NPCs are not counted)"
+        aria-label={`${npcLabels().players}: ${aliveCount} of ${totalPlayers}`}
+      >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/sprites/player.png" alt="" className="h-6 w-6" draggable={false} />
         <span className="toon-text-thin tabular-nums">
@@ -244,35 +249,55 @@ function KillFeed({ store, selfNickname }: { store: HudStore; selfNickname: stri
   if (fresh.length === 0) return null;
   return (
     <ol className="absolute left-3 top-3 flex max-w-[min(22rem,40vw)] flex-col gap-1.5" aria-label="Kill feed">
-      {fresh.map((e) => (
-        <li
-          key={e.id}
-          className="toon-chip flex items-center gap-2 px-3 py-1 text-sm tracking-wide animate-outcome-enter"
-        >
-          {e.killer ? (
-            <>
-              <Name name={e.killer} self={e.killer === selfNickname} />
-              {e.weapon && isWeaponId(e.weapon) ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={weaponIcon(e.weapon)} alt={WEAPONS[e.weapon].name} className="h-6 w-10 object-contain" draggable={false} />
-              ) : (
-                <span className="text-white/60">killed</span>
-              )}
-              <Name name={e.victim} self={e.victim === selfNickname} victim />
-            </>
-          ) : (
-            <>
-              <Name name={e.victim} self={e.victim === selfNickname} victim />
-              <span className="text-white/60">died</span>
-            </>
-          )}
-        </li>
-      ))}
+      {fresh.map((e) => {
+        // NPC MODEL v5: NPC names come by role ("Marauder ✕ Vlad", personal "You ✕ Marauder").
+        const n = killFeedNames(e, selfNickname);
+        return (
+          <li
+            key={e.id}
+            className={clsx(
+              "toon-chip flex items-center gap-2 px-3 py-1 text-sm tracking-wide animate-outcome-enter",
+              n.personal && "opacity-90",
+            )}
+          >
+            {n.killer ? (
+              <>
+                <Name who={n.killer} self={n.personal || (!n.killer.npc && e.killer === selfNickname)} />
+                {e.weapon && isWeaponId(e.weapon) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={weaponIcon(e.weapon)} alt={WEAPONS[e.weapon].name} className="h-6 w-10 object-contain" draggable={false} />
+                ) : (
+                  <span className="text-white/60">killed</span>
+                )}
+                <Name who={n.victim} self={!n.victim.npc && e.victim === selfNickname} victim />
+              </>
+            ) : (
+              <>
+                <Name who={n.victim} self={!n.victim.npc && e.victim === selfNickname} victim />
+                <span className="text-white/60">died</span>
+              </>
+            )}
+          </li>
+        );
+      })}
     </ol>
   );
 }
 
-function Name({ name, self, victim }: { name: string; self: boolean; victim?: boolean }) {
+function Name({ who, self, victim }: { who: FeedName; self: boolean; victim?: boolean }) {
+  if (who.npc) {
+    return (
+      <span className="flex min-w-0 items-center gap-1" title={npcLabels().npc}>
+        <NpcBadge role={who.npc} />
+        <span
+          className={clsx("toon-text-thin max-w-[9rem] truncate", who.npc === "boss" && "tracking-wider")}
+          style={{ color: cssHex(NPC_TAG_COLOR[who.npc]) }}
+        >
+          {who.name}
+        </span>
+      </span>
+    );
+  }
   return (
     <span
       className={clsx(
@@ -280,8 +305,32 @@ function Name({ name, self, victim }: { name: string; self: boolean; victim?: bo
         self ? "text-amber-300" : victim ? "text-rose-300" : "text-white",
       )}
     >
-      {name}
+      {who.name}
     </span>
+  );
+}
+
+/** Small role badge before an NPC name: skull for a boss, shield for a guard, chevron for a marauder. */
+function NpcBadge({ role }: { role: NonNullable<FeedName["npc"]> }) {
+  const fill = cssHex(NPC_TAG_COLOR[role]);
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4 shrink-0" aria-hidden>
+      {role === "boss" ? (
+        <>
+          <circle cx="8" cy="7" r="5.5" fill={fill} stroke="#000" strokeWidth="1.2" />
+          <circle cx="6" cy="7" r="1.4" fill="#16090a" />
+          <circle cx="10" cy="7" r="1.4" fill="#16090a" />
+          <rect x="5.5" y="11" width="5" height="3" rx="0.8" fill={fill} stroke="#000" strokeWidth="1" />
+        </>
+      ) : role === "guard" ? (
+        <path d="M2 2h12v7l-6 6-6-6z" fill={fill} stroke="#000" strokeWidth="1.3" />
+      ) : (
+        <>
+          <rect x="1.5" y="2" width="13" height="12" rx="3" fill={fill} stroke="#000" strokeWidth="1.3" />
+          <path d="M4.5 5l3.5 2.5L11.5 5v2L8 9.5 4.5 7zM4.5 8.5l3.5 2.5 3.5-2.5v2L8 13l-3.5-2.5z" fill="#23210f" />
+        </>
+      )}
+    </svg>
   );
 }
 

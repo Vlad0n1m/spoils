@@ -1,18 +1,31 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CONTAINER_STATE, ITEM_FLAG, MATCH, SERVER_TICK_MS, mulberry32, type LoadoutSnapshot } from "@extract/shared";
-import { BOT_PEACE_MS } from "./bot.js";
+import { CONTAINER_STATE, ITEM_FLAG, MATCH, NPC, SERVER_TICK_MS, SOLID, bushIndexAt, circleIsFree, hasLineOfSight, mulberry32, type LoadoutSnapshot } from "@extract/shared";
 import { groundUniques } from "./inventory.js";
-import { LEGACY_MATCH_PLAYERS as MATCH_PLAYERS, Match, matchMap } from "./match.js";
-import { counterUid } from "./test-utils.js";
-import type { MatchEvent, RosterEntry } from "./types.js";
+import { Match, matchMap } from "./match.js";
+import { counterUid, humans, legacyNpcPosts } from "./test-utils.js";
+import type { MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
 
-function bots(n: number): RosterEntry[] {
-  return Array.from({ length: n }, (_, i) => ({ userId: null, nickname: `Bot${i}`, isBot: true }));
+/** Legacy-map NPC world: `n` marauder posts of 2 (every 2nd one T3), always spawned. */
+function npcWorld(mapSeed: number, n = 6) {
+  const posts = legacyNpcPosts(mapSeed, n);
+  // Midday, clear (a night raid shrinks sight below the 450 px these tests stand at).
+  return { mapId: "legacy" as const, mapSeed, npcPosts: posts, npcSpawns: posts.map((p) => ({ postId: p.id, members: 2 })), envSeed: 2, weatherOverride: "clear" };
 }
 
-function idleHumanRoster(): RosterEntry[] {
-  return [{ userId: "human-1", nickname: "Idle", isBot: false }, ...bots(MATCH_PLAYERS - 1)];
+/** Put a human next to the first post: free open ground (no bush) with a clear line of sight to it. */
+function nearPost(m: Match, rt: PlayerRuntime, dist = 450): void {
+  const post = m.npcs.squads[0]!.post!;
+  for (let k = 0; k < 32; k++) {
+    const a = (k * Math.PI) / 16;
+    const x = post.x + Math.cos(a) * dist, y = post.y + Math.sin(a) * dist;
+    if (!circleIsFree(m.idx, x, y, 20) || !hasLineOfSight(m.idx, post.x, post.y, x, y, SOLID.ALL) || bushIndexAt(m.bushIndex, x, y) >= 0) continue;
+    rt.pub.x = rt.prevX = x;
+    rt.pub.y = rt.prevY = y;
+    rt.pub.aim = a + Math.PI;
+    return;
+  }
+  assert.fail("no clear spot next to the post");
 }
 
 type Timed = MatchEvent & { at: number };
@@ -69,68 +82,114 @@ function assertConservation(m: Match) {
   for (const it of r.minted) assert.equal(m.ledger.known.get(it.uid)?.origin, "minted");
 }
 
-/** No bot fires during the peace window unless it was hit first. */
+/**
+ * No NPC fires during the peace window unless it was hit first or a human walked into its post
+ * (within its leash of the anchor, or NPC.PEACE_CLOSE_PX of the NPC). The humans of these tests
+ * stand still, so their final position is where they stood.
+ */
 function assertPeace(m: Match, events: Timed[]) {
   const lastHit = new Map<number, number>();
+  const humans = m.allRuntimes().filter((r) => !r.isNpc);
   for (const e of events) {
-    if (e.at >= BOT_PEACE_MS) break;
+    if (e.at >= NPC.PEACE_MS) break;
     if (e.type === "hit") lastHit.set(e.target, e.at);
-    if (e.type === "shot" && m.rosterRuntime(e.src)!.isBot) {
-      assert.ok(lastHit.has(e.src), `${e.msg.s} fired at ${e.at} ms without being hit first`);
+    if (e.type === "shot" && m.rosterRuntime(e.src)!.isNpc) {
+      const info = m.npcs.info(m.rosterRuntime(e.src)!)!;
+      const intruder = humans.some((h) =>
+        Math.hypot(h.pub.x - e.msg.cx, h.pub.y - e.msg.cy) <= NPC.PEACE_CLOSE_PX + 80 ||
+        Math.hypot(h.pub.x - info.anchor.x, h.pub.y - info.anchor.y) <= info.leash + 80);
+      assert.ok(lastHit.has(e.src) || intruder, `${e.msg.s} fired at ${e.at} ms without being hit first or an intruder in its post`);
     }
   }
 }
 
-// These whole-match bot tests are tuned for the small legacy map (MatchOptions.mapId "legacy");
-// the Steppe soak lives in map-boot.test.ts until the bots WP retunes bots for 24,576 px.
+/** NPCs never loot, pick up, extract or get posted; FREE gear never reaches a report. */
+function assertNpcRules(m: Match, events: Timed[]) {
+  for (const rt of m.npcs.runtimes()) {
+    assert.equal(rt.stats.containersSearched + rt.stats.corpsesSearched, 0, `${rt.id} never loots`);
+    assert.notEqual(rt.exitReport?.exit, "extract", `${rt.id} never extracts`);
+    assert.equal(rt.self.extractMask, 0);
+  }
+  const npcIdx = new Set(m.npcs.runtimes().map((r) => r.rosterIndex));
+  for (const e of events) {
+    if (e.type === "chest") assert.ok(!npcIdx.has(e.src), "an NPC opened a container");
+    if (e.type === "exit") assert.ok(e.report.userId, "an NPC exit was posted");
+    if (e.type === "outcome") assert.ok(!npcIdx.has(e.to), "an NPC got an OUTCOME");
+  }
+  for (const rep of m.exitReports) for (const it of [...rep.extracted, ...rep.lost, ...rep.destroyed]) assert.ok(it.uid || !itemIsFreeGear(it.def), `FREE ${it.def} reported`);
+  for (const it of m.report!.leftOnMap) assert.ok(it.uid, "leftOnMap holds tracked uniques only");
+}
+
+/** NPC weapons / armor / backpacks are FREE (no uid): such a def without a uid in a report = FREE gear leaked. */
+function itemIsFreeGear(def: string): boolean {
+  return /^(pistol|shotgun|rifle|sniper|armor_\d|backpack_\d)$/.test(def);
+}
+
 for (const seed of [1, 7, 2024]) {
-  test(`bots-only match (seed ${seed}) plays to the end and conserves every uid`, () => {
-    const m = new Match({ mapId: "legacy", roster: bots(MATCH_PLAYERS), rng: mulberry32(seed), newUid: counterUid, now: () => 1_700_000_000_000, strictLedger: true });
+  test(`an NPC world (seed ${seed}): a human next to a squad, marauders fight and hold; every uid conserved, humans-only reports`, () => {
+    const m = new Match({ ...npcWorld(500 + seed), roster: humans(1), rng: mulberry32(seed), newUid: counterUid, now: () => 1_700_000_000_000, strictLedger: true });
     assert.ok(m.map.containers.length > 0 && m.state.extracts.size > 0 && m.state.items.size > 0);
     assert.equal(m.state.containerState.length, m.map.containers.length);
-    assert.equal(m.state.totalPlayers, MATCH_PLAYERS);
-    const closing = [...m.state.extracts.values()].filter((e) => e.closeAt > 0).length;
-    assert.equal(closing, Math.floor(m.state.extracts.size * MATCH.EXTRACT_CLOSE_EARLY_FRACTION));
-    const spawns = new Set([...m.state.players.values()].map((p) => `${p.x},${p.y}`));
-    assert.equal(spawns.size, MATCH_PLAYERS, "distinct spawns");
-    const colors = new Set([...m.state.players.values()].map((p) => p.color));
-    assert.equal(colors.size, MATCH_PLAYERS, "distinct colors");
-    assert.equal(m.state.self.size, MATCH_PLAYERS);
-
+    assert.equal(m.state.totalPlayers, 1, "the HUD counts humans only");
+    assert.equal(m.npcs.runtimes().length, 12);
+    assert.equal(m.state.players.size, 13, "NPCs are Players (role ≠ 0) for rendering");
+    const human = m.allRuntimes()[0]!;
+    nearPost(m, human);
     const events = playOut(m);
     const counts = countByType(events);
     assert.equal(m.state.phase, "ended");
     assert.equal(m.state.aliveCount, 0);
     const r = m.report!;
-    assert.equal(r.participants.length, MATCH_PLAYERS);
-    for (const p of r.participants) {
-      assert.ok(["extract", "dead", "timeout"].includes(p.exitType));
-      assert.equal(p.isBot, true);
-      assert.equal(p.userId, null);
-    }
-    assert.equal(counts.outcome ?? 0, 0, "bots get no OUTCOME messages");
-    assert.equal(counts.exit ?? 0, 0, "bot exits are not posted");
-    assert.ok((counts.shot ?? 0) > 0, "bots fight");
-    assert.ok((counts.chest ?? 0) > 0, "bots loot containers");
-    assert.ok((counts.sound ?? 0) > 0, "the sim emits sounds");
-    const opened = [...m.state.containerState].filter((v) => v !== CONTAINER_STATE.UNTOUCHED).length;
-    assert.equal(opened, counts.chest);
-    const exits = r.participants.map((p) => p.exitType);
-    console.log(
-      `seed ${seed}: clock=${m.clock} shots=${counts.shot ?? 0} hits=${counts.hit ?? 0} kills=${counts.kill ?? 0} ` +
-      `chests=${counts.chest ?? 0} extract=${exits.filter((e) => e === "extract").length} ` +
-      `dead=${exits.filter((e) => e === "dead").length} timeout=${exits.filter((e) => e === "timeout").length} ` +
-      `known=${m.ledger.known.size} leftOnMap=${r.leftOnMap.length}`,
-    );
-    assert.ok(exits.some((e) => e !== "timeout"), "bots kill or extract");
-    assert.equal(events.filter((e) => e.type === "shot" && e.at < BOT_PEACE_MS).length, 0, "nobody shoots in peace");
+    assert.deepEqual(r.participants.map((p) => [p.userId, p.isBot]), [["user0", false]], "participants are humans only");
+    assert.deepEqual(r.npcSummary!.spawned, { boss: 0, guard: 0, marauder: 12 });
+    assert.equal(counts.outcome ?? 0, 1, "one OUTCOME: the human's");
+    assert.equal(counts.exit ?? 0, 1, "one exit posted: the human's");
+    assert.ok((counts.shot ?? 0) > 0, "the squad fought the human");
+    assert.equal(human.exitReport!.exit, "dead", "an idle human next to a squad does not survive");
+    assert.ok(m.clock < MATCH.DURATION_MS, "the match ended with its last human, NPCs still standing");
+    console.log(`seed ${seed}: clock=${m.clock} shots=${counts.shot ?? 0} hits=${counts.hit ?? 0} kills=${counts.kill ?? 0} known=${m.ledger.known.size}`);
+    assertPeace(m, events);
+    assertNpcRules(m, events);
     assertConservation(m);
   });
 }
 
+test("an idle human in sight of a squad but outside its post is never shot in the peace window (10 seeds)", () => {
+  let tested = 0;
+  for (let seed = 1; seed <= 10; seed++) {
+    const m = new Match({ ...npcWorld(600 + seed, 3), roster: humans(1), rng: mulberry32(seed * 7919), newUid: counterUid, strictLedger: true });
+    const human = m.allRuntimes()[0]!;
+    // Post 0 is a low post (leash 500): 700 px is outside it and beyond NPC.PEACE_CLOSE_PX, inside
+    // sight — and the spot must be outside every other post too (an intruder is fought).
+    nearPost(m, human, 700);
+    const intruding = m.npcs.squads.some((sq) => {
+      const p = sq.post!;
+      return Math.hypot(p.x - human.pub.x, p.y - human.pub.y) < Math.max(m.npcs.info(sq.members[0]!)!.leash, NPC.PEACE_CLOSE_PX) + 50;
+    });
+    if (intruding) continue;
+    tested++;
+    const early = playOut(m, NPC.PEACE_MS - 200);
+    assert.ok(human.pub.alive && human.pub.hp === 100, `seed ${seed}: untouched in the peace window`);
+    assert.equal(early.filter((e) => e.type === "shot").length, 0, `seed ${seed}: nobody fired`);
+    const sees = m.npcs.runtimes().some((rt) => m.vision.sees(rt.rosterIndex, human.rosterIndex));
+    assert.ok(sees, `seed ${seed}: the squad saw the human`);
+    assertPeace(m, [...early, ...playOut(m)]);
+    assertConservation(m);
+  }
+  assert.ok(tested >= 5, `${tested} seeds had a spot outside every post`);
+});
+
+test("the roster is humans only: a pre-v5 bot entry is skipped, never turned into a player", () => {
+  const roster: RosterEntry[] = [...humans(2), { userId: null, nickname: "Bot", isBot: true }];
+  const m = new Match({ mapId: "legacy", roster, rng: mulberry32(3), mapSeed: 3, newUid: counterUid, emptyWorld: true });
+  assert.equal(m.allRuntimes().length, 2);
+  assert.ok(m.allRuntimes().every((r) => !r.isNpc && r.userId));
+  assert.equal(m.state.totalPlayers, 2);
+});
+
 test("container contents are deterministic per (matchSeed, idx), whatever the open order", () => {
-  const a = new Match({ mapId: "legacy", roster: bots(2), rng: mulberry32(3), mapSeed: 99, newUid: counterUid, botBrains: false, strictLedger: true });
-  const b = new Match({ mapId: "legacy", roster: bots(2), rng: mulberry32(4), mapSeed: 99, newUid: counterUid, botBrains: false, strictLedger: true });
+  const a = new Match({ mapId: "legacy", roster: humans(2), rng: mulberry32(3), mapSeed: 99, newUid: counterUid, npcBrains: false, strictLedger: true });
+  const b = new Match({ mapId: "legacy", roster: humans(2), rng: mulberry32(4), mapSeed: 99, newUid: counterUid, npcBrains: false, strictLedger: true });
   const n = a.map.containers.length;
   const strip = (items: ReturnType<Match["containers"]["roll"]>) => items.map((i) => `${i.def}x${i.qty}r${i.rarity}`);
   const fwd = Array.from({ length: n }, (_, i) => strip(a.containers.roll(i)));
@@ -150,7 +209,7 @@ test("live mode: loadouts and pool items are tracked, nothing is minted, FREE ki
     ],
   };
   const m = new Match({
-    roster: [{ userId: "u1", nickname: "Live", isBot: false, loadoutId: "L1" }, ...bots(5)],
+    roster: [{ userId: "u1", nickname: "Live", loadoutId: "L1" }],
     rng: mulberry32(11), mapSeed: 5, map, newUid: counterUid, mode: "live", strictLedger: true,
     loadouts: [snap],
     containerLoot: { "0": [{ uid: "pool-1", def: "sniper", qty: 1, rarity: 1, dur: 72 }], boss: [] },
@@ -179,51 +238,14 @@ test("live mode: loadouts and pool items are tracked, nothing is minted, FREE ki
 });
 
 test("a match with an idle (never connected) human runs until the human dies or time runs out", () => {
-  const m = new Match({ mapId: "legacy", roster: idleHumanRoster(), rng: mulberry32(99), newUid: counterUid, strictLedger: true });
-  assertPeace(m, playOut(m));
+  const m = new Match({ ...npcWorld(77, 4), roster: humans(1), rng: mulberry32(99), newUid: counterUid, strictLedger: true });
+  const events = playOut(m);
+  assertPeace(m, events);
   const human = m.report!.participants[0]!;
-  assert.equal(human.userId, "human-1");
+  assert.equal(human.userId, "user0");
   assert.ok(human.exitType === "dead" || human.exitType === "timeout");
+  assertNpcRules(m, events);
   assertConservation(m);
 });
 
-test("an idle human + bots: the human is alive at 30 s in 10/10 seeded matches", () => {
-  let alive = 0;
-  for (let seed = 1; seed <= 10; seed++) {
-    const m = new Match({ mapId: "legacy", roster: idleHumanRoster(), rng: mulberry32(seed * 7919), newUid: counterUid, strictLedger: true });
-    const human = m.allRuntimes()[0]!;
-    const early = playOut(m, 30_000);
-    assert.ok(m.clock >= 30_000);
-    if (human.pub.alive) alive++;
-    const events = [...early, ...playOut(m)];
-    assertPeace(m, events);
-    assertConservation(m);
-  }
-  console.log(`idle human alive at 30 s: ${alive}/10`);
-  assert.equal(alive, 10);
-});
-
-// Spawn fairness (side-aware since WP-M2) is tested in map-boot.test.ts.
-
-test("bots-only matches over 10 seeds last long enough and show extraction", () => {
-  const lengths: number[] = [];
-  let extracts = 0;
-  const lines: string[] = [];
-  for (let seed = 1; seed <= 10; seed++) {
-    const m = new Match({ mapId: "legacy", roster: bots(MATCH_PLAYERS), rng: mulberry32(seed), newUid: counterUid, strictLedger: true });
-    const events = playOut(m);
-    assertPeace(m, events);
-    assertConservation(m);
-    const n = m.report!.participants.filter((p) => p.exitType === "extract").length;
-    extracts += n;
-    lengths.push(m.clock);
-    lines.push(`${seed}:${(m.clock / 60_000).toFixed(2)}m/${n}ex`);
-  }
-  lengths.sort((a, b) => a - b);
-  const median = (lengths[4]! + lengths[5]!) / 2;
-  const avgExtracts = extracts / 10;
-  console.log(`bots-only x10: median ${(median / 60_000).toFixed(2)} min, avg extracts ${avgExtracts.toFixed(1)} [${lines.join(" ")}]`);
-  // Extracts open at 3:00, so a match lasts at least that long whenever anyone extracts.
-  assert.ok(median >= 3.5 * 60_000, `median match length ${median} ms`);
-  assert.ok(avgExtracts >= 3, `avg extracts ${avgExtracts}`);
-});
+// Spawn fairness (humans-only farthest-point sampling) is tested in map-boot.test.ts.

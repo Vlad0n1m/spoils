@@ -11,8 +11,10 @@
  * alive = false before it drops out (the client plays the death and fades the body).
  *
  * The published matrix is the single truth for every consumer: StateView rows (views.ts), event
- * audiences (audience.ts), visible-vs-hidden sound entries (sound.ts) and, from WP-G, bots.
- * Bot viewers use VISION.BOT_RANGE_CAP so their tuning stays as before.
+ * audiences (audience.ts), visible-vs-hidden sound entries (sound.ts) and NPC sight (npc.ts).
+ * NPC viewers use NPC.VIEW_RANGE_CAP while calm and NPC.VIEW_RANGE_ALERT while alerted / under fire
+ * (PlayerRuntime.viewCap; a muzzle flash is seen to VISION.RANGE either way), look at humans only (NPCs never fight each other, so
+ * NPC → NPC pairs are never computed) and skip their row entirely while dormant.
  *
  * Cost (32 players clustered on the Steppe): well under the 0.2 ms budget — most pairs are rejected
  * by the squared-distance test, the rest early-out on the first clear ray (vision.test.ts bench).
@@ -21,6 +23,7 @@
 import {
   COS_SERVER_CONE,
   INPUT_DT_MS,
+  NPC,
   VISION,
   bushIndexAt,
   canSee,
@@ -49,15 +52,15 @@ export function turnToward(from: number, to: number, max: number): number {
   return Math.atan2(Math.sin(out), Math.cos(out));
 }
 
-/** One applied input of a human: the vision cone turns toward its aim (bots snap). */
+/** One applied input of a human: the vision cone turns toward its aim (NPCs snap). */
 export function followAim(rt: PlayerRuntime, aim: number): void {
-  rt.viewAim = rt.isBot ? aim : turnToward(rt.viewAim, aim, VIEW_TURN_PER_INPUT);
+  rt.viewAim = rt.isNpc ? aim : turnToward(rt.viewAim, aim, VIEW_TURN_PER_INPUT);
   rt.viewAimSrc = aim;
 }
 
 /** Facing of the vision cone. Player.aim set outside the input path (spawn, tests) snaps it. */
 function coneAim(rt: PlayerRuntime): number {
-  return rt.isBot || rt.pub.aim !== rt.viewAimSrc ? rt.pub.aim : rt.viewAim;
+  return rt.isNpc || rt.pub.aim !== rt.viewAimSrc ? rt.pub.aim : rt.viewAim;
 }
 
 /** One published-row flip: viewer i starts / stops receiving target j. */
@@ -69,7 +72,11 @@ export interface VisionChange {
 
 interface Pre extends VisionViewer, VisionTarget {
   onMap: boolean;
-  bot: boolean;
+  npc: boolean;
+  /** Dormant NPC viewer: its row is not computed (it stays a target). */
+  dormant: boolean;
+  /** NPC viewer sight cap (PlayerRuntime.viewCap: calm NPC.VIEW_RANGE_CAP, alerted NPC.VIEW_RANGE_ALERT). */
+  viewCap: number;
 }
 
 export class VisionSystem {
@@ -86,7 +93,7 @@ export class VisionSystem {
     this.lastSeen = new Float64Array(n * n).fill(-Infinity);
     this.published = new Uint8Array(n * n);
     this.pre = Array.from({ length: n }, () => ({
-      x: 0, y: 0, aim: 0, vx: 0, vy: 0, inBush: false, stillMs: 0, sinceShotMs: Infinity, onMap: false, bot: false,
+      x: 0, y: 0, aim: 0, vx: 0, vy: 0, inBush: false, stillMs: 0, sinceShotMs: Infinity, onMap: false, npc: false, dormant: false, viewCap: 0,
     }));
   }
 
@@ -98,7 +105,8 @@ export class VisionSystem {
     const clock = m.clock;
     const rangeMult = visionRangeMult(envNow(m).vis);
     const human: VisionEnv = { idx: m.idx, rangeMult };
-    const bot: VisionEnv = { idx: m.idx, rangeMult, rangeCap: VISION.BOT_RANGE_CAP };
+    const npcCalm: VisionEnv = { idx: m.idx, rangeMult, rangeCap: NPC.VIEW_RANGE_CAP };
+    const npcAlert: VisionEnv = { idx: m.idx, rangeMult, rangeCap: NPC.VIEW_RANGE_ALERT };
     const rts = m.allRuntimes();
     for (let j = 0; j < n; j++) {
       const rt = rts[j];
@@ -109,7 +117,9 @@ export class VisionSystem {
       }
       const p = rt.pub;
       q.onMap = p.alive;
-      q.bot = rt.isBot;
+      q.npc = rt.isNpc;
+      q.dormant = rt.dormant;
+      q.viewCap = rt.viewCap;
       q.x = p.x;
       q.y = p.y;
       q.aim = coneAim(rt);
@@ -122,17 +132,19 @@ export class VisionSystem {
     for (let i = 0; i < n; i++) {
       const v = this.pre[i]!;
       // Dead / extracted viewers keep the row clearRow emptied: no spectating.
-      if (!v.onMap) continue;
-      const env = v.bot ? bot : human;
+      if (!v.onMap || v.dormant) continue;
+      const env = !v.npc ? human : v.viewCap > NPC.VIEW_RANGE_CAP ? npcAlert : npcCalm;
       const row = i * n;
       for (let j = 0; j < n; j++) {
         if (j === i) continue;
         const k = row + j;
         const t = this.pre[j]!;
+        // NPCs only ever look at humans (published stays 0 for NPC → NPC).
+        if (v.npc && t.npc) continue;
         if (t.onMap && canSee(env, v, t)) this.lastSeen[k] = clock;
         // A human's target that left the server cone drops at once (the client cone is narrower,
         // so it is not drawn anyway): hysteresis bridges LOS flicker, never a cone swept past it.
-        else if (!v.bot && t.onMap && outsideCone(v, t)) this.lastSeen[k] = -Infinity;
+        else if (!v.npc && t.onMap && outsideCone(v, t)) this.lastSeen[k] = -Infinity;
         const want = clock - this.lastSeen[k]! <= VISION.HYSTERESIS_MS ? 1 : 0;
         if (want !== this.published[k]) {
           this.published[k] = want;

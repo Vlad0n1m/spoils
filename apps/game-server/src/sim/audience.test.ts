@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SERVER_TICK_MS, SoundKind, VISION, envConfigOf, mulberry32, quantizeFa, sampleEnv, type ShotMsg } from "@extract/shared";
+import { NPC_ROLE, SERVER_TICK_MS, SoundKind, VISION, envConfigOf, mulberry32, quantizeFa, sampleEnv, type ShotMsg } from "@extract/shared";
 import { CLIP_BLUR, buildBatches } from "./audience.js";
 import { killPlayer } from "./death.js";
 import { extractPlayer } from "./extraction.js";
@@ -122,12 +122,23 @@ test("audience: HIT goes to target (with fa), shooter and the target's viewers; 
   for (const n of ["D", "F", "G"]) assert.equal(b.get(R[n]!), undefined, `${n}: nothing`);
 });
 
-test("audience: KILL is broadcast (names only); CHEST goes only to the opener and its viewers", () => {
+test("audience: KILL is broadcast (names only), NPC deaths below boss go to the killer only; CHEST goes only to the opener and its viewers", () => {
   const { m, R, S, all } = scene();
-  const kill: MatchEvent = { type: "kill", msg: { victim: "P1", victimId: S.B!, killer: "P0", killerId: S.A!, weapon: "rifle" } };
+  const kill: MatchEvent = { type: "kill", src: R.A!, msg: { victim: "P1", victimId: S.B!, killer: "P0", killerId: S.A!, weapon: "rifle", killerRole: 0, victimRole: 0 } };
   const chest: MatchEvent = { type: "chest", src: R.A!, idx: 0 };
   const b = buildBatches(m, [kill, chest], all);
   for (const r of all) assert.equal(b.get(r)!.kills!.length, 1);
+  // A marauder / guard death: a personal row for its killer, nobody else (no fight radar).
+  for (const victimRole of [NPC_ROLE.MARAUDER, NPC_ROLE.GUARD]) {
+    const npcKill: MatchEvent = { type: "kill", src: R.C!, msg: { victim: "Marauder", victimId: "npc9", killer: "P2", killerId: S.C!, weapon: "rifle", killerRole: 0, victimRole } };
+    const nb = buildBatches(m, [npcKill], all);
+    assert.deepEqual([...nb.keys()], [R.C!], `role ${victimRole}: killer only`);
+  }
+  // A boss death and a human killed by an NPC are broadcast.
+  const bossKill: MatchEvent = { type: "kill", src: R.C!, msg: { victim: "FOREMAN", victimId: "npc8", killer: "P2", killerId: S.C!, weapon: "rifle", killerRole: 0, victimRole: NPC_ROLE.BOSS } };
+  const byNpc: MatchEvent = { type: "kill", src: -1, msg: { victim: "P1", victimId: S.B!, killer: "Marauder", killerId: "npc9", weapon: "rifle", killerRole: NPC_ROLE.MARAUDER, victimRole: 0 } };
+  const bb = buildBatches(m, [bossKill, byNpc], all);
+  for (const r of all) assert.equal(bb.get(r)!.kills!.length, 2);
   assert.deepEqual(b.get(R.C!)!.chest, [{ idx: 0, by: S.A }]);
   assert.deepEqual(b.get(R.A!)!.chest, [{ idx: 0, by: S.A }]);
   // D's AOI ring holds the container but D does not see A: a chest event would mark a hidden
@@ -246,7 +257,7 @@ test("audience: dead and extracted players get no shots, hits or chest events af
     shot(m, A!.rosterIndex, A!.id, 1000, 2500, [0]),
     { type: "hit", src: D!.rosterIndex, target: E!.rosterIndex, msg: { t: E!.id, s: D!.id, x: 1700, y: 2900, d: 10, ar: false }, fa: 0 },
     { type: "chest", src: A!.rosterIndex, idx: 0 },
-    { type: "kill", msg: { victim: "P4", victimId: E!.id, killer: "", killerId: "", weapon: "" } },
+    { type: "kill", src: -1, msg: { victim: "P4", victimId: E!.id, killer: "", killerId: "", weapon: "" } },
   ];
   const b = buildBatches(m, evs, all, null);
   for (const gone of [D!, X!]) {

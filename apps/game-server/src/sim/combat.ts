@@ -4,6 +4,7 @@
  */
 
 import {
+  NPC,
   PLAYER,
   RARITY_DAMAGE_MULT,
   SoundKind,
@@ -115,8 +116,11 @@ export function stepBullets(m: Match, dtMs: number): void {
 
     let hitT = Infinity;
     let hit: PlayerRuntime | null = null;
+    // NPCs are one faction (NPC.FRIENDLY_FIRE false): their bullets pass through other NPCs, so
+    // luring squads into a crossfire gives nothing.
+    const npcShot = b.owner.isNpc && !NPC.FRIENDLY_FIRE;
     for (const rt of m.allRuntimes()) {
-      if (!rt.pub.alive || rt === b.owner) continue;
+      if (!rt.pub.alive || rt === b.owner || (npcShot && rt.isNpc)) continue;
       const t = segmentCircleT(b.x, b.y, sx, sy, rt.pub.x, rt.pub.y, R);
       if (t < hitT) { hitT = t; hit = rt; }
     }

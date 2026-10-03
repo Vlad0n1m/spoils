@@ -2,26 +2,30 @@
  * Boss presentation helpers (loot economy v4, client side). Pure: no Pixi, no window, no audio —
  * boss-hud.ts (the GameSystem), entities.ts (PlayerView), minimap.ts and fullmap.ts draw with them.
  *
- * The server marks NPCs with Player.role (NPC_ROLE: 1 boss, 2 guard) and Player.maxHp; the boss kind
- * is only in the nickname (BOSSES[kind].name / guardName), so kindOfNpc falls back to the nearest
- * BossSpot when a nickname does not match (renamed bosses, older servers).
+ * The server marks NPCs with Player.role (NPC_ROLE: 1 boss, 2 guard, 3 marauder) and Player.maxHp;
+ * the boss kind is only in the nickname (BOSSES[kind].name / guardName), so kindOfNpc falls back to
+ * the nearest BossSpot when a nickname does not match (renamed bosses, older servers). Names and
+ * colours of every NPC role live in npc-labels.ts (one localized set).
  */
 
-import { BOSSES, BOSS_KINDS, NPC_ROLE, PLAYER, zoneAt, type BossKind, type BossSpot, type MapData } from "@extract/shared";
+import { BOSSES, BOSS_KINDS, PLAYER, zoneAt, type BossKind, type BossSpot, type MapData } from "@extract/shared";
+import { NPC_BODY_TINT, NPC_RING_COLOR, npcDisplayName, npcRoleName, type NpcRoleName } from "./npc-labels";
 
-export type NpcRole = "boss" | "guard" | null;
+/** NPC role of a runtime: boss, guard, marauder (NPC MODEL v5), or null for a human. */
+export type NpcRole = NpcRoleName | null;
 
 export function npcRole(role: number | undefined): NpcRole {
-  if (role === NPC_ROLE.BOSS) return "boss";
-  if (role === NPC_ROLE.GUARD) return "guard";
-  return null;
+  return npcRoleName(role);
 }
 
-/** Boss red / guard amber: rings, name tags, map skulls. */
-export const BOSS_COLOR = 0xff3b30;
-export const GUARD_COLOR = 0xff922b;
+/** Boss red / guard amber / marauder khaki: rings, name tags, map skulls. */
+export const BOSS_COLOR = NPC_RING_COLOR.boss;
+export const GUARD_COLOR = NPC_RING_COLOR.guard;
+export const MARAUDER_COLOR = NPC_RING_COLOR.marauder;
 /** Guard body tint (khaki: reads as "uniformed", distinct from the player colour rings). */
-export const GUARD_TINT = 0xd8c08a;
+export const GUARD_TINT = NPC_BODY_TINT.guard;
+/** Marauder body tint (duller olive than a guard). */
+export const MARAUDER_TINT = NPC_BODY_TINT.marauder;
 /** Boss sprite size relative to PLAYER_SPRITE_SIZE. */
 export const BOSS_SCALE = 1.4;
 /** Guard sprite size relative to PLAYER_SPRITE_SIZE (a touch bigger than a player). */
@@ -63,11 +67,13 @@ export function kindOfNpc(
   return kindOfNickname(p.nickname) ?? nearestBossKind(bosses, p.x, p.y);
 }
 
-/** Name tag: "FOREMAN" for a boss, the guard name for a guard ("Elevator thug"), else the nickname. */
+/**
+ * Name tag: "FOREMAN" for a boss, the guard name for a guard ("Elevator thug"), "Marauder" for a
+ * marauder (never a player-style nickname), else the nickname (humans).
+ */
 export function npcNameTag(role: NpcRole, kind: BossKind | null, nickname: string): string {
-  if (role === "boss") return (kind ? BOSSES[kind].name : nickname).toUpperCase();
-  if (role === "guard") return kind ? BOSSES[kind].guardName : nickname;
-  return nickname;
+  if (role === "guard" && !kind) return nickname || npcDisplayName("guard", null, nickname);
+  return npcDisplayName(role, kind, nickname);
 }
 
 /** "Foreman's turf". */
@@ -157,7 +163,8 @@ export class BossAlertTracker {
    * An NPC is in view this scan. Returns "boss" / "guard" when a sting should play now, else null.
    */
   sight(id: string, role: NpcRole, kind: BossKind | null, nowMs: number): NpcRole {
-    if (!role) return null;
+    // Marauder squads are everywhere: the boss sting is for boss groups only.
+    if (!role || role === "marauder") return null;
     const prev = this.lastSeen.get(id);
     this.lastSeen.set(id, nowMs);
     const fresh = prev === undefined || nowMs - prev > this.resightMs;
@@ -175,7 +182,7 @@ export class BossAlertTracker {
 
   /** The local player was hit by an NPC of this role. */
   shotBy(role: NpcRole, nowMs: number): NpcRole {
-    if (!role || nowMs - this.lastStingAt < this.cooldownMs) return null;
+    if (!role || role === "marauder" || nowMs - this.lastStingAt < this.cooldownMs) return null;
     this.lastStingAt = nowMs;
     return role;
   }

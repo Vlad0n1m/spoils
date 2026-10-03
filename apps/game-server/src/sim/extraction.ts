@@ -19,8 +19,9 @@ export function extractIsOpen(e: Extract, clock: number): boolean {
   return clock >= e.openAt && (e.closeAt === 0 || clock < e.closeAt);
 }
 
-/** May this player use extract `e`? Extracts outside MapData (tests) are always allowed. */
+/** May this player use extract `e`? NPCs never extract; extracts outside MapData (tests) are always allowed. */
 export function extractAllowed(m: Match, rt: PlayerRuntime, e: Extract): boolean {
+  if (rt.isNpc) return false;
   const bit = m.extractBit.get(e.id);
   return bit === undefined || (rt.self.extractMask & (1 << bit)) !== 0;
 }

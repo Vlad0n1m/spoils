@@ -43,6 +43,7 @@ import {
 import type { Room } from "colyseus.js";
 import type { BattleState } from "@extract/shared";
 import { INV_ERR_TEXT, containerTitle, itemValueCr, tierName } from "../lib/items-ui";
+import { bodyTitle } from "./npc-labels";
 
 // ------------------------------------------------------------------------------------------ types
 
@@ -440,8 +441,7 @@ export function createInventoryClient(opts: InventoryClientOptions): InventoryCl
     let tier = -1;
     let openMs: number = SEARCH.OPEN_MS.cache;
     if (corpseId !== null) {
-      const label = st?.corpses?.get(corpseId)?.label;
-      title = label ? `${label}'s body` : "Body";
+      title = bodyTitle(st?.corpses?.get(corpseId)?.label);
       openMs = SEARCH.OPEN_MS.corpse;
     } else if (cIdx !== null) {
       const spot = opts.containers?.()?.[cIdx];

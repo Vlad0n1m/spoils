@@ -9,8 +9,11 @@ import { and, eq, sql } from "drizzle-orm";
 import {
   ARMOR,
   DOG_TAG,
+  FREE_KIT,
+  GIVEAWAY,
   GIVEAWAY_KIT,
   MATCH,
+  NPC,
   POOL,
   PROGRESSION,
   dogTagCr,
@@ -24,7 +27,7 @@ import {
   type RaidStartRequest,
   type SettledItem,
 } from "@extract/shared";
-import { creditLedger, itemEvents, items, loadouts, matchResults, raids, stashStacks, users } from "../../db/schema";
+import { creditLedger, deposits, itemEvents, items, loadouts, matchResults, raids, stashStacks, users } from "../../db/schema";
 import { PARAM, getNumberParam, setParam } from "../economy/params";
 import { TIER_SCORE_SQL } from "../economy/pool";
 import { runEconomyDaily } from "../economy/daily";
@@ -139,18 +142,49 @@ async function lockedPlayer() {
 
 beforeEach(() => resetDb(db));
 
+/** A confirmed deposit (the tradable-giveaway gate). */
+async function deposit(userId: string, minor: number): Promise<void> {
+  await db.insert(deposits).values({ userId, signature: randomUUID(), amountCents: BigInt(minor), status: "confirmed" });
+}
+
 describe("starter kit", () => {
   test("claims once, even concurrently", async () => {
     const u = await makeUser(db);
+    await deposit(u, GIVEAWAY.MIN_DEPOSIT_MINOR);
     const results = await Promise.all([claimStarter(db, u, { lockRaids: 1 }), claimStarter(db, u, { lockRaids: 1 })]);
     assert.deepEqual(results.map((r) => r.status).sort(), ["already", "claimed"]);
     assert.equal((await claimStarter(db, u)).status, "already");
     const owned = await db.select().from(items).where(eq(items.ownerId, u));
     assert.equal(owned.length, 3);
-    assert.ok(owned.every((i) => i.origin === "giveaway" && i.lockRaids === 1 && i.state === "in_stash"));
+    assert.ok(owned.every((i) => i.origin === "giveaway" && i.lockRaids === 1 && !i.bound && i.state === "in_stash"));
     assert.equal(await credits(u), 1000 + GIVEAWAY_KIT.cr);
     assert.ok((await stack(u, "bandage")) > 0);
     assert.equal((await claimStarter(db, randomUUID())).status, "no_user");
+    await assertCreditsConserved();
+  });
+
+  test("gates (v5 review): no deposit, or the tradable cap reached → the same kit BOUND (never listable, 0 risk)", async () => {
+    const poor = await makeUser(db);
+    const r1 = await claimStarter(db, poor, { lockRaids: 1 });
+    assert.ok(r1.status === "claimed" && r1.bound);
+    const o1 = await db.select().from(items).where(eq(items.ownerId, poor));
+    assert.equal(o1.length, 3);
+    assert.ok(o1.every((i) => i.bound && i.lockRaids === 0 && i.origin === "giveaway"));
+    assert.equal(await credits(poor), 1000 + GIVEAWAY_KIT.cr, "CR and stacks either way");
+    // Deposited, but the tradable cap is used up: bound too.
+    const a = await makeUser(db);
+    await deposit(a, GIVEAWAY.MIN_DEPOSIT_MINOR);
+    const ra = await claimStarter(db, a, { lockRaids: 1, kitCap: 1 });
+    assert.ok(ra.status === "claimed" && !ra.bound, "first gated claim is tradable");
+    const b = await makeUser(db);
+    await deposit(b, GIVEAWAY.MIN_DEPOSIT_MINOR * 10);
+    const rb = await claimStarter(db, b, { lockRaids: 1, kitCap: 1 });
+    assert.ok(rb.status === "claimed" && rb.bound, "cap reached");
+    // A pending deposit does not count.
+    const c = await makeUser(db);
+    await db.insert(deposits).values({ userId: c, signature: randomUUID(), amountCents: 500n, status: "pending" });
+    const rc = await claimStarter(db, c, { lockRaids: 1 });
+    assert.ok(rc.status === "claimed" && rc.bound);
     await assertCreditsConserved();
   });
 
@@ -369,9 +403,32 @@ describe("raid exit", () => {
     );
     assert.equal(g.guest, true);
     assert.equal(g.credits, 0);
-    assert.equal(g.sold[0]?.cr, 1500, "guest receipt shows what it would have sold for");
+    assert.equal(g.sold[0]?.cr, 1500 * FREE_KIT.AUTOSELL_MULT, "guest receipt shows what it would have sold for (a free-kit raid)");
     const rifle = await item(victim.rifle);
     assert.deepEqual([rifle.state, rifle.ownerId, rifle.durability], ["lost_pool", null, 100]);
+  });
+
+  test("free kit (v5 review): a live raid entered with no unique sells its junk at FREE_KIT.AUTOSELL_MULT; dog tags keep their price", async () => {
+    const u = await makeUser(db);
+    const req = startReq([{ userId: u, loadoutId: "" }]);
+    await startRaid(db, req);
+    const victim = randomUUID();
+    const r = await applyExit(
+      db,
+      exitReport(req.matchId, u, {
+        extracted: [
+          { uid: "", def: "junk_gpu", qty: 1, rarity: 3, dur: 0 },
+          { uid: "", def: "junk_dogtag", qty: 1, rarity: 1, dur: 0, label: "v", lvl: 2, victim },
+        ],
+      }),
+    );
+    assert.equal(r.credits, Math.floor(1500 * FREE_KIT.AUTOSELL_MULT) + dogTagCr(2));
+    // A geared player in the same kind of raid sells at × 1.
+    const p = await lockedPlayer();
+    const req2 = startReq([{ userId: p.userId, loadoutId: p.loadoutId }]);
+    await startRaid(db, req2);
+    const r2 = await applyExit(db, exitReport(req2.matchId, p.userId, { extracted: [{ uid: "", def: "junk_gpu", qty: 1, rarity: 3, dur: 0 }] }));
+    assert.equal(r2.credits, 1500);
   });
 
   test("dog tags: same pair pays REPEAT_FREE times per 24 h", async () => {
@@ -467,6 +524,11 @@ describe("raid end and conservation", () => {
     }
     const mr = await db.select().from(matchResults).where(eq(matchResults.matchId, req.matchId));
     assert.equal(mr[0]!.payload.participants[0]!.extracted?.length, 2);
+    assert.deepEqual(
+      mr[0]!.payload.participants.map((p) => p.nickname),
+      ["a", "b"],
+      "v5: a pre-v5 report's bot entry never reaches match_results",
+    );
     const raid = (await db.select().from(raids).where(eq(raids.matchId, req.matchId)))[0]!;
     assert.equal(raid.status, "settled");
     await assertCreditsConserved();
@@ -563,6 +625,41 @@ describe("pool release v4 (bosses first, no free floor)", () => {
     assert.equal(await poolCount(), POOL.BOSS_MIN_POOL + 50 - 5);
   });
 
+  test("risk ties reward per player (v5 review): pool uniques a risk-free raider extracts arrive bound; a geared raider's do not", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const p = await lockedPlayer();
+    const free = await makeUser(db);
+    const req = startReq([{ userId: p.userId, loadoutId: p.loadoutId }, { userId: free, loadoutId: "" }]);
+    const res = await startRaid(db, req);
+    const pooled = Object.values(res.containerLoot).flat();
+    assert.ok(pooled.length >= 2, `released ${pooled.length}`);
+    const [a, b] = pooled as [SettledItem, SettledItem];
+    await applyExit(db, exitReport(req.matchId, free, { extracted: [a] }));
+    await applyExit(db, exitReport(req.matchId, p.userId, { extracted: [b] }));
+    const ia = await item(a.uid), ib = await item(b.uid);
+    assert.deepEqual([ia.state, ia.ownerId, ia.bound], ["in_stash", free, true], "free kit: usable, never sellable");
+    assert.deepEqual([ib.state, ib.ownerId, ib.bound], ["in_stash", p.userId, false], "geared: a normal tradable unique");
+  });
+
+  test("risk units (v5 review): bound gear and gear under POOL.RISK_MIN_DUR_PCT ride along but add no risk", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const userId = await makeUser(db);
+    const rifle = await makeItem(db, { def: "rifle", ownerId: userId, bound: true });
+    const armor = await makeItem(db, { def: "armor_1", dur: POOL.RISK_MIN_DUR_PCT - 1, ownerId: userId });
+    const bp = await makeItem(db, { def: "backpack_1", dur: POOL.RISK_MIN_DUR_PCT, ownerId: userId });
+    const lock = await lockLoadout(db, userId, [
+      { key: "w1", itemId: rifle, def: "rifle", qty: 1 },
+      { key: "armor", itemId: armor, def: "armor_1", qty: 1 },
+      { key: "bp", itemId: bp, def: "backpack_1", qty: 1 },
+    ]);
+    assert.ok(lock.ok, JSON.stringify(lock));
+    const req = startReq([{ userId, loadoutId: lock.loadoutId }], { bosses: BOSSES_CF, bossSlots: 5 });
+    const res = await startRaid(db, req);
+    assert.equal(res.accepted[0]!.entries.filter((e) => e.uid).length, 3, "all three ride along");
+    const raid = (await db.select().from(raids).where(eq(raids.matchId, req.matchId)))[0]!;
+    assert.equal(raid.riskUnits, 1, "only the backpack at the durability floor counts");
+  });
+
   test("pool at or below BOSS_MIN_POOL after the risk release: no top-up, the risk items still go to bosses first", async () => {
     await bulkPool(POOL.BOSS_MIN_POOL);
     const p = await lockedPlayer();
@@ -647,15 +744,27 @@ describe("pool release v4 (bosses first, no free floor)", () => {
 
 describe("economy daily", () => {
   /** `n` veterans (account 30 days old, one raid exit yesterday) with `credits` CR each. */
-  async function veterans(n: number, cr: number, now: Date) {
+  async function veterans(n: number, cr: number, now: Date, geared = true) {
     const matchId = randomUUID();
+    const at = new Date(now.getTime() - 86_400_000);
     for (let i = 0; i < n; i++) {
       const u = await makeUser(db);
       await db.execute(sql`update users set credits = ${cr}, created_at = ${new Date(now.getTime() - 30 * 86_400_000)} where id = ${u}`);
       await db.execute(sql`insert into raid_exits (match_id, user_id, exit, report, at)
-        values (${matchId}, ${u}, 'extract', '{}'::jsonb, ${new Date(now.getTime() - 86_400_000)})`);
+        values (${matchId}, ${u}, 'extract', '{}'::jsonb, ${at})`);
+      const entries = geared ? [{ key: "w1" as const, uid: randomUUID(), def: "rifle", qty: 1, rarity: 0, dur: 90 }] : [{ key: "p0" as const, uid: "", def: "ammo_light", qty: 30, rarity: 0, dur: 0 }];
+      await db.insert(loadouts).values({ userId: u, status: "settled", entries, matchId, startedAt: at });
     }
   }
+
+  test("free-kit-only accounts (alt farms) never count as veterans: their hoards do not steer autosell", async () => {
+    const now = new Date("2026-10-03T03:00:00Z");
+    await veterans(60, 500, now);
+    await veterans(300, 50_000, now, false);
+    const r = await runEconomyDaily(db, now);
+    assert.equal(r.veterans.sample, 60);
+    assert.equal(r.autosell.to, 1.03, "the geared veterans are poor: junk pays more");
+  });
 
   test("steers autosell once per UTC day from the veterans' median CR; small samples change nothing", async () => {
     const now = new Date("2026-10-03T03:00:00Z");
@@ -679,8 +788,8 @@ describe("economy daily", () => {
   });
 });
 
-describe("bot settlement", () => {
-  test("uniques broken / destroyed / carried out by bots resolve without an end sweep", async () => {
+describe("legacy (pre-v5) bot fields, parsed for one release", () => {
+  test("uniques broken / destroyed / carried out by bots of an older server resolve without an end sweep", async () => {
     for (let i = 0; i < 3; i++) await makeItem(db, { def: i === 2 ? "armor_2" : "rifle", rarity: 1, state: "lost_pool", dur: 50 });
     const p = await lockedPlayer(); // 3 risk units → 3 released (pool of 3)
     const req = startReq([{ userId: p.userId, loadoutId: p.loadoutId }]);
@@ -709,6 +818,155 @@ describe("bot settlement", () => {
     assert.equal((await item(rifles[0]!.uid)).state, "lost_pool");
     assert.equal((await item(rifles[0]!.uid)).durability, 50, "bot extract: no wear");
     assert.equal((await item(armor.uid)).state, "destroyed");
+  });
+});
+
+describe("NPC MODEL v5: humans + NPCs", () => {
+  const CARRIERS: NonNullable<RaidStartRequest["carriers"]> = [
+    { key: "npc:4.0", tier: 3 },
+    { key: "npc:4.1", tier: 3 },
+    { key: "npc:9.0", tier: 4 },
+  ];
+  const LOW: RaidStartRequest["containers"] = [{ idx: 1, kind: "crate", tier: 2 }, { idx: 5, kind: "stash", tier: 4 }];
+
+  test("R = 9: bosses first, then one unique per T3/T4 carrier (no container eligible), journaled alloc_npc", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const ps = [await lockedPlayer(), await lockedPlayer(), await lockedPlayer()];
+    const req = startReq(ps.map((p) => ({ userId: p.userId, loadoutId: p.loadoutId })), {
+      containers: LOW,
+      bosses: BOSSES_CF,
+      bossSlots: 5,
+      // A malformed T2 entry (the contract says 3 | 4) is dropped by normCarriers.
+      carriers: [...CARRIERS, { key: "npc:2.0", tier: 2 as 3 }],
+    });
+    const res = await startRaid(db, req);
+    assert.equal(res.containerLoot["boss:commander"]?.length, 3);
+    assert.equal(res.containerLoot["boss:foreman"]?.length, 2);
+    const npcKeys = Object.keys(res.containerLoot).filter((k) => k.startsWith("npc:"));
+    assert.deepEqual(npcKeys.sort(), ["npc:4.0", "npc:4.1", "npc:9.0"], "the T2 entry never carries");
+    assert.ok(npcKeys.every((k) => res.containerLoot[k]!.length === 1), "one each");
+    assert.equal(Object.values(res.containerLoot).flat().length, 8, "8 = MAX_PER_MATCH: carriers never raise the count");
+    assert.equal((await allocEvents(req.matchId, "alloc_npc")).length, 3);
+    assert.equal((await allocEvents(req.matchId, "alloc_boss")).length, 5);
+    const raid = (await db.select().from(raids).where(eq(raids.matchId, req.matchId)))[0]!;
+    assert.deepEqual([raid.riskUnits, raid.poolReleased], [9, 8]);
+    assert.equal(await poolCount(), POOL.BOSS_MIN_POOL + 50 - 8);
+    assert.deepEqual(await startRaid(db, req), res, "replay returns the stored response");
+  });
+
+  test("carriers share the release with T3/T4 containers; a free-kit lobby and demo mode put nothing on NPCs", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const ps = [await lockedPlayer(), await lockedPlayer(), await lockedPlayer()];
+    const res = await startRaid(db, startReq(ps.map((p) => ({ userId: p.userId, loadoutId: p.loadoutId })), { carriers: CARRIERS }));
+    const keys = Object.keys(res.containerLoot);
+    assert.equal(Object.values(res.containerLoot).flat().length, 8);
+    assert.ok(keys.every((k) => k === "2" || k === "3" || CARRIERS.some((c) => c.key === k)), keys.join(","));
+    assert.ok(keys.filter((k) => k.startsWith("npc:")).every((k) => res.containerLoot[k]!.length === 1));
+
+    const free = await startRaid(db, startReq([{ userId: await makeUser(db), loadoutId: "" }], { carriers: CARRIERS, bosses: BOSSES_CF, bossSlots: 5 }));
+    assert.deepEqual(free.containerLoot, {}, "R = 0: nothing released");
+    const p = await lockedPlayer();
+    const demo = await startRaid(db, startReq([{ userId: p.userId, loadoutId: p.loadoutId }], { mode: "demo", carriers: CARRIERS }));
+    assert.deepEqual(demo.containerLoot, {}, "demo: the pool is never touched");
+    assert.equal(demo.accepted.length, 1);
+  });
+
+  test("a carrier's unique: the human who loots it keeps it; an unlooted one returns to the pool unworn", async () => {
+    await bulkPool(POOL.BOSS_MIN_POOL + 50);
+    const p = await lockedPlayer();
+    const req = startReq([{ userId: p.userId, loadoutId: p.loadoutId }], { containers: LOW, carriers: CARRIERS });
+    const res = await startRaid(db, req);
+    const carried = Object.entries(res.containerLoot).filter(([k]) => k.startsWith("npc:"));
+    assert.equal(carried.length, 3, "R = 3, no boss, no container: all three ride on marauders");
+    const [taken, ...left] = carried.map(([, v]) => v[0]!);
+    const ex = await applyExit(
+      db,
+      exitReport(req.matchId, p.userId, {
+        extracted: [{ uid: p.rifle, def: "rifle", qty: 1, rarity: 1, dur: 100 }, taken!],
+        stats: { shotsFired: 30, dmgDealt: 300, containersSearched: 0, corpsesSearched: 1, bossKills: 0, npcKills: 2 },
+      }),
+    );
+    assert.equal(ex.status, "applied");
+    assert.equal(ex.xp, PROGRESSION.XP_RAID + PROGRESSION.XP_EXTRACT + 2 * PROGRESSION.XP_NPC);
+    const e = await applyEnd(
+      db,
+      endReport(req.matchId, {
+        participants: [{ userId: p.userId, nickname: "p", isBot: false, exitType: "extract", kills: 0 }],
+        leftOnMap: [
+          { uid: p.armor, def: "armor_2", qty: 1, rarity: 1, dur: 10 },
+          { uid: p.bp, def: "backpack_1", qty: 1, rarity: 0, dur: 100 },
+          ...left,
+        ],
+        npcSummary: { spawned: { boss: 0, guard: 0, marauder: 3 }, killedByHumans: { boss: 0, guard: 0, marauder: 2 } },
+      }),
+    );
+    assert.deepEqual([e.status, e.swept], ["applied", 0]);
+    assert.deepEqual([(await item(taken!.uid)).state, (await item(taken!.uid)).ownerId], ["in_stash", p.userId]);
+    for (const it of left) assert.deepEqual([(await item(it.uid)).state, (await item(it.uid)).durability], ["lost_pool", 80], "no wear");
+  });
+
+  test("end report: humans-only scoreboard with npcSummary, no bot fields stored, settles without botLost", async () => {
+    const p = await lockedPlayer();
+    const req = startReq([{ userId: p.userId, loadoutId: p.loadoutId }]);
+    await startRaid(db, req);
+    await applyExit(db, exitReport(req.matchId, p.userId, { exit: "dead", lost: [{ uid: p.rifle, def: "rifle", qty: 1, rarity: 1, dur: 100 }] }));
+    const npcSummary = { spawned: { boss: 2, guard: 5, marauder: 30 }, killedByHumans: { boss: 0, guard: 1, marauder: 4 } };
+    const e = await applyEnd(
+      db,
+      endReport(req.matchId, {
+        participants: [
+          { userId: p.userId, nickname: "p", isBot: false, exitType: "dead", kills: 0 },
+          { userId: null, nickname: "Marauder", isBot: true, exitType: "timeout", kills: 1 },
+        ],
+        leftOnMap: [
+          { uid: p.armor, def: "armor_2", qty: 1, rarity: 1, dur: 10 },
+          { uid: p.bp, def: "backpack_1", qty: 1, rarity: 0, dur: 100 },
+        ],
+        npcSummary,
+      }),
+    );
+    assert.deepEqual([e.status, e.swept], ["applied", 0]);
+    const mr = (await db.select().from(matchResults).where(eq(matchResults.matchId, req.matchId)))[0]!;
+    assert.deepEqual(mr.payload.participants.map((x) => x.nickname), ["p"]);
+    assert.deepEqual(mr.payload.npcSummary, npcSummary);
+    assert.ok(!("botLost" in mr.payload) && !("botDestroyed" in mr.payload));
+    const botEvents = await db.execute<{ n: number }>(sql`select count(*)::int as n from item_events where reason = 'bot_break'`);
+    assert.equal(Number(botEvents.rows[0]!.n), 0);
+  });
+
+  test("npcKills XP is capped at NPC.MAX_PER_RAID; older reports without npcKills pay none", async () => {
+    const a = await makeUser(db);
+    const b = await makeUser(db);
+    const m = randomUUID();
+    const big = await applyExit(
+      db,
+      exitReport(m, a, { exit: "dead", stats: { shotsFired: 0, dmgDealt: 0, containersSearched: 0, corpsesSearched: 0, bossKills: 0, npcKills: 500 } }),
+    );
+    assert.equal(big.xp, PROGRESSION.XP_RAID + NPC.MAX_PER_RAID * PROGRESSION.XP_NPC);
+    const old = await applyExit(db, exitReport(m, b, { exit: "dead" }));
+    assert.equal(old.xp, PROGRESSION.XP_RAID);
+  });
+
+  test("economy daily: raids of the last 24 h, humans-only lobby size, solo share and NPC totals", async () => {
+    const humans = async (n: number) => Promise.all(Array.from({ length: n }, () => makeUser(db)));
+    const part = (ids: string[]) => ids.map((userId, i) => ({ userId, nickname: `h${i}`, isBot: false, exitType: "dead" as const, kills: 0 }));
+    const sum = (m: number, k: number) => ({ spawned: { boss: 1, guard: 2, marauder: m }, killedByHumans: { boss: 0, guard: 1, marauder: k } });
+    await applyEnd(db, endReport(randomUUID(), { participants: part(await humans(1)), npcSummary: sum(30, 3) }));
+    await applyEnd(db, endReport(randomUUID(), { participants: part(await humans(2)), npcSummary: sum(35, 5) }));
+    // A pre-v5 report: 3 humans + a bot, no npcSummary.
+    await applyEnd(
+      db,
+      endReport(randomUUID(), {
+        participants: [...part(await humans(3)), { userId: null, nickname: "bot", isBot: true, exitType: "timeout", kills: 2 }],
+      }),
+    );
+    // Older than 24 h: not counted.
+    await applyEnd(db, endReport(randomUUID(), { participants: part(await humans(1)), endedAt: Date.now() - 2 * 86_400_000 }));
+    const d = await runEconomyDaily(db, new Date(Date.now() + 1000));
+    assert.equal(d.raids.count, 3);
+    assert.equal(d.raids.medianHumans, 2);
+    assert.equal(d.raids.soloShare, 0.3333);
+    assert.deepEqual(d.raids.npc, { spawned: { boss: 2, guard: 4, marauder: 65 }, killedByHumans: { boss: 0, guard: 2, marauder: 8 } });
   });
 });
 

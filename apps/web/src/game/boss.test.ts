@@ -66,6 +66,9 @@ describe("npc identity", () => {
     assert.equal(npcNameTag("guard", "commander", "x"), BOSSES.commander.guardName);
     assert.equal(npcNameTag(null, null, "vlad"), "vlad");
     assert.equal(npcNameTag("boss", null, "Big"), "BIG");
+    // v5 marauders: role tag only, never the raw nickname.
+    assert.equal(npcNameTag("marauder", null, "Marauder"), "Marauder");
+    assert.equal(npcNameTag("marauder", null, "Ivan_88"), "Marauder");
     assert.equal(turfLine("foreman"), "Foreman's turf");
   });
 
@@ -148,6 +151,14 @@ describe("alert sting", () => {
     const a = new BossAlertTracker();
     assert.equal(a.sight("g1", "guard", "warden", 0), "guard");
     assert.equal(a.sight("g1", "guard", "warden", STING_COOLDOWN_MS + RESIGHT_MS), "guard");
+  });
+
+  it("marauders never sting: the boss cue is for boss groups only", () => {
+    const a = new BossAlertTracker();
+    assert.equal(a.sight("m1", "marauder", null, 0), null);
+    assert.equal(a.shotBy("marauder", 10), null);
+    // A marauder sighting does not burn the cooldown.
+    assert.equal(a.sight("g1", "guard", "foreman", 20), "guard");
   });
 
   it("being shot by an NPC stings, regular players never do", () => {

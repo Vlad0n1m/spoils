@@ -18,6 +18,8 @@ export interface ItemPatch {
   durability?: number;
   /** Added to lock_raids, floored at 0 (extract decrements by 1). */
   lockRaidsDelta?: number;
+  /** Make the item bound (never listable, destroyed instead of pooled). Never unbinds. */
+  bind?: boolean;
 }
 
 export interface ItemEventInfo {
@@ -123,6 +125,7 @@ export async function applyMove(tx: Tx, it: LockedItem, patch: ItemPatch, ev: It
         ? Math.max(0, Math.min(it.maxDurability, patch.durability))
         : it.durability,
     lockRaids: Math.max(0, it.lockRaids + (patch.lockRaidsDelta ?? 0)),
+    bound: it.bound || patch.bind === true,
   };
   await tx.execute(sql`
     update items set
@@ -132,6 +135,7 @@ export async function applyMove(tx: Tx, it: LockedItem, patch: ItemPatch, ev: It
       loadout_id = ${next.loadoutId},
       durability = ${next.durability},
       lock_raids = ${next.lockRaids},
+      bound = ${next.bound},
       version = version + 1,
       updated_at = now()
     where id = ${it.id}`);
