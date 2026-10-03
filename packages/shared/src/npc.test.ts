@@ -80,8 +80,11 @@ test("roles, renamed constants and aliases", () => {
   assert.equal(BOSS_AI.NO_BREAK, NPC.NO_BREAK);
   assert.equal(NPC_GEAR_FLAGS, ITEM_FLAG.FREE, "NPC gear is FREE: never in a corpse, never extracted, never valued");
   assert.equal(NPC.FRIENDLY_FIRE, false);
-  assert.equal(NPC.WAVES.ENABLED, false);
-  assert.equal(NPC.WAVES.LOOT, false);
+  assert.ok(!("WAVES" in NPC), "v6: WAVES replaced by RESPAWN");
+  assert.deepEqual(NPC.RESPAWN, {
+    ENABLED: true, AFTER_MS: 900_000, MAX_PER_POST: 1, MIN_HUMAN_DIST_PX: 3600,
+    MIN_CYCLE_LEFT_MS: 600_000, CONSUMABLE_MULT: 0.5, SALT: 0x5e59a77,
+  });
   assert.equal(NPC_KILL.TAG, false);
 });
 

@@ -63,6 +63,13 @@ export const DOG_TAG = {
   /** Same extractor + same victim within this window: tags after REPEAT_FREE are worth 0. */
   REPEAT_WINDOW_MS: 24 * 3600_000,
   REPEAT_FREE: 2,
+  /**
+   * WORLD v6 (D22): a tag pays full price only to its victim's killer (SettledItem.by, resolved by
+   * the server); anyone else who extracts it gets this share (late free-kit corpse farming).
+   */
+  NON_KILLER_MULT: 0.25,
+  /** WORLD v6 (D22): guest victims drop no dog tag. */
+  GUEST_TAG: false,
 } as const;
 
 export function dogTagCr(victimLevel: number): number {

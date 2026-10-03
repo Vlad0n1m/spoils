@@ -94,8 +94,22 @@ export const NPC = {
   FRIENDLY_FIRE: false,
   /** Every NPC role skips BREAK_CHANCE_ON_DEATH (replaces BOSS_AI.NO_BREAK, kept as an alias). */
   NO_BREAK: true,
-  /** Respawn waves: config only, default OFF; wave NPCs carry no loot bag. */
-  WAVES: { ENABLED: false, EVERY_MS: 480_000, MAX: 2, MIN_HUMAN_DIST_PX: 2500, LOOT: false },
+  /**
+   * WORLD v6 (D15, replaces the unused WAVES): a fully cleared marauder squad respawns at its post
+   * at most MAX_PER_POST times per cycle, AFTER_MS after its last member died, only when no human is
+   * within MIN_HUMAN_DIST_PX and at least MIN_CYCLE_LEFT_MS of the cycle remain. Fresh FREE kit, bag
+   * at the full junk table, consumables × CONSUMABLE_MULT; SALT mixes the respawned bag's stream.
+   * Bosses and guards never respawn.
+   */
+  RESPAWN: {
+    ENABLED: true,
+    AFTER_MS: 900_000,
+    MAX_PER_POST: 1,
+    MIN_HUMAN_DIST_PX: 3600,
+    MIN_CYCLE_LEFT_MS: 600_000,
+    CONSUMABLE_MULT: 0.5,
+    SALT: 0x5e59a77,
+  },
   /**
    * Radio chatter from awake idle squads (players hear a camp before walking into it). Needs a
    * SoundKind.voice entry, which is NOT in sound.ts yet (it lands together with the client / server

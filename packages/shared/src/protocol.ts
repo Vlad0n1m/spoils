@@ -11,14 +11,15 @@ import type { SoundMsg } from "./sound.js";
 
 /** Colyseus room names. */
 export const ROOMS = {
-  /** Single demo matchmaking queue. Join with { ticket }. */
+  /** @deprecated v6: no matchmaking (world shards are joined by id). Deleted in S8. */
   MATCHMAKING: "mm",
   /** One room per match. Join by id with BattleJoinOptions. */
   BATTLE: "battle",
 } as const;
 
-/** Matchmaking room → client: the battle is created, join it by id. */
+/** @deprecated v6: no matchmaking. Deleted in S8. Matchmaking room → client: the battle is created, join it by id. */
 export const MM_BATTLE_READY = "battle_ready";
+/** @deprecated v6: no matchmaking. Deleted in S8. */
 export interface BattleReadyMsg {
   battleRoomId: string;
 }
@@ -36,17 +37,39 @@ export interface BattleJoinOptions {
  * 4000–4010 (e.g. 4002 = WS_CLOSE_WITH_ERROR).
  */
 export const CLOSE_CODES = {
-  /** Battle: the ticket's user is not in this match's roster. */
+  /** @deprecated v6 (legacy roster matches). Battle: the ticket's user is not in this match's roster. */
   NOT_IN_ROSTER: 4101,
-  /** Matchmaking: the queue already launched its battle. */
+  /** @deprecated v6: no matchmaking. Matchmaking: the queue already launched its battle. */
   QUEUE_CLOSED: 4102,
   /** The same user connected again from another tab / device; the old connection is dropped. */
   JOINED_ELSEWHERE: 4103,
   /** raids/start rejected this player's loadout (not locked / expired / wrong user). */
   LOADOUT_REJECTED: 4104,
-  /** Matchmaking: the battle room could not be created. */
+  /** WORLD v6: the map was wiped (sent 8 s after the end report). */
+  WIPED: 4105,
+  /** WORLD v6: this connection has no runtime on this map (entry gone / settled). */
+  NOT_IN_WORLD: 4109,
+  /** @deprecated v6: no matchmaking. Matchmaking: the battle room could not be created. */
   LAUNCH_FAILED: 4150,
 } as const;
+
+/**
+ * WORLD v6: ServerError messages of the battle room's static onAuth (admission), sent as "<code>" or
+ * "<code>:<detail>" (e.g. "loadout_rejected:not_locked").
+ */
+export const WORLD_JOIN_ERR = {
+  INVALID_TICKET: "invalid_ticket",
+  MAP_MISMATCH: "map_mismatch",
+  MAP_GONE: "map_gone",
+  ENTRY_CLOSED: "entry_closed",
+  WORLD_FULL: "world_full",
+  EXIT_SETTLING: "exit_settling",
+  IN_RAID: "in_raid",
+  ENTRY_LIMIT: "entry_limit",
+  LOADOUT_REJECTED: "loadout_rejected",
+  WEB_UNAVAILABLE: "web_unavailable",
+} as const;
+export type WorldJoinErrCode = (typeof WORLD_JOIN_ERR)[keyof typeof WORLD_JOIN_ERR];
 
 /** Client → server message names. */
 export const C2S = {
@@ -101,6 +124,10 @@ export interface JoinedMsg {
   matchId: string;
   /** This client's key in BattleState.self ("p<rosterIndex>"). */
   selfKey: string;
+  /** WORLD v6: this stay's entry id (minted by the web at join). */
+  entryId?: string;
+  /** WORLD v6: the cycle of this map. */
+  cycleId?: number;
 }
 
 /** Move one item (or part of a stack) into the player's own inventory. */

@@ -30,11 +30,17 @@ export const MATCH = {
    * join; the match launches at the first of: queue >= MAX_HUMANS (at once); queue >= MIN_HUMANS
    * and >= MIN_WAIT_MS since the window opened; the window ends with >= 1 human (a solo raid against
    * NPCs is legal, SOLO_START_OK). Joiners beyond MAX_HUMANS open the next window (mmShouldLaunch).
+   * WORLD v6: the queue is gone (one always-live world, WORLD below); these stay until step S8.
    */
+  /** @deprecated v6: no matchmaking (WORLD.CAPACITY). Deleted in S8. */
   MAX_HUMANS: 24,
+  /** @deprecated v6: no matchmaking. Deleted in S8. */
   MIN_HUMANS: 12,
+  /** @deprecated v6: no matchmaking. Deleted in S8. */
   MIN_WAIT_MS: 10_000,
+  /** @deprecated v6: no matchmaking. Deleted in S8. */
   QUEUE_WINDOW_MS: 45_000,
+  /** @deprecated v6: no matchmaking. Deleted in S8. */
   SOLO_START_OK: true,
   /** @deprecated v5: humans + bots per match; use MAX_HUMANS (bots are gone). */
   MAX_PLAYERS: 32,
@@ -57,6 +63,7 @@ export function humanSideCap(n: number): number {
 }
 
 /**
+ * @deprecated v6: no matchmaking (one always-live world). Deleted in S8.
  * Queue rule (MATCH): should the "mm" queue launch now? `queued` humans, `sinceOpenMs` since the
  * window opened, `windowMs` = the window length (env MM_QUEUE_WINDOW_MS, default
  * MATCH.QUEUE_WINDOW_MS). Never launches an empty queue.
@@ -84,7 +91,109 @@ export const WORLD = {
   TERRAIN_CELL: 64,
   /** Client bake / interest-management chunk. */
   CHUNK: 1024,
+  // ---- WORLD v6: one always-live map per cycle, aligned to the UTC wall clock (spec D1–D21).
+  /** One map ("cycle") lasts this long; wipes at :00 :45 :30 :15 UTC, 32 maps a day. */
+  CYCLE_MS: 45 * 60_000,
+  /** Entry opens this long after the cycle start (the reset window after the wipe). */
+  RESET_MS: 20_000,
+  /** Entry closes this long before the wipe. */
+  ENTRY_CLOSE_MS: 10 * 60_000,
+  /** Wipe warnings (time left), derived from the clock by the client. */
+  WARN_AT_MS: [600_000, 300_000, 60_000] as const,
+  /** The next cycle's room is created this long before its start. */
+  PREWARM_MS: 30_000,
+  /** The next map's boss is revealed in the lobby this long before the wipe. */
+  NEXT_BOSS_REVEAL_MS: 10 * 60_000,
+  /** Humans on one map (shard). A full map answers world_full. */
+  CAPACITY: 24,
+  /** v6 launches with one shard; overflow shards are later. */
+  MAX_SHARDS: 1,
+  /** Vision is allocated for this many runtimes (humans + NPCs, never reused) per shard. */
+  MAX_RUNTIMES_PER_SHARD: 256,
+  /** Admission refuses at MAX_RUNTIMES_PER_SHARD − this (kept for NPC respawns). */
+  RUNTIME_HEADROOM: 24,
+  /** Entries of one user per cycle (web check). */
+  MAX_ENTRIES_PER_CYCLE: 4,
+  /** A player's extracts arm this long after their own entry. */
+  EXTRACT_ARM_MS: 3 * 60_000,
+  /** Early-closing extracts (MapData closesAtMs) close this long before the wipe. */
+  EXTRACT_EARLY_CLOSE_MS: 5 * 60_000,
+  /** An entry must stay this long on the map to burn a giveaway lock (bind rule, D21). */
+  MIN_EXPOSURE_MS: 8 * 60_000,
+  /** Late-join spawn tier 1: at least this far from every living human. */
+  LATE_SPAWN_MIN_HUMAN_PX: 3000,
+  /** Late-join spawn tier 2. */
+  LATE_SPAWN_FALLBACK_PX: 2000,
+  /** Client: armed auto-enter waits rand(0..this) after openAt. */
+  AUTO_ENTER_JITTER_MS: 4_000,
+  /** Map #1 = the cycle that starts at this instant (planned v6 launch, a UTC midnight). */
+  NUMBER_EPOCH_MS: Date.UTC(2026, 9, 6),
+  // ---- Ground and corpse expiry (addendum A6, world mode only; legacy roster matches unchanged).
+  /**
+   * A loose ground item vanishes this long after it hit the ground (a pick-up and re-drop starts a
+   * new timer). Player valuables (DB uniques) → treasury (MatchEndReport.expired), fungibles destroyed.
+   */
+  GROUND_EXPIRE_MS: 10 * 60_000,
+  /**
+   * A corpse and everything still in it vanish this long after the death. Player corpse uniques →
+   * treasury (expired); NPC-corpse pool items → lost pool untaxed (expiredToPool); the rest destroyed.
+   */
+  CORPSE_EXPIRE_MS: 15 * 60_000,
+  /** Client: the item / corpse blinks during its last this-many ms (GroundItem / Corpse.expiresAt). */
+  EXPIRE_WARN_MS: 60_000,
 } as const;
+
+/** One world cycle (wall-clock ms). */
+export interface WorldCycle {
+  cycle: number;
+  startAt: number;
+  openAt: number;
+  entryClosesAt: number;
+  wipeAt: number;
+}
+/** resetting: [startAt, openAt); open: [openAt, entryClosesAt); closing: [entryClosesAt, wipeAt). */
+export type WorldPhase = "resetting" | "open" | "closing";
+
+/** cycle = floor(nowMs / CYCLE_MS); openAt = startAt + RESET_MS; entryClosesAt = wipeAt − ENTRY_CLOSE_MS. */
+export function worldCycleOf(cycle: number): WorldCycle {
+  const c = Math.floor(cycle);
+  const startAt = c * WORLD.CYCLE_MS;
+  const wipeAt = startAt + WORLD.CYCLE_MS;
+  return { cycle: c, startAt, openAt: startAt + WORLD.RESET_MS, entryClosesAt: wipeAt - WORLD.ENTRY_CLOSE_MS, wipeAt };
+}
+
+/** The cycle running at wall-clock `nowMs` (pure: callers pass their own clock). */
+export function worldCycleAt(nowMs: number): WorldCycle {
+  return worldCycleOf(Math.floor(nowMs / WORLD.CYCLE_MS));
+}
+
+/**
+ * resetting: [startAt, openAt); open: [openAt, entryClosesAt); closing: [entryClosesAt, wipeAt).
+ * Outside the cycle: before openAt → "resetting", from entryClosesAt on → "closing".
+ */
+export function worldPhase(c: WorldCycle, nowMs: number): WorldPhase {
+  if (nowMs < c.openAt) return "resetting";
+  if (nowMs < c.entryClosesAt) return "open";
+  return "closing";
+}
+
+/** Public map number: cycle − floor(NUMBER_EPOCH_MS / CYCLE_MS) + 1 (may be ≤ 0 before the epoch). */
+export function mapNumber(cycle: number): number {
+  return Math.floor(cycle) - Math.floor(WORLD.NUMBER_EPOCH_MS / WORLD.CYCLE_MS) + 1;
+}
+
+/** Public per-cycle environment seed (every shard of a cycle has the same weather / time of day). */
+export function cycleEnvSeed(cycle: number): number {
+  return (Math.imul(cycle, 0x9e3779b1) ^ 0x5f0f1a2b) >>> 0;
+}
+
+/** When extract `e` opens for this player: max(e.openAt, self.extractArmAt ?? 0). */
+export function extractOpenAtFor(
+  e: { openAt: number },
+  self: { extractArmAt?: number } | null | undefined,
+): number {
+  return Math.max(e.openAt, self?.extractArmAt ?? 0);
+}
 
 /** v1 map size; only map/legacy.ts uses it. */
 export const LEGACY_WORLD = {
