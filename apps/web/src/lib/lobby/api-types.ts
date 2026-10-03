@@ -1,9 +1,11 @@
 /**
  * JSON shapes of the lobby API routes (/api/stash, /api/loadout/*, /api/market/*, /api/trader/*,
- * /api/economy/stats). Types only, so client components and route handlers share one contract.
+ * /api/economy/stats, WORLD v6 /api/world/*, /api/me/world, /api/leaderboards). Types only, so
+ * client components and route handlers share one contract. The WORLD v6 DTOs themselves live in
+ * @extract/shared (WorldStatusDto, WorldJoinResponse, MeWorldDto, LeaderboardDto, WorldEventsDto).
  * Money is a decimal string of balance_cents minor units (bigint does not survive JSON).
  */
-import type { LoadoutEntry, LoadoutErrCode, PricePoint } from "@extract/shared";
+import type { LoadoutEntry, LoadoutErrCode, PricePoint, WorldJoinError } from "@extract/shared";
 import type { StashDto } from "../inventory/stash";
 
 export type { StashDto, StashItemDto } from "../inventory/stash";
@@ -128,4 +130,22 @@ export interface EconomyStatsDto {
   };
   autosellMult: number;
   daily: Array<{ day: string; data: Record<string, unknown> }>;
+}
+
+/**
+ * Error body of POST /api/world/join (spec §4.7). Every response carries `serverTime` (world clock,
+ * ms) so the lobby can correct its countdowns.
+ * - entry_closed: `openAt` = when the next entry window opens.
+ * - world_starting: `retryInMs` (the shard of this cycle is not registered yet).
+ * - in_raid: `settlesAt` = when the entry's shard is voided at the latest (ends_at + 5 min), if known.
+ * - loadout codes: `key` = the offending slot.
+ */
+export interface WorldJoinErrorBody {
+  error: WorldJoinError | "conflict" | "no_user";
+  message: string;
+  serverTime: number;
+  openAt?: number;
+  retryInMs?: number;
+  settlesAt?: number;
+  key?: string;
 }

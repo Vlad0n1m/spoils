@@ -1,9 +1,25 @@
+import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ROOMS, isSlotKey, type JoinTicket, type LoadoutEntry, type SlotKey } from "@extract/shared";
+import {
+  ROOMS,
+  WORLD,
+  isSlotKey,
+  worldCycleAt,
+  worldCycleOf,
+  worldPhase,
+  type JoinTicket,
+  type LoadoutEntry,
+  type SlotKey,
+  type WorldJoinResponse,
+} from "@extract/shared";
 import type { Db } from "../inventory/db";
 import { MAX_LOADOUT_ENTRIES, getDraft, lockLoadout, saveDraft, unlockLoadout } from "../inventory/loadout";
+import { RAID_USER_VOID_GRACE_MS, voidStaleForUser } from "../inventory/raids";
 import { getStash } from "../inventory/stash";
 import { signJoinTicket } from "../join-ticket";
+import { worldNow } from "../world/clock";
+import type { WorldJoinErrorBody } from "./api-types";
 import { LOADOUT_ERR_TEXT, draftFromLocked, pruneDraft, sameLoadout } from "./loadout-model";
 import type { Caller } from "./route-helpers";
 
@@ -28,13 +44,20 @@ export type JoinResult =
  * lost since the page saved it cannot block the Play button. An already-locked loadout that no
  * longer matches the draft (the player edited it after a cancelled search) is unlocked and
  * re-locked, so the raid always carries what the Loadout tab shows.
+ * `world` (WORLD v6, worldJoin) puts the shard's matchId and the freshly minted entryId into the
+ * signed ticket; the legacy routes leave both "" until S8.
  */
-export async function lockAndIssueTicket(db: Db, c: Caller, entries?: LoadoutEntry[]): Promise<JoinResult> {
+export async function lockAndIssueTicket(
+  db: Db,
+  c: Caller,
+  entries?: LoadoutEntry[],
+  world: { matchId: string; entryId: string } = { matchId: "", entryId: "" },
+): Promise<JoinResult> {
   if (c.kind === "anon") return { ok: false, status: 401, error: "unauthenticated", message: "Sign in first." };
   if (c.kind === "guest") {
     return {
       ok: true,
-      ticket: signJoinTicket({ userId: c.userId, nickname: c.nickname, loadoutId: "" }),
+      ticket: signJoinTicket({ userId: c.userId, nickname: c.nickname, loadoutId: "", ...world }),
       roomName: ROOMS.MATCHMAKING,
       loadoutId: "",
       entries: [],
@@ -79,7 +102,7 @@ export async function lockAndIssueTicket(db: Db, c: Caller, entries?: LoadoutEnt
   }
   return {
     ok: true,
-    ticket: signJoinTicket({ userId: c.userId, nickname: c.nickname, loadoutId: lock.loadoutId }),
+    ticket: signJoinTicket({ userId: c.userId, nickname: c.nickname, loadoutId: lock.loadoutId, ...world }),
     roomName: ROOMS.MATCHMAKING,
     loadoutId: lock.loadoutId,
     entries: lock.loadoutId ? draftFromLocked(lock.entries) : [],
@@ -90,4 +113,139 @@ export async function lockAndIssueTicket(db: Db, c: Caller, entries?: LoadoutEnt
 /** Draft entries in the {key, uid, def, qty} shape sameLoadout compares against. */
 function draftFromLockedLike(entries: readonly LoadoutEntry[]) {
   return entries.map((e) => ({ key: e.key, uid: e.itemId ?? "", def: e.def, qty: e.qty }));
+}
+
+// ============================================================================ WORLD v6 join
+
+export type WorldJoinResult =
+  | { ok: true; body: WorldJoinResponse }
+  | { ok: false; status: number; body: WorldJoinErrorBody };
+
+type ActiveEntryRow = {
+  entry_id: string;
+  match_id: string;
+  loadout_id: string | null;
+  raid_status: string | null;
+  raid_cycle: number | null;
+  room_id: string | null;
+  ends_at: Date | string | null;
+};
+
+/**
+ * POST /api/world/join (spec §4.7, D4/D5/D6): the lobby's PLAY. In order:
+ * 1. anon → 401 `unauthenticated`.
+ * 2. Lazy void of this user's stale shard (voidStaleForUser), so a crashed process never strands gear.
+ * 3. An active entry on a running world row of the current cycle → a rejoin ticket for that same
+ *    entry (`rejoin: true`; a lost raids/enter reply heals here, D6). Any other active entry → 409
+ *    `in_raid` with `settlesAt` = its ends_at + RAID_USER_VOID_GRACE_MS (when the lazy void frees it).
+ * 4. Not in the entry window → 409 `entry_closed` with `openAt` (this cycle's while resetting, else
+ *    the next cycle's).
+ * 5. No running world row for this cycle (raids/open has not landed yet) → 503 `world_starting`.
+ * 6. WORLD.MAX_ENTRIES_PER_CYCLE entries of this user this cycle → 409 `entry_limit`.
+ * 7. lockAndIssueTicket with the shard's matchId and a fresh entryId (the web's raids/enter makes it
+ *    an entry only when the game server admits it).
+ * Every body carries `serverTime` (= `now`, the world clock).
+ */
+export async function worldJoin(db: Db, c: Caller, entries?: LoadoutEntry[], now = worldNow()): Promise<WorldJoinResult> {
+  const fail = (status: number, error: WorldJoinErrorBody["error"], message: string, extra: Partial<WorldJoinErrorBody> = {}) =>
+    ({ ok: false, status, body: { error, message, serverTime: now, ...extra } }) as const;
+  if (c.kind === "anon") return fail(401, "unauthenticated", "Sign in first.");
+  const wc = worldCycleAt(now);
+
+  await voidStaleForUser(db, c.userId, new Date(now));
+  const act = await db.execute<ActiveEntryRow>(sql`
+    select e.entry_id, e.match_id, e.loadout_id, r.status as raid_status, r.cycle_id as raid_cycle, r.room_id, r.ends_at
+    from raid_entries e left join raids r on r.match_id = e.match_id
+    where e.user_id = ${c.userId} and e.status = 'active'
+    order by e.created_at desc limit 1`);
+  const a = act.rows[0];
+  if (a) {
+    if (a.raid_status === "running" && Number(a.raid_cycle) === wc.cycle && a.room_id) {
+      const loadoutId = a.loadout_id ?? "";
+      return {
+        ok: true,
+        body: {
+          ticket: signJoinTicket({ userId: c.userId, nickname: c.nickname, loadoutId, matchId: a.match_id, entryId: a.entry_id }),
+          roomId: a.room_id,
+          matchId: a.match_id,
+          cycle: wc.cycle,
+          wipeAt: wc.wipeAt,
+          entryClosesAt: wc.entryClosesAt,
+          rejoin: true,
+          serverTime: now,
+          loadoutId,
+          entries: loadoutId ? await lockedEntries(db, loadoutId) : [],
+          pruned: false,
+        },
+      };
+    }
+    return fail(409, "in_raid", "Your last raid is still settling. Your gear comes back when it does.", {
+      ...(a.ends_at ? { settlesAt: new Date(a.ends_at).getTime() + RAID_USER_VOID_GRACE_MS } : {}),
+    });
+  }
+
+  const phase = worldPhase(wc, now);
+  if (phase !== "open") {
+    return fail(
+      409,
+      "entry_closed",
+      phase === "resetting" ? "A new map is starting. Entry opens in a few seconds." : "Entry to this map is closed. The next map opens soon.",
+      { openAt: phase === "resetting" ? wc.openAt : worldCycleOf(wc.cycle + 1).openAt },
+    );
+  }
+
+  const cur = await db.execute<{ match_id: string; room_id: string }>(sql`
+    select match_id, room_id from raids
+    where kind = 'world' and cycle_id = ${wc.cycle} and status = 'running' and room_id is not null
+    order by started_at desc limit 1`);
+  const shard = cur.rows[0];
+  if (!shard) return fail(503, "world_starting", "The map is starting up. Try again in a few seconds.", { retryInMs: 3000 });
+
+  const cnt = await db.execute<{ n: number }>(sql`
+    select count(*)::int as n from raid_entries where cycle_id = ${wc.cycle} and user_id = ${c.userId}`);
+  if (Number(cnt.rows[0]?.n ?? 0) >= WORLD.MAX_ENTRIES_PER_CYCLE) {
+    return fail(
+      409,
+      "entry_limit",
+      `You've dropped into this map ${WORLD.MAX_ENTRIES_PER_CYCLE} times. The next map opens soon.`,
+      { openAt: worldCycleOf(wc.cycle + 1).openAt },
+    );
+  }
+
+  const r = await lockAndIssueTicket(db, c, entries, { matchId: shard.match_id, entryId: randomUUID() });
+  if (!r.ok) {
+    const extra: Partial<WorldJoinErrorBody> = {};
+    if (r.key) extra.key = r.key;
+    if (r.error === "in_raid" && r.matchId) {
+      const e = await db.execute<{ ends_at: Date | string }>(sql`select ends_at from raids where match_id = ${r.matchId}`);
+      const endsAt = e.rows[0]?.ends_at;
+      if (endsAt) extra.settlesAt = new Date(endsAt).getTime() + RAID_USER_VOID_GRACE_MS;
+    }
+    return fail(r.status, r.error as WorldJoinErrorBody["error"], r.message, extra);
+  }
+  return {
+    ok: true,
+    body: {
+      ticket: r.ticket,
+      roomId: shard.room_id,
+      matchId: shard.match_id,
+      cycle: wc.cycle,
+      wipeAt: wc.wipeAt,
+      entryClosesAt: wc.entryClosesAt,
+      rejoin: false,
+      serverTime: now,
+      loadoutId: r.loadoutId,
+      entries: r.entries,
+      pruned: r.pruned,
+    },
+  };
+}
+
+/** The entries of a loadout row in the lobby's LoadoutEntry shape ([] when missing). */
+async function lockedEntries(db: Db, loadoutId: string): Promise<LoadoutEntry[]> {
+  const r = await db.execute<{ entries: Array<{ key: string; uid: string; def: string; qty: number }> }>(
+    sql`select entries from loadouts where id = ${loadoutId}`,
+  );
+  const e = r.rows[0]?.entries;
+  return Array.isArray(e) ? draftFromLocked(e) : [];
 }

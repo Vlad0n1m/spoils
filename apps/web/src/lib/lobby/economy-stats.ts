@@ -8,7 +8,9 @@ import type { EconomyStatsDto } from "./api-types";
  * Public /economy numbers (critique cut 11: a numbers table, no charts): CR faucets and sinks
  * from credit_ledger, items by lifecycle state, lost-pool and treasury size, market trades and
  * fees, plus the stored economy_daily snapshots. All aggregates over indexed columns; the route
- * caches the result for 60 s.
+ * caches the result for 60 s. "Raids in 24 h" (WORLD v6, spec §4.9) = world entries (raid_entries:
+ * one stay of one user) plus legacy roster raids (raids.kind = 'match'); world shard rows are not
+ * raids a player plays, so they are not counted themselves.
  */
 export async function getEconomyStats(db: Db, now = new Date()): Promise<EconomyStatsDto> {
   const dayAgo = new Date(now.getTime() - 86_400_000);
@@ -36,7 +38,8 @@ export async function getEconomyStats(db: Db, now = new Date()): Promise<Economy
     db.execute<{ registered: number }>(sql`select count(*)::int as registered from users`),
     db.execute<{ raids24: number; exits24: number; extracts24: number; active24: number }>(sql`
       select
-        (select count(*)::int from raids where started_at > ${dayAgo}) as raids24,
+        ((select count(*) from raids where kind = 'match' and started_at > ${dayAgo})
+          + (select count(*) from raid_entries where created_at > ${dayAgo}))::int as raids24,
         count(*)::int as exits24,
         count(*) filter (where exit = 'extract')::int as extracts24,
         count(distinct user_id) filter (where not guest)::int as active24
