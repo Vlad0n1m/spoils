@@ -10,7 +10,9 @@ import {
   cosmeticLabel,
   levelRewards,
   levelUnlocks,
+  featureKindOf,
   markRewardTable,
+  rewardsBetween,
   nameColorHex,
   nextReward,
   rewardTable,
@@ -50,6 +52,13 @@ describe("level rewards", () => {
       [50, ["Title: Fixer"]],
       [100, ["Badge frame: Fixer"]],
     ]);
+  });
+
+  it("reward cards: feature kinds, and every item of the levels crossed", () => {
+    assert.deepEqual(levelRewards(5, 5).slice(0, 3).map((x) => x.feature), ["market", "trader", "band"]);
+    assert.equal(featureKindOf("Level badge turns gold"), "band");
+    assert.deepEqual(rewardsBetween(1, 4).map((x) => x.label), unlocksBetween(1, 4));
+    assert.deepEqual(rewardsBetween(10, 11), []);
   });
 
   it("next reward after a level", () => {
