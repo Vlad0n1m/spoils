@@ -323,9 +323,9 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
           <dt className="text-white/70">Grenades</dt>
           <dd className="text-right tabular-nums text-white">{entries.filter((e) => itemDef(e.def)?.cat === "throwable").reduce((s, e) => s + e.qty, 0)}</dd>
         </dl>
-        <p className="font-body text-xs leading-relaxed text-white/55">
+        <p className="font-body text-sm leading-relaxed text-white/75">
           {entries.length === 0
-            ? `Empty loadout = basic gear: pistol, ${FREE_KIT.AMMO_LIGHT} light ammo and a bandage. Nothing to lose, but no lost-pool loot in containers.`
+            ? `Empty loadout = basic gear: a pistol, ${FREE_KIT.AMMO_LIGHT} light ammo and a bandage. You can't lose it, but it adds no gear to the map's crates: only raiders who bring their own gear do.`
             : "Die and each item has a 50% chance to break into the lost pool; the rest stays in your body for whoever finds it. Extract to keep everything."}
         </p>
         <div className="mt-auto flex flex-col gap-2">

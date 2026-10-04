@@ -128,7 +128,7 @@ export function GearStrip({
     return (
       <div className="flex items-end gap-3 short:gap-2">
         <div className="relative">
-          <span className="menu-label absolute -top-3 left-3 z-10 rounded-lg border-[3px] border-black bg-sky-400 px-2 py-0.5 text-[0.7rem] leading-none tracking-wider text-white [text-shadow:none] short:-top-2.5">
+          <span className="menu-label absolute -top-3 left-3 z-10 rounded-lg border-[3px] border-black bg-sky-400 px-2 py-0.5 text-xs leading-none tracking-wider text-white [text-shadow:none] short:-top-2.5">
             <span className="optical-center">BASIC GEAR</span>
           </span>
           <ul className={PLATE} aria-label={`You drop with the basic gear: pistol (never lost), ${FREE_KIT.AMMO_LIGHT} light ammo, ${FREE_KIT.BANDAGES} bandage`}>
@@ -152,7 +152,7 @@ export function GearStrip({
             <span className="text-base leading-none tracking-wide short:text-sm">
               <span className="optical-center">Buy starter kit</span>
             </span>
-            <span className="font-body mt-1 text-[0.7rem] font-bold leading-tight text-black/70">{formatMinor(stash.kit.priceMinor)}</span>
+            <span className="font-body mt-1 text-xs font-bold leading-tight text-black/80">{formatMinor(stash.kit.priceMinor)}</span>
             <span className="absolute -right-2 -top-2 h-5 w-5 rounded-full border-[3px] border-black bg-rose-500" aria-hidden />
           </button>
         )}
