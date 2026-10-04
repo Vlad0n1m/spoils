@@ -153,3 +153,43 @@ test("npc threat micro-bench: a marauder sees the human and never fires at an un
   assert.equal(t.shotsUnseen, 0);
   assert.ok(t.shotHits <= t.shots && t.hits >= t.shotHits);
 });
+
+test("world harness summary (WORLD v6, §8.4): late-joiner buckets, pool capture, boss attempts and the 4-cycle cap", async () => {
+  const { summarizeWorld, WORLD_MAX_CYCLES } = await import("./world-harness.js");
+  assert.equal(WORLD_MAX_CYCLES, 4);
+  const entry = (o: Record<string, unknown>) => ({
+    seed: 1, cycle: 2001, entryId: "e", userId: "u", n: 1, strategy: "poi", stance: "defend", kit: "starter", role: "background",
+    enterMin: 1, probeMin: -1, exit: "extract", killedBy: "", onMapMin: 9, humansAtEntry: 3, targetsAtEntry: 70, openedAtEntry: 0, attempt: false,
+    riskUnits: 3, maxTier: 0, junkCr: 400, junkPaidCr: 400, tags: 0, tagCr: 0, consFoundCr: 50, consUsedCr: 80, consNetCr: -30, crTotal: 370,
+    containers: 10, containersXp: 10, corpsesSearched: 0, kills: { human: 0, boss: 0, guard: 0, marauder: 0, respawned: 0 },
+    pool: { released: 0, unplaced: 0, bossFill: 0 }, gained: { pool: 0, carrier: 0, boss: 0, corpse: 0, other: 0, top: 0 },
+    hunt: { reached: false, killed: false }, xp: 200, xpLines: [], leaveReason: "time", ...o,
+  });
+  const entries = [
+    entry({ enterMin: 1, junkPaidCr: 600 }),
+    entry({ enterMin: 26, junkPaidCr: 60, role: "probe", probeMin: 25 }),
+    entry({ enterMin: 30, strategy: "tags", kit: "free", role: "tagger", tagCr: 50, tags: 1 }),
+    entry({ enterMin: 2, strategy: "boss", attempt: true, hunt: { reached: true, killed: true } }),
+    entry({ enterMin: 3, strategy: "boss", attempt: true, exit: "mia" }),
+  ];
+  const shard = {
+    seed: 1, cycle: 2001, bossEvent: "foreman", wallMs: 1, entries: 5, users: 5, worldFull: 0, entryLimit: 0, maxHumans: 4, exits: {},
+    pool: { sizeBefore: 700, topBefore: 40, released: 4, entriesWithRelease: 2, returnedUnplaced: 1, pendingAtWipe: 1, placed: 2, fate: { extracted: 2, returned: 1, left: 1 }, byEntryMin: { "0": { released: 4, extracted: 2 } } },
+    boss: { kind: "foreman", attempts: 2, reached: 1, killedAtMin: 9, killedBy: "human", resets: 1, bagFilled: 3, bagStowed: true, bagFate: { extracted: 3 } },
+    respawn: { squads: 2, npcs: 5, killedByHumans: 1, consumablesCr: 40 },
+    expiry: { treasury: 2, treasuryTop: 0, treasuryRefCr: 300, toPool: 1 },
+    corpseUniques: { looted: 3, expired: 2 }, humanDeaths: 1, mapAge: [], containers: 380, t34Containers: 93,
+  } as const;
+  const s = summarizeWorld([shard as never], entries as never);
+  assert.deepEqual(Object.keys(s.byMinute), ["0", "25"], "taggers stay out of the late-joiner curve");
+  assert.equal(s.byMinute["0"]!.n, 3);
+  assert.equal(s.byMinute["25"]!.junk.mean, 60);
+  assert.equal(s.taggers.n, 1);
+  assert.equal(s.taggers.tagCr.median, 50);
+  assert.equal(s.pool.captureOfPlaced, 1);
+  assert.equal(s.pool.captureOfReleased, 0.5);
+  assert.equal(s.boss.perAttempt, 0.5, "one kill in two attempts made while the boss lived");
+  assert.equal(s.boss.perEvent, 1);
+  assert.equal(s.expiry.treasury, 2);
+  assert.equal(s.mia, 0.2);
+});

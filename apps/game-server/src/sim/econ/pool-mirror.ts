@@ -1,6 +1,9 @@
 /**
- * In-process mirror of the web's lost-pool release (apps/web/src/lib/economy/pool.ts allocatePool
- * + seed.ts seedEconomy + value.ts) for the economy benches. The game server must not import the
+ * In-process mirror of the web's legacy (pre-v6, per-match) lost-pool release for the economy
+ * benches' roster raids: the v4/v5 allocatePool that raids/start used to run (removed from the web in
+ * WORLD v6; its pure helpers releasePlan / planAllocation / normCarriers / rankBossSlots stay in
+ * apps/web/src/lib/economy/pool.ts), plus seed.ts seedEconomy and value.ts. The WORLD v6 per-entry
+ * release (releaseForEntry / fillBossBag) is mirrored in world-harness.ts. The game server must not import the
  * web app (drizzle, DB), so the few pure pieces are mirrored here and the shared pure functions
  * (poolReleasePlanV4, uniqueTierScore, poolContainerEligible / Weight, armorPoints, SCRAP_CR, GIVEAWAY_KIT) are reused as-is.
  *
@@ -9,7 +12,7 @@
  *   slots first by tier score, the rest only into T3/T4 crate / toolbox / weapon_box / safe,
  *   guarded ×4; v5 NPC carriers — spawned T3/T4 marauders — in the same draw at
  *   npcCarrierWeight, one item each, never refilled);
- * - mirrorAllocatePool: allocatePool with poolReleasePlanV4 (the web's releasePlan at its default
+ * - mirrorAllocatePool: the legacy allocatePool with poolReleasePlanV4 (the web's releasePlan at its default
  *   knobs) and the DB picks (`order by tier score desc, random()` for bosses, random for the rest;
  *   with no eligible container the rest is capped at the carrier capacity);
  * - seedPiece: seed.ts rollPiece (giveaway-kit-like pieces, ~12% rarer weapons) + dur 55..100;
