@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Texture } from "pixi.js";
-import { WEAPONS } from "@extract/shared";
+import { WEAPONS, buildCollisionIndex } from "@extract/shared";
 import { Effects, tracerSpan, type FxTextures } from "./effects";
 
 const TEX: FxTextures = { line: Texture.WHITE, flash: Texture.WHITE, dot: Texture.WHITE, vignette: Texture.WHITE };
@@ -109,11 +109,44 @@ describe("Effects pools", () => {
     fx.shot(null, "a", "pistol", 0, 0, 0, 0, [0], false, 0);
     fx.update(35, 16, 800, 600);
     assert.equal(fx.stats().flashes, 1);
-    const flash = fx.layer.children[1]!.children[0]!;
+    // Each flash is a pooled pair: the additive muzzle light, then the star over it.
+    const glow = fx.layer.children[1]!.children[0]!;
+    const flash = fx.layer.children[1]!.children[1]!;
     assert.ok(Math.abs(flash.alpha - 0.45) < 1e-9);
+    assert.ok(glow.visible && glow.alpha > 0);
     fx.update(80, 16, 800, 600);
     assert.equal(fx.stats().flashes, 0);
     assert.equal(flash.visible, false);
+    assert.equal(glow.visible, false);
+    fx.destroy();
+  });
+});
+
+describe("combat feel", () => {
+  it("a tracer that stops at a wall leaves an impact; one stopped in a body does not", () => {
+    const wall = buildCollisionIndex({ rects: [{ x: 300, y: -50, w: 20, h: 100 }], circles: [] }, 1000, 1000);
+    const fx = new Effects({ textures: TEX });
+    fx.shot(wall, "a", "rifle", 0, 0, 20, 0, [0], false, 0);
+    for (let t = 16; t < 400; t += 16) fx.update(t, 16, 800, 600);
+    assert.ok(fx.stats().particles > 0, "impact particles at the wall");
+    const fx2 = new Effects({ textures: TEX });
+    fx2.shot(wall, "a", "rifle", 0, 0, 20, 0, [0], false, 0);
+    fx2.stopTracer("a", 150, 0);
+    for (let t = 16; t < 400; t += 16) fx2.update(t, 16, 800, 600);
+    assert.equal(fx2.stats().particles, 0);
+    fx.destroy();
+    fx2.destroy();
+  });
+
+  it("particles stay under the cap during a long shotgun burst into a wall", () => {
+    const wall = buildCollisionIndex({ rects: [{ x: 200, y: -500, w: 20, h: 1000 }], circles: [] }, 1000, 1000);
+    const fx = new Effects({ textures: TEX });
+    const a = [-0.2, -0.1, 0, 0.1, 0.2, -0.15, 0.15, 0.05];
+    for (let t = 0; t < 3000; t += 16) {
+      if (t % 48 === 0) fx.shot(wall, "a", "shotgun", 0, 0, 20, 0, a, true, t);
+      fx.update(t, 16, 800, 600);
+      assert.ok(fx.stats().particles <= 600);
+    }
     fx.destroy();
   });
 });

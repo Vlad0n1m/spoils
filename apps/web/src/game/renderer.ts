@@ -37,6 +37,7 @@ import {
   HEAL,
   INPUT_DT_MS,
   MATCH,
+  NPC_ROLE,
   S2C,
   SOLID,
   WEAPONS,
@@ -95,6 +96,7 @@ import { WorldView, type ViewRect } from "./world";
 import { EMPTY_TALLY, bossKindOfLabel, corpseNpcRole, npcDisplayName, npcRoleName, tallyKill, type KillTally, type NpcRoleName } from "./npc-labels";
 import { getGameAudio } from "./audio/game-audio";
 import { feedAimPointer, getCameraRig, setTouchSticksActive } from "./camera";
+import { SPRITE_RECOIL_PX } from "./combat-fx";
 
 /** About this many world units are visible (by area), whatever the window size. */
 const VIEW_W = 1600;
@@ -911,12 +913,17 @@ export class GameRenderer implements GameRendererApi {
       const x = cx + Math.cos(a) * muzzle;
       const y = cy + Math.sin(a) * muzzle;
       this.effects.shot(this.idx, m.s, w, cx, cy, x, y, m.a, true, now);
+      this.players.get(m.s)?.view.kick(SPRITE_RECOIL_PX[w], now);
       return;
     }
     // Walls are raycast from the shooter's centre, like the server's bullets. A clipped shot of a
     // hidden shooter (s = "") starts at the view-circle entry: cx/cy equal x/y there.
     const c = shotCentre(m, muzzle);
-    const play = (t: number) => this.effects?.shot(this.idx, m.s, w, c.x, c.y, m.x, m.y, m.a, isSelf, t);
+    const play = (t: number) => {
+      this.effects?.shot(this.idx, m.s, w, c.x, c.y, m.x, m.y, m.a, isSelf, t);
+      // The shooter's gun kicks back (only a shooter we render; hidden ones have s = "").
+      if (m.s) this.players.get(m.s)?.view.kick(SPRITE_RECOIL_PX[w], t);
+    };
     // Other players are drawn INTERP_DELAY_MS in the past: show their shots on the same timeline.
     if (isSelf) play(now);
     else this.remoteFx.push(now + INTERP_DELAY_MS, play);
@@ -936,17 +943,37 @@ export class GameRenderer implements GameRendererApi {
     };
     at(m.s !== this.selfId, () => this.effects?.stopTracer(m.s, m.x, m.y));
     // A target we do not see (in a bush, behind a fence, or the position-less "hit confirmed" of a
-    // grenade, t = ""): no burst and no damage number on the map, only the hitmarker and the sound.
-    if (m.t !== this.selfId && (!m.t || !this.state?.players.has(m.t))) return;
+    // grenade, t = ""): no burst and no damage number on the map, only the hitmarker, the sound and
+    // a neutral puff where our own tracer stopped (a point this client already drew).
+    if (m.t !== this.selfId && (!m.t || !this.state?.players.has(m.t))) {
+      if (m.s === this.selfId && Number.isFinite(m.x) && Number.isFinite(m.y)) this.effects.confirmPuff(m.x, m.y, now);
+      return;
+    }
     at(m.t !== this.selfId, (t) => {
       const fx = this.effects;
       if (!fx) return;
-      fx.hitBurst(m.x, m.y, !!m.ar, t);
+      // Blood / sparks fly along the bullet: from the shooter we draw (s is "" when it is hidden).
+      const from = m.s === this.selfId ? this.selfRender : m.s ? this.players.get(m.s)?.view : null;
+      let dx = 0;
+      let dy = 0;
+      if (from) {
+        dx = m.x - from.x;
+        dy = m.y - from.y;
+        const l = Math.hypot(dx, dy);
+        if (l > 1) {
+          dx /= l;
+          dy /= l;
+        } else dx = dy = 0;
+      }
+      fx.hitBurst(m.x, m.y, !!m.ar, t, dx, dy);
+      const tv = this.players.get(m.t)?.view;
+      if (m.d > 0 || m.ar) tv?.flashHit(t);
       if (m.t === this.selfId) {
-        if (m.d > 0) fx.damageNumber(m.x, m.y, m.d, COLORS.damageTaken, t);
+        if (m.d > 0) fx.damageNumber(m.t, m.x, m.y, m.d, false, true, t);
         fx.hurtFlash(m.d);
-      } else if (m.s === this.selfId && m.d > 0) {
-        fx.damageNumber(m.x, m.y, m.d, m.ar ? COLORS.hitArmor : COLORS.damageDealt, t);
+      } else if (m.s === this.selfId) {
+        tv?.revealBars(t);
+        if (m.d > 0) fx.damageNumber(m.t, m.x, m.y, m.d, !!m.ar, false, t);
       }
     });
   }
@@ -1228,7 +1255,10 @@ export class GameRenderer implements GameRendererApi {
       v.setWeapon(p.weapon);
       v.setBackpack(p.bp);
       const armorMax = p.armor >= 1 && p.armor <= 3 ? ARMOR[p.armor as 1 | 2 | 3].durability : 0;
-      v.setBars(p.hp, p.armor, p.armorDur, armorMax, p.maxHp || undefined);
+      v.setBars(p.hp, p.armor, p.armorDur, armorMax, p.maxHp || undefined, now);
+      // Enemy HP bars show after the local player hits them (combat-fx HP_REVEAL); bosses and
+      // party mates always show theirs.
+      v.updateBarsAlpha(now, p.role === NPC_ROLE.BOSS || this.mateIds.has(id));
       const bush = this.bushes ? bushIndexAt(this.bushes, v.x, v.y) : -1;
       v.setLabelVisible(bush < 0 || bush === selfBush);
     }

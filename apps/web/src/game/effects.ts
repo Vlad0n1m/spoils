@@ -34,6 +34,7 @@ import {
 } from "@extract/shared";
 import { BOLT_DRAW_PX, COLORS } from "./assets";
 import { emptyEnvSource, rememberEnvSource, sameEnvSource } from "./audio/ambience";
+import { DMG_NUM, damageNumberPose, damageNumberStyle } from "./combat-fx";
 import { tracerLengths } from "./shots";
 import type { GameContext, GameSystem } from "./systems";
 
@@ -53,6 +54,10 @@ interface Tracer {
   speed: number;
   born: number;
   width: number;
+  /** The bullet stops at a solid (not range / a player): dust and sparks where it ends. */
+  wall: boolean;
+  /** The end-of-flight impact was handled. */
+  done: boolean;
 }
 
 interface Spark {
@@ -64,12 +69,21 @@ interface Spark {
   born: number;
   life: number;
   size: number;
+  /** 0: shrinks as it fades (sparks, droplets); > 0: a puff that grows by this factor (dust, smoke). */
+  grow: number;
+  /** Velocity kept per 1/60 s (0.9 = sparks; puffs drift slower). */
+  drag: number;
+  /** Starting alpha (soft puffs < 1). */
+  a0: number;
 }
 
 interface Flash {
   sprite: Sprite;
+  /** Additive muzzle light under the star (dot texture). */
+  glow: Sprite;
   born: number;
   size: number;
+  glowR: number;
 }
 
 interface Ring {
@@ -86,6 +100,12 @@ interface FloatNumber {
   x: number;
   y: number;
   born: number;
+  /** Damage numbers: stack key (target id) and running total; "" for plain pop texts. */
+  key: string;
+  total: number;
+  armor: boolean;
+  /** When the value last changed (scale pop). */
+  popAt: number;
 }
 
 const TRACER_LEN = 70;
@@ -98,13 +118,28 @@ const MAX_PARTICLES = 600;
 const SHAKE: Record<WeaponId, number> = {
   pistol: 2.5, rifle: 2, shotgun: 7, sniper: 9,
   // Weapons v2.
-  smg: 1.6, lmg: 2.6, revolver: 5, crossbow: 1.5,
+  smg: 1.6, lmg: 3.4, revolver: 5, crossbow: 1.5,
 };
 
 /** Tracer core width per weapon (glow = width + 2). */
 const TRACER_WIDTH: Partial<Record<WeaponId, number>> = { sniper: 4, shotgun: 2.5, smg: 2.4, revolver: 3.4 };
 /** Muzzle flash size per weapon (1 = pistol / rifle); the crossbow has none (weaponHasFlash). */
 const FLASH_SIZE: Partial<Record<WeaponId, number>> = { shotgun: 1.4, sniper: 1.4, lmg: 1.25, revolver: 1.2, smg: 0.85 };
+/** Additive muzzle light radius (world px) and tint per weapon; the crossbow has none. */
+const MUZZLE_GLOW: Partial<Record<WeaponId, { r: number; tint: number }>> = {
+  pistol: { r: 22, tint: 0xffc070 }, rifle: { r: 24, tint: 0xffc878 }, shotgun: { r: 36, tint: 0xffa64d },
+  sniper: { r: 38, tint: 0xfff0c0 }, smg: { r: 18, tint: 0xffc070 }, lmg: { r: 28, tint: 0xffb45a },
+  revolver: { r: 30, tint: 0xff9e48 },
+};
+/** Weapons that leave a little smoke at the muzzle (heavy single shots). */
+const MUZZLE_SMOKE: Partial<Record<WeaponId, number>> = { shotgun: 3, sniper: 3, revolver: 2 };
+/** Wall impact: dust puffs + sparks per pellet (fewer per pellet for multi-pellet shots). */
+const IMPACT = { DUST: 4, SPARKS: 5, DUST_MULTI: 2, SPARKS_MULTI: 2, DUST_TINT: 0xd8c8a4, SPARK_TINT: 0xffe9a3 } as const;
+/** Damage numbers start this far right of / above the hit point (beside the head, off the name tag). */
+const DMG_NUM_DX = 34;
+const DMG_NUM_DY = 22;
+/** Above this many live particles the cosmetic extras (dust, smoke) are skipped first. */
+const PARTICLE_SOFT_CAP = 420;
 
 
 /** Muzzle-flash texture pixels per world unit (flashes scale up to 1.4× on a 1.5× screen). */
@@ -125,6 +160,8 @@ export interface FxTextures {
   /** White disc of radius DOT_TEX_R px. */
   dot: Texture;
   vignette: Texture;
+  /** Soft white radial falloff, radius DOT_TEX_R px (muzzle light); falls back to `dot`. */
+  soft?: Texture;
 }
 
 /** Where a tracer streak is this frame, along its path from the muzzle; null once it is gone. */
@@ -165,11 +202,14 @@ export class Effects {
   private textPool: Text[] = [];
   /** Hidden display objects waiting for reuse (they stay parented, only `visible` flips). */
   private spritePool: Sprite[] = [];
-  private flashPool: Sprite[] = [];
+  private flashPool: Array<{ sprite: Sprite; glow: Sprite }> = [];
   private boltPool: Sprite[] = [];
   private particlePool: Particle[] = [];
   /** Particles were born since the last update (the live set changed even if its size did not). */
   private particlesDirty = false;
+  /** Reused per shot: which pellets stop at a wall. */
+  private readonly walls: boolean[] = [];
+  private readonly numPose = { dy: 0, scale: 1, alpha: 1 };
   private shakeAmp = 0;
   private hurt = 0;
 
@@ -262,7 +302,7 @@ export class Effects {
     const def = WEAPONS[weapon] ?? WEAPONS.pistol;
     if (isSelf) this.shakeAmp = Math.max(this.shakeAmp, SHAKE[weapon] ?? 2);
     // The muzzle pokes through a wall: the server's bullets stop inside it, draw nothing.
-    const lens = tracerLengths(idx, cx, cy, x, y, angles, def.range);
+    const lens = tracerLengths(idx, cx, cy, x, y, angles, def.range, this.walls);
     if (!lens) return;
     let sumA = 0;
     // Weapons v2: a crossbow shoots a visible bolt (sprite) instead of a tracer streak.
@@ -285,7 +325,7 @@ export class Effects {
       }
       this.tracers.push({
         shooter, glow, core, bolt, sx: x, sy: y, dx: Math.cos(a), dy: Math.sin(a), len, speed: def.bulletSpeed, born: now,
-        width: TRACER_WIDTH[weapon] ?? 3,
+        width: TRACER_WIDTH[weapon] ?? 3, wall: this.walls[i] === true, done: false,
       });
     });
     if (this.tracers.length > MAX_TRACERS) {
@@ -294,22 +334,82 @@ export class Effects {
     // The crossbow has no muzzle flash (WeaponDef.flash false, the server's vision agrees).
     if (!weaponHasFlash(weapon)) return;
     const avg = angles.length ? sumA / angles.length : 0;
-    let flash = this.flashPool.pop();
-    if (!flash) {
-      flash = new Sprite(this.tex.flash);
-      flash.anchor.set(-FLASH_X0 / (FLASH_X1 - FLASH_X0), 0.5);
-      this.flashLayer.addChild(flash);
+    let pair = this.flashPool.pop();
+    if (!pair) {
+      const glow = new Sprite(this.tex.soft ?? this.tex.dot);
+      glow.anchor.set(0.5);
+      glow.blendMode = "add";
+      const star = new Sprite(this.tex.flash);
+      star.anchor.set(-FLASH_X0 / (FLASH_X1 - FLASH_X0), 0.5);
+      this.flashLayer.addChild(glow, star);
+      pair = { sprite: star, glow };
     }
+    const { sprite: flash, glow } = pair;
+    const g = MUZZLE_GLOW[weapon] ?? MUZZLE_GLOW.pistol!;
     flash.position.set(x, y);
-    flash.rotation = avg;
+    // A little jitter so a burst never repeats the exact same star.
+    flash.rotation = avg + (Math.random() - 0.5) * 0.22;
     flash.visible = false;
-    this.flashes.push({ sprite: flash, born: now, size: FLASH_SIZE[weapon] ?? 1 });
+    glow.position.set(x + Math.cos(avg) * 6, y + Math.sin(avg) * 6);
+    glow.tint = g.tint;
+    glow.visible = false;
+    this.flashes.push({ sprite: flash, glow, born: now, size: (FLASH_SIZE[weapon] ?? 1) * (0.88 + Math.random() * 0.24), glowR: g.r });
+    const smoke = MUZZLE_SMOKE[weapon] ?? 0;
+    if (smoke && this.particles.length < PARTICLE_SOFT_CAP) {
+      const cs = Math.cos(avg);
+      const sn = Math.sin(avg);
+      for (let i = 0; i < smoke; i++) {
+        const v = 30 + Math.random() * 40;
+        const sa = avg + (Math.random() - 0.5) * 0.9;
+        this.spawn(x + cs * 8, y + sn * 8, 0x9a9a92, Math.cos(sa) * v, Math.sin(sa) * v, now, 520 + Math.random() * 260, 4 + Math.random() * 3, 1.8, 0.93, 0.35);
+      }
+      this.trimParticles();
+    }
   }
 
   /** A bullet from `shooter` hit someone at (x, y): stop the matching tracer there and burst. */
   hit(shooter: string, x: number, y: number, armor: boolean, now: number) {
     this.stopTracer(shooter, x, y);
     this.hitBurst(x, y, armor, now);
+  }
+
+  /** One pooled particle; `alpha0` scales its starting alpha (soft puffs). */
+  private spawn(
+    x: number, y: number, tint: number, vx: number, vy: number, now: number, life: number, size: number, grow: number, drag: number, alpha0 = 1,
+  ) {
+    const sprite = this.particlePool.pop() ?? new Particle({ texture: this.tex.dot, anchorX: 0.5, anchorY: 0.5 });
+    sprite.tint = tint;
+    this.particles.push({ sprite, x, y, vx, vy, born: now, life, size, grow, drag, a0: alpha0 });
+    this.particlesDirty = true;
+  }
+
+  private trimParticles() {
+    if (this.particles.length > MAX_PARTICLES) {
+      for (const p of this.particles.splice(0, this.particles.length - MAX_PARTICLES)) this.particlePool.push(p.sprite);
+    }
+  }
+
+  /**
+   * A bullet stopped at a wall at (x, y), flying along (dx, dy): sparks bounce back off it and a
+   * little dust puffs out. `multi` = one of several pellets (fewer particles each).
+   */
+  wallImpact(x: number, y: number, dx: number, dy: number, multi: boolean, now: number) {
+    const back = Math.atan2(-dy, -dx);
+    const sparks = multi ? IMPACT.SPARKS_MULTI : IMPACT.SPARKS;
+    for (let i = 0; i < sparks; i++) {
+      const a = back + (Math.random() - 0.5) * 2.2;
+      const v = 280 + Math.random() * 260;
+      this.spawn(x, y, IMPACT.SPARK_TINT, Math.cos(a) * v, Math.sin(a) * v, now, 130 + Math.random() * 110, 2.2 + Math.random() * 1.4, 0, 0.86);
+    }
+    if (this.particles.length < PARTICLE_SOFT_CAP) {
+      const dust = multi ? IMPACT.DUST_MULTI : IMPACT.DUST;
+      for (let i = 0; i < dust; i++) {
+        const a = back + (Math.random() - 0.5) * 1.6;
+        const v = 50 + Math.random() * 90;
+        this.spawn(x, y, IMPACT.DUST_TINT, Math.cos(a) * v, Math.sin(a) * v, now, 480 + Math.random() * 300, 5 + Math.random() * 3, 2.2, 0.9, 0.8);
+      }
+    }
+    this.trimParticles();
   }
 
   /** Stop the tracer from `shooter` that passes closest to (x, y) at that point. */
@@ -328,12 +428,51 @@ export class Effects {
         best = t;
       }
     }
-    if (best) best.len = Math.max(0, (x - best.sx) * best.dx + (y - best.sy) * best.dy);
+    if (best) {
+      best.len = Math.max(0, (x - best.sx) * best.dx + (y - best.sy) * best.dy);
+      // It ended in a body, not the wall behind it.
+      best.wall = false;
+    }
   }
 
-  /** Impact particles where a bullet hit a player. */
-  hitBurst(x: number, y: number, armor: boolean, now: number) {
-    this.burst(x, y, armor ? COLORS.hitArmor : COLORS.hitFlesh, 9, 260, now);
+  /**
+   * Impact where a bullet hit a player. Flesh: a dark red puff and droplets sprayed on along the
+   * bullet (dx, dy; 0, 0 = unknown → all around). Armor: a white-blue flash and fast sparks
+   * glancing off back toward the shooter.
+   */
+  hitBurst(x: number, y: number, armor: boolean, now: number, dx = 0, dy = 0) {
+    const dir = dx !== 0 || dy !== 0;
+    const fwd = dir ? Math.atan2(dy, dx) : 0;
+    if (armor) {
+      this.spawn(x, y, 0xffffff, 0, 0, now, 90, 7, 0.8, 0.9);
+      for (let i = 0; i < 8; i++) {
+        const a = dir ? fwd + Math.PI + (Math.random() - 0.5) * 2.4 : Math.random() * Math.PI * 2;
+        const v = 300 + Math.random() * 260;
+        this.spawn(x, y, i & 1 ? COLORS.hitArmor : 0xe8f6ff, Math.cos(a) * v, Math.sin(a) * v, now, 140 + Math.random() * 110, 1.8 + Math.random() * 1.4, 0, 0.86);
+      }
+    } else {
+      for (let i = 0; i < 2; i++) {
+        const v = 25 + Math.random() * 30;
+        const a = dir ? fwd + (Math.random() - 0.5) * 1.2 : Math.random() * Math.PI * 2;
+        this.spawn(x, y, 0x8e1414, Math.cos(a) * v, Math.sin(a) * v, now, 360 + Math.random() * 140, 5 + Math.random() * 2, 1.3, 0.9, 0.75);
+      }
+      for (let i = 0; i < 8; i++) {
+        const a = dir ? fwd + (Math.random() - 0.5) * 1.3 : Math.random() * Math.PI * 2;
+        const v = 140 + Math.random() * 220;
+        this.spawn(x, y, i & 1 ? COLORS.hitFlesh : 0xc21d1d, Math.cos(a) * v, Math.sin(a) * v, now, 220 + Math.random() * 200, 1.8 + Math.random() * 2.2, 0, 0.88);
+      }
+    }
+    this.trimParticles();
+  }
+
+  /** "Hit confirmed" on a target we cannot see: a small neutral puff where our own tracer stopped. */
+  confirmPuff(x: number, y: number, now: number) {
+    for (let i = 0; i < 4; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const v = 60 + Math.random() * 80;
+      this.spawn(x, y, 0xf2f2f2, Math.cos(a) * v, Math.sin(a) * v, now, 160 + Math.random() * 80, 1.6 + Math.random(), 0, 0.88);
+    }
+    this.trimParticles();
   }
 
   burst(x: number, y: number, color: number, count: number, speed: number, now: number) {
@@ -344,7 +483,7 @@ export class Effects {
       sprite.tint = color;
       this.particles.push({
         sprite, x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, born: now,
-        life: 250 + Math.random() * 200, size: 2.5 + Math.random() * 3,
+        life: 250 + Math.random() * 200, size: 2.5 + Math.random() * 3, grow: 0, drag: 0.9, a0: 1,
       });
     }
     this.particlesDirty = true;
@@ -357,12 +496,39 @@ export class Effects {
     this.rings.push({ x, y, born: now, life, color, maxR });
   }
 
-  damageNumber(x: number, y: number, amount: number, color: number, now: number) {
-    this.popText(x + (Math.random() - 0.5) * 16, y - 20, String(Math.max(1, Math.round(amount))), color, now, 20);
+  /**
+   * A floating damage number over a hit on `key` (the target's id). Hits on the same target within
+   * DMG_NUM.STACK_MS add up into the running number, which pops again and follows the target;
+   * colour and size follow the total (combat-fx damageNumberStyle).
+   */
+  damageNumber(key: string, x: number, y: number, amount: number, armor: boolean, taken: boolean, now: number) {
+    if (key) {
+      for (let i = this.numbers.length - 1; i >= 0; i--) {
+        const n = this.numbers[i]!;
+        if (n.key !== key || now - n.popAt > DMG_NUM.STACK_MS) continue;
+        n.total += amount;
+        n.armor = n.armor || armor;
+        n.popAt = now;
+        n.born = now;
+        n.x = x + DMG_NUM_DX + (n.x - x - DMG_NUM_DX) * 0.5;
+        n.y = y - DMG_NUM_DY;
+        const st = damageNumberStyle(n.total, n.armor, taken);
+        n.text.text = String(Math.max(1, Math.round(n.total)));
+        n.text.style.fill = st.color;
+        if (n.text.style.fontSize !== st.size) n.text.style.fontSize = st.size;
+        return;
+      }
+    }
+    const st = damageNumberStyle(amount, armor, taken);
+    // Spawned beside the head, clear of the name tag and the HP bar.
+    const n = this.popText(x + DMG_NUM_DX + (Math.random() - 0.5) * 10, y - DMG_NUM_DY, String(Math.max(1, Math.round(amount))), st.color, now, st.size);
+    n.key = key;
+    n.total = amount;
+    n.armor = armor;
   }
 
   /** A short floating label at (x, y) that rises and fades like a damage number ("+2 XP"). */
-  popText(x: number, y: number, label: string, color: number, now: number, fontSize = 20) {
+  popText(x: number, y: number, label: string, color: number, now: number, fontSize = 20): FloatNumber {
     const text =
       this.textPool.pop() ??
       new Text({
@@ -383,11 +549,15 @@ export class Effects {
     text.alpha = 1;
     text.visible = true;
     this.floatLayer.addChild(text);
-    this.numbers.push({ text, x, y, born: now });
+    const n: FloatNumber = { text, x, y, born: now, key: "", total: 0, armor: false, popAt: now };
+    this.numbers.push(n);
+    return n;
   }
 
+  /** Red vignette pulse for damage taken: scales with the hit and stacks a little on bursts. */
   hurtFlash(amount: number) {
-    this.hurt = Math.min(1, Math.max(this.hurt, 0.35 + amount / 60));
+    const d = Math.max(0, amount);
+    this.hurt = Math.min(1, Math.max(this.hurt + d / 120, 0.3 + d / 45));
   }
 
   /** Advance and redraw. Returns the camera shake offset for this frame. */
@@ -399,6 +569,7 @@ export class Effects {
         // A bolt flies at its speed and is gone where it stops (wall, range or the target).
         const head = ((now - t.born) / 1000) * t.speed;
         if (head >= t.len) {
+          if (t.wall && !t.done) this.wallImpact(t.sx + t.dx * t.len, t.sy + t.dy * t.len, t.dx, t.dy, false, now);
           this.releaseTracer(t);
           continue;
         }
@@ -408,7 +579,12 @@ export class Effects {
         continue;
       }
       const span = tracerSpan((now - t.born) / 1000, t.len, t.speed);
+      if (span && span.head >= t.len && !t.done) {
+        t.done = true;
+        if (t.wall) this.wallImpact(t.sx + t.dx * t.len, t.sy + t.dy * t.len, t.dx, t.dy, t.width < 3, now);
+      }
       if (!span) {
+        if (t.wall && !t.done) this.wallImpact(t.sx + t.dx * t.len, t.sy + t.dy * t.len, t.dx, t.dy, t.width < 3, now);
         this.releaseTracer(t);
         continue;
       }
@@ -429,17 +605,22 @@ export class Effects {
       const k = (now - f.born) / FLASH_MS;
       if (k >= 1) {
         f.sprite.visible = false;
-        this.flashPool.push(f.sprite);
+        f.glow.visible = false;
+        this.flashPool.push({ sprite: f.sprite, glow: f.glow });
         continue;
       }
       this.flashes[w++] = f;
       f.sprite.visible = true;
       f.sprite.scale.set((f.size * (1 - k * 0.5)) / FLASH_TEX_RES);
       f.sprite.alpha = 0.9 * (1 - k);
+      f.glow.visible = true;
+      f.glow.scale.set((f.glowR * (0.8 + 0.4 * k)) / DOT_TEX_R);
+      f.glow.alpha = 0.75 * (1 - k) * (1 - k);
     }
     this.flashes.length = w;
 
     const dt = dtMs / 1000;
+    const drag90 = Math.pow(0.9, dtMs / 16.67);
     const before = this.particles.length;
     w = 0;
     const live = this.particleLayer.particleChildren;
@@ -453,15 +634,17 @@ export class Effects {
       this.particles[w++] = p;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
-      p.vx *= 0.9;
-      p.vy *= 0.9;
+      // Drag per 1/60 s, frame-rate independent.
+      const dr = p.drag === 0.9 ? drag90 : Math.pow(p.drag, dtMs / 16.67);
+      p.vx *= dr;
+      p.vy *= dr;
       const sp = p.sprite;
       sp.x = p.x;
       sp.y = p.y;
-      const sc = (p.size * (1 - k * 0.6)) / DOT_TEX_R;
+      const sc = (p.size * (p.grow > 0 ? 1 + p.grow * (1 - (1 - k) * (1 - k)) : 1 - k * 0.6)) / DOT_TEX_R;
       sp.scaleX = sc;
       sp.scaleY = sc;
-      sp.alpha = 1 - k;
+      sp.alpha = p.a0 * (1 - k);
       live.push(sp);
     }
     this.particles.length = w;
@@ -486,7 +669,7 @@ export class Effects {
 
     w = 0;
     for (const n of this.numbers) {
-      const k = (now - n.born) / NUMBER_MS;
+      const k = (now - n.born) / Math.max(NUMBER_MS, DMG_NUM.LIFE_MS);
       if (k >= 1) {
         n.text.visible = false;
         this.floatLayer.removeChild(n.text);
@@ -494,14 +677,16 @@ export class Effects {
         continue;
       }
       this.numbers[w++] = n;
-      n.text.position.set(n.x, n.y - 34 * k);
-      n.text.alpha = k < 0.6 ? 1 : 1 - (k - 0.6) / 0.4;
-      n.text.scale.set(k < 0.12 ? 0.7 + (k / 0.12) * 0.5 : 1.2 - Math.min(0.2, k * 0.4));
+      const pose = this.numPose;
+      damageNumberPose(now - n.born, now - n.popAt, pose);
+      n.text.position.set(n.x, n.y + pose.dy);
+      n.text.alpha = pose.alpha;
+      n.text.scale.set(pose.scale);
     }
     this.numbers.length = w;
 
-    // Vignette fades over ~0.4 s.
-    this.hurt *= Math.exp(-dtMs / 160);
+    // Vignette fades over ~0.6 s.
+    this.hurt *= Math.exp(-dtMs / 260);
     if (this.hurt < 0.01) this.hurt = 0;
     this.vignette.alpha = this.hurt;
     this.vignette.visible = this.hurt > 0;
@@ -535,7 +720,7 @@ export class Effects {
     this.floatLayer.destroy({ children: true });
     this.vignette.destroy();
     if (this.ownsTextures) {
-      for (const t of [this.tex.flash, this.tex.dot, this.tex.vignette]) t.destroy(true);
+      for (const t of [this.tex.flash, this.tex.dot, this.tex.vignette, this.tex.soft]) t?.destroy(true);
     }
   }
 }
@@ -552,7 +737,23 @@ function placeStreak(s: Sprite, t: Tracer, span: { tail: number; head: number },
 }
 
 function makeFxTextures(): FxTextures {
-  return { line: Texture.WHITE, flash: makeFlashTexture(), dot: makeDotTexture(), vignette: makeVignetteTexture() };
+  return { line: Texture.WHITE, flash: makeFlashTexture(), dot: makeDotTexture(), vignette: makeVignetteTexture(), soft: makeSoftTexture() };
+}
+
+/** Soft radial light (white, alpha falling off to 0 at DOT_TEX_R) for the additive muzzle glow. */
+function makeSoftTexture(): Texture {
+  const size = DOT_TEX_R * 2 + 2;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext("2d")!;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, DOT_TEX_R);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.35, "rgba(255,255,255,0.55)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  return new Texture({ source: new ImageSource({ resource: c, scaleMode: "linear" }) });
 }
 
 /** The old per-frame muzzle-flash shape (yellow star + white core) at size 1, pre-rendered. */

@@ -34,11 +34,13 @@ import {
   WEAPON_GROUND_LENGTH,
   WEAPON_HELD_LENGTH,
   playerColor,
+  textureImage,
   type SpriteName,
   type Textures,
 } from "./assets";
 import { BOSS_COLOR, BOSS_SCALE, GUARD_SCALE, GUARD_TINT, MARAUDER_TINT, hpFraction, kindOfNpc, npcNameTag, npcRole, type NpcRole } from "./boss";
 import { guardBadgeContext, npcBadgeContext } from "./boss-icons";
+import { chipFraction, hitFlashAlpha, hpBarAlpha, recoilOffset } from "./combat-fx";
 import { NPC_CORPSE_TINT, NPC_RING_COLOR, NPC_TAG_COLOR, type NpcRoleName } from "./npc-labels";
 import type { KnownEmpty } from "./known-empty";
 import { SnapshotBuffer } from "./prediction";
@@ -141,6 +143,32 @@ function statusContexts() {
 /** Alpha Veteran skin (Alpha Pass tier 8): mint tint, light enough to keep the sprite's shading. */
 export const ALPHA_VETERAN_TINT = 0x9ff2da;
 
+/** White silhouettes of character textures for the hit flash (one canvas per source texture). */
+const silhouettes = new WeakMap<Texture, Texture | null>();
+
+/** A white copy of `tex`'s opaque pixels, or null without a DOM / a drawable image. */
+function whiteSilhouette(tex: Texture): Texture | null {
+  if (silhouettes.has(tex)) return silhouettes.get(tex)!;
+  let out: Texture | null = null;
+  const img = typeof document !== "undefined" ? textureImage(tex) : null;
+  if (img) {
+    const f = tex.frame;
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(f.width));
+    c.height = Math.max(1, Math.round(f.height));
+    const g = c.getContext("2d");
+    if (g) {
+      g.drawImage(img, f.x, f.y, f.width, f.height, 0, 0, c.width, c.height);
+      g.globalCompositeOperation = "source-in";
+      g.fillStyle = "#ffffff";
+      g.fillRect(0, 0, c.width, c.height);
+      out = new Texture({ source: new ImageSource({ resource: c, scaleMode: "linear" }) });
+    }
+  }
+  silhouettes.set(tex, out);
+  return out;
+}
+
 export class PlayerView {
   readonly root = new Container();
   /** Rotates with aim: backpack, weapon and body. */
@@ -176,6 +204,16 @@ export class PlayerView {
   private act = 0;
   private rollStartedAt = -Infinity;
   private statusKind: "" | "heal" | "loot" = "";
+  /** Combat feel (combat-fx.ts): recoil, the white hit flash, the HP bar reveal and its chip. */
+  private weaponBaseX = 0;
+  private kickAt = Number.NEGATIVE_INFINITY;
+  private kickPx = 0;
+  private hitAt = Number.NEGATIVE_INFINITY;
+  private flash: Sprite | null = null;
+  private barsHitAt = Number.NEGATIVE_INFINITY;
+  private lastK = -1;
+  private chipFrom = 0;
+  private chipAt = Number.NEGATIVE_INFINITY;
   /** Fog alpha (0..1), eased by the renderer. */
   alpha = 0;
 
@@ -235,6 +273,9 @@ export class PlayerView {
     this.setNickname(nickname);
     this.buffer.clear();
     this.barsKey = "";
+    this.kickAt = this.hitAt = this.barsHitAt = this.chipAt = Number.NEGATIVE_INFINITY;
+    this.lastK = -1;
+    if (this.flash) this.flash.visible = false;
     this.act = 0;
     this.rollStartedAt = -Infinity;
     this.setStatus("");
@@ -341,7 +382,44 @@ export class PlayerView {
     this.weapon.texture = this.tex[weapon];
     const len = WEAPON_HELD_LENGTH[weapon];
     fitWidth(this.weapon, len);
-    this.weapon.position.set(WEAPONS[weapon].muzzle - len + (this.scaleK - 1) * PLAYER_SPRITE_SIZE * 0.4, 0);
+    this.weaponBaseX = WEAPONS[weapon].muzzle - len + (this.scaleK - 1) * PLAYER_SPRITE_SIZE * 0.4;
+    this.weapon.position.set(this.weaponBaseX, 0);
+  }
+
+  /** This player fired: the gun and the body jump back `px` along the aim and spring back. */
+  kick(px: number, nowMs: number) {
+    this.kickAt = nowMs;
+    this.kickPx = px;
+  }
+
+  /** This player was hit: a short white flash over the sprite. */
+  flashHit(nowMs: number) {
+    this.hitAt = nowMs;
+    const tex = this.sprite.texture;
+    const sil = whiteSilhouette(tex);
+    if (!sil) return;
+    if (!this.flash) {
+      this.flash = new Sprite(sil);
+      this.flash.anchor.set(0.5);
+      this.flash.eventMode = "none";
+      this.body.addChild(this.flash);
+    } else if (this.flash.texture !== sil) {
+      this.flash.texture = sil;
+    }
+    this.flash.width = this.sprite.width;
+    this.flash.height = this.sprite.height;
+  }
+
+  /** The local player hit this target: show its HP bar (hpBarAlpha holds it 2 s, then fades). */
+  revealBars(nowMs: number) {
+    this.barsHitAt = nowMs;
+  }
+
+  /** Per frame: bar visibility; `always` for bosses and party mates. */
+  updateBarsAlpha(nowMs: number, always: boolean) {
+    const a = always ? 1 : hpBarAlpha(nowMs - this.barsHitAt);
+    this.bars.alpha = a;
+    this.bars.visible = a > 0;
   }
 
   /** Backpack level 0..3 (Player.bp); the icon loads lazily, so this retries until it has one. */
@@ -370,8 +448,16 @@ export class PlayerView {
   }
 
   /** HP (against maxHp: bosses and guards have more than PLAYER.MAX_HP) and armor bars. */
-  setBars(hp: number, armor: number, armorDur: number, armorMax: number, maxHp: number = PLAYER.MAX_HP) {
-    const key = `${Math.ceil(hp)}|${armor}|${Math.ceil(armorDur)}|${maxHp}|${this.role ?? ""}`;
+  setBars(hp: number, armor: number, armorDur: number, armorMax: number, maxHp: number = PLAYER.MAX_HP, nowMs = 0) {
+    const kNow = hpFraction(hp, maxHp);
+    // The HP just lost stays as a white chip that drains after a beat (combat-fx chipFraction).
+    if (this.lastK >= 0 && kNow < this.lastK - 1e-6) {
+      this.chipFrom = Math.max(this.lastK, chipFraction(this.chipFrom, this.lastK, nowMs - this.chipAt));
+      this.chipAt = nowMs;
+    }
+    this.lastK = kNow;
+    const chip = chipFraction(this.chipFrom, kNow, nowMs - this.chipAt);
+    const key = `${Math.ceil(hp)}|${armor}|${Math.ceil(armorDur)}|${maxHp}|${this.role ?? ""}|${Math.round(chip * 300)}`;
     if (key === this.barsKey) return;
     this.barsKey = key;
     const boss = this.role === "boss";
@@ -383,6 +469,7 @@ export class PlayerView {
     g.roundRect(-W / 2 - 2, y - 2, W + 4, H + 4, 3).fill({ color: 0x111111, alpha: 0.85 });
     const k = hpFraction(hp, maxHp);
     const hpColor = boss ? BOSS_COLOR : k > 0.6 ? 0x5ee35a : k > 0.3 ? 0xffc533 : 0xff4b4b;
+    if (chip > k + 0.002) g.rect(-W / 2 + W * k, y, W * (chip - k), H).fill({ color: 0xffffff, alpha: 0.9 });
     if (k > 0) g.roundRect(-W / 2, y, W * k, H, 2).fill({ color: hpColor });
     if (armor > 0 && armorMax > 0) {
       const a = Math.max(0, Math.min(1, armorDur / armorMax));
@@ -438,6 +525,15 @@ export class PlayerView {
     }
     this.body.rotation = rot;
     this.body.scale.set(squash);
+    // Recoil: the gun slides back in the hands, the body rocks back a little less.
+    const kick = recoilOffset(nowMs - this.kickAt, this.kickPx);
+    this.body.position.set(-Math.cos(aim) * kick * 0.4, -Math.sin(aim) * kick * 0.4);
+    this.weapon.x = this.weaponBaseX - kick * 0.6;
+    if (this.flash) {
+      const fa = hitFlashAlpha(nowMs - this.hitAt);
+      this.flash.visible = fa > 0;
+      if (fa > 0) this.flash.alpha = fa;
+    }
     // Reload: the gun dips and swings toward the body while the mag is changed.
     if (this.act & ACT.RELOAD) {
       this.weapon.rotation = -0.65 + Math.sin(nowMs / 140) * 0.08;
@@ -813,6 +909,25 @@ export function damageArcAlpha(ageMs: number, damage: number): number {
 }
 
 /**
+ * Direction of a damage arc. HitMsg.s is only set when the target (us) can see the shooter, so
+ * then the arc points at where the shooter is drawn right now; otherwise it keeps the server's
+ * coarse direction (HitMsg.fa, quantised to 2π/64) and never reveals a hidden position.
+ */
+export function arcAngle(
+  fa: number,
+  seen: { x: number; y: number; at: number } | null,
+  self: { x: number; y: number },
+  nowMs: number,
+): number {
+  if (seen && nowMs - seen.at < 250) {
+    const dx = seen.x - self.x;
+    const dy = seen.y - self.y;
+    if (dx * dx + dy * dy > 1) return Math.atan2(dy, dx);
+  }
+  return fa;
+}
+
+/**
  * Red arcs around the local player pointing at whoever hit them (HitMsg.fa, the target's copy
  * only, quantised to 2π/64 by the server). A plug-in system drawing into the screen layer: one
  * shared arc geometry, pooled Graphics, no per-frame tessellation.
@@ -843,11 +958,14 @@ export class DamageArcSystem implements GameSystem {
     const now = performance.now();
     for (const h of ev.hits) {
       if (h.t !== me || typeof h.fa !== "number" || !(h.d > 0)) continue;
+      const angle = arcAngle(h.fa, h.s ? c.lastSeen(h.s) : null, c.selfPos(), now);
       const g = this.pool.pop() ?? new Graphics(this.ctx);
       if (!g.parent) this.root.addChild(g);
       g.visible = true;
-      g.rotation = h.fa;
-      this.arcs.push({ g, angle: h.fa, born: now, dmg: h.d });
+      g.rotation = angle;
+      // Heavier hits draw a slightly thicker, longer arc.
+      g.scale.set(1, Math.min(1.3, 1 + h.d / 120));
+      this.arcs.push({ g, angle, born: now, dmg: h.d });
       if (this.arcs.length > DAMAGE_ARC.MAX) this.release(this.arcs.shift()!);
     }
   }

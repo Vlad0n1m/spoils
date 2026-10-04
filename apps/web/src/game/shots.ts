@@ -25,6 +25,7 @@ export function shotCentre(m: ShotMsg, muzzle: number): { x: number; y: number }
  * bullets: each one starts at the centre (cx, cy), flies `range` and stops at the first solid.
  * Returns null when a solid lies between the centre and the muzzle (the gun pokes through a wall):
  * the server's bullets stop at once, so neither a tracer nor a muzzle flash may be drawn there.
+ * `walls`, when given, receives per pellet whether it stops at a solid (an impact puff there).
  */
 export function tracerLengths(
   idx: CollisionIndex | null,
@@ -34,16 +35,23 @@ export function tracerLengths(
   my: number,
   angles: number[],
   range: number,
+  walls?: boolean[],
 ): number[] | null {
   if (idx && (mx !== cx || my !== cy) && raycastSolids(idx, cx, cy, mx, my) !== Infinity) return null;
+  if (walls) walls.length = 0;
   return angles.map((a) => {
     const dx = Math.cos(a);
     const dy = Math.sin(a);
     let reach = range;
+    let wall = false;
     if (idx) {
       const t = raycastSolids(idx, cx, cy, cx + dx * range, cy + dy * range);
-      if (t !== Infinity) reach = range * t;
+      if (t !== Infinity) {
+        reach = range * t;
+        wall = true;
+      }
     }
+    walls?.push(wall);
     // The tracer is drawn from the muzzle, which is already this far along the pellet's path.
     const muzzleAlong = (mx - cx) * dx + (my - cy) * dy;
     return Math.max(0, reach - muzzleAlong);
