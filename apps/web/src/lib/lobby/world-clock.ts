@@ -19,6 +19,11 @@ import {
   type WorldStatusDto,
 } from "@extract/shared";
 
+/** "Map #N" from the launch epoch on; before Map #1 (WORLD.NUMBER_EPOCH_MS) the maps read "Preview map". */
+export function mapLabel(n: number): string {
+  return Number.isFinite(n) && n >= 1 ? `Map #${n}` : "Preview map";
+}
+
 /** Seconds from an `Age` response header (missing / garbage → 0). */
 export function parseAgeSec(age: string | number | null | undefined): number {
   if (age === null || age === undefined || age === "") return 0;

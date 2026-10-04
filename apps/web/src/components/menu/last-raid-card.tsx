@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { XP_LINE_LABEL, type ExitType, type LastRaidDto, type XpLine } from "@extract/shared";
 import { fmtCr } from "@/lib/items-ui";
 import { fmtInt } from "./xp-bar";
+import { mapLabel } from "@/lib/lobby/world-clock";
 
 const EXIT: Record<ExitType, { title: string; bar: string }> = {
   extract: { title: "Extracted!", bar: "bg-zooa-lime" },
@@ -50,7 +51,7 @@ export function LastRaidCard({ raid, onDismiss }: { raid: LastRaidDto; onDismiss
     >
       <div className={clsx("h-2.5 border-b-[3px] border-black", exit.bar)} aria-hidden />
       <div className="p-4 [@media(max-height:500px)]:p-3">
-        <p className="text-[0.65rem] tracking-[0.2em] text-white/55">LAST RAID · MAP #{raid.mapNumber}</p>
+        <p className="text-[0.65rem] tracking-[0.2em] text-white/55">LAST RAID · {mapLabel(raid.mapNumber).toUpperCase()}</p>
         <h2 className="toon-text-thin mt-1.5 text-2xl tracking-wide text-white">{exit.title}</h2>
 
         <details className="group mt-3 [@media(max-height:500px)]:mt-1">

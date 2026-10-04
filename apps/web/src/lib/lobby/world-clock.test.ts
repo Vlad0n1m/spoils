@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { BOUND_OFFERS, MARKET, WORLD, boundTraderLevel, worldCycleOf, type WorldStatusDto } from "@extract/shared";
-import { clockOffsetMs, fmtClockS, fmtLocalHm, parseAgeSec, secsUntil, worldView } from "./world-clock";
+import { clockOffsetMs, fmtClockS, fmtLocalHm, mapLabel, parseAgeSec, secsUntil, worldView } from "./world-clock";
 import { levelColor, levelUnlocks, unlocksBetween } from "./levels";
 import { hasUnseenNews, parseNewsSeen } from "./news-seen";
 
@@ -159,4 +159,11 @@ describe("news dot", () => {
     assert.deepEqual(parseNewsSeen('{"patch":"p1","event":5}'), { patch: "p1", event: 5 });
     assert.deepEqual(parseNewsSeen('{"patch":7,"event":"x"}'), { patch: null, event: 0 });
   });
+});
+
+it("mapLabel numbers maps from the launch epoch and calls earlier ones a preview", () => {
+  assert.equal(mapLabel(1), "Map #1");
+  assert.equal(mapLabel(212), "Map #212");
+  assert.equal(mapLabel(0), "Preview map");
+  assert.equal(mapLabel(-61), "Preview map");
 });
