@@ -18,6 +18,8 @@
  *
  * - Phones (coarse pointer, ?touch=1): touch-controls.ts sticks and buttons feed the same
  *   InputController; the move stick steers the facing while the aim stick is idle.
+ * - Crosshair (crosshair.ts): a CSS cursor over the canvas on desktop; on phones a reticle on the
+ *   aim-stick line at the effective aim distance (screen layer, above the fog).
  *
  * Used by battle-screen.tsx: `new GameRenderer({ mountEl, room, onHud, selfKey }); await r.start(); … r.stop()`.
  */
@@ -70,6 +72,7 @@ import { buildHud, extractAllowed, personalExtractStatus, stickyCounts, type Pla
 import { EXPIRE_FADE_TAU_MS, expiryBlink, expiryFading } from "./expiry";
 import { InputController } from "./input";
 import { PerfOverlay, TouchControls, shouldUseTouch } from "./touch-controls";
+import { TouchCrosshair, setCanvasCrosshair, touchCrosshairDistance } from "./crosshair";
 import { Minimap, type MinimapExtract } from "./minimap";
 import { canStartHeal, decayFactor, inputCancelsHeal, moveFnFor, Predictor, readServerMove } from "./prediction";
 import { DelayQueue, shotCentre } from "./shots";
@@ -79,7 +82,7 @@ import type { GameRendererApi, HudSnapshot, KillFeedEntry, RendererOptions } fro
 import { WorldView, type ViewRect } from "./world";
 import { EMPTY_TALLY, bossKindOfLabel, corpseNpcRole, npcDisplayName, npcRoleName, tallyKill, type KillTally, type NpcRoleName } from "./npc-labels";
 import { getGameAudio } from "./audio/game-audio";
-import { getCameraRig } from "./camera";
+import { feedAimPointer, getCameraRig } from "./camera";
 
 /** About this many world units are visible (by area), whatever the window size. */
 const VIEW_W = 1600;
@@ -194,9 +197,12 @@ export class GameRenderer implements GameRendererApi {
   /** Other players' shots / hits, waiting to be shown on the interpolated (past) timeline. */
   private readonly remoteFx = new DelayQueue();
   private input: InputController | null = null;
-  /** Phones (touch-controls.ts): sticks + buttons; ?perf=1 overlay. */
+  /** Phones (touch-controls.ts): sticks + buttons, the aim-stick reticle; ?perf=1 overlay. */
   private touch: TouchControls | null = null;
+  private touchCrosshair: TouchCrosshair | null = null;
   private perf: PerfOverlay | null = null;
+  /** Desktop crosshair cursor currently on the canvas (null = not set yet). */
+  private cursorCrosshair: boolean | null = null;
 
   private players = new Map<string, Fading<Player, PlayerView>>();
   /** Where players that left this client's view were last drawn (GameContext.lastSeen). */
@@ -389,6 +395,9 @@ export class GameRenderer implements GameRendererApi {
       this.touch = new TouchControls(this.opts.mountEl, this.input);
       this.touch.onPress = (t) => this.perf?.markInput(t);
       this.touch.attach();
+      // Screen layer, above the fog; added before the systems so the full map covers it.
+      this.touchCrosshair = new TouchCrosshair();
+      this.layers.screen.addChild(this.touchCrosshair.root);
     }
     if (new URLSearchParams(window.location.search).get("perf") === "1") {
       this.perf = new PerfOverlay(this.opts.mountEl);
@@ -426,6 +435,8 @@ export class GameRenderer implements GameRendererApi {
     this.touch = null;
     this.perf?.detach();
     this.perf = null;
+    this.touchCrosshair?.destroy();
+    this.touchCrosshair = null;
     this.input?.detach();
     this.input = null;
 
@@ -983,6 +994,8 @@ export class GameRenderer implements GameRendererApi {
     const blocked = inputBlockedBy(this.opts.isInputBlocked, this.systemsReady ? this.systems : NO_SYSTEMS);
     this.inputBlockedNow = blocked;
     this.input?.setFireBlocked(blocked);
+    // Desktop: crosshair cursor over the canvas, the normal one while the full map owns the mouse.
+    if (!this.touch && this.cursorCrosshair !== !blocked) this.cursorCrosshair = setCanvasCrosshair(app.canvas, !blocked);
     // A held fire stick re-presses at the fire interval of a semi-auto weapon.
     const weaponDef = me?.weapon && me.weapon in WEAPONS ? WEAPONS[me.weapon as WeaponId] : null;
     if (this.touch) this.input?.setTouchRepeatMs(weaponDef && !weaponDef.auto ? weaponDef.fireIntervalMs : 0);
@@ -1037,6 +1050,8 @@ export class GameRenderer implements GameRendererApi {
         }
       }
     }
+
+    if (this.touchCrosshair) this.updateTouchCrosshair(dt, w, h, controllable && !blocked, weaponDef?.range ?? 0);
 
     this.remoteFx.flush(now);
     const shake = this.effects?.update(now, dt, w, h) ?? { x: 0, y: 0 };
@@ -1324,6 +1339,24 @@ export class GameRenderer implements GameRendererApi {
     if (self && inputCancelsHeal(self, fire, this.prevFire, r.rolling)) p.predictHealCancel();
     this.prevFire = fire;
     return true;
+  }
+
+  /**
+   * Phones: the reticle on the aim-stick line at the effective aim distance, and the aim point the
+   * look-ahead and the hitmarker follow (also along the move direction while only moving).
+   */
+  private updateTouchCrosshair(dt: number, w: number, h: number, live: boolean, rangeWorld: number) {
+    const ch = this.touchCrosshair;
+    const input = this.input;
+    if (!ch || !input) return;
+    const self = this.selfRender;
+    const aiming = live && !!self && input.touchAimAngle !== null;
+    const facing = live && !!self && (aiming || input.touchMoveAngle !== null);
+    const sx = self ? w / 2 + (self.x - this.camX) * this.zoom : w / 2;
+    const sy = self ? h / 2 + (self.y - this.camY) * this.zoom : h / 2;
+    const dist = touchCrosshairDistance(rangeWorld, this.zoom, sx, sy, this.aim, w, h);
+    ch.update(dt, aiming, sx, sy, this.aim, dist);
+    if (facing) feedAimPointer(sx + Math.cos(this.aim) * dist, sy + Math.sin(this.aim) * dist);
   }
 
   /** Forward a UI command to the first system that handles it. */
