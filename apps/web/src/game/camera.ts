@@ -299,9 +299,20 @@ export function getCameraRig(): CameraRig | null {
 
 // ---------------------------------------------------------------- pointer
 
+/** Every attached PointerTracker (feedAimPointer moves them all). */
+const trackers = new Set<PointerTracker>();
+
+/**
+ * Phones: the touch aim point (the drawn crosshair, canvas px) stands in for the mouse, so the
+ * look-ahead and the hitmarker follow the aim stick instead of the finger on it.
+ */
+export function feedAimPointer(x: number, y: number): void {
+  for (const t of trackers) t.feed(x, y);
+}
+
 /**
  * Cursor position in canvas px, from window pointer events (the renderer's input does the same).
- * Finger events are ignored: on a phone the fingers sit on the touch sticks, not on the target.
+ * Finger events are ignored: on a phone the fingers sit on the sticks, feedAimPointer aims.
  */
 export class PointerTracker {
   x = 0;
@@ -314,6 +325,7 @@ export class PointerTracker {
   attach(canvas: HTMLCanvasElement): void {
     if (this.canvas || typeof window === "undefined") return;
     this.canvas = canvas;
+    trackers.add(this);
     window.addEventListener("pointermove", this.onMove, { passive: true });
     window.addEventListener("pointerdown", this.onMove, { passive: true });
   }
@@ -322,7 +334,16 @@ export class PointerTracker {
     if (!this.canvas) return;
     window.removeEventListener("pointermove", this.onMove);
     window.removeEventListener("pointerdown", this.onMove);
+    trackers.delete(this);
     this.canvas = null;
+  }
+
+  /** A synthetic aim point over the canvas (feedAimPointer). */
+  feed(x: number, y: number): void {
+    this.x = x;
+    this.y = y;
+    this.has = true;
+    this.overCanvas = true;
   }
 
   private onMove = (e: PointerEvent) => {
