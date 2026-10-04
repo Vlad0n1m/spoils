@@ -4,13 +4,15 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
 import { useLobby } from "@/lib/lobby/lobby-context";
+import { AccountWalletEntry } from "@/components/wallet/account-wallet-entry";
 
 const item =
   "font-body flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold text-white/85 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime";
 
 /**
- * Account menu (WORLD v6 spec §6.2): ☰ in the top bar. Signed in: nick, email, Wallet, Economy
- * stats, Sign out. Guest: Register to keep your raider, Sign out. Signed out: Sign in, Register.
+ * Account menu (WORLD v6 spec §6.2): ☰ in the top bar. Signed in: nick, email, the linked Solana
+ * wallet (short address + copy) or Connect wallet, Wallet, Economy stats, Sign out. Guest: Register
+ * to keep your raider, Sign out. Signed out: Sign in, Register.
  * Closes on Escape (focus back to the button) and on an outside click.
  */
 export function AccountMenu() {
@@ -77,8 +79,9 @@ export function AccountMenu() {
             <p className="font-body px-3 pb-3 pt-2 text-sm text-white/70">Not signed in</p>
           )}
           <nav className="mt-1 flex flex-col" aria-label="Account">
-            {sessionKind === "user" && (
+            {sessionKind === "user" && user && (
               <>
+                <AccountWalletEntry userId={user.id} itemClassName={item} />
                 <Link href="/wallet" className={item}>
                   Wallet
                 </Link>
