@@ -175,6 +175,144 @@ button {
   @apply pointer-events-none absolute inset-x-2 bottom-2 rounded-md border-2 border-black bg-white py-1 text-center text-[0.6rem] tracking-[0.2em] text-black shadow-[0_2px_0_#000];
 }
 
+@layer components {
+/*
+ * Main menu in the Brawl Stars layout. `.menu-tile`: a chunky square icon button with a bevel (light
+ * top edge, dark bottom edge), a hard black drop shadow, a lift on hover and a press on click; the
+ * label sits over the bottom of the tile as outlined display text. `.menu-chip`: the same material
+ * for the top bar's pills and small buttons.
+ */
+.menu-tile {
+  @apply relative grid place-items-center rounded-[1.15rem] border-[3px] border-black text-white transition-[transform,box-shadow,filter] duration-100;
+  background: linear-gradient(180deg, #3c4c72 0%, #26314d 55%, #1d2640 100%);
+  box-shadow:
+    inset 0 3px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.35),
+    0 5px 0 #000;
+}
+
+.menu-tile:hover {
+  filter: brightness(1.12);
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 3px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.35),
+    0 7px 0 #000;
+}
+
+.menu-tile:active {
+  transform: translateY(4px);
+  box-shadow:
+    inset 0 3px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.35),
+    0 1px 0 #000;
+}
+
+.menu-tile[data-on="true"] {
+  background: linear-gradient(180deg, #f0ff7a 0%, #ccff00 55%, #a6d400 100%);
+  color: #000;
+}
+
+.menu-tile[data-locked="true"] {
+  background: linear-gradient(180deg, #2c3240 0%, #1b202b 100%);
+}
+
+.menu-chip {
+  @apply relative inline-flex items-center rounded-2xl border-[3px] border-black transition-[transform,box-shadow,filter] duration-100;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.3),
+    0 4px 0 #000;
+}
+
+button.menu-chip:hover,
+a.menu-chip:hover {
+  filter: brightness(1.1);
+}
+
+button.menu-chip:active,
+a.menu-chip:active {
+  transform: translateY(3px);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.3),
+    0 1px 0 #000;
+}
+
+/*
+ * The big PLAY: thick outline, a bevel, a hard shadow and a soft one; it sinks on press. The look
+ * follows the PLAY state (data-look): yellow to drop in, sky blue to arm for the next map, lime
+ * stripes once armed, grey when nothing can be done.
+ */
+.play-btn {
+  @apply relative flex flex-col items-center justify-center rounded-[1.6rem] border-4 border-black text-black transition-[transform,box-shadow,filter] duration-100;
+  background: linear-gradient(180deg, #fff27a 0%, #ffd91f 42%, #ffb800 100%);
+  box-shadow:
+    inset 0 5px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -7px 0 rgba(150, 70, 0, 0.35),
+    0 8px 0 #000,
+    0 16px 26px rgba(0, 0, 0, 0.5);
+}
+
+.play-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.play-btn:active:not(:disabled) {
+  transform: translateY(6px);
+  box-shadow:
+    inset 0 5px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -4px 0 rgba(150, 70, 0, 0.35),
+    0 2px 0 #000,
+    0 6px 12px rgba(0, 0, 0, 0.45);
+}
+
+.play-btn[data-look="ghost"] {
+  background: linear-gradient(180deg, #d4f1ff 0%, #8fd8ff 45%, #55b8f0 100%);
+  box-shadow:
+    inset 0 5px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -7px 0 rgba(0, 60, 120, 0.3),
+    0 8px 0 #000,
+    0 16px 26px rgba(0, 0, 0, 0.5);
+}
+
+.play-btn[data-look="armed"] {
+  background-color: #ccff00;
+  background-image:
+    repeating-linear-gradient(-45deg, rgba(0, 0, 0, 0.14) 0 10px, transparent 10px 20px),
+    linear-gradient(180deg, #f0ff7a 0%, #ccff00 50%, #a6d400 100%);
+  background-size:
+    28px 28px,
+    100% 100%;
+}
+
+.play-btn[data-look="grey"] {
+  background: linear-gradient(180deg, #d4d4d8 0%, #a1a1aa 100%);
+  box-shadow:
+    inset 0 4px 0 rgba(255, 255, 255, 0.45),
+    inset 0 -6px 0 rgba(0, 0, 0, 0.18),
+    0 8px 0 #000;
+}
+
+/* Outlined label text on the menu: a heavier stroke and a hard shadow under it. */
+.menu-label {
+  -webkit-text-stroke: 0.16em #000;
+  paint-order: stroke fill;
+  text-shadow: 0 0.12em 0 #000;
+}
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-tile,
+  .menu-tile:hover,
+  .menu-tile:active,
+  .menu-chip:active,
+  .play-btn:active {
+    transition: none;
+    transform: none;
+  }
+}
+
 /* Diagonal stripes for an armed PLAY ("READY ✓"); animated with animate-stripes. */
 .play-stripes {
   background-image: repeating-linear-gradient(-45deg, rgba(0, 0, 0, 0.14) 0 10px, transparent 10px 20px);

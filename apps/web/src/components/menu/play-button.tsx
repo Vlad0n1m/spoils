@@ -76,19 +76,14 @@ function announceOf(s: PlayState): string {
   }
 }
 
-const LOOK: Record<Look, string> = {
-  lime: "toon-btn",
-  armed: "toon-btn play-stripes animate-stripes motion-reduce:animate-none",
-  ghost: "toon-btn-ghost",
-  grey: "inline-flex items-center justify-center rounded-2xl border-[3px] border-black bg-zinc-400 px-6 text-black shadow-[0_5px_0_#000]",
-};
-
 /**
- * The big PLAY (WORLD v6 spec §6.5): bottom centre, every PlayState of lib/lobby/play-state.ts. An
- * error keeps the base state's face and adds a red line with its fix (Fix loadout / Sign in / Try
- * again). Armed shows a Cancel under the button.
+ * The big PLAY (Brawl Stars layout): bottom right, a huge bevelled yellow button (sky blue to arm for
+ * the next map, lime stripes once armed, grey when nothing can be done; globals.css `.play-btn`) with
+ * the state's sub-line inside it. Every PlayState of lib/lobby/play-state.ts. An error keeps the base
+ * state's face and adds a red bubble above with its fix (Fix loadout / Sign in / Try again). Armed
+ * shows a Cancel tab on the button's top edge.
  */
-export function PlayButton({ onFixInventory }: { onFixInventory: () => void }) {
+export function PlayButton({ onFixInventory, className }: { onFixInventory: () => void; className?: string }) {
   const { state, press, disarm, join } = usePlay();
   const base = state.kind === "error" ? state.base : state;
   const v = playView(base);
@@ -107,70 +102,80 @@ export function PlayButton({ onFixInventory }: { onFixInventory: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kindKey]);
 
+  const long = v.label.length > 8;
   return (
-    <div className="relative mx-auto flex w-full flex-col items-center md:w-[min(26rem,90%)]">
-      {v.pulse && (
-        <span
-          className="pointer-events-none absolute -inset-x-3 -top-3 h-[calc(100%+1.5rem)] max-h-[7rem] rounded-[2rem] bg-zooa-lime/45 blur-xl animate-soft-glow motion-reduce:animate-none"
-          aria-hidden
-        />
-      )}
-      <button
-        type="button"
-        onClick={press}
-        disabled={action === null}
-        aria-describedby={subId}
-        className={clsx(
-          LOOK[v.look],
-          "relative min-h-[4.5rem] w-full flex-col gap-1 py-2 md:min-h-[5.5rem]",
-          // Landscape phones (≤ 500 px tall): 4 rem so the world card, gear strip and PLAY all fit.
-          "[@media(max-height:500px)]:min-h-16 [@media(max-height:500px)]:gap-0 [@media(max-height:500px)]:py-1",
-          "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black",
-          action === null && "cursor-default disabled:opacity-100",
-          base.kind === "loading" && "opacity-60",
-        )}
-      >
-        {/* One line always: long labels (DROPPING IN…, READY ✓ 4:59, GEAR IN RAID) get a smaller size. */}
-        <span
-          className={clsx(
-            "flex items-center gap-3 whitespace-nowrap tabular-nums tracking-wide",
-            v.label.length > 8 ? "text-3xl md:text-4xl" : "text-4xl md:text-5xl",
-            "[@media(max-height:500px)]:text-3xl",
-          )}
-        >
-          {v.spinner && <span className="h-7 w-7 animate-spin rounded-full border-4 border-black border-t-transparent motion-reduce:animate-none" aria-hidden />}
-          <span className="optical-center">{v.label}</span>
-        </span>
-        <span id={subId} className={clsx("font-body text-sm font-bold tabular-nums [@media(max-height:500px)]:text-xs", v.amber ? "text-amber-700" : "text-black/75")}>
-          {v.sub}
-        </span>
-      </button>
-
+    <div className={clsx("relative flex w-full flex-col items-stretch", className)}>
       {state.kind === "error" && (
-        <p role="alert" className="font-body mt-2 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center text-sm font-semibold text-rose-300">
+        <p
+          role="alert"
+          className="font-body mb-3 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-2xl border-[3px] border-black bg-rose-500 px-3 py-1.5 text-center text-sm font-bold text-white shadow-[0_3px_0_#000] short:mb-2 short:py-1 short:text-xs"
+        >
           <span>{state.message}</span>
           {state.fix === "inventory" && (
-            <button type="button" onClick={onFixInventory} className="min-h-8 rounded-lg px-1 text-zooa-lime underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime">
+            <button type="button" onClick={onFixInventory} className="min-h-8 rounded-lg px-1 text-black underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">
               Fix loadout
             </button>
           )}
           {state.fix === "signin" && (
-            <Link href="/auth/login?next=/play" className="min-h-8 rounded-lg px-1 text-zooa-lime underline underline-offset-4">
+            <Link href="/auth/login?next=/play" className="min-h-8 rounded-lg px-1 text-black underline underline-offset-4">
               Sign in
             </Link>
           )}
           {state.fix === "retry" && (
-            <button type="button" onClick={join} className="min-h-8 rounded-lg px-1 text-zooa-lime underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime">
+            <button type="button" onClick={join} className="min-h-8 rounded-lg px-1 text-black underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">
               Try again
             </button>
           )}
         </p>
       )}
-      {base.kind === "armed" && (
-        <button type="button" onClick={disarm} className="toon-btn-ghost mt-2 min-h-10 px-5 text-sm">
-          <span className="optical-center">Cancel</span>
+      <div className="relative">
+        {v.pulse && (
+          <span className="pointer-events-none absolute -inset-3 rounded-[2.2rem] bg-amber-300/50 blur-xl animate-soft-glow motion-reduce:animate-none" aria-hidden />
+        )}
+        <button
+          type="button"
+          onClick={press}
+          disabled={action === null}
+          aria-describedby={subId}
+          data-look={v.look}
+          className={clsx(
+            "play-btn h-[6.75rem] w-full gap-1.5 px-4 md:h-[7.5rem] short:!h-[5.6rem] short:gap-1 tiny:!h-[5rem]",
+            "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black",
+            v.look === "armed" && "animate-stripes motion-reduce:animate-none",
+            action === null && "cursor-default",
+            base.kind === "loading" && "opacity-70",
+          )}
+        >
+          {/* One line always: long labels (DROPPING IN…, READY ✓ 4:59, GEAR IN RAID) get a smaller size. */}
+          <span
+            className={clsx(
+              "toon-text flex items-center gap-3 whitespace-nowrap leading-none tabular-nums tracking-wide text-white [text-shadow:0_0.08em_0_#000]",
+              long ? "text-[2.1rem] md:text-[2.5rem] short:!text-[1.9rem] tiny:!text-[1.7rem]" : "text-[3.2rem] md:text-[3.8rem] short:!text-[2.8rem] tiny:!text-[2.5rem]",
+            )}
+          >
+            {v.spinner && <span className="h-7 w-7 animate-spin rounded-full border-4 border-black border-t-transparent motion-reduce:animate-none" aria-hidden />}
+            <span className="optical-center">{v.label}</span>
+          </span>
+          <span
+            id={subId}
+            className={clsx(
+              "font-body line-clamp-2 max-w-full px-1 text-center text-sm font-extrabold leading-tight tabular-nums short:text-xs",
+              v.amber ? "text-red-800" : "text-black/75",
+            )}
+          >
+            {v.sub}
+          </span>
         </button>
-      )}
+        {base.kind === "armed" && (
+          <button
+            type="button"
+            onClick={disarm}
+            className="menu-chip absolute -top-4 right-3 h-9 bg-white px-3 text-sm text-black focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70"
+          >
+            <span className="optical-center">✕ Cancel</span>
+          </button>
+        )}
+      </div>
       <p className="sr-only" aria-live="polite">
         {said}
       </p>
@@ -195,9 +200,14 @@ export function PlayMiniChip() {
       disabled={action === null}
       title={v.sub}
       className={clsx(
-        "hidden min-h-10 items-center gap-2 whitespace-nowrap rounded-full border-[3px] border-black px-3.5 text-sm tabular-nums shadow-[0_3px_0_#000] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 sm:inline-flex",
-        v.look === "ghost" ? "bg-white text-black" : v.look === "grey" ? "bg-zinc-400 text-black" : "bg-zooa-lime text-black",
-        v.look === "armed" && "play-stripes",
+        "menu-chip hidden min-h-11 gap-2 whitespace-nowrap px-4 text-base tabular-nums focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 sm:inline-flex",
+        v.look === "ghost"
+          ? "bg-[linear-gradient(180deg,#d4f1ff,#55b8f0)] text-black"
+          : v.look === "grey"
+            ? "bg-zinc-400 text-black"
+            : v.look === "armed"
+              ? "play-stripes bg-zooa-lime text-black"
+              : "bg-[linear-gradient(180deg,#fff27a,#ffd91f_45%,#ffb800)] text-black",
       )}
     >
       <span className="optical-center">{v.label}</span>

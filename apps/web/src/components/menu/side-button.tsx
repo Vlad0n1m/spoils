@@ -17,8 +17,8 @@ export const MENU_ICONS = {
   news: { src: "/lobby/menu_news.png", fallback: "/sprites/junk_battery.png" },
   leaderboards: { src: "/lobby/menu_leaderboards.png", fallback: "/sprites/junk_dogtag.png" },
   friends: { src: "/lobby/menu_friends.png", fallback: "/sprites/player.png" },
-  /** Daily tasks and rewards: no lobby art yet (point `src` at /lobby/menu_tasks.png once it exists). */
-  tasks: { src: "/sprites/crate.png", fallback: "/sprites/crate.png" },
+  /** Daily tasks and rewards. */
+  tasks: { src: "/lobby/menu_quests.png", fallback: "/sprites/crate.png" },
   guilds: { src: "/lobby/menu_guilds.png", fallback: "/sprites/sandbags.png" },
 } as const satisfies Record<string, MenuIcon>;
 
@@ -35,10 +35,12 @@ export function LockSticker({ className }: { className?: string }) {
 }
 
 /**
- * Main-menu side button (WORLD v6 spec §6.1): a 104 px tile (116 px at ≥ 1440, 84 px on tablets)
- * with a 64 px icon and a Luckiest Guy label; lime while its panel is open. `locked` tiles (Guilds)
- * stay focusable with aria-disabled, show a grey icon, a padlock and a SOON ribbon, and
- * only toast on click. `dot` = unread marker (News; Friends: requests or party invites), `hotkey` =
+ * Main-menu tile (Brawl Stars layout): a chunky square button with a bevel and a hard shadow, the
+ * icon filling most of it and a short outlined label over its bottom edge; lime while its panel is
+ * open. Sizes: 104 px on desktops (88 px below 800 px tall), 64 px on landscape phones (58 px at
+ * ≤ 380 px tall), 72 px in the portrait fallback. `locked` tiles (Guilds) stay focusable with
+ * aria-disabled, a grey icon and a padlock, and only toast on click. `dot` = unread marker,
+ * `ariaLabel` = the full name when the visible label is short ("Gear" → Inventory), `hotkey` =
  * desktop key hint.
  */
 export const SideButton = forwardRef<
@@ -47,12 +49,14 @@ export const SideButton = forwardRef<
     label: string;
     icon: MenuIcon;
     onClick: () => void;
+    ariaLabel?: string;
     active?: boolean;
     locked?: boolean;
     dot?: boolean;
     hotkey?: string;
   }
->(function SideButton({ label, icon, onClick, active = false, locked = false, dot = false, hotkey }, ref) {
+>(function SideButton({ label, icon, onClick, ariaLabel, active = false, locked = false, dot = false, hotkey }, ref) {
+  const name = ariaLabel ?? label;
   return (
     <button
       ref={ref}
@@ -61,47 +65,41 @@ export const SideButton = forwardRef<
       aria-disabled={locked || undefined}
       aria-haspopup={locked ? undefined : "dialog"}
       aria-expanded={locked ? undefined : active}
-      aria-label={locked ? `${label}, coming soon` : dot ? `${label}, new` : label}
+      aria-label={locked ? `${name}, coming soon` : dot ? `${name}, new` : name}
+      data-on={active || undefined}
+      data-locked={locked || undefined}
       className={clsx(
-        "toon-tile h-[5.25rem] w-[5.25rem] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black lg:h-[6.5rem] lg:w-[6.5rem] min-[1440px]:h-[7.25rem] min-[1440px]:w-[7.25rem]",
-        // Landscape phones: 72 px tiles (64 px at ≤ 400 px tall) so a column of four fits.
-        "[@media(max-height:500px)]:h-[4.5rem] [@media(max-height:500px)]:w-[4.5rem] [@media(max-height:400px)]:!h-16 [@media(max-height:400px)]:!w-16",
-        active && "!bg-zooa-lime text-black",
-        locked && "cursor-not-allowed !bg-[#161b28]/90",
+        "menu-tile h-[4.5rem] w-[4.5rem] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/80 focus-visible:ring-offset-2 focus-visible:ring-offset-black",
+        "md:h-[5.5rem] md:w-[5.5rem] [@media(min-width:1024px)_and_(min-height:800px)]:h-[6.5rem] [@media(min-width:1024px)_and_(min-height:800px)]:w-[6.5rem]",
+        "short:!h-16 short:!w-16 tiny:!h-[3.6rem] tiny:!w-[3.6rem]",
+        locked && "cursor-not-allowed",
       )}
     >
       <FallbackImg
         src={icon.src}
         fallback={icon.fallback}
         className={clsx(
-          "object-contain drop-shadow-[0_3px_0_rgba(0,0,0,0.55)]",
-          locked
-            ? "-mt-5 h-8 w-8 opacity-60 grayscale lg:h-11 lg:w-11 [@media(max-height:500px)]:-mt-4 [@media(max-height:500px)]:h-7 [@media(max-height:500px)]:w-7"
-            : "-mt-1 h-10 w-10 lg:h-16 lg:w-16 [@media(max-height:500px)]:h-8 [@media(max-height:500px)]:w-8",
+          "pointer-events-none absolute left-1/2 top-[44%] h-[78%] w-[78%] -translate-x-1/2 -translate-y-1/2 object-contain drop-shadow-[0_3px_0_rgba(0,0,0,0.6)]",
+          locked && "opacity-55 grayscale",
         )}
       />
       <span
         className={clsx(
-          "text-xs tracking-wide lg:text-[0.95rem] [@media(max-height:500px)]:text-[0.6rem] [@media(max-height:500px)]:tracking-normal [@media(max-height:400px)]:!text-[0.55rem]",
-          locked && "text-white/60",
+          "menu-label pointer-events-none absolute inset-x-0 -bottom-1.5 text-center text-[0.8rem] leading-none tracking-wide md:text-[0.95rem] short:!text-[0.78rem] tiny:!text-[0.72rem]",
+          locked ? "text-white/70" : "text-white",
         )}
         aria-hidden
       >
         <span className="optical-center">{label}</span>
       </span>
-      {locked && (
-        <>
-          <LockSticker className="absolute -right-2 -top-2 h-6 w-6" />
-          <span className="toon-ribbon" aria-hidden>
-            SOON
-          </span>
-        </>
-      )}
+      {locked && <LockSticker className="absolute -right-2 -top-2 h-7 w-7 short:h-6 short:w-6" />}
       {dot && !locked && (
-        <span className="absolute -right-1.5 -top-1.5 h-4 w-4 rounded-full border-[3px] border-black bg-rose-500" aria-hidden />
+        <span className="absolute -right-2 -top-2 grid h-[1.35rem] w-[1.35rem] place-items-center rounded-full border-[3px] border-black bg-rose-500 shadow-[0_2px_0_#000]" aria-hidden>
+          <span className="h-1.5 w-1.5 rounded-full bg-white" />
+        </span>
       )}
       {hotkey && !locked && (
-        <span className="toon-key absolute left-1.5 top-1.5 h-5 min-w-5 text-[0.6rem] [@media(hover:none)]:hidden" aria-hidden>
+        <span className="toon-key absolute left-1 top-1 h-5 min-w-5 text-[0.6rem] opacity-80 [@media(hover:none)]:hidden short:hidden" aria-hidden>
           {hotkey}
         </span>
       )}

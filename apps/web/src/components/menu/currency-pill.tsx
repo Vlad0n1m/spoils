@@ -1,15 +1,24 @@
 import Link from "next/link";
 import clsx from "clsx";
 
+/**
+ * Brawl Stars style money pill: a dark bevelled bar with the currency's coin bulging out of its left
+ * end, the value in display type and a chunky green "+" on the right. 44 px tall (40 px on a
+ * landscape phone).
+ */
 const pill =
-  "inline-flex min-h-10 items-center gap-1.5 whitespace-nowrap rounded-full border-[3px] border-black px-3 text-sm tabular-nums shadow-[0_3px_0_#000] transition-[transform,box-shadow] hover:-translate-y-px active:translate-y-[2px] active:shadow-[0_1px_0_#000] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70";
+  "menu-chip h-11 gap-2 whitespace-nowrap bg-[#141a29] pl-1 pr-1 text-white tabular-nums focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 short:h-10";
+
+const plus =
+  "grid h-8 w-8 shrink-0 place-items-center rounded-xl border-[3px] border-black bg-[linear-gradient(180deg,#8dff6a,#3fd63a)] text-xl leading-none text-black shadow-[inset_0_2px_0_rgba(255,255,255,0.5)] short:h-7 short:w-7";
 
 /** Coin glyph (CR). */
 function Coin() {
   return (
-    <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0" aria-hidden>
-      <circle cx="10" cy="10" r="8" fill="#fbbf24" stroke="#000" strokeWidth="2.5" />
-      <circle cx="10" cy="10" r="4" fill="none" stroke="#000" strokeWidth="1.5" opacity="0.5" />
+    <svg viewBox="0 0 32 32" className="-ml-3 h-10 w-10 shrink-0 drop-shadow-[0_2px_0_#000] short:h-9 short:w-9" aria-hidden>
+      <circle cx="16" cy="16" r="13" fill="#fbbf24" stroke="#000" strokeWidth="3" />
+      <circle cx="16" cy="16" r="8" fill="#fcd34d" stroke="#b45309" strokeWidth="2" />
+      <path d="M10 10.5a8 8 0 0 1 6-3" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" fill="none" opacity="0.8" />
     </svg>
   );
 }
@@ -17,32 +26,39 @@ function Coin() {
 /** Diamond glyph (market currency). */
 function Gem() {
   return (
-    <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0" aria-hidden>
-      <path d="M10 2 L18 9 L10 18 L2 9 Z" fill="#14f195" stroke="#000" strokeWidth="2.5" strokeLinejoin="round" />
+    <svg viewBox="0 0 32 32" className="-ml-3 h-10 w-10 shrink-0 drop-shadow-[0_2px_0_#000] short:h-9 short:w-9" aria-hidden>
+      <path d="M16 3 L28 13 L16 29 L4 13 Z" fill="#14f195" stroke="#000" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M4 13 H28 M11 13 L16 4 L21 13 L16 29" fill="none" stroke="#0b8f5a" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M9 11 L13 6" stroke="#fff" strokeWidth="2" strokeLinecap="round" opacity="0.8" />
     </svg>
   );
 }
 
-/**
- * Top-bar money pills (WORLD v6 spec §6.2): CR (amber, opens Shop · Traders) and the market wallet
- * (SOL green, links to /wallet with a "+"). `value` null = loading.
- */
-export function CreditsPill({ value, onClick }: { value: string | null; onClick: () => void }) {
+/** CR: opens Shop · Traders. `value` null = loading. */
+export function CreditsPill({ value, onClick, className }: { value: string | null; onClick: () => void; className?: string }) {
   return (
-    <button type="button" onClick={onClick} className={clsx(pill, "bg-amber-300 text-black")} aria-label={value ? `${value}. Open the traders` : "Credits loading"}>
+    <button type="button" onClick={onClick} className={clsx(pill, className)} aria-label={value ? `${value}. Open the traders` : "Credits loading"}>
       <Coin />
-      <span className="optical-center">{value ?? "—"}</span>
+      <span className="min-w-[3.5rem] text-base tracking-wide port:min-w-0 short:text-sm">
+        <span className="optical-center">{value ?? "—"}</span>
+      </span>
+      <span className={plus} aria-hidden>
+        <span className="optical-center">+</span>
+      </span>
     </button>
   );
 }
 
+/** The market wallet (SOL): links to /wallet to top up. */
 export function WalletPill({ value, className }: { value: string | null; className?: string }) {
   return (
-    <Link href="/wallet" className={clsx(pill, "bg-[#0f2a1f] text-sol-400", className)} aria-label={value ? `Wallet ${value}. Top up` : "Wallet"}>
+    <Link href="/wallet" className={clsx(pill, "text-sol-400", className)} aria-label={value ? `Wallet ${value}. Top up` : "Wallet"}>
       <Gem />
-      <span className="optical-center">{value ?? "—"}</span>
-      <span className="ml-0.5 grid h-5 w-5 place-items-center rounded-full border-2 border-black bg-sol-400 text-xs text-black" aria-hidden>
-        +
+      <span className="min-w-[3.5rem] text-base tracking-wide port:min-w-0 short:text-sm">
+        <span className="optical-center">{value ?? "—"}</span>
+      </span>
+      <span className={plus} aria-hidden>
+        <span className="optical-center">+</span>
       </span>
     </Link>
   );

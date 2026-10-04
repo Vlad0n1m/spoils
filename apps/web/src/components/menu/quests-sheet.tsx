@@ -20,8 +20,15 @@ import { playUi } from "@/game/audio/ui-sounds";
 import { LevelBadge } from "./level-badge";
 import { Panel } from "./panel";
 import { useQuests } from "./quests-context";
-import { fmtUntil } from "./quests-strip";
 import { fmtInt } from "./xp-bar";
+
+/** "5h 12m", "12m", "<1m" until `at`. */
+export function fmtUntil(at: number, now: number): string {
+  const mins = Math.max(0, Math.floor((at - now) / 60_000));
+  if (mins < 1) return "<1m";
+  const h = Math.floor(mins / 60);
+  return h > 0 ? `${h}h ${mins % 60}m` : `${mins}m`;
+}
 
 export type QuestsTab = "today" | "rewards";
 const TABS: readonly QuestsTab[] = ["today", "rewards"];

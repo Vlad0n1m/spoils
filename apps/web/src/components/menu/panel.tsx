@@ -97,12 +97,12 @@ export function Panel({
         {/* Landscape phones (≤ 500 px tall): title, tabs, chip and × on one row, so the body keeps
             most of the height instead of ~170 px; the tabs get narrower so the side sheets' three tabs
             (Friends) fit beside the chip and × instead of the last one scrolling out of sight. */}
-        <header className="flex flex-wrap items-center gap-3 border-b-[3px] border-black bg-[#0d1119]/80 px-3 py-3 md:px-5 [@media(max-height:500px)]:flex-nowrap [@media(max-height:500px)]:py-2">
+        <header className="flex flex-wrap items-center gap-3 border-b-[3px] border-black bg-[linear-gradient(180deg,#26314d,#18203a)] px-3 py-3 shadow-[inset_0_3px_0_rgba(255,255,255,0.12)] md:px-5 [@media(max-height:500px)]:flex-nowrap [@media(max-height:500px)]:py-2">
           <button
             type="button"
             onClick={onClose}
             aria-label="Back"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border-[3px] border-black bg-white text-black shadow-[0_3px_0_#000] md:hidden"
+            className="menu-chip grid h-11 w-11 shrink-0 place-items-center bg-white text-black md:hidden"
           >
             <svg viewBox="0 0 20 20" className="h-5 w-5" aria-hidden>
               <path d="M12.5 4 6.5 10l6 6" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -112,7 +112,7 @@ export function Panel({
             ref={heading}
             id={`${id}-title`}
             tabIndex={-1}
-            className="toon-text mr-auto text-3xl tracking-wide text-white focus:outline-none [@media(max-height:500px)]:mr-0 [@media(max-height:500px)]:shrink-0 [@media(max-height:500px)]:text-2xl"
+            className="menu-label mr-auto text-3xl leading-none tracking-wide text-white focus:outline-none md:text-4xl [@media(max-height:500px)]:mr-0 [@media(max-height:500px)]:shrink-0 [@media(max-height:500px)]:!text-2xl"
           >
             <span className="optical-center">{title}</span>
           </h2>
@@ -121,17 +121,17 @@ export function Panel({
             type="button"
             onClick={onClose}
             aria-label={`Close ${title}`}
-            className="hidden h-11 w-11 shrink-0 place-items-center rounded-xl border-[3px] border-black bg-white text-black shadow-[0_3px_0_#000] transition-[transform,box-shadow] active:translate-y-[2px] active:shadow-[0_1px_0_#000] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 md:grid [@media(max-height:500px)]:order-3"
+            className="menu-chip hidden h-11 w-11 shrink-0 place-items-center bg-[linear-gradient(180deg,#fb7185,#e11d48)] text-white focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 md:grid [@media(max-height:500px)]:order-3"
           >
             <svg viewBox="0 0 20 20" className="h-5 w-5" aria-hidden>
-              <path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" />
+              <path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" />
             </svg>
           </button>
           {tabs.length > 1 && (
             <div
               role="tablist"
               aria-label={`${title} sections`}
-              className="flex w-full gap-1.5 overflow-x-auto pb-0.5 [@media(max-height:500px)]:order-1 [@media(max-height:500px)]:w-auto [@media(max-height:500px)]:min-w-0 [@media(max-height:500px)]:flex-1"
+              className="flex w-full gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5 [@media(max-height:500px)]:order-1 [@media(max-height:500px)]:w-auto [@media(max-height:500px)]:min-w-0 [@media(max-height:500px)]:flex-1"
             >
               {tabs.map((t, i) => {
                 const on = t === tab;
@@ -149,10 +149,10 @@ export function Panel({
                     onClick={() => onTab(t)}
                     onKeyDown={(e) => onTabKey(e, i)}
                     className={clsx(
-                      "min-h-11 shrink-0 rounded-2xl border-[3px] border-black px-4 text-sm tracking-wide transition-[transform,box-shadow] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 md:text-base [@media(max-height:500px)]:px-3 [@media(max-height:500px)]:text-sm",
+                      "menu-chip min-h-11 shrink-0 px-4 text-sm tracking-wide focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 md:text-base [@media(max-height:500px)]:px-3 [@media(max-height:500px)]:text-sm",
                       on
-                        ? "bg-zooa-lime text-black shadow-[0_4px_0_#000]"
-                        : "bg-[#1d2333]/90 text-white/80 shadow-[0_3px_0_#000] hover:text-white active:translate-y-[2px] active:shadow-[0_1px_0_#000]",
+                        ? "bg-[linear-gradient(180deg,#f0ff7a,#ccff00_55%,#a6d400)] text-black"
+                        : "bg-[#141a29] text-white/85 hover:text-white",
                     )}
                   >
                     <span className="optical-center">{tabLabels?.[t] ?? TAB_LABEL[t] ?? t}</span>

@@ -93,21 +93,24 @@ export function XpBar({ xp, variant = "bar" }: { xp: number; variant?: "bar" | "
       </span>
     );
   }
+  // Chunky bar with the numbers inside it (top bar profile).
   return (
-    <span className="flex min-w-0 items-center gap-2" title={tip}>
-      <span
-        className="block h-3 w-28 shrink-0 overflow-hidden rounded-full border-2 border-black bg-black/55 lg:w-40"
-        role="progressbar"
-        aria-label="Experience"
-        aria-valuemin={0}
-        aria-valuemax={p.need}
-        aria-valuenow={p.into}
-        aria-valuetext={tip}
-      >
-        {fill}
-      </span>
-      <span className="font-body whitespace-nowrap text-xs font-semibold tabular-nums text-white/75">
-        {fmtInt(p.into)} / {fmtInt(p.need)} XP
+    <span
+      className="relative block h-5 w-full min-w-[7rem] overflow-hidden rounded-full border-[3px] border-black bg-black/70 short:h-[1.1rem]"
+      role="progressbar"
+      aria-label="Experience"
+      aria-valuemin={0}
+      aria-valuemax={p.need}
+      aria-valuenow={p.into}
+      aria-valuetext={tip}
+      title={tip}
+    >
+      {fill}
+      <span className="absolute inset-x-0 top-0 h-1/2 bg-white/15" aria-hidden />
+      <span className="menu-label absolute inset-0 grid place-items-center text-[0.75rem] leading-none tabular-nums text-white [text-shadow:none] [-webkit-text-stroke:0.22em_#000] short:text-[0.68rem]" aria-hidden>
+        <span className="optical-center">
+          {fmtInt(p.into)} / {fmtInt(p.need)} XP
+        </span>
       </span>
     </span>
   );
