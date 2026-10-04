@@ -17,42 +17,63 @@
       "out": "hero_0.png",
       "gen": "1024x1536",
       "kind": "cutout",
-      "box": [512, 768],
-      "prompt": "Full-body game character in three-quarter front view, standing in a confident idle pose, facing the viewer slightly to the left. A young raider in a rounded light-gray helmet with goggles pushed up, olive field jacket, cargo pants, tan boots, fingerless gloves, a small radio on the chest strap, both hands gripping the shoulder straps of a small backpack. NO weapon in the hands. Friendly cartoon proportions: slightly big head, chunky hands and boots, tough but cheerful face. The character fills about 85% of the frame height, the whole body from helmet to boots is visible with a margin on every side."
+      "box": [
+        512,
+        768
+      ],
+      "prompt": "Full-body game lobby hero character, standing 3/4 view, confident pose, clean thick dark outlines, bold cel-shading, stylized cartoon like Brawl Stars / Fortnite lobby art, mature and cool, NOT a cute kid, no text, no logos, no flags, no national symbols, solid flat magenta #FF00FF background. A scavenger looter with attitude: gas mask with glowing lime filter, hood up, patched jacket, oversized loot backpack with a gold chain and a GPU sticking out, holding a shotgun on the shoulder, swagger pose."
     },
     {
       "id": "hero_1",
       "out": "hero_1.png",
       "gen": "1024x1536",
       "kind": "cutout",
-      "box": [512, 768],
-      "refs": ["art/raw/lobby/hero_0.png"],
-      "prompt": "The exact same character as the second reference image: same face, pose, helmet, clothes, colors and framing. Now wearing a light tan soft armor vest with two front pouches over the jacket."
+      "box": [
+        512,
+        768
+      ],
+      "refs": [
+        "art/raw/lobby/hero-v2/b.png"
+      ],
+      "prompt": "The exact same character as the reference image (same gas mask, hood, pose, shotgun, loot backpack, colors, framing, magenta background). Now also wearing light tan soft armor vest with two front pouches over the jacket."
     },
     {
       "id": "hero_2",
       "out": "hero_2.png",
       "gen": "1024x1536",
       "kind": "cutout",
-      "box": [512, 768],
-      "refs": ["art/raw/lobby/hero_0.png"],
-      "prompt": "The exact same character as the second reference image: same face, pose, helmet, clothes, colors and framing. Now wearing a medium dark-olive plate carrier with shoulder pads and magazine pouches."
+      "box": [
+        512,
+        768
+      ],
+      "refs": [
+        "art/raw/lobby/hero-v2/b.png"
+      ],
+      "prompt": "The exact same character as the reference image (same gas mask, hood, pose, shotgun, loot backpack, colors, framing, magenta background). Now also wearing medium dark-olive plate carrier with shoulder pads and magazine pouches over the jacket."
     },
     {
       "id": "hero_3",
       "out": "hero_3.png",
       "gen": "1024x1536",
       "kind": "cutout",
-      "box": [512, 768],
-      "refs": ["art/raw/lobby/hero_0.png"],
-      "prompt": "The exact same character as the second reference image: same face, pose, clothes, colors and framing. Now wearing heavy dark-gray assault armor: thick chest plate, big shoulder plates, armored collar, and a heavier helmet with a raised visor."
+      "box": [
+        512,
+        768
+      ],
+      "refs": [
+        "art/raw/lobby/hero-v2/b.png"
+      ],
+      "prompt": "The exact same character as the reference image (same gas mask, hood, pose, shotgun, loot backpack, colors, framing, magenta background). Now also wearing heavy dark-gray assault armor: thick chest plate, big shoulder plates and an armored collar over the jacket."
     },
     {
       "id": "menu_inventory",
       "out": "menu_inventory.png",
       "gen": "1024x1024",
       "kind": "cutout",
-      "box": [256, 256],
+      "box": [
+        256,
+        256
+      ],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a stuffed olive military backpack with straps and a rolled sleeping mat on top."
     },
     {
@@ -60,7 +81,10 @@
       "out": "menu_shop.png",
       "gen": "1024x1024",
       "kind": "cutout",
-      "box": [256, 256],
+      "box": [
+        256,
+        256
+      ],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a small wooden trader's crate stall with a striped cloth awning, a pile of gold coins and a blank paper price tag in front."
     },
     {
@@ -68,7 +92,10 @@
       "out": "menu_leaderboards.png",
       "gen": "1024x1024",
       "kind": "cutout",
-      "box": [256, 256],
+      "box": [
+        256,
+        256
+      ],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a shiny golden trophy cup with two handles and a blank steel dog tag on a chain hanging from one handle."
     },
     {
@@ -76,7 +103,10 @@
       "out": "menu_news.png",
       "gen": "1024x1024",
       "kind": "cutout",
-      "box": [256, 256],
+      "box": [
+        256,
+        256
+      ],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a rugged olive handheld field radio with a long antenna and a glowing red signal light."
     },
     {
@@ -84,7 +114,10 @@
       "out": "menu_info.png",
       "gen": "1024x1024",
       "kind": "cutout",
-      "box": [256, 256],
+      "box": [
+        256,
+        256
+      ],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a folded paper field map with a red route drawn on it and a brass compass lying on top."
     },
     {
@@ -92,7 +125,10 @@
       "out": "menu_friends.png",
       "gen": "1024x1024",
       "kind": "cutout",
-      "box": [256, 256],
+      "box": [
+        256,
+        256
+      ],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: two cartoon gloved hands doing a fist bump, one olive glove and one tan glove."
     },
     {
@@ -100,7 +136,10 @@
       "out": "menu_guilds.png",
       "gen": "1024x1024",
       "kind": "cutout",
-      "box": [256, 256],
+      "box": [
+        256,
+        256
+      ],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a plain heraldic shield with a blank lime-green field and crossed wooden spears behind it, no symbols on the shield."
     },
     {
@@ -108,7 +147,10 @@
       "out": "menu_quests.png",
       "gen": "1024x1024",
       "kind": "cutout",
-      "box": [256, 256],
+      "box": [
+        256,
+        256
+      ],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a wooden clipboard with a sheet of paper showing three big green check marks, a red pencil lying across it and a small gold star sticker in the corner."
     },
     {
@@ -116,7 +158,10 @@
       "out": "menu_pass.png",
       "gen": "1024x1024",
       "kind": "cutout",
-      "box": [256, 256],
+      "box": [
+        256,
+        256
+      ],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a mint-teal and dark navy military medal on a short striped ribbon, with a big white five-pointed star in the middle of the round medal and a small gold rim."
     },
     {
@@ -124,8 +169,13 @@
       "out": "hero_alpha.png",
       "gen": "1024x1536",
       "kind": "cutout",
-      "box": [512, 768],
-      "refs": ["art/raw/lobby/hero_0.png"],
+      "box": [
+        512,
+        768
+      ],
+      "refs": [
+        "art/raw/lobby/hero_0.png"
+      ],
       "prompt": "The exact same character as the second reference image: same face, pose, helmet shape, proportions and framing. Now in the Alpha Veteran outfit: a mint-teal field jacket with dark navy collar and cuffs, a mint-teal stripe across the light-gray helmet, dark navy cargo pants, a small round mint-teal shoulder patch with a simple white star (no text), mint-teal fingerless gloves, the same small backpack. NO weapon in the hands."
     }
   ]
