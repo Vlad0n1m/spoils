@@ -1,6 +1,10 @@
 /**
  * Shooting, server-side bullets and damage. Bullets are never synced: clients draw tracers from
  * the ShotMsg in their `ev` batch, and the state (hp, alive) is the truth about hits.
+ * Weapons v2: the crossbow bolt is an ordinary slow bullet (1100 px/s); a weapon without a muzzle
+ * flash (WeaponDef.flash false) sets lastShotAt VISION.FLASH_MS back, so the shot cancels bush
+ * concealment but never shows the shooter to the full VISION.RANGE. Grenade blasts (grenade.ts)
+ * deal their damage through damagePlayer with weapon "grenade".
  *
  * Party (shared party.ts, PARTY.FRIENDLY_FIRE = false): a bullet passes through its shooter's party
  * mates exactly as NPC bullets pass through NPCs (no hit, no damage, no hit marker, it flies on to
@@ -11,14 +15,17 @@ import {
   NPC,
   PLAYER,
   RARITY_DAMAGE_MULT,
+  SERVER_TICK_MS,
   SoundKind,
+  VISION,
   applyDamage,
   itemDef,
   partyMates,
   raycastSolids,
   segmentCircleT,
+  weaponHasFlash,
   weaponVariant,
-  type WeaponId,
+  type KillWeapon,
 } from "@extract/shared";
 import { cancelHeal, startReload } from "./actions.js";
 import { activeWeapon, ammoCount, syncPublic, weaponDefOf } from "./bag.js";
@@ -66,9 +73,15 @@ export function tryFire(m: Match, rt: PlayerRuntime): void {
 
   cancelHeal(rt);
   rt.pressPending = false;
-  // Strictly clock + interval: ticks quantize shots, and the rule is "never faster than the interval".
-  rt.nextFireAt = m.clock + def.fireIntervalMs;
-  rt.lastShotAt = m.clock;
+  // Semi-auto: strictly clock + interval (ticks quantize shots; "never faster than the interval").
+  // Automatic fire held through (Weapons v2: the SMG's 75 ms and the LMG's 110 ms are not multiples
+  // of the 50 ms tick): a shot that went out less than one tick after it was due carries the
+  // schedule on, so the held rate averages exactly the interval (never two shots in one tick)
+  // instead of rounding up to the next tick (75 → 100 ms, 110 → 150 ms). The rifle's 100 ms is unchanged.
+  const due = rt.nextFireAt;
+  rt.nextFireAt = (def.auto && m.clock - due < SERVER_TICK_MS ? Math.max(due, m.clock - SERVER_TICK_MS + 1) : m.clock) + def.fireIntervalMs;
+  // No flash (crossbow): the bush reveal (SHOT_REVEAL_MS) still applies, the flash (FLASH_MS) never.
+  rt.lastShotAt = weaponHasFlash(def.id) ? m.clock : Math.max(rt.lastShotAt, m.clock - VISION.FLASH_MS);
   rt.stats.shotsFired++;
   w.mag -= 1;
 
@@ -146,14 +159,19 @@ export function stepBullets(m: Match, dtMs: number): void {
   m.bullets = keep;
 }
 
+/**
+ * Apply `raw` damage (before armor) to `rt`. `from` = where the damage came from for the target's
+ * damage arc (default: the attacker's position; grenades pass the blast centre).
+ */
 export function damagePlayer(
   m: Match,
   rt: PlayerRuntime,
   raw: number,
   attacker: PlayerRuntime | null,
-  weapon: WeaponId | "",
+  weapon: KillWeapon | "",
   hx: number,
   hy: number,
+  from?: { x: number; y: number },
 ): void {
   const p = rt.pub;
   if (!p.alive) return;
@@ -187,7 +205,9 @@ export function damagePlayer(
     src: attacker?.rosterIndex ?? -1,
     target: rt.rosterIndex,
     msg: { t: rt.id, s: attacker?.id ?? "", x: hx, y: hy, d: round2(hpLoss), ar: armorUsed > 0 },
-    fa: attacker && attacker !== rt ? Math.atan2(attacker.pub.y - p.y, attacker.pub.x - p.x) : undefined,
+    fa: from
+      ? Math.atan2(from.y - p.y, from.x - p.x)
+      : attacker && attacker !== rt ? Math.atan2(attacker.pub.y - p.y, attacker.pub.x - p.x) : undefined,
   });
   emitSound(m, rt, SoundKind.hurt, p.x, p.y);
   syncPublic(rt);

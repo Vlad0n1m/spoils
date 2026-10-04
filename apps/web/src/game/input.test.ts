@@ -74,6 +74,7 @@ function setup(opts: { noToggleMap?: boolean } = {}) {
     closePanel: () => calls.push("close"),
     toggleMap: opts.noToggleMap ? undefined : () => calls.push("map"),
     toggleFullMap: () => calls.push("fullMap"),
+    throwGrenade: (aim) => calls.push(aim ? `throw:${aim.angle.toFixed(2)}:${aim.frac.toFixed(2)}` : "throw"),
   };
   const win = new FakeTarget();
   const body = { tagName: "BODY" };
@@ -162,6 +163,32 @@ describe("InputController", () => {
     down("KeyT", { repeat: true });
     down("KeyR", { ctrlKey: true });
     assert.equal(calls.length, 10, "repeats and browser shortcuts are ignored");
+  });
+
+  it("Weapons v2: G and 5 throw a grenade (once per press), the touch drag passes its aim", () => {
+    const { ctl, calls, down } = setup();
+    const g = down("KeyG");
+    assert.equal(g.defaultPrevented, true);
+    down("Digit5");
+    down("KeyG", { repeat: true });
+    assert.deepEqual(calls, ["throw", "throw"]);
+    // An open panel (inventory: G drops the focused item there) or a key the HUD handled: no throw.
+    ctl.setFireBlocked(true);
+    down("KeyG");
+    ctl.setFireBlocked(false);
+    down("KeyG", { defaultPrevented: true });
+    assert.deepEqual(calls, ["throw", "throw"]);
+    ctl.press("grenade");
+    assert.equal(calls[2], "throw");
+    // The touch button's drag: preview while dragging (frac clamped), then the throw clears it.
+    ctl.setGrenadeAim({ angle: 1, frac: 1.7 });
+    assert.deepEqual(ctl.grenadeAim, { angle: 1, frac: 1 });
+    ctl.setGrenadeAim({ angle: NaN, frac: 0.5 });
+    assert.equal(ctl.grenadeAim, null, "a broken aim is no aim");
+    ctl.setGrenadeAim({ angle: 0.5, frac: 0.25 });
+    ctl.throwGrenadeAt(0.5, 0.25);
+    assert.equal(calls[3], "throw:0.50:0.25");
+    assert.equal(ctl.grenadeAim, null);
   });
 
   it("fire latches short clicks, is blocked while a panel is open, and dropBuffered clears latches", () => {

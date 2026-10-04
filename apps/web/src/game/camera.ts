@@ -32,7 +32,12 @@ export const LOOK = {
 } as const;
 
 /** Recoil kick in screen px, opposite the aim, per own shot (memo: 4–10 px, back in ~120 ms). */
-export const RECOIL_PX: Record<WeaponId, number> = { pistol: 4, rifle: 3, shotgun: 9, sniper: 10 };
+export const RECOIL_PX: Record<WeaponId, number> = {
+  pistol: 4, rifle: 3, shotgun: 9, sniper: 10,
+  // Weapons v2: the SMG barely kicks, the LMG a little more than the rifle, the revolver hard, the
+  // crossbow a soft thump.
+  smg: 2, lmg: 4, revolver: 7, crossbow: 3,
+};
 export const KICK = { TAU_MS: 40, MAX_PX: 14 } as const;
 
 export const SHAKE = {
@@ -40,13 +45,19 @@ export const SHAKE = {
   MAX: 10,
   /** Someone else fired within this radius of us. */
   CLOSE_SHOT_PX: 450,
-  CLOSE_SHOT_AMP: { pistol: 1.6, rifle: 1.6, shotgun: 3.5, sniper: 4.5 } as Record<WeaponId, number>,
+  CLOSE_SHOT_AMP: {
+    pistol: 1.6, rifle: 1.6, shotgun: 3.5, sniper: 4.5,
+    // The crossbow is nearly silent: no shake from someone else's bolt.
+    smg: 1.2, lmg: 2.2, revolver: 2.6, crossbow: 0,
+  } as Record<WeaponId, number>,
   /** Taking damage: amp = dmg × PER_DMG, clamped. */
   HIT_PER_DMG: 0.12,
   HIT_MIN: 1.5,
   HIT_MAX: 6,
   /** explosionShake(): amp = power at the centre, zero at power × RADIUS_PER_POWER px. */
   RADIUS_PER_POWER: 120,
+  /** Weapons v2: a hand grenade blast (BoomMsg) = power 9 (felt up to ≈ 1080 px). */
+  GRENADE_POWER: 9,
 } as const;
 
 export const MOTION_KEY = "extract.motion.v1";
@@ -104,7 +115,7 @@ export function hitShake(dmg: number): number {
   return Math.min(SHAKE.HIT_MAX, Math.max(SHAKE.HIT_MIN, dmg * SHAKE.HIT_PER_DMG));
 }
 
-/** Shake for an explosion of `power` (≈ amp at the centre) `dist` px away. No explosives exist yet. */
+/** Shake for an explosion of `power` (≈ amp at the centre) `dist` px away (hand grenades: SHAKE.GRENADE_POWER). */
 export function explosionShake(power: number, dist: number): number {
   const r = power * SHAKE.RADIUS_PER_POWER;
   if (!(power > 0) || !(dist < r)) return 0;
@@ -432,6 +443,13 @@ class CameraSystem implements GameSystem {
     }
     if (ev.hits) {
       for (const h of ev.hits) if (h && h.t === sid) rig.shake(hitShake(h.d));
+    }
+    if (Array.isArray(ev.booms)) {
+      const p = ctx.selfPos();
+      for (const b of ev.booms) {
+        if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) continue;
+        rig.shake(explosionShake(SHAKE.GRENADE_POWER, Math.hypot(b.x - p.x, b.y - p.y)));
+      }
     }
   }
 

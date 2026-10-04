@@ -6,7 +6,7 @@
  */
 
 import type { SlotKey } from "./inventory.js";
-import type { WeaponId } from "./items.js";
+import type { KillWeapon, WeaponId } from "./items.js";
 import type { SoundMsg } from "./sound.js";
 
 /** Colyseus room names. */
@@ -78,6 +78,8 @@ export const C2S = {
   INV_DROP: "inv_drop",
   /** { t: number } — latency probe, answered with PONG. */
   PING: "ping",
+  /** ThrowMsg — Weapons v2: throw one hand grenade (G / 5, touch THROW button). */
+  THROW: "throw",
 } as const;
 
 /** Server → client message names. */
@@ -107,6 +109,18 @@ export interface SwitchMsg {
 
 export interface HealMsg {
   kind: "bandage" | "medkit";
+}
+
+/**
+ * Weapons v2: throw a hand grenade (GRENADE in items.ts). The server throws from the player's
+ * current position; refused while rolling or reloading, within GRENADE.COOLDOWN_MS of the last
+ * throw, or without a grenade in the inventory.
+ */
+export interface ThrowMsg {
+  /** Throw direction, radians. */
+  a: number;
+  /** 0..1: distance between GRENADE.MIN_PX and MAX_PX (grenadeThrowPx). */
+  d: number;
 }
 
 export interface JoinedMsg {
@@ -183,7 +197,8 @@ export interface KillMsg {
   /** Killer nickname / sessionId ("" when not killed by a player). */
   killer: string;
   killerId: string;
-  weapon: WeaponId | "";
+  /** Gun, "grenade" (Weapons v2), or "" (no weapon). */
+  weapon: KillWeapon | "";
   /**
    * NPC MODEL v5: NPC_ROLE of the killer / victim (absent = 0, a human; optional for older
    * servers). Marauder and guard deaths go only to their killer; boss and human deaths broadcast.
@@ -199,6 +214,33 @@ export interface ChestEvent {
   by?: string;
 }
 
+/**
+ * Weapons v2: a hand grenade in flight / on the ground. Sent once, at the throw (in full to the
+ * thrower and to recipients that see the thrower), or as a resting grenade when it lands (to
+ * recipients that see the landing point but not the thrower: `s` = "", `p` = the resting point).
+ * The client moves it along `p` and shows the warning ring before `fuse`; the blast itself is a
+ * BoomMsg (authoritative) and its audio the SoundKind.explosion entry of `snd`.
+ */
+export interface GrenadeMsg {
+  /** Grenade id (unique per match). */
+  id: number;
+  /** Thrower sessionId, "" when the recipient does not see the thrower. */
+  s: string;
+  /** Polyline, stride 3: [x, y, t, …], t = ms after the throw (the last point is where it rests). */
+  p: number[];
+  /** Explosion time, ms after the throw. */
+  fuse: number;
+  /** ms after the throw at which this message describes the grenade (0 = the throw itself; landing copies: the landing time). */
+  at: number;
+}
+
+/** Weapons v2: a hand grenade exploded at x/y (recipients that got its GrenadeMsg or see the point). */
+export interface BoomMsg {
+  id: number;
+  x: number;
+  y: number;
+}
+
 /** Batched per-tick events for one client. Missing keys = nothing of that kind this tick. */
 export interface EventsMsg {
   shots?: ShotMsg[];
@@ -206,6 +248,10 @@ export interface EventsMsg {
   kills?: KillMsg[];
   snd?: SoundMsg;
   chest?: ChestEvent[];
+  /** Weapons v2: grenades thrown (or landed in view) this tick. */
+  nades?: GrenadeMsg[];
+  /** Weapons v2: grenades that exploded this tick. */
+  booms?: BoomMsg[];
 }
 
 /** Quantise an angle to 2π/64 (HitMsg.fa): enough for a damage arc, too coarse to aim with. */

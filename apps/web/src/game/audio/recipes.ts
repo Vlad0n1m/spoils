@@ -232,7 +232,8 @@ function rumble(c: Ctx, out: AudioNode, r: Rand, t0: number, dur: number, lp: nu
 
 // ---------------------------------------------------------------- gunshots
 
-export type GunId = "pistol" | "rifle" | "shotgun" | "sniper";
+/** Guns with a powder shot (Weapons v2 adds SMG, LMG, revolver; the crossbow has its own recipe). */
+export type GunId = "pistol" | "rifle" | "shotgun" | "sniper" | "smg" | "lmg" | "revolver";
 export interface GunParams {
   crackHz: number;
   crackMs: number;
@@ -256,6 +257,11 @@ export const GUN_PARAMS: Record<GunId, GunParams> = {
   rifle: { crackHz: 3000, crackMs: 10, bodyLp: 4500, bodyMs: 60, th0: 140, th1: 55, thMs: 60, thG: 0.7, tailLp: 1500, tailMs: 500, tailG: 0.3, echoMs: 110, echoG: 0.25, drive: 2.2 },
   shotgun: { crackHz: 1800, crackMs: 18, bodyLp: 2500, bodyMs: 180, th0: 110, th1: 40, thMs: 160, thG: 1.0, tailLp: 900, tailMs: 900, tailG: 0.35, echoMs: 140, echoG: 0.3, drive: 2.6 },
   sniper: { crackHz: 4000, crackMs: 8, bodyLp: 3000, bodyMs: 160, th0: 90, th1: 35, thMs: 220, thG: 1.0, tailLp: 800, tailMs: 1400, tailG: 0.4, echoMs: 220, echoG: 0.35, drive: 2.8 },
+  // Weapons v2: the SMG is a light, dry pop (quieter than the rifle), the LMG a heavier rifle with a
+  // longer tail, the revolver a deep boom between the pistol and the shotgun.
+  smg: { crackHz: 3300, crackMs: 7, bodyLp: 4200, bodyMs: 45, th0: 175, th1: 75, thMs: 45, thG: 0.55, tailLp: 1700, tailMs: 380, tailG: 0.22, echoMs: 85, echoG: 0.2, drive: 1.9 },
+  lmg: { crackHz: 2800, crackMs: 11, bodyLp: 4000, bodyMs: 80, th0: 125, th1: 45, thMs: 90, thG: 0.85, tailLp: 1300, tailMs: 650, tailG: 0.33, echoMs: 130, echoG: 0.28, drive: 2.4 },
+  revolver: { crackHz: 2200, crackMs: 14, bodyLp: 3200, bodyMs: 120, th0: 120, th1: 45, thMs: 110, thG: 0.95, tailLp: 1000, tailMs: 700, tailG: 0.32, echoMs: 150, echoG: 0.3, drive: 2.5 },
 };
 export const GUN_IDS = Object.keys(GUN_PARAMS) as GunId[];
 
@@ -296,6 +302,60 @@ export function gunshot(c: Ctx, out: AudioNode, r: Rand, p: GunParams, far = fal
   bodyG.connect(dl);
   chain(dl, echoLp, fb, dl);
   chain(echoLp, eg, sum);
+}
+
+/**
+ * Weapons v2 crossbow: no powder, so no crack or echo — the string's twang (a plucked, quickly
+ * damped low tone with a buzz), the limbs' wooden thwack and the bolt's short hiss. Quiet by
+ * design (shared soundRadius 450 px).
+ */
+export function crossbowShot(c: Ctx, out: AudioNode, r: Rand): void {
+  const j = (v: number, k = 0.06) => v * (1 + (r() * 2 - 1) * k);
+  // Thwack of the limbs.
+  burst(c, out, r, 0, { f: j(900), Q: 1.4, a: 0.0005, d: 0.05, peak: 1, color: "pink" });
+  tone(c, out, 0, { f0: j(220), f1: 120, glide: 0.04, a: 0.001, d: 0.06, peak: 0.6 });
+  // String twang: a sawtooth pluck through a closing lowpass.
+  const g = gain(c);
+  perc(g, 0.002, 0.002, 0.55, 0.22);
+  const lp = filt(c, "lowpass", 2600, 2.5);
+  lp.frequency.setValueAtTime(2600, 0.002);
+  lp.frequency.exponentialRampToValueAtTime(380, 0.2);
+  const s0 = osc(c, "sawtooth", j(150, 0.04), 0.002, 0.26);
+  s0.frequency.setValueAtTime(j(150, 0.04), 0.002);
+  s0.frequency.exponentialRampToValueAtTime(118, 0.2);
+  chain(s0, lp, g, out);
+  // The bolt leaving: a short airy hiss.
+  burst(c, out, r, 0.01, { type: "highpass", f: j(4500), a: 0.01, d: 0.09, peak: 0.25 });
+}
+
+/**
+ * Weapons v2 hand grenade blast: a hard broadband crack, a deep pressure thump with a pitch drop,
+ * a long rolling rumble and debris patter. The far take loses the crack and the debris (distance
+ * eats the highs) and keeps the rumble.
+ */
+export function explosion(c: Ctx, out: AudioNode, r: Rand, far = false): void {
+  const sum = gain(c, 1);
+  const clip = softClip(c, far ? 2.2 : 3.2);
+  let dst: AudioNode = out;
+  if (far) {
+    const lp = filt(c, "lowpass", 420, 0.6);
+    lp.connect(out);
+    dst = lp;
+  }
+  chain(sum, clip, dst);
+  if (!far) burst(c, sum, r, 0, { type: "highpass", f: 1800, a: 0.0004, d: 0.03, peak: 1 });
+  const bodyG = gain(c);
+  perc(bodyG, 0, 0.002, 1, far ? 0.5 : 0.35);
+  chain(noise(c, "white", r, 0, 1), filt(c, "lowpass", far ? 900 : 2600, 0.7), bodyG, sum);
+  tone(c, sum, 0, { f0: 85, f1: 28, glide: 0.45, a: 0.002, d: 0.6, peak: far ? 0.8 : 1.1 });
+  rumble(c, sum, r, 0.04, far ? 2.4 : 2.0, far ? 220 : 380, far ? 0.9 : 0.75, 0.03);
+  if (!far) {
+    // Debris: small clicks raining down for half a second.
+    for (let i = 0; i < 14; i++) {
+      const t = 0.12 + r() * 0.6;
+      burst(c, sum, r, t, { f: 1500 + r() * 2500, Q: 2, a: 0.0003, d: 0.006 + r() * 0.01, peak: 0.15 + r() * 0.2 });
+    }
+  }
 }
 
 // ---------------------------------------------------------------- footsteps
@@ -369,6 +429,26 @@ export const misc = {
     chain(noise(c, "white", r, 0, 0.2), bp, g, out);
     burst(c, out, r, 0.14, { f: 2800, Q: 2, a: 0.0003, d: 0.01, peak: 1 });
     metal(c, out, r, 0.14, 1800, 0.35, 0.06);
+  },
+  /** Weapons v2: pulling the pin of a hand grenade (ring ping, spoon flick) and the throw's swish. */
+  grenade_pin(c, out, r) {
+    metal(c, out, r, 0, 3200, 0.35, 0.05);
+    burst(c, out, r, 0, { f: 4200, Q: 3, a: 0.0003, d: 0.004, peak: 0.8 });
+    burst(c, out, r, 0.09, { f: 2500, Q: 2.5, a: 0.0003, d: 0.006, peak: 0.6 });
+    metal(c, out, r, 0.09, 1900, 0.25, 0.06);
+    const g = gain(c);
+    perc(g, 0.16, 0.05, 0.45, 0.12);
+    const bp = filt(c, "bandpass", 700, 0.8);
+    bp.frequency.setValueAtTime(700, 0.16);
+    bp.frequency.exponentialRampToValueAtTime(2200, 0.32);
+    chain(noise(c, "pink", r, 0.16, 0.25), bp, g, out);
+  },
+  /** Weapons v2: a hand grenade hitting a wall / the floor — a dull metal clonk with a rattle. */
+  grenade_bounce(c, out, r) {
+    burst(c, out, r, 0, { type: "lowpass", f: 1400, a: 0.0005, d: 0.03, peak: 0.9, color: "pink" });
+    tone(c, out, 0, { f0: 320, f1: 210, glide: 0.04, a: 0.0008, d: 0.05, peak: 0.6 });
+    metal(c, out, r, 0.002, 1100, 0.3, 0.09);
+    burst(c, out, r, 0.07, { f: 2400, Q: 2, a: 0.0003, d: 0.006, peak: 0.35 });
   },
   dry_fire(c, out, r) {
     burst(c, out, r, 0, { type: "highpass", f: 6000, a: 0.0002, d: 0.0015, peak: 1 });
@@ -745,6 +825,19 @@ export const SFX = {
   gun_shotgun_far: gunDef("shotgun", true),
   gun_sniper: gunDef("sniper", false),
   gun_sniper_far: gunDef("sniper", true),
+  // Weapons v2.
+  gun_smg: gunDef("smg", false),
+  gun_smg_far: gunDef("smg", true),
+  gun_lmg: gunDef("lmg", false),
+  gun_lmg_far: gunDef("lmg", true),
+  gun_revolver: gunDef("revolver", false),
+  gun_revolver_far: gunDef("revolver", true),
+  /** No far take: at 450 px a crossbow is never heard far away. */
+  gun_crossbow: def(crossbowShot, { dur: 0.45, variants: 3, db: -5, bus: "sfx", cls: "gun", priority: 3, jitter: 0.03, group: "guns" }),
+  explosion: def((c, o, r) => explosion(c, o, r, false), { dur: 2.6, variants: 2, db: 0, bus: "sfx", cls: "gun", priority: 4, jitter: 0.03, group: "guns" }),
+  explosion_far: def((c, o, r) => explosion(c, o, r, true), { dur: 3.0, variants: 2, db: -4, bus: "sfx", cls: "gun", priority: 4, jitter: 0.03, group: "guns" }),
+  grenade_pin: sfx(misc.grenade_pin, 0.45, -10, "weapon"),
+  grenade_bounce: sfx(misc.grenade_bounce, 0.25, -8, "weapon", 2, { variants: 3, jitter: 0.05 }),
 
   step_grass: stepDef("grass"),
   step_dirt: stepDef("dirt"),

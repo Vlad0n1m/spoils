@@ -18,7 +18,9 @@ import {
   TERRAIN,
   TERRAIN_KIND_MASK,
   WEAPONS,
+  WEAPON_IDS,
   envConfigOf,
+  weaponHasFlash,
   isIndoor,
   sampleEnv,
   surfaceAt,
@@ -30,16 +32,18 @@ import {
   type StepMaterial,
   type WeaponId,
 } from "@extract/shared";
-import { COLORS } from "./assets";
+import { BOLT_DRAW_PX, COLORS } from "./assets";
 import { emptyEnvSource, rememberEnvSource, sameEnvSource } from "./audio/ambience";
 import { tracerLengths } from "./shots";
 import type { GameContext, GameSystem } from "./systems";
 
 interface Tracer {
   shooter: string;
-  /** Wide translucent streak and the thin bright core drawn over it. */
-  glow: Sprite;
-  core: Sprite;
+  /** Wide translucent streak and the thin bright core drawn over it (null for a crossbow bolt). */
+  glow: Sprite | null;
+  core: Sprite | null;
+  /** Weapons v2: a crossbow bolt is the bolt sprite flying at its head instead of a streak. */
+  bolt: Sprite | null;
   sx: number;
   sy: number;
   dx: number;
@@ -91,7 +95,17 @@ const MAX_TRACERS = 300;
 const MAX_PARTICLES = 600;
 
 /** Screen shake strength per weapon for the local player's shots. */
-const SHAKE: Record<WeaponId, number> = { pistol: 2.5, rifle: 2, shotgun: 7, sniper: 9 };
+const SHAKE: Record<WeaponId, number> = {
+  pistol: 2.5, rifle: 2, shotgun: 7, sniper: 9,
+  // Weapons v2.
+  smg: 1.6, lmg: 2.6, revolver: 5, crossbow: 1.5,
+};
+
+/** Tracer core width per weapon (glow = width + 2). */
+const TRACER_WIDTH: Partial<Record<WeaponId, number>> = { sniper: 4, shotgun: 2.5, smg: 2.4, revolver: 3.4 };
+/** Muzzle flash size per weapon (1 = pistol / rifle); the crossbow has none (weaponHasFlash). */
+const FLASH_SIZE: Partial<Record<WeaponId, number>> = { shotgun: 1.4, sniper: 1.4, lmg: 1.25, revolver: 1.2, smg: 0.85 };
+
 
 /** Muzzle-flash texture pixels per world unit (flashes scale up to 1.4× on a 1.5× screen). */
 const FLASH_TEX_RES = 2;
@@ -134,6 +148,10 @@ export class Effects {
   private readonly ownsTextures: boolean;
   private readonly tracerLayer = new Container();
   private readonly flashLayer = new Container();
+  /** Weapons v2: crossbow bolts in flight (after the rings, so the layer indexes above stay). */
+  private readonly boltLayer = new Container();
+  /** The bolt sprite (renderer Textures.bolt); null / EMPTY = bolts fall back to a thin streak. */
+  private readonly boltTex: Texture | null;
   private readonly particleLayer: ParticleContainer;
   private readonly ringLayer = new Graphics();
   /** Whether ringLayer holds geometry from the last frame (so it is cleared once, not every frame). */
@@ -148,35 +166,52 @@ export class Effects {
   /** Hidden display objects waiting for reuse (they stay parented, only `visible` flips). */
   private spritePool: Sprite[] = [];
   private flashPool: Sprite[] = [];
+  private boltPool: Sprite[] = [];
   private particlePool: Particle[] = [];
   /** Particles were born since the last update (the live set changed even if its size did not). */
   private particlesDirty = false;
   private shakeAmp = 0;
   private hurt = 0;
 
-  constructor(opts: { textures?: FxTextures } = {}) {
+  constructor(opts: { textures?: FxTextures; bolt?: Texture | null } = {}) {
     this.ownsTextures = !opts.textures;
     this.tex = opts.textures ?? makeFxTextures();
+    this.boltTex = opts.bolt && opts.bolt !== Texture.EMPTY ? opts.bolt : null;
     this.particleLayer = new ParticleContainer({
       texture: this.tex.dot,
       // Particles move, fade/tint and shrink every frame; rotation and uvs never change.
       dynamicProperties: { position: true, color: true, vertex: true, rotation: false, uvs: false },
     });
-    this.layer.addChild(this.tracerLayer, this.flashLayer, this.particleLayer, this.ringLayer);
+    this.layer.addChild(this.tracerLayer, this.flashLayer, this.particleLayer, this.ringLayer, this.boltLayer);
     this.vignette = new Sprite(this.tex.vignette);
     this.vignette.alpha = 0;
     this.vignette.eventMode = "none";
   }
 
   /** Display-object counts, for tests and the perf overlay. */
-  stats(): { tracers: number; particles: number; flashes: number; rings: number; pooledSprites: number } {
+  stats(): { tracers: number; particles: number; flashes: number; rings: number; pooledSprites: number; bolts: number } {
     return {
       tracers: this.tracers.length,
       particles: this.particles.length,
       flashes: this.flashes.length,
       rings: this.rings.length,
       pooledSprites: this.tracerLayer.children.length,
+      bolts: this.boltLayer.children.length,
     };
+  }
+
+  private takeBoltSprite(): Sprite {
+    let s = this.boltPool.pop();
+    if (!s) {
+      s = new Sprite(this.boltTex ?? Texture.EMPTY);
+      // The texture's tip (right edge) sits on the bolt's position.
+      s.anchor.set(1, 0.5);
+      const w = s.texture.width || 128;
+      s.scale.set(BOLT_DRAW_PX / w);
+      this.boltLayer.addChild(s);
+    }
+    s.visible = false;
+    return s;
   }
 
   private takeLineSprite(tint: number, alpha: number): Sprite {
@@ -194,9 +229,18 @@ export class Effects {
   }
 
   private releaseTracer(t: Tracer) {
-    t.glow.visible = false;
-    t.core.visible = false;
-    this.spritePool.push(t.glow, t.core);
+    if (t.glow) {
+      t.glow.visible = false;
+      this.spritePool.push(t.glow);
+    }
+    if (t.core) {
+      t.core.visible = false;
+      this.spritePool.push(t.core);
+    }
+    if (t.bolt) {
+      t.bolt.visible = false;
+      this.boltPool.push(t.bolt);
+    }
   }
 
   /**
@@ -221,22 +265,34 @@ export class Effects {
     const lens = tracerLengths(idx, cx, cy, x, y, angles, def.range);
     if (!lens) return;
     let sumA = 0;
+    // Weapons v2: a crossbow shoots a visible bolt (sprite) instead of a tracer streak.
+    const asBolt = def.ammo === "bolt" && this.boltTex !== null;
     angles.forEach((a, i) => {
       sumA += a;
       const len = lens[i]!;
       if (len <= 0) return;
-      const glow = this.takeLineSprite(COLORS.tracer, 0.45);
-      const core = this.takeLineSprite(COLORS.tracerCore, 0.95);
-      glow.rotation = a;
-      core.rotation = a;
+      let glow: Sprite | null = null;
+      let core: Sprite | null = null;
+      let bolt: Sprite | null = null;
+      if (asBolt) {
+        bolt = this.takeBoltSprite();
+        bolt.rotation = a;
+      } else {
+        glow = this.takeLineSprite(COLORS.tracer, 0.45);
+        core = this.takeLineSprite(COLORS.tracerCore, 0.95);
+        glow.rotation = a;
+        core.rotation = a;
+      }
       this.tracers.push({
-        shooter, glow, core, sx: x, sy: y, dx: Math.cos(a), dy: Math.sin(a), len, speed: def.bulletSpeed, born: now,
-        width: weapon === "sniper" ? 4 : weapon === "shotgun" ? 2.5 : 3,
+        shooter, glow, core, bolt, sx: x, sy: y, dx: Math.cos(a), dy: Math.sin(a), len, speed: def.bulletSpeed, born: now,
+        width: TRACER_WIDTH[weapon] ?? 3,
       });
     });
     if (this.tracers.length > MAX_TRACERS) {
       for (const t of this.tracers.splice(0, this.tracers.length - MAX_TRACERS)) this.releaseTracer(t);
     }
+    // The crossbow has no muzzle flash (WeaponDef.flash false, the server's vision agrees).
+    if (!weaponHasFlash(weapon)) return;
     const avg = angles.length ? sumA / angles.length : 0;
     let flash = this.flashPool.pop();
     if (!flash) {
@@ -247,7 +303,7 @@ export class Effects {
     flash.position.set(x, y);
     flash.rotation = avg;
     flash.visible = false;
-    this.flashes.push({ sprite: flash, born: now, size: weapon === "shotgun" || weapon === "sniper" ? 1.4 : 1 });
+    this.flashes.push({ sprite: flash, born: now, size: FLASH_SIZE[weapon] ?? 1 });
   }
 
   /** A bullet from `shooter` hit someone at (x, y): stop the matching tracer there and burst. */
@@ -333,6 +389,18 @@ export class Effects {
     // Tracers: a short streak whose head flies at bulletSpeed and whose tail catches up at the end.
     let w = 0;
     for (const t of this.tracers) {
+      if (t.bolt) {
+        // A bolt flies at its speed and is gone where it stops (wall, range or the target).
+        const head = ((now - t.born) / 1000) * t.speed;
+        if (head >= t.len) {
+          this.releaseTracer(t);
+          continue;
+        }
+        this.tracers[w++] = t;
+        t.bolt.visible = head > 0;
+        t.bolt.position.set(t.sx + t.dx * head, t.sy + t.dy * head);
+        continue;
+      }
       const span = tracerSpan((now - t.born) / 1000, t.len, t.speed);
       if (!span) {
         this.releaseTracer(t);
@@ -340,11 +408,13 @@ export class Effects {
       }
       this.tracers[w++] = t;
       const visible = span.head > span.tail;
-      t.glow.visible = visible;
-      t.core.visible = visible;
+      const glow = t.glow!;
+      const core = t.core!;
+      glow.visible = visible;
+      core.visible = visible;
       if (!visible) continue;
-      placeStreak(t.glow, t, span, t.width + 2);
-      placeStreak(t.core, t, span, t.width * 0.5);
+      placeStreak(glow, t, span, t.width + 2);
+      placeStreak(core, t, span, t.width * 0.5);
     }
     this.tracers.length = w;
 
@@ -451,6 +521,7 @@ export class Effects {
     this.rings = [];
     this.spritePool = [];
     this.flashPool = [];
+    this.boltPool = [];
     this.particlePool = [];
     // Children (pooled sprites, the particle container, the ring Graphics) go with the layer;
     // textures are shared between them and released once below.
@@ -698,9 +769,11 @@ export const CASING = {
   BRASS: 0xd9a441,
   SHELL: 0xc23b2b,
   /** Scale of the CASING_TEX_W × CASING_TEX_H texture per weapon. */
-  SIZE: { pistol: 0.6, rifle: 0.68, shotgun: 0.85, sniper: 0.85 } as Record<WeaponId, number>,
+  SIZE: { pistol: 0.6, rifle: 0.68, shotgun: 0.85, sniper: 0.85, smg: 0.58, lmg: 0.7, revolver: 0.6, crossbow: 0.6 } as Record<WeaponId, number>,
   /** Pump / bolt: the shell comes out with the rack (matches game-audio RACK_AFTER_SHOT_S). */
-  DELAY_MS: { pistol: 0, rifle: 0, shotgun: 350, sniper: 500 } as Record<WeaponId, number>,
+  DELAY_MS: { pistol: 0, rifle: 0, shotgun: 350, sniper: 500, smg: 0, lmg: 0, revolver: 0, crossbow: 0 } as Record<WeaponId, number>,
+  /** Weapons v2: a revolver keeps its cases in the cylinder, a crossbow has none. */
+  NONE: new Set<WeaponId>(["revolver", "crossbow"]) as ReadonlySet<WeaponId>,
 } as const;
 
 const CASING_TEX_W = 10;
@@ -1309,6 +1382,7 @@ class WorldFxSystem implements GameSystem {
     if (ev.shots) {
       for (const s of ev.shots) {
         if (!s || !s.s || !Array.isArray(s.a) || !s.a.length || !(s.w in WEAPONS)) continue;
+        if (CASING.NONE.has(s.w)) continue;
         let sum = 0;
         for (const v of s.a) sum += v;
         const aim = sum / s.a.length;
@@ -1565,8 +1639,9 @@ class WorldFxSystem implements GameSystem {
   }
 }
 
-const WEAPON_IDS_BY_INDEX: readonly WeaponId[] = ["pistol", "rifle", "shotgun", "sniper"];
-const WEAPON_INDEX: Record<string, number> = { pistol: 0, rifle: 1, shotgun: 2, sniper: 3 };
+/** Casing queue payload: the weapon's index in the shared WEAPON_IDS (Weapons v2 appended four). */
+const WEAPON_IDS_BY_INDEX: readonly WeaponId[] = WEAPON_IDS;
+const WEAPON_INDEX: Record<string, number> = Object.fromEntries(WEAPON_IDS.map((w, i) => [w, i]));
 
 /** GameSystem factory for the renderer registry (systems-registry.ts). */
 export function createWorldFxSystem(): GameSystem {

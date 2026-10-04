@@ -89,6 +89,9 @@ export const ICON_OF: Readonly<Record<SoundKind, RingIcon>> = {
   [SoundKind.bodyFall]: "skull",
   [SoundKind.dryFire]: "mag",
   [SoundKind.switch]: "mag",
+  // Weapons v2: a grenade blast reads as a bang; the pin / a bounce off a wall as a metal click.
+  [SoundKind.explosion]: "burst",
+  [SoundKind.grenade]: "mag",
 };
 
 export function ringRadius(w: number, h: number): number {

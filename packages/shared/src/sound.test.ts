@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { SOLID, buildCollisionIndex } from "./geometry.js";
 import { WEAPONS, WEAPON_IDS } from "./items.js";
 import {
+  GRENADE_SOUND,
   OCCLUSION,
   SOUND,
   SOUND_KIND_COUNT,
@@ -94,7 +95,12 @@ test("radius table (critique numbers) and env/surface scaling", () => {
   assert.equal(baseSoundRadius(SoundKind.step), 800);
   assert.equal(baseSoundRadius(SoundKind.step, 0, true), 180);
   assert.equal(baseSoundRadius(SoundKind.roll), 900);
-  assert.deepEqual(WEAPON_IDS.map((w) => baseSoundRadius(SoundKind.shot, weaponVariant(w))), [2000, 2400, 2200, 3600]);
+  // Weapons v2 appended smg, lmg, revolver, crossbow (the crossbow is quieter than a footstep).
+  assert.deepEqual(WEAPON_IDS.map((w) => baseSoundRadius(SoundKind.shot, weaponVariant(w))), [2000, 2400, 2200, 3600, 1800, 2800, 2300, 450]);
+  assert.ok(baseSoundRadius(SoundKind.shot, weaponVariant("crossbow")) < baseSoundRadius(SoundKind.step));
+  assert.equal(baseSoundRadius(SoundKind.explosion), 3400);
+  assert.equal(baseSoundRadius(SoundKind.grenade, GRENADE_SOUND.THROW), 300);
+  assert.equal(baseSoundRadius(SoundKind.grenade, GRENADE_SOUND.BOUNCE), 400);
   for (const w of WEAPON_IDS) assert.equal(baseSoundRadius(SoundKind.shot, weaponVariant(w)), WEAPONS[w].soundRadius);
   assert.equal(baseSoundRadius(SoundKind.shot, 99), WEAPONS.pistol.soundRadius, "unknown variant falls back");
   assert.equal(baseSoundRadius(SoundKind.reload), 500);

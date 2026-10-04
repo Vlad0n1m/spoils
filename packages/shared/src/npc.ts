@@ -145,6 +145,8 @@ export interface MarauderDef {
   weapons: readonly MarauderWeapon[];
   /** At most this many snipers per squad (top class); extra sniper draws become the first non-sniper entry. */
   sniperMaxPerSquad?: number;
+  /** Weapons v2: at most this many light machine guns per squad (top class); extra draws become the first entry. */
+  lmgMaxPerSquad?: number;
   /** Aim error multiplier (guards 0.85, boss 0.7). */
   sloppiness: number;
   reactMs: readonly [number, number];
@@ -160,6 +162,10 @@ export interface MarauderDef {
  * v5 iteration 2: low sloppiness 1.25 → 1.6 (npc-threat bench, strafing human at 400 px: low hit
  * rate 27 % → 19 %, target 10–20 %). Top sloppiness stays 0.9: the top hit rate does not respond
  * to sloppiness (0.6–0.9 all measure 22–26 %; a running strafe caps rifle hits there).
+ * Weapons v2 (docs/WEAPONS_V2.md §8): SMGs replace part of the mid / high rifles and shotguns
+ * (mid rifle 85 → 70 + SMG 15; high rifle 70 → 55, shotgun 30 → 25 + rare SMG 20), the top class
+ * trades rifle 80 → 65 for a rare LMG 15 (at most one per squad). Low stays pistol / shotgun. No NPC
+ * carries a crossbow or grenades. Kits stay FREE (never dropped, never valued).
  */
 export const MARAUDER: Readonly<Record<NpcClass, MarauderDef>> = {
   low: {
@@ -169,18 +175,18 @@ export const MARAUDER: Readonly<Record<NpcClass, MarauderDef>> = {
   },
   mid: {
     name: "Marauder", hp: 100, armor: 1, armorChance: 0.4,
-    weapons: [{ weapon: "shotgun", rarity: 0, w: 15 }, { weapon: "rifle", rarity: 0, w: 85 }],
+    weapons: [{ weapon: "shotgun", rarity: 0, w: 15 }, { weapon: "rifle", rarity: 0, w: 70 }, { weapon: "smg", rarity: 0, w: 15 }],
     sloppiness: 1.1, reactMs: [550, 850], leashPx: 700, freeAmmo: 90,
   },
   high: {
     name: "Marauder", hp: 100, armor: 1, armorChance: 1,
-    weapons: [{ weapon: "rifle", rarity: 0, w: 70 }, { weapon: "shotgun", rarity: 1, w: 30 }],
+    weapons: [{ weapon: "rifle", rarity: 0, w: 55 }, { weapon: "shotgun", rarity: 1, w: 25 }, { weapon: "smg", rarity: 1, w: 20 }],
     sloppiness: 1.0, reactMs: [450, 750], leashPx: 800, freeAmmo: 120,
   },
   top: {
     name: "Marauder", hp: 110, armor: 2, armorChance: 1,
-    weapons: [{ weapon: "rifle", rarity: 1, w: 80 }, { weapon: "sniper", rarity: 0, w: 20 }],
-    sniperMaxPerSquad: 1, sloppiness: 0.9, reactMs: [400, 650], leashPx: 900, freeAmmo: 150,
+    weapons: [{ weapon: "rifle", rarity: 1, w: 65 }, { weapon: "sniper", rarity: 0, w: 20 }, { weapon: "lmg", rarity: 1, w: 15 }],
+    sniperMaxPerSquad: 1, lmgMaxPerSquad: 1, sloppiness: 0.9, reactMs: [400, 650], leashPx: 900, freeAmmo: 150,
   },
 };
 
@@ -230,6 +236,9 @@ const L = (def: string, qty: number, weight: number): NpcLootEntry => ({ def, qt
  * 144 / 208 CR against kill costs 80 / 126).
  * EV per NPC (cons CR-eq at CONSUMABLES_CR / junk CR): low 11.4 / 12.9, mid 17.7 / 30.8,
  * high 30.3 / 48.8, top 50.9 / 58.8.
+ * Weapons v2: a hand grenade in the high / top pockets (weight 3 / 5, WEAPONS_V2 §7) replaces part of
+ * the medkits and light ammo (high medkit 5 → 3, light 40 → 39; top medkit 10 → 7, light 35 → 33), so
+ * the table weights stay 100 and the consumables EV moves only +1.4 % / +1.9 % (30.7 / 51.9).
  */
 export const NPC_LOOT: Readonly<Record<NpcClass, { cons: NpcLootDraw; junk: NpcLootDraw }>> = {
   low: {
@@ -244,14 +253,20 @@ export const NPC_LOOT: Readonly<Record<NpcClass, { cons: NpcLootDraw; junk: NpcL
     },
   },
   high: {
-    cons: { none: 0.4, table: [L("ammo_light", 20, 40), L("ammo_shell", 6, 20), L("ammo_heavy", 5, 15), L("bandage", 1, 20), L("medkit", 1, 5)] },
+    cons: {
+      none: 0.4,
+      table: [L("ammo_light", 20, 39), L("ammo_shell", 6, 20), L("ammo_heavy", 5, 15), L("bandage", 1, 20), L("medkit", 1, 3), L("grenade", 1, 3)],
+    },
     junk: {
       none: 0.85,
       table: [L("junk_battery", 1, 20), L("junk_fuel", 1, 20), L("junk_circuit", 1, 22), L("junk_hdd", 1, 20), L("junk_keycard", 1, 12), L("junk_goldchain", 1, 6)],
     },
   },
   top: {
-    cons: { none: 0.35, table: [L("ammo_light", 30, 35), L("ammo_heavy", 10, 20), L("ammo_shell", 6, 10), L("bandage", 1, 25), L("medkit", 1, 10)] },
+    cons: {
+      none: 0.35,
+      table: [L("ammo_light", 30, 33), L("ammo_heavy", 10, 20), L("ammo_shell", 6, 10), L("bandage", 1, 25), L("medkit", 1, 7), L("grenade", 1, 5)],
+    },
     junk: {
       none: 0.85,
       table: [
@@ -397,14 +412,15 @@ export interface MarauderKit {
 /**
  * FREE kit of every member of a squad of `members` at post `postId`: per member one weapon draw
  * (pickWeighted over MARAUDER[cls].weapons) and one armor draw (< armorChance → armor). Over
- * sniperMaxPerSquad, a sniper becomes the first non-sniper entry. The server posts the sniper on
- * the farthest post point. Deterministic in (matchSeed, postId, members, cls).
+ * sniperMaxPerSquad / lmgMaxPerSquad, a sniper / LMG becomes the first entry that is neither. The
+ * server posts the sniper on the farthest post point. Deterministic in (matchSeed, postId, members, cls).
  */
 export function rollMarauderKit(matchSeed: number, postId: number, members: number, cls: NpcClass): MarauderKit[] {
   const def = MARAUDER[cls];
-  const fallback = def.weapons.find((w) => w.weapon !== "sniper") ?? def.weapons[0]!;
+  const fallback = def.weapons.find((w) => w.weapon !== "sniper" && w.weapon !== "lmg") ?? def.weapons[0]!;
   const out: MarauderKit[] = [];
   let snipers = 0;
+  let lmgs = 0;
   for (let m = 0; m < members; m++) {
     const rng = npcRng(matchSeed, postId, m, 1);
     let w = pickWeighted(rng, def.weapons.map((x) => ({ ...x, weight: x.w })));
@@ -412,6 +428,9 @@ export function rollMarauderKit(matchSeed: number, postId: number, members: numb
     if (w.weapon === "sniper") {
       if (snipers >= (def.sniperMaxPerSquad ?? Infinity)) w = { ...fallback, weight: fallback.w };
       else snipers++;
+    } else if (w.weapon === "lmg") {
+      if (lmgs >= (def.lmgMaxPerSquad ?? Infinity)) w = { ...fallback, weight: fallback.w };
+      else lmgs++;
     }
     out.push({ weapon: w.weapon, rarity: w.rarity, armor: armorHit ? def.armor : 0 });
   }

@@ -20,6 +20,7 @@ import {
   dogTagCr,
   itemDef,
   junkSellCr,
+  weaponSlotIcon,
   type ContainerKind,
   type EquipKey,
   type InvErrCode,
@@ -30,6 +31,7 @@ import {
   type SettledItem,
   type SoldLine,
   type XpLine,
+  type KillWeapon,
   type WeaponId,
 } from "@extract/shared";
 
@@ -51,8 +53,24 @@ export function isWeaponId(v: string): v is WeaponId {
   return Object.prototype.hasOwnProperty.call(WEAPONS, v);
 }
 
+/** Side-view gun sprite (HUD weapon cards, kill feed): the gun as it is held, muzzle right. */
 export function weaponIcon(id: WeaponId): string {
   return `/sprites/${id}.png`;
+}
+
+/** Kill feed icon: the gun, or (Weapons v2) the hand grenade. */
+export function killWeaponIcon(w: KillWeapon): string {
+  return w === "grenade" ? "/sprites/grenade.png" : weaponIcon(w);
+}
+
+/** Kill feed / tooltip name of what killed: the gun's name or "Grenade". */
+export function killWeaponName(w: KillWeapon): string {
+  return w === "grenade" ? "Grenade" : (WEAPONS[w]?.name ?? w);
+}
+
+/** Is `v` something a kill can be credited to (a gun or "grenade")? */
+export function isKillWeapon(v: string): v is KillWeapon {
+  return v === "grenade" || isWeaponId(v);
 }
 
 export function armorIcon(level: number): string {
@@ -60,10 +78,14 @@ export function armorIcon(level: number): string {
   return `/sprites/armor_${l}.png`;
 }
 
-/** Sprite URL of an item def; unknown defs fall back to a generic bag so the UI never 404s. */
+/**
+ * Sprite URL of an item def for a square tile (inventory, stash, receipts, market): weapons use
+ * their square icon_<id> art (Weapons v2: the gun turned 30° to fill the slot), everything else its
+ * def icon. Unknown defs fall back to a generic bag so the UI never 404s.
+ */
 export function itemIcon(def: string): string {
   const d = itemDef(def);
-  return d ? `/sprites/${d.icon}.png` : "/sprites/backpack.png";
+  return d ? `/sprites/${weaponSlotIcon(d)}.png` : "/sprites/backpack.png";
 }
 
 /** Anything that names an item: InvItem, SettledItem, SoldLine, ItemLike. */

@@ -72,11 +72,18 @@ export function isNpc(rt: PlayerRuntime): boolean {
   return rt.pub.role !== NPC_ROLE.NONE;
 }
 
-/** Wielding order of pool weapons: tier score, rarity, then weapon class. */
-const WEAPON_RANK: Readonly<Record<WeaponId, number>> = { pistol: 0, sniper: 1, shotgun: 2, rifle: 3 };
+/**
+ * Wielding order of pool weapons: tier score, rarity, then weapon class. Weapons v2: the crossbow is
+ * never wielded (rank −1: no NPC fights with one, WEAPONS_V2 §8; a pool crossbow is stowed and drops
+ * with the corpse); the new guns rank below the rifle so a boss keeps the fight it was tuned for.
+ */
+const WEAPON_RANK: Readonly<Record<WeaponId, number>> = {
+  pistol: 0, revolver: 1, sniper: 2, smg: 3, shotgun: 4, lmg: 5, rifle: 6, crossbow: -1,
+};
 function weaponRank(it: ItemLike): number {
   const w = itemDef(it.def)?.weapon;
-  return w ? uniqueTierScore(it.def, it.rarity) * 100 + it.rarity * 10 + WEAPON_RANK[w] : -1;
+  if (!w || WEAPON_RANK[w] < 0) return -1;
+  return uniqueTierScore(it.def, it.rarity) * 100 + it.rarity * 10 + WEAPON_RANK[w];
 }
 
 /** Put an item straight into the first empty storage slot (never auto-equipped). */
@@ -113,7 +120,7 @@ export function equipBoss(m: Match, rt: PlayerRuntime, kind: BossKind, pool: Ite
   const s = rt.self.slots;
   const free = ITEM_FLAG.FREE;
   // The best pool weapon is wielded (non-FREE, never breaks: it drops with the corpse).
-  const weapons = pool.filter((it) => itemDef(it.def)?.cat === "weapon").sort((a, b) => weaponRank(b) - weaponRank(a));
+  const weapons = pool.filter((it) => weaponRank(it) >= 0).sort((a, b) => weaponRank(b) - weaponRank(a));
   const wield = weapons[0];
   const weapon: WeaponId = wield ? itemDef(wield.def)!.weapon! : def.weapon;
   s.set("w1", cloneItem(wield ?? makeItem(def.weapon, { rarity: def.weaponRarity, flags: free })));

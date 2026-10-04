@@ -4,7 +4,8 @@
  * callbacks.
  *
  * Bindings: WASD/arrows move, Shift walk (quiet), Space roll, LMB fire, wheel / 1 / 2 weapon,
- * 3 / 4 heal, R reload, F interact/search, Tab inventory, T take all, M full map, Esc close.
+ * 3 / 4 heal, G / 5 throw a grenade (Weapons v2), R reload, F interact/search, Tab inventory,
+ * T take all, M full map, Esc close.
  *
  * Phones (touch-controls.ts): an analog move stick (part deflection = quiet walk), an aim stick
  * that fires past its fire threshold, and buttons that go through press(). While those sticks are
@@ -23,6 +24,12 @@ export interface InputActions {
   selectSlot(slot: 0 | 1): void;
   toggleSlot(): void;
   heal(kind: HealKind): void;
+  /**
+   * Weapons v2, G / 5 and the touch grenade button: throw a hand grenade. Without `aim` the
+   * renderer throws toward the cursor (distance = cursor distance) or, on a phone, ahead along the
+   * facing at GRENADE_TAP_FRAC; the touch button's drag passes its own direction and range.
+   */
+  throwGrenade?(aim?: GrenadeAim): void;
   /** Tab. */
   toggleInventory?(): void;
   /** T: take everything from the open container. */
@@ -39,7 +46,13 @@ export interface InputActions {
 }
 
 /** Touch buttons (touch-controls.ts), dispatched by InputController.press(). */
-export type TouchAction = "roll" | "interact" | "reload" | "swap" | "bandage" | "medkit" | "inventory" | "map";
+export type TouchAction = "roll" | "interact" | "reload" | "swap" | "bandage" | "medkit" | "grenade" | "inventory" | "map";
+
+/** A grenade throw: direction (radians) and 0..1 of the throw range (shared grenadeThrowPx). */
+export interface GrenadeAim {
+  angle: number;
+  frac: number;
+}
 
 /** Move stick pushed less than this far (0..1) = quiet walk. */
 export const TOUCH_WALK_BELOW = 0.55;
@@ -119,6 +132,8 @@ export class InputController {
   private touchHigh = false;
   /** The touch sticks are mounted: fingers belong to them, finger events on the canvas are ignored. */
   private touchSticks = false;
+  /** Weapons v2: the touch grenade button is being dragged (aim preview), null otherwise. */
+  private grenadeDrag: GrenadeAim | null = null;
   private attached = false;
   private readonly env: InputEnv;
 
@@ -300,6 +315,9 @@ export class InputController {
       case "medkit":
         a.heal(action);
         return;
+      case "grenade":
+        a.throwGrenade?.();
+        return;
       case "inventory":
         a.toggleInventory?.();
         return;
@@ -308,6 +326,23 @@ export class InputController {
         else a.toggleFullMap?.();
         return;
     }
+  }
+
+  /** Touch grenade button dragged: the aim preview the renderer draws (null = released / cancelled). */
+  setGrenadeAim(v: GrenadeAim | null): void {
+    this.grenadeDrag = v && Number.isFinite(v.angle) && Number.isFinite(v.frac) ? { angle: v.angle, frac: clamp01(v.frac) } : null;
+  }
+
+  /** The touch grenade drag in progress, null when none. */
+  get grenadeAim(): GrenadeAim | null {
+    return this.grenadeDrag;
+  }
+
+  /** Touch grenade button released after a drag: throw along that direction and range. */
+  throwGrenadeAt(angle: number, frac: number): void {
+    this.grenadeDrag = null;
+    if (!Number.isFinite(angle) || !Number.isFinite(frac)) return;
+    this.actions.throwGrenade?.({ angle, frac: clamp01(frac) });
   }
 
   /**
@@ -348,6 +383,7 @@ export class InputController {
     this.fireHeld = false;
     this.fireLatched = false;
     this.rollSamplesLeft = 0;
+    this.grenadeDrag = null;
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -412,6 +448,12 @@ export class InputController {
       case "Digit4":
         this.actions.heal("medkit");
         break;
+      case "KeyG":
+      case "Digit5":
+        // Not while a panel owns the mouse: G there drops the focused inventory item instead.
+        if (!this.actions.throwGrenade || this.fireBlocked || e.defaultPrevented) return;
+        this.actions.throwGrenade();
+        break;
       default:
         return;
     }
@@ -475,4 +517,8 @@ export class InputController {
   private onContextMenu = (e: Event) => {
     e.preventDefault();
   };
+}
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
 }

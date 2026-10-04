@@ -19,6 +19,7 @@
  */
 import {
   ACT,
+  GRENADE_SOUND,
   MATCH,
   SoundKind,
   WEAPONS,
@@ -84,6 +85,15 @@ export function gunSfx(w: string | undefined): SfxId {
       return "gun_shotgun";
     case "sniper":
       return "gun_sniper";
+    // Weapons v2.
+    case "smg":
+      return "gun_smg";
+    case "lmg":
+      return "gun_lmg";
+    case "revolver":
+      return "gun_revolver";
+    case "crossbow":
+      return "gun_crossbow";
     default:
       return "gun_pistol";
   }
@@ -131,6 +141,11 @@ export function layersForSound(kind: number, variant: number, wetness = 0): Soun
       return [{ id: "dry_fire", db: 0 }];
     case SoundKind.switch:
       return [{ id: "weapon_switch", db: 0 }];
+    // Weapons v2: grenade blast (a world sound) and the pin / a bounce off a wall.
+    case SoundKind.explosion:
+      return [{ id: "explosion", db: 0 }];
+    case SoundKind.grenade:
+      return [{ id: variant === GRENADE_SOUND.BOUNCE ? "grenade_bounce" : "grenade_pin", db: 0 }];
     default:
       return [];
   }
@@ -242,6 +257,8 @@ export interface GameAudioLocal {
   localDryFire(): void;
   /** Predicted roll start (the SelfState roll cue is then skipped). */
   localRoll(): void;
+  /** Weapons v2: our grenade throw was sent (the server never echoes our own sounds). */
+  localThrow(): void;
 }
 
 let activeSystem: GameAudioSystem | null = null;
@@ -593,6 +610,23 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
       }
     }
 
+    // Weapons v2: a blast we got a BoomMsg for plays at its exact spot; the hidden world sound of
+    // the same blast in ev.snd is then skipped (one per BoomMsg).
+    let boomsPlayed = 0;
+    if (Array.isArray(ev.booms)) {
+      for (const b of ev.booms) {
+        if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) continue;
+        boomsPlayed++;
+        eng.playAt("explosion", {
+          dx: b.x - pos.x,
+          dy: b.y - pos.y,
+          range: baseSoundRadius(SoundKind.explosion) * hear * RANGE_SLACK,
+          key: `boom${b.id}`,
+          priority: 5,
+        });
+      }
+    }
+
     let chestOpens = 0;
     if (ev.chest) {
       const wallIdx = getWallIndex(map);
@@ -618,6 +652,10 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
         // The chest event already played this lid at its exact spot.
         if (d.kind === SoundKind.loot && chestOpens > 0) {
           chestOpens--;
+          continue;
+        }
+        if (d.kind === SoundKind.explosion && boomsPlayed > 0) {
+          boomsPlayed--;
           continue;
         }
         if (!d.hidden && d.kind === SoundKind.hurt && this.hitTargets.has(d.id)) continue;
@@ -680,6 +718,11 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
     if (!this.eng || this.disposed) return;
     this.localRollAt = performance.now();
     this.eng.play("roll", { key: "self", priority: 4 });
+  }
+
+  localThrow(): void {
+    if (!this.eng || this.disposed) return;
+    this.eng.play("grenade_pin", { key: "self", priority: 4 });
   }
 
   // ------------------------------------------------------------ teardown

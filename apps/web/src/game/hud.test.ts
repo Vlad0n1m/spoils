@@ -89,14 +89,29 @@ describe("buildHudSelf (slots → summary)", () => {
     assert.deepEqual(h.slots[0], { weapon: "pistol", rarity: 0, mag: 7, magSize: 12, free: true, broken: false });
     assert.equal(h.slots[1].weapon, "shotgun");
     assert.equal(h.slots[1].rarity, 2);
-    assert.deepEqual(h.ammo, { light: 60, shell: 12, heavy: 0 });
+    assert.deepEqual(h.ammo, { light: 60, shell: 12, heavy: 0, bolt: 0 });
     assert.equal(h.bandages, 3);
     assert.equal(h.medkits, 0);
+    assert.equal(h.grenades, 0);
     assert.equal(h.armor, 2);
     assert.equal(h.armorDur, 90);
     assert.equal(h.armorMax, 130);
     assert.equal(h.storageUsed, 4);
     assert.equal(h.storageCap, 4, "pockets only without a backpack");
+  });
+
+  it("Weapons v2: crossbow bolts and hand grenades are counted", () => {
+    const self = selfWith({
+      w1: inv("crossbow", { mag: 1, rarity: 1 }),
+      p0: inv("ammo_bolt", { qty: 7 }),
+      p1: inv("grenade", { qty: 2 }),
+      p2: inv("grenade", { qty: 1 }),
+    });
+    const h = buildHudSelf({ me, self, clockMs: 0 });
+    assert.equal(h.slots[0].weapon, "crossbow");
+    assert.equal(h.slots[0].magSize, 1);
+    assert.equal(h.ammo.bolt, 7);
+    assert.equal(h.grenades, 3);
   });
 
   it("flags broken weapons and excludes broken ammo stacks", () => {

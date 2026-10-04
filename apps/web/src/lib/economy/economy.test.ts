@@ -31,6 +31,7 @@ import {
   type AllocPick,
 } from "./pool";
 import { fromRaidDur, itemRefValueCr, toRaidDur } from "./value";
+import { npcPriceMinor } from "./seed";
 import { matchEndReportSchema, playerExitReportSchema } from "../inventory/report-schemas";
 import { checkGameServerSignature, signGameServerBody } from "../game-server-hmac";
 import { rollStarterKit } from "../inventory/starter";
@@ -300,4 +301,14 @@ test("starter kit roll follows GIVEAWAY_KIT and brings matching ammo", () => {
     const ammo = k.weapon.def === "rifle" ? "ammo_light" : "ammo_shell";
     assert.ok(k.stacks.some((s) => s.def === ammo && s.qty > 0));
   }
+});
+
+test("Weapons v2: the new guns have no NPC reference price (Vlad sets it); the old ones keep theirs", () => {
+  const rng = mulberry32(7);
+  for (const w of ["smg", "lmg", "revolver", "crossbow"]) {
+    for (const r of [0, 1, 2, 3]) assert.equal(npcPriceMinor(w, r, 100, rng), null, `${w} r${r}`);
+  }
+  const rifle = npcPriceMinor("rifle", 2, 100, rng);
+  assert.ok(rifle !== null && rifle > 0n);
+  assert.ok((npcPriceMinor("armor_2", 1, 100, rng) ?? 0n) > 0n);
 });

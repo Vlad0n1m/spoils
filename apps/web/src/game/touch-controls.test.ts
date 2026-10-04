@@ -8,6 +8,9 @@ import { describe, it } from "node:test";
 import {
   AIM_FROM,
   FIRE_AT,
+  GRENADE_DRAG_FROM,
+  GRENADE_DRAG_SPAN,
+  grenadeDragAim,
   STICK_RADIUS,
   TOUCH_BUTTONS,
   TOUCH_MIN_SIZE,
@@ -49,6 +52,26 @@ describe("touch sticks", () => {
     assert.deepEqual(stickVector(STICK_RADIUS / 2, 0), { x: 0.5, y: 0 });
     const v = stickVector(STICK_RADIUS * 3, STICK_RADIUS * 4);
     assert.ok(Math.abs(v.x - 0.6) < 1e-9 && Math.abs(v.y - 0.8) < 1e-9);
+  });
+});
+
+describe("touch grenade button (Weapons v2)", () => {
+  it("a short drag is a tap, a longer one aims and sets the range", () => {
+    assert.equal(grenadeDragAim(0, 0), null);
+    assert.equal(grenadeDragAim(GRENADE_DRAG_FROM - 1, 0), null);
+    const near = grenadeDragAim(0, GRENADE_DRAG_FROM)!;
+    assert.ok(Math.abs(near.angle - Math.PI / 2) < 1e-9);
+    assert.equal(near.frac, 0);
+    assert.equal(grenadeDragAim(-(GRENADE_DRAG_FROM + GRENADE_DRAG_SPAN / 2), 0)!.frac, 0.5);
+    assert.equal(grenadeDragAim(500, 500)!.frac, 1);
+    assert.equal(grenadeDragAim(NaN, 3), null);
+  });
+
+  it("sits on the left side next to the meds", () => {
+    const g = TOUCH_BUTTONS.find((b) => b.id === "grenade");
+    assert.ok(g && g.side === "left");
+    const ids = TOUCH_BUTTONS.map((b) => b.id);
+    assert.equal(ids.indexOf("grenade"), ids.indexOf("medkit") + 1);
   });
 });
 

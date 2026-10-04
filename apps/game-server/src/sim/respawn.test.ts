@@ -204,7 +204,8 @@ test("T15 respawn: a respawned squad carries a FREE kit and no pool item; its ba
   // The respawn stream is not the match-start stream (salted by the generation).
   assert.notEqual(seed, a.m.lootSeed);
 
-  // respawnBag = rollNpcLoot on the same seed, consumables × CONSUMABLE_MULT (floored, 0 dropped), junk kept.
+  // respawnBag = rollNpcLoot on the same seed, consumables (ammo, meds, grenades) × CONSUMABLE_MULT
+  // (floored, 0 dropped), junk kept.
   let halved = 0, dropped = 0, junk = 0;
   for (let s = 1; s <= 400; s++) {
     for (const c of ["low", "mid", "high", "top"] as const) {
@@ -213,7 +214,8 @@ test("T15 respawn: a respawned squad carries a FREE kit and no pool item; its ba
       const exp: Array<{ def: string; qty: number }> = [];
       for (const it of full) {
         const cat = itemDef(it.def)!.cat;
-        if (cat === "ammo" || cat === "med") {
+        // Weapons v2: a pocket grenade is a consumable too (1 × 0.5 → dropped).
+        if (cat === "ammo" || cat === "med" || cat === "throwable") {
           const q = Math.floor(it.qty * NPC.RESPAWN.CONSUMABLE_MULT);
           if (q > 0) {
             exp.push({ def: it.def, qty: q });

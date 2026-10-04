@@ -11,7 +11,10 @@ import {
   describeItem,
   durInfo,
   fmtCr,
+  isKillWeapon,
   itemIcon,
+  killWeaponIcon,
+  killWeaponName,
   itemValueCr,
   quickTarget,
   recordStore,
@@ -37,7 +40,22 @@ describe("describeItem", () => {
     assert.equal(describeItem({ def: "junk_dogtag", label: "Nick" }).name, "Dog tag · Nick");
     assert.equal(describeItem({ def: "nope" }).cat, "unknown");
     assert.equal(itemIcon("nope"), "/sprites/backpack.png");
-    assert.equal(itemIcon("ammo_shell"), "/sprites/ammo.png");
+    // Weapons v2: one icon per ammo type, square icon_<id> art for guns in tiles.
+    assert.equal(itemIcon("ammo_shell"), "/sprites/ammo_shell.png");
+    assert.equal(itemIcon("ammo_bolt"), "/sprites/ammo_bolt.png");
+    assert.equal(itemIcon("rifle"), "/sprites/icon_rifle.png");
+    assert.equal(describeItem({ def: "crossbow", rarity: 1 }).icon, "/sprites/icon_crossbow.png");
+    assert.equal(describeItem({ def: "grenade" }).cat, "throwable");
+    assert.equal(itemIcon("grenade"), "/sprites/grenade.png");
+  });
+  it("kill feed: guns by their side sprite, the grenade by its icon", () => {
+    assert.equal(killWeaponIcon("lmg"), "/sprites/lmg.png");
+    assert.equal(killWeaponIcon("grenade"), "/sprites/grenade.png");
+    assert.equal(killWeaponName("grenade"), "Grenade");
+    assert.equal(killWeaponName("revolver"), "Revolver");
+    assert.equal(isKillWeapon("grenade"), true);
+    assert.equal(isKillWeapon("smg"), true);
+    assert.equal(isKillWeapon("rocket"), false);
   });
 });
 

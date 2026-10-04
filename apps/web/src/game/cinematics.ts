@@ -389,7 +389,9 @@ export function killCard(
 ): { kicker: string; name: string; sub: string } {
   if (!kill || !kill.killer) return { kicker: "YOU DIED", name: "K.I.A.", sub: "" };
   const parts: string[] = [];
-  const w = kill.weapon && kill.weapon in WEAPONS ? WEAPONS[kill.weapon as WeaponId].name : "";
+  // Weapons v2: a hand grenade kill reads "Grenade".
+  const w =
+    kill.weapon === "grenade" ? "Grenade" : kill.weapon && kill.weapon in WEAPONS ? WEAPONS[kill.weapon as WeaponId].name : "";
   if (w) parts.push(w);
   if (distPx !== null && Number.isFinite(distPx)) parts.push(`${Math.max(1, Math.round(distPx / PX_PER_METER))} m`);
   const npc = npcRoleName(kill.killerRole) ?? npcRoleOfLabel(kill.killer);

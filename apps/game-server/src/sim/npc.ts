@@ -62,6 +62,7 @@ import {
   BOSSES,
   BOSS_AI,
   BOSS_EVENT,
+  GRENADE,
   INPUT_DT_MS,
   ITEM_FLAG,
   MARAUDER,
@@ -84,6 +85,7 @@ import {
   npcClassOfPost,
   npcLeashPx,
   quantizeFa,
+  raycastSolids,
   rollMarauderKit,
   rollNpcLoot,
   sectorAngle,
@@ -164,7 +166,19 @@ const HEAR_PRIO: Partial<Record<SoundKind, number>> = {
   [SoundKind.bodyFall]: 2,
   [SoundKind.dryFire]: 1,
   [SoundKind.switch]: 1,
+  // Weapons v2: a blast alerts like a gunshot (listen); a grenade's pin / bounce is a noise.
+  [SoundKind.explosion]: 4,
+  [SoundKind.grenade]: 2,
 };
+
+/**
+ * Weapons v2 (docs/WEAPONS_V2.md §8): NPC handling of the new guns. Rounds per burst of the
+ * automatic weapons (default NPC.BURST.SHOTS); the SMG closes in like the shotgun with its own band;
+ * the LMG holds its ground like the sniper (no advancing, fires standing). The revolver is a pistol.
+ */
+const BURST_SHOTS: Partial<Record<string, readonly [number, number]>> = { smg: [4, 8], lmg: [6, 12] };
+const SMG_BAND: readonly [number, number] = [180, 380];
+const HOLDS_GROUND = new Set(["sniper", "lmg"]);
 
 /** Shot sound variant of the shotgun (a blast next to the NPC is a "burst"). */
 const SHOTGUN_VARIANT = weaponVariant("shotgun");
@@ -613,13 +627,14 @@ export function respawnSize(seed: number, post: Pick<NpcPost, "id" | "size">): n
 
 /**
  * Bag of a respawned marauder: the full rollNpcLoot table on the respawn seed, consumables (ammo,
- * meds) × NPC.RESPAWN.CONSUMABLE_MULT (floored; a line that reaches 0 is dropped), junk unchanged.
+ * meds, grenades) × NPC.RESPAWN.CONSUMABLE_MULT (floored; a line that reaches 0 is dropped), junk unchanged.
  */
 export function respawnBag(seed: number, postId: number, member: number, cls: NpcClass): NpcLootItem[] {
   const out: NpcLootItem[] = [];
   for (const it of rollNpcLoot(seed, postId, member, cls)) {
     const cat = itemDef(it.def)?.cat;
-    if (cat !== "ammo" && cat !== "med") {
+    // Weapons v2: a pocket grenade is a consumable too (1 × 0.5 floors to none on a respawn).
+    if (cat !== "ammo" && cat !== "med" && cat !== "throwable") {
       out.push(it);
       continue;
     }
@@ -848,7 +863,8 @@ export class NpcBrain {
         // Bursts of NPC.BURST.SHOTS rounds with NPC.BURST.PAUSE_MS pauses, never a laser.
         if (clock >= this.pauseUntil && clock < this.burstUntil) fire = true;
         else if (clock >= this.burstUntil && clock >= this.pauseUntil) {
-          const shots = Math.round(this.rand(NPC.BURST.SHOTS[0], NPC.BURST.SHOTS[1]));
+          const span = BURST_SHOTS[def.id] ?? NPC.BURST.SHOTS;
+          const shots = Math.round(this.rand(span[0], span[1]));
           this.burstUntil = clock + shots * def.fireIntervalMs;
           this.pauseUntil = this.burstUntil + this.rand(NPC.BURST.PAUSE_MS[0], NPC.BURST.PAUSE_MS[1]);
           fire = true;
@@ -909,7 +925,7 @@ export class NpcBrain {
       const angle = sectorAngle(s.a);
       const x = p.x + Math.cos(angle) * dist;
       const y = p.y + Math.sin(angle) * dist;
-      if (s.kind === SoundKind.shot && dist <= alertPx) {
+      if ((s.kind === SoundKind.shot || s.kind === SoundKind.explosion) && dist <= alertPx) {
         this.sys.alert(this.info.squad, x, y);
         urgent = true;
       }
@@ -1011,6 +1027,12 @@ export class NpcBrain {
     this.walker.walk = false;
     this.wantFire = false;
     this.homeward = false;
+    // Weapons v2: a grenade about to go off next to us — run first, everything else can wait.
+    const nade = this.grenadeThreat();
+    if (nade) {
+      this.fleeGrenade(nade);
+      return;
+    }
     if (s.healUntil > 0) {
       // Patching up (the channel lands in boss.ts, capped at maxHp): stand still.
       this.walker.stop();
@@ -1513,8 +1535,10 @@ export class NpcBrain {
       return;
     }
     const sniper = def.id === "sniper";
+    // The sniper and (Weapons v2) the LMG hold their ground: no closing in, they fire standing.
+    const holds = HOLDS_GROUND.has(def.id);
     const far = dist > engage * 0.85 || !los;
-    if (far && !sniper) {
+    if (far && !holds) {
       // Close in, but only inside the chase radius (guards: their leash, and only toward an enemy
       // inside it, v4); a route around a wall must not drag it out.
       if (info.role === "guard" && this.dAnchor(e.x, e.y) > info.leash + 150) {
@@ -1530,8 +1554,9 @@ export class NpcBrain {
       this.strafe = this.m.rng() < 0.5 ? -1 : 1;
       this.strafeUntil = clock + this.rand(500, 1300);
     }
-    // Preferred band: the shotgun closes in, the sniper keeps its distance.
-    const [near, farBand] = def.id === "shotgun" ? [140, 260] : sniper ? [450, engage * 0.95] : [260, def.range * 0.6];
+    // Preferred band: the shotgun (and the SMG) closes in, the sniper keeps its distance.
+    const [near, farBand] =
+      def.id === "shotgun" ? [140, 260] : def.id === "smg" ? SMG_BAND : sniper ? [450, engage * 0.95] : [260, def.range * 0.6];
     const radial = dist < near ? -0.7 : dist > farBand ? 0.7 : 0;
     let a = Math.atan2(Math.sin(angle) * radial + Math.cos(angle) * this.strafe,
       Math.cos(angle) * radial - Math.sin(angle) * this.strafe);
@@ -1545,8 +1570,8 @@ export class NpcBrain {
         return;
       }
     }
-    // The sniper fires standing (no strafing) unless the enemy is too close.
-    if (sniper && radial >= 0) {
+    // The sniper (and the LMG) fires standing (no strafing) unless the enemy is too close.
+    if (holds && radial >= 0) {
       this.walker.stop();
       return;
     }
@@ -1586,6 +1611,45 @@ export class NpcBrain {
       this.switchAt = this.m.clock + 900;
       return;
     }
+  }
+
+  /**
+   * Weapons v2: the nearest grenade resting (or landing) within GRENADE.NPC_FLEE_PX whose blast
+   * would reach us (no SHOT wall between), noticed GRENADE.NPC_NOTICE_MS after the throw; else null.
+   */
+  private grenadeThreat(): Pt | null {
+    const gs = this.m.grenades;
+    if (gs.length === 0) return null;
+    const p = this.rt.pub;
+    const clock = this.m.clock;
+    let best: Pt | null = null;
+    let bestD: number = GRENADE.NPC_FLEE_PX;
+    for (const g of gs) {
+      if (clock - g.thrownAt < GRENADE.NPC_NOTICE_MS) continue;
+      const rest = g.path[g.path.length - 1]!;
+      const d = Math.hypot(rest.x - p.x, rest.y - p.y);
+      if (d >= bestD) continue;
+      if (raycastSolids(this.m.idx, rest.x, rest.y, p.x, p.y, SOLID.SHOT) !== Infinity) continue;
+      best = { x: rest.x, y: rest.y };
+      bestD = d;
+    }
+    return best;
+  }
+
+  /** Run straight away from a grenade (sideways when the way back is blocked). */
+  private fleeGrenade(at: Pt): void {
+    const p = this.rt.pub;
+    this.wantFire = false;
+    this.state = "cover";
+    const d = Math.hypot(p.x - at.x, p.y - at.y);
+    const away = d > 1 ? Math.atan2(p.y - at.y, p.x - at.x) : this.m.rng() * Math.PI * 2;
+    for (const turn of [0, 0.6, -0.6, 1.3, -1.3]) {
+      if (this.walker.clear(away + turn, 60)) {
+        this.walker.heading(away + turn);
+        return;
+      }
+    }
+    this.walker.heading(away);
   }
 
   private rand(min: number, max: number): number {

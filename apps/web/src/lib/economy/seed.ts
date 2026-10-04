@@ -5,6 +5,7 @@ import {
   itemDef,
   pickWeighted,
   templateKey,
+  templateRefPriced,
   type Rng,
 } from "@extract/shared";
 import { itemEvents, items, listings, type NewItem } from "../../db/schema";
@@ -14,7 +15,8 @@ import { PARAM, setParam } from "./params";
 /**
  * NPC reference prices in market minor units (balance_cents) at 100 % durability. Placeholders
  * until Vlad sets the primary-sale prices (economy memo §16): weapons by rarity, armor and
- * backpacks by level.
+ * backpacks by level. Weapons v2 guns (shared UNPRICED_WEAPONS: SMG, LMG, revolver, crossbow) have
+ * NO reference price: npcPriceMinor returns null for them and the seed never lists them.
  */
 export const NPC_PRICE_MINOR = {
   weapon: [300, 900, 2500, 6000],
@@ -22,9 +24,11 @@ export const NPC_PRICE_MINOR = {
   backpack: [0, 300, 900, 2200],
 } as const;
 
-export function npcPriceMinor(def: string, rarity: number, dur: number, rng: Rng): bigint {
+export function npcPriceMinor(def: string, rarity: number, dur: number, rng: Rng): bigint | null {
   const d = itemDef(def);
   if (!d) return 0n;
+  const template = templateKey({ def, rarity });
+  if (template && !templateRefPriced(template)) return null;
   const base =
     d.cat === "weapon"
       ? NPC_PRICE_MINOR.weapon[Math.max(0, Math.min(3, rarity))]!
@@ -33,6 +37,13 @@ export function npcPriceMinor(def: string, rarity: number, dur: number, rng: Rng
         : NPC_PRICE_MINOR.backpack[d.bpLevel ?? 1];
   const k = (0.6 + (0.4 * dur) / 100) * (0.9 + rng() * 0.3);
   return BigInt(Math.max(5, Math.round((base * k) / 5) * 5));
+}
+
+/** Treasury listing price; unpriced templates never reach a listing (filtered when rolled). */
+function listingPrice(def: string, rarity: number, dur: number, rng: Rng): bigint {
+  const p = npcPriceMinor(def, rarity, dur, rng);
+  if (p === null) throw new Error(`no reference price for ${def}:${rarity}`);
+  return p;
 }
 
 /**
@@ -87,7 +98,8 @@ export async function seedEconomy(
         rarity: p.rarity,
         durability: dur,
         maxDurability: 100,
-        state: i < nPool ? "lost_pool" : "listed",
+        // A template without a reference price (Weapons v2) is never listed by the treasury.
+        state: i < nPool || !templateRefPriced(templateKey(p) ?? "") ? "lost_pool" : "listed",
         ownerId: null,
         origin: "seed",
       });
@@ -118,7 +130,7 @@ export async function seedEconomy(
           itemId: r.id,
           sellerId: null,
           template: templateKey({ def: r.defId, rarity: r.rarity }) ?? r.defId,
-          priceMinor: npcPriceMinor(r.defId, r.rarity, r.durability, opts.rng),
+          priceMinor: listingPrice(r.defId, r.rarity, r.durability, opts.rng),
           feeCr: 0,
           status: "active" as const,
           visibleAt: now,

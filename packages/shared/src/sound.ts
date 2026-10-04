@@ -30,9 +30,15 @@ export const SoundKind = {
   bodyFall: 11,
   dryFire: 12,
   switch: 13,
+  /** Weapons v2: a hand grenade exploding (a world sound at the blast, never pinned to a player). */
+  explosion: 14,
+  /** Weapons v2: hand grenade noises; variant GRENADE_SOUND.THROW (pin + throw) or BOUNCE (hits a wall). */
+  grenade: 15,
 } as const;
 export type SoundKind = (typeof SoundKind)[keyof typeof SoundKind];
-export const SOUND_KIND_COUNT = 14;
+export const SOUND_KIND_COUNT = 16;
+/** Variants of SoundKind.grenade. */
+export const GRENADE_SOUND = { THROW: 0, BOUNCE: 1 } as const;
 
 export const SOUND = {
   /** A footstep fires every this many px of non-roll travel (run ≈ 2.2/s, walk ≈ 1.1/s). */
@@ -55,6 +61,10 @@ export const SOUND = {
     bodyFall: 750,
     dryFire: 250,
     switch: 300,
+    /** Weapons v2 (WEAPONS_V2 §4): blast, pin + throw, a bounce off a wall. */
+    explosion: 3400,
+    grenadeThrow: 300,
+    grenadeBounce: 400,
   },
   /** Repeat intervals for channelled sounds, ms. */
   SEARCH_REPEAT_MS: 1500,
@@ -107,6 +117,8 @@ export function baseSoundRadius(kind: SoundKind, variant = 0, walk = false): num
     case SoundKind.bodyFall: return R.bodyFall;
     case SoundKind.dryFire: return R.dryFire;
     case SoundKind.switch: return R.switch;
+    case SoundKind.explosion: return R.explosion;
+    case SoundKind.grenade: return variant === GRENADE_SOUND.BOUNCE ? R.grenadeBounce : R.grenadeThrow;
   }
   return 0;
 }
@@ -118,7 +130,7 @@ export function effectiveSoundRadius(base: number, envHear: number, stepRangeMul
 
 /** Higher = kept first when over SOUND.MAX_PER_TICK. */
 export const SOUND_PRIORITY: Readonly<Record<SoundKind, number>> = {
-  0: 3, 1: 3, 2: 5, 3: 8, 4: 2, 5: 2, 6: 4, 7: 4, 8: 7, 9: 6, 10: 9, 11: 6, 12: 2, 13: 1,
+  0: 3, 1: 3, 2: 5, 3: 8, 4: 2, 5: 2, 6: 4, 7: 4, 8: 7, 9: 6, 10: 9, 11: 6, 12: 2, 13: 1, 14: 9, 15: 4,
 };
 
 /** Client presentation (ring life ms, color). */
@@ -137,6 +149,8 @@ export const SOUND_VIZ: Readonly<Record<SoundKind, { lifeMs: number; color: numb
   11: { lifeMs: 1200, color: 0xff2d55 },
   12: { lifeMs: 700, color: 0xffd54a },
   13: { lifeMs: 700, color: 0xffd54a },
+  14: { lifeMs: 2500, color: 0xff8a1f },
+  15: { lifeMs: 900, color: 0xffd54a },
 };
 export const SOUND_BAND_GAIN = [1.0, 0.5, 0.22] as const;
 export const SOUND_BAND_ALPHA = [1.0, 0.7, 0.45] as const;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
-import { templateKey } from "@extract/shared";
+import { templateKey, templateRefPriced } from "@extract/shared";
 import type { HistoryResponse, MarketConfigDto, StashItemDto } from "@/lib/lobby/api-types";
 import { formatMinor, parsePriceToMinor, saleBreakdown } from "@/lib/market/config";
 import { templateLabel } from "@/lib/market/templates";
@@ -132,6 +132,8 @@ export function ListDialog({
                     </>
                   )}
                 </>
+              ) : !templateRefPriced(template) ? (
+                "new item — no reference price yet, any price goes."
               ) : (
                 "no price index yet — any price goes."
               )}
