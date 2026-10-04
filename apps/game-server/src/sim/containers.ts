@@ -74,6 +74,7 @@ import { isTrackedUnique, makeItem, toInv, toPlain } from "./items.js";
 import type { Match } from "./match.js";
 import { emitSound } from "./sound.js";
 import type { PlayerRuntime } from "./types.js";
+import { creditRaidXp } from "./xp.js";
 
 /** Seed of the demo unique rolls of one container (independent of the fungible stream). */
 function uniqueSeed(matchSeed: number, idx: number): number {
@@ -572,7 +573,10 @@ export class ContainerSystem {
     if (t.searchedBy.has(who)) return;
     t.searchedBy.add(who);
     if (t.kind === "corpse") rt.stats.corpsesSearched++;
-    else rt.stats.containersSearched++;
+    else {
+      rt.stats.containersSearched++;
+      creditRaidXp(this.m, rt, "containers", rt.stats.containersSearched);
+    }
   }
 
   /** Reveal loop of one target: runs while at least one searcher is past the open delay. */
@@ -599,7 +603,9 @@ export class ContainerSystem {
    * public flag once `actors` (default: the target's searchers) have left (disclosure.ts).
    */
   checkEmptied(t: SearchTarget, actors: Iterable<PlayerRuntime> = t.searchers): void {
-    if (t.emptied || t.loot.revealed < t.loot.total || t.loot.slots.size > 0) return;
+    if (t.emptied || t.loot.revealed < t.loot.total) return;
+    // BROKEN copies (death.ts) are on show only: a body holding nothing else is empty.
+    for (const it of t.loot.slots.values()) if (!(it.flags & ITEM_FLAG.BROKEN)) return;
     t.emptied = true;
     const c = t.corpse;
     if (c) {
@@ -611,14 +617,17 @@ export class ContainerSystem {
     }
   }
 
-  /** Everything still inside a target: hidden items plus what is revealed and not taken. */
+  /**
+   * Everything still inside a target: hidden items plus what is revealed and not taken. BROKEN
+   * copies are left out (death.ts already reported them lost).
+   */
   remaining(t: SearchTarget): ItemLike[] {
     const out: ItemLike[] = [];
     for (let i = 0; i < t.loot.total; i++) {
       if (i < t.loot.revealed) {
         const it = t.loot.slots.get(String(i));
-        if (it) out.push(toPlain(it));
-      } else {
+        if (it && !(it.flags & ITEM_FLAG.BROKEN)) out.push(toPlain(it));
+      } else if (!(t.items[i]!.flags & ITEM_FLAG.BROKEN)) {
         out.push(t.items[i]!);
       }
     }
@@ -628,8 +637,8 @@ export class ContainerSystem {
   /**
    * Uniques still on the map inside containers and corpses (MatchEndReport.leftOnMap): unopened
    * live pool allocations (containers, bosses and carriers that did not spawn) plus the remaining contents
-   * of every target. Broken items never sit in
-   * a corpse (they were reported lost at death).
+   * of every target. Broken copies in a corpse are
+   * not included (they were reported lost at death).
    */
   leftInside(): ItemLike[] {
     const out = [...this.pool.values(), ...this.bossPool.values(), ...this.carrierPool.values(), this.legacyBossPool].flat();

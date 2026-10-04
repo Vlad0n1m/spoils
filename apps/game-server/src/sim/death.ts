@@ -1,7 +1,8 @@
 /**
  * Death (critique "Durability semantics and death wear", inventory memo §2.4):
- * - every non-FREE unique breaks with BREAK_CHANCE_ON_DEATH: flagged BROKEN, NOT put into the
- *   corpse, resolved as `lost` and reported in PlayerExitReport.lost (web: → lost pool at −8 dur);
+ * - every non-FREE unique breaks with BREAK_CHANCE_ON_DEATH: flagged BROKEN, resolved as `lost` and
+ *   reported in PlayerExitReport.lost (web: → lost pool at −8 dur); a BROKEN copy stays in the corpse
+ *   in its slot order so searchers see what broke (never takeable, never counted as left inside);
  * - survivors keep their durability (and magazine) and stay in the corpse for others;
  * - fungibles (ammo, meds, junk) never break; FREE items vanish;
  * - every human corpse holds a dog tag (label = nickname, lvl = level, ref = self key → the victim
@@ -23,6 +24,7 @@ import { closeSearch } from "./containers.js";
 import { isTrackedUnique, makeItem } from "./items.js";
 import type { Match } from "./match.js";
 import { emitSound } from "./sound.js";
+import { creditRaidXp, pvpLikelyRanked } from "./xp.js";
 import type { PlayerRuntime } from "./types.js";
 
 export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | null, weapon: KillWeapon | ""): void {
@@ -48,10 +50,17 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
       // Kill credit (web XP): human victims → kills (XP_KILL); bosses → bossKills (XP_BOSS);
       // guards and marauders → npcKills (XP_NPC; guards also guardKills → XP_GUARD). NPCs earn nothing.
       if (p.role === NPC_ROLE.NONE) killer.self.kills = Math.min(255, killer.self.kills + 1);
-      else if (p.role === NPC_ROLE.BOSS) killer.stats.bossKills++;
-      else {
+      else if (p.role === NPC_ROLE.BOSS) {
+        killer.stats.bossKills++;
+        creditRaidXp(m, killer, "boss", killer.stats.bossKills);
+      } else {
         killer.stats.npcKills++;
-        if (p.role === NPC_ROLE.GUARD) killer.stats.guardKills++;
+        if (p.role === NPC_ROLE.GUARD) {
+          killer.stats.guardKills++;
+          creditRaidXp(m, killer, "guard", killer.stats.guardKills);
+        } else {
+          creditRaidXp(m, killer, "npc", killer.stats.npcKills - killer.stats.guardKills);
+        }
       }
       if (rt.isNpc) m.npcs.creditKill(rt);
       // WORLD v6 (D22 / spec §3.4): who killed whom, for dog tag prices (SettledItem.by) and ranked
@@ -59,6 +68,8 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
       if (!rt.isNpc && rt.userId) {
         rt.killerUserId = killer.userId;
         killer.victims.push(rt.userId);
+        // In-raid estimate only (the web makes the real ranked check at settlement).
+        if (pvpLikelyRanked(killer, rt)) creditRaidXp(m, killer, "pvp", killer.self.kills);
       }
     }
     // A bullet still in flight can kill after its shooter already extracted or died: keep their
@@ -111,22 +122,26 @@ export function deathSplit(
   carried: readonly ItemLike[],
   rng: () => number,
   noBreak = false,
-): { lost: ItemLike[]; dropped: ItemLike[]; remains: ItemLike[] } {
+): { lost: ItemLike[]; dropped: ItemLike[]; remains: ItemLike[]; shown: ItemLike[] } {
   const lost: ItemLike[] = [];
   const dropped: ItemLike[] = [];
   const remains: ItemLike[] = [];
+  const shown: ItemLike[] = [];
   for (const item of carried) {
     if (item.flags & ITEM_FLAG.FREE) continue;
     if (isTrackedUnique(item)) {
       if (!noBreak && rng() < BREAK_CHANCE_ON_DEATH) {
-        lost.push({ ...item, flags: item.flags | ITEM_FLAG.BROKEN });
+        const broken = { ...item, flags: item.flags | ITEM_FLAG.BROKEN };
+        lost.push(broken);
+        shown.push({ ...broken });
         continue;
       }
       dropped.push(item);
     }
     remains.push(item);
+    shown.push(item);
   }
-  return { lost, dropped, remains };
+  return { lost, dropped, remains, shown };
 }
 
 /**
@@ -136,10 +151,13 @@ export function deathSplit(
  */
 export function buildCorpse(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | null = null): { lost: ItemLike[]; dropped: ItemLike[] } {
   const noBreak = NPC.NO_BREAK && rt.isNpc;
-  const { lost, dropped, remains } = deathSplit(carriedItems(rt).map((c) => c.item), m.rng, noBreak);
+  const { lost, dropped, shown } = deathSplit(carriedItems(rt).map((c) => c.item), m.rng, noBreak);
   clearSlots(rt);
   // Guests drop no tag (WORLD v6 D22, DOG_TAG.GUEST_TAG).
-  if (!rt.isNpc && (!rt.guest || DOG_TAG.GUEST_TAG)) remains.push(makeItem("junk_dogtag", { label: rt.nickname, lvl: rt.level, ref: rt.selfKey }));
-  m.containers.addCorpse(rt, remains, killer);
+  if (!rt.isNpc && (!rt.guest || DOG_TAG.GUEST_TAG)) shown.push(makeItem("junk_dogtag", { label: rt.nickname, lvl: rt.level, ref: rt.selfKey }));
+  // Broken uniques stay in the body as BROKEN copies, in their slot order: searchers see what was
+  // lost (fog-safe: loot entries reach searchers only) but can never take them (takeFromLoot), and
+  // they are no part of what is left inside (remaining / leftInside / emptied).
+  m.containers.addCorpse(rt, shown, killer);
   return { lost, dropped };
 }
