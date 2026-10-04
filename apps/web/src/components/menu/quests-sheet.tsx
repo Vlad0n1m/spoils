@@ -19,6 +19,8 @@ import { cosmeticLabel, markRewardTable, nameColorHex, nextReward, rewardTable, 
 import { playUi } from "@/game/audio/ui-sounds";
 import { LevelBadge } from "./level-badge";
 import { Panel } from "./panel";
+import { usePass } from "./pass-context";
+import { PassTab } from "./pass-tab";
 import { useQuests } from "./quests-context";
 import { fmtInt } from "./xp-bar";
 
@@ -30,12 +32,14 @@ export function fmtUntil(at: number, now: number): string {
   return h > 0 ? `${h}h ${mins % 60}m` : `${mins}m`;
 }
 
-export type QuestsTab = "today" | "rewards";
-const TABS: readonly QuestsTab[] = ["today", "rewards"];
-const TAB_LABELS: Readonly<Record<QuestsTab, string>> = { today: "Today", rewards: "Rewards" };
+export type QuestsTab = "today" | "rewards" | "pass";
+const TABS: readonly QuestsTab[] = ["today", "rewards", "pass"];
+const TAB_LABELS: Readonly<Record<QuestsTab, string>> = { today: "Today", rewards: "Rewards", pass: "Alpha Pass" };
+const SHEET_TITLE: Readonly<Record<QuestsTab, string>> = { today: "Daily tasks", rewards: "Rewards", pass: "Alpha Pass" };
 
 /**
- * Daily tasks and level rewards (RETENTION.md §3, §5): a drawer from the left with two tabs.
+ * Daily tasks, level rewards and the Alpha Pass (RETENTION.md §3, §5; GAME_DESIGN §18e): a drawer
+ * from the left with three tabs (Pass: pass-tab.tsx).
  * Today: the three tasks with progress, the day's free swap, task XP today, marks. Rewards: the next
  * reward, what to wear (title, name colour, badge frame — unlocked ones only, the server checks
  * again) and every reward by level and by task marks. Not a URL panel: opened by the tasks strip,
@@ -44,9 +48,12 @@ const TAB_LABELS: Readonly<Record<QuestsTab, string>> = { today: "Today", reward
 export function QuestsSheet({ tab, onTab, onClose }: { tab: QuestsTab; onTab: (t: QuestsTab) => void; onClose: () => void }) {
   const { sessionKind } = useLobby();
   const { reload, markSeen } = useQuests();
+  const pass = usePass();
   // Fresh numbers on open (the last raid may have settled since the menu loaded); the dot goes.
   useEffect(() => {
     void reload();
+    void pass.reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
   useEffect(() => {
     markSeen();
@@ -54,7 +61,7 @@ export function QuestsSheet({ tab, onTab, onClose }: { tab: QuestsTab; onTab: (t
 
   return (
     <Panel
-      title={tab === "rewards" ? "Rewards" : "Daily tasks"}
+      title={SHEET_TITLE[tab]}
       variant="drawer-left"
       tabs={TABS}
       tab={tab}
@@ -62,7 +69,15 @@ export function QuestsSheet({ tab, onTab, onClose }: { tab: QuestsTab; onTab: (t
       onClose={onClose}
       tabLabels={TAB_LABELS}
     >
-      {sessionKind !== "user" ? <RegisterHint /> : tab === "rewards" ? <RewardsTab /> : <TodayTab onRewards={() => onTab("rewards")} />}
+      {sessionKind !== "user" ? (
+        <RegisterHint />
+      ) : tab === "pass" ? (
+        <PassTab />
+      ) : tab === "rewards" ? (
+        <RewardsTab />
+      ) : (
+        <TodayTab onRewards={() => onTab("rewards")} />
+      )}
     </Panel>
   );
 }
@@ -70,7 +85,10 @@ export function QuestsSheet({ tab, onTab, onClose }: { tab: QuestsTab; onTab: (t
 function RegisterHint() {
   return (
     <div className="toon-panel bg-[#161b28]/95 p-6 text-center">
-      <p className="font-body text-white/80">Registered raiders get 3 daily tasks for bonus XP, and unlock titles, name colours and badge frames as they level up.</p>
+      <p className="font-body text-white/80">
+        Registered raiders get 3 daily tasks for bonus XP, the Alpha Pass with founder cosmetics, and unlock titles, name colours and badge
+        frames as they level up.
+      </p>
       <Link href="/auth/register?next=/play" className="toon-btn mt-4 inline-flex min-h-11 items-center px-5 text-base">
         <span className="optical-center">Register</span>
       </Link>

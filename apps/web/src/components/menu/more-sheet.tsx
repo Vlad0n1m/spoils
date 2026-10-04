@@ -19,6 +19,8 @@ export function MoreSheet({
   onInfo,
   onTasks,
   tasksDot = false,
+  onPass,
+  passDot = false,
   onFriends,
   friendsDot = false,
   onLocked,
@@ -27,6 +29,8 @@ export function MoreSheet({
   onInfo: () => void;
   onTasks: () => void;
   tasksDot?: boolean;
+  onPass: () => void;
+  passDot?: boolean;
   onFriends: () => void;
   friendsDot?: boolean;
   onLocked: (what: "Guilds") => void;
@@ -56,6 +60,13 @@ export function MoreSheet({
             {tasksDot && <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-black bg-rose-500" aria-hidden />}
           </span>
           Daily tasks · rewards
+        </button>
+        <button type="button" className={row} onClick={onPass} aria-label={passDot ? "Alpha Pass, reward to claim" : "Alpha Pass"}>
+          <span className="relative">
+            <FallbackImg src={MENU_ICONS.pass.src} fallback={MENU_ICONS.pass.fallback} className="h-8 w-8 object-contain" />
+            {passDot && <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-black bg-rose-500" aria-hidden />}
+          </span>
+          Alpha Pass · founder rewards
         </button>
         <button type="button" className={row} onClick={onFriends} aria-label={friendsDot ? "Friends and party, new" : "Friends and party"}>
           <span className="relative">

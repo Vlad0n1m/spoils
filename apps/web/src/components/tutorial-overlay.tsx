@@ -101,7 +101,9 @@ export function TutorialOverlay({ store, touch, force }: { store: HudStore; touc
     <div
       className={clsx(
         "pointer-events-none absolute z-20",
-        touch ? "left-2 top-[7rem] w-[15.5rem]" : "left-3 top-[32%] w-[20rem]",
+        // Touch: under the compass, just right of the raider (centre) and left of the right-hand
+        // buttons — the left column holds the meds / bag / map buttons and the corners the sticks.
+        touch ? "left-[calc(50%+2.5rem)] top-[5.25rem] w-[min(13rem,calc(50%-12.75rem))]" : "left-3 top-[32%] w-[20rem]",
       )}
       role="status"
       aria-live="polite"
@@ -110,7 +112,7 @@ export function TutorialOverlay({ store, touch, force }: { store: HudStore; touc
       <div
         className={clsx(
           "pointer-events-auto rounded-2xl border-[3px] border-black bg-[#121826]/95 shadow-[0_4px_0_#000] transition-colors",
-          touch ? "px-3 py-2.5" : "px-4 py-3",
+          touch ? "px-3 py-2" : "px-4 py-3",
           flash && "bg-[#173326]/95",
         )}
       >
@@ -118,7 +120,7 @@ export function TutorialOverlay({ store, touch, force }: { store: HudStore; touc
           <p className={clsx("font-body font-bold uppercase tracking-[0.14em] text-zooa-lime", touch ? "text-xs" : "text-[0.8125rem]")}>
             {step === "done" ? "First raid" : `First raid · ${idx + 1}/${DOTS.length}`}
           </p>
-          <ol className="flex gap-1" aria-hidden>
+          <ol className={clsx("flex gap-1", touch && "hidden")} aria-hidden>
             {DOTS.map((d, i) => (
               <li
                 key={d}
@@ -130,7 +132,7 @@ export function TutorialOverlay({ store, touch, force }: { store: HudStore; touc
             ))}
           </ol>
         </div>
-        <p className={clsx("toon-text-thin mt-1 tracking-wide text-white", touch ? "text-lg leading-tight" : "text-xl")}>
+        <p className={clsx("toon-text-thin mt-1 tracking-wide text-white", touch ? "text-base leading-tight" : "text-xl")}>
           {flash && step !== "done" ? <span className="mr-1.5 text-zooa-lime">✓</span> : null}
           {hint.title}
         </p>
@@ -140,7 +142,7 @@ export function TutorialOverlay({ store, touch, force }: { store: HudStore; touc
             type="button"
             onClick={skip}
             className={clsx(
-              "font-body mt-2 inline-flex min-h-9 items-center rounded-lg px-2 -mx-2 font-semibold text-white/80 underline decoration-white/40 underline-offset-2 hover:text-white focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70",
+              "font-body mt-1 inline-flex min-h-9 items-center rounded-lg px-2 -mx-2 font-semibold text-white/80 underline decoration-white/40 underline-offset-2 hover:text-white focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70",
               touch ? "text-xs" : "text-[0.8125rem]",
             )}
           >

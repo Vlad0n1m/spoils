@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from "react";
 import clsx from "clsx";
+import { ALPHA_SKIN } from "@extract/shared";
 import { FallbackImg } from "./fallback-img";
+
+/** Alpha Veteran hero art (art/lobby.json hero_alpha). */
+const ALPHA_HERO_ART = "/lobby/hero_alpha.png";
 
 /** Lobby background art of step S10 (LobbyBackdrop); it has the extract ring painted on its pad. */
 const BG_ART = "/lobby/bg.webp";
@@ -81,8 +85,11 @@ export function useUnderHero(el: React.RefObject<HTMLElement | null>): void {
  * is drawn at the same spot. Fallback until the hero art exists: the top-down player sprite turned
  * −12°, as on the landing page. Decorative: the menu draws it under its controls.
  */
-export function HeroStage({ armor, className }: { armor: 0 | 1 | 2 | 3; className?: string }) {
+export function HeroStage({ armor, skin = null, className }: { armor: 0 | 1 | 2 | 3; skin?: string | null; className?: string }) {
   const bgArt = useArtLoaded(BG_ART);
+  // Alpha Veteran skin (Alpha Pass tier 8): its own art, whatever the armour; the armour art until it loads.
+  const alpha = skin === ALPHA_SKIN;
+  const src = alpha ? ALPHA_HERO_ART : `/lobby/hero_${armor}.png`;
   return (
     <div
       className={clsx(
@@ -105,9 +112,9 @@ export function HeroStage({ armor, className }: { armor: 0 | 1 | 2 | 3; classNam
       >
         <div className="flex h-full items-end animate-hero-idle motion-reduce:animate-none">
           <FallbackImg
-            key={armor}
-            src={`/lobby/hero_${armor}.png`}
-            fallback="/sprites/player.png"
+            key={src}
+            src={src}
+            fallback={alpha ? `/lobby/hero_${armor}.png` : "/sprites/player.png"}
             className="h-full max-h-full w-auto object-contain drop-shadow-[0_8px_0_rgba(0,0,0,0.4)]"
             fallbackClassName="!h-[60%] -rotate-12 [filter:drop-shadow(0_6px_0_#000)]"
           />
