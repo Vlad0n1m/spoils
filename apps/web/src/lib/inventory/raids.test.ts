@@ -1282,7 +1282,7 @@ describe("WORLD v6 end settlement and voids (T21)", () => {
     assert.equal(await poolCount(), 30 - 3 + 3);
   });
 
-  test("voids run from ends_at: nothing at minute 36 of a live map; the user's raid at ends_at + 5 min (free-kit entries too); the cron at + 10 min", async () => {
+  test("voids run from ends_at: nothing at minute 36 of a live map; the user's raid at ends_at + RAID_USER_VOID_GRACE_MS (free-kit entries too); the cron at + RAID_VOID_GRACE_MS", async () => {
     const t0 = new Date();
     const s = wShard({ startsAt: t0.getTime(), entryClosesAt: t0.getTime() + 35 * 60_000, endsAt: t0.getTime() + WORLD.CYCLE_MS });
     await openShard(db, s, t0);
@@ -1292,10 +1292,15 @@ describe("WORLD v6 end settlement and voids (T21)", () => {
     const f = await makeUser(db);
     await enterOk(wEntry(s.matchId, f));
     const at = (min: number) => new Date(t0.getTime() + min * 60_000);
+    // Both graces outlast the game server's exit retry window (GS_EXIT_RETRY_WINDOW_MS).
+    const wipeMin = WORLD.CYCLE_MS / 60_000;
+    const userMin = wipeMin + RAID_USER_VOID_GRACE_MS / 60_000 + 1;
+    assert.ok(userMin < wipeMin + RAID_VOID_GRACE_MS / 60_000, "the lazy user void comes before the cron");
     assert.deepEqual(await voidStaleForUser(db, a.userId, at(36)), [], "a live 45-minute map is never voided at minute 36");
     assert.deepEqual(await voidStale(db, at(36)), []);
-    assert.deepEqual(await voidStale(db, at(51)), [], "the cron waits 10 min past the wipe");
-    assert.deepEqual(await voidStaleForUser(db, f, at(51)), [s.matchId], "free-kit entry: found through raid_entries");
+    assert.deepEqual(await voidStaleForUser(db, f, at(userMin - 2)), [], "the user's void waits out the exit retries");
+    assert.deepEqual(await voidStale(db, at(userMin)), [], "the cron waits RAID_VOID_GRACE_MS past the wipe");
+    assert.deepEqual(await voidStaleForUser(db, f, at(userMin)), [s.matchId], "free-kit entry: found through raid_entries");
     assert.equal((await item(a.rifle)).state, "in_stash");
     const ents = await db.select().from(raidEntries).where(eq(raidEntries.matchId, s.matchId));
     assert.ok(ents.every((e) => e.status === "voided"));

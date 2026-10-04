@@ -29,14 +29,26 @@ export function openTestDb(): { db: Db; pool: Pool } {
  */
 const TEST_DB_LOCK_KEY = 727_001;
 let lockClient: import("pg").PoolClient | null = null;
+let lockPending: Promise<void> | null = null;
 
-export async function lockTestDb(pool: Pool): Promise<void> {
-  lockClient = await pool.connect();
-  await lockClient.query("select pg_advisory_lock($1)", [TEST_DB_LOCK_KEY]);
+export function lockTestDb(pool: Pool): Promise<void> {
+  lockPending = (async () => {
+    const client = await pool.connect();
+    await client.query("select pg_advisory_lock($1)", [TEST_DB_LOCK_KEY]);
+    lockClient = client;
+  })();
+  return lockPending;
 }
 
-/** Releases the file lock and closes the pool; use as the file's `after` hook. */
+/**
+ * Releases the file lock and closes the pool; use as the file's `after` hook.
+ * When --test-name-pattern matches no test of a file, node:test runs `after` without awaiting the
+ * async `before`: the lock is still being taken here. Wait for it first, or the late client keeps
+ * the process alive forever while holding the advisory lock (every other DB test file then hangs).
+ */
 export async function closeTestDb(pool: Pool): Promise<void> {
+  await lockPending?.catch(() => undefined);
+  lockPending = null;
   if (lockClient) {
     await lockClient.query("select pg_advisory_unlock($1)", [TEST_DB_LOCK_KEY]).catch(() => undefined);
     lockClient.release();
