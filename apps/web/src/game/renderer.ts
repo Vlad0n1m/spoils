@@ -1168,6 +1168,7 @@ export class GameRenderer implements GameRendererApi {
         if (!onMap) continue;
         v.root.alpha = 1;
         v.setColor(p.color);
+        v.setSkin(p.skin ?? 0);
         v.setNickname(p.nickname);
         v.setWeapon(p.weapon);
         v.setBackpack(p.bp);
@@ -1192,6 +1193,7 @@ export class GameRenderer implements GameRendererApi {
         if (r) this.npcNames.set(p.nickname, r);
       }
       v.setColor(p.color);
+      v.setSkin(p.skin ?? 0);
       v.setNickname(p.nickname);
       v.setWeapon(p.weapon);
       v.setBackpack(p.bp);
@@ -1518,6 +1520,8 @@ export class GameRenderer implements GameRendererApi {
       totalPlayers: this.counts.total,
       // The full map is the only system that blocks input (fullmap.ts): it is open.
       mapOpen: this.systemsReady && this.systems.some((s) => s.isInputBlocked?.() === true),
+      // First-raid tutorial (tutorial.ts): the drawn position and the local aim.
+      pose: this.selfRender ? { x: this.selfRender.x, y: this.selfRender.y, aim: this.aim } : null,
     };
     if (this.touch) {
       const s = snapshot.self;

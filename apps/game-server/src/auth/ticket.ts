@@ -14,6 +14,8 @@ const MAX_NICKNAME_LEN = 24;
 const LOADOUT_ID_RE = /^(?:[0-9a-zA-Z-]{1,64})?$/;
 /** WORLD v6 matchId / entryId: a uuid, or "" / absent (legacy tickets). */
 const OPT_UUID_RE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i;
+/** Alpha: a cosmetic skin id ("" = none). */
+const SKIN_ID_RE = /^(?:[a-z0-9-]{1,40})?$/;
 
 let warnedNoSecret = false;
 
@@ -57,6 +59,11 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
   // The drop's member count (signed after the party fields): the seats the shard holds for the drop.
   const dropSize = t.dropSize;
   if (dropSize !== undefined && (typeof dropSize !== "number" || !Number.isSafeInteger(dropSize) || dropSize < 1 || dropSize > PARTY.MAX_SIZE)) return null;
+  // Alpha extras (signed after everything else, only when present).
+  const tutorial = t.tutorial;
+  if (tutorial !== undefined && typeof tutorial !== "boolean") return null;
+  const skin = t.skin === undefined ? "" : t.skin;
+  if (typeof skin !== "string" || !SKIN_ID_RE.test(skin)) return null;
   if (typeof userId !== "string" || userId.length < 1 || userId.length > MAX_USER_ID_LEN) return null;
   if (typeof nickname !== "string") return null;
   const nickLen = [...nickname].length;
@@ -68,7 +75,21 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
   if (now - issuedAt > JOIN_TICKET_TTL_MS) return null;
 
   const expected = createHmac("sha256", secret)
-    .update(joinTicketPayload({ userId, nickname, issuedAt, loadoutId, matchId, entryId, dropId, partyId, ...(dropSize !== undefined ? { dropSize } : {}) }))
+    .update(
+      joinTicketPayload({
+        userId,
+        nickname,
+        issuedAt,
+        loadoutId,
+        matchId,
+        entryId,
+        dropId,
+        partyId,
+        ...(dropSize !== undefined ? { dropSize } : {}),
+        ...(tutorial ? { tutorial } : {}),
+        ...(skin ? { skin } : {}),
+      }),
+    )
     .digest();
   const given = Buffer.from(sig, "hex");
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
@@ -85,6 +106,8 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
       if (dropSize !== undefined) out.dropSize = dropSize;
     }
   }
+  if (tutorial) out.tutorial = true;
+  if (skin) out.skin = skin;
   return out;
 }
 
@@ -100,6 +123,8 @@ export function signJoinTicket(
     dropId?: string;
     partyId?: string;
     dropSize?: number;
+    tutorial?: boolean;
+    skin?: string;
   },
   secret: string,
 ): JoinTicket {
@@ -109,6 +134,8 @@ export function signJoinTicket(
   if (!t.dropId) delete t.dropId;
   if (!t.partyId) delete t.partyId;
   if (t.dropSize === undefined || !t.dropId) delete t.dropSize;
+  if (!t.tutorial) delete t.tutorial;
+  if (!t.skin) delete t.skin;
   const sig = createHmac("sha256", secret).update(joinTicketPayload(t)).digest("hex");
   return { ...t, sig };
 }

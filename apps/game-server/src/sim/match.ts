@@ -40,6 +40,7 @@ import {
   npcPostsOf,
   rollNpcSpawns,
   PLAYER,
+  skinCode,
   Player,
   SOLID,
   SelfState,
@@ -108,7 +109,7 @@ import { GROUND_DROPS_PER_USER, GroundStore, autoPickup, dropSpot, findDropPile,
 import { Ledger, cloneItem, isTrackedUnique, makeItem, toPlain, toSettled } from "./items.js";
 import { NpcSystem, type NpcSpawn } from "./npc.js";
 import { leftoverPool, poolTargetCount, poolTick, receiveBossFill, receiveEntryPool, takeUnplaced, type UnplacedPoolItem } from "./pool-place.js";
-import { pickDropSpawn, pickEntrySpawn, type PartyDropAnchor } from "./spawn.js";
+import { pickDropSpawn, pickEntrySpawn, pickTutorialSpawn, type PartyDropAnchor } from "./spawn.js";
 import { deliverSounds, emitSound, footstep } from "./sound.js";
 import type { Bullet, EntryInit, LoadoutMap, MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
 import { VisionSystem, followAim } from "./vision.js";
@@ -543,12 +544,15 @@ export class Match {
     const dropId = partyId ? (e.dropId ?? "") : "";
     // A party drop (spawn.ts): the drop's first member picks a normal entry spot, later members of
     // the same drop land 150–300 px from it within PARTY.DROP_TTL_MS.
-    const spawn = dropId ? pickDropSpawn(this, this.rng, e.userId, dropId, partyId) : pickEntrySpawn(this, this.rng, e.userId);
+    // Alpha: a solo first raid lands next to a quiet T1 container with a marauder post nearby.
+    const tutorialSpawn = e.tutorial && !dropId ? pickTutorialSpawn(this, e.userId) : null;
+    const spawn = tutorialSpawn ?? (dropId ? pickDropSpawn(this, this.rng, e.userId, dropId, partyId) : pickEntrySpawn(this, this.rng, e.userId));
     const id = `e${i}`;
     const p = new Player();
     p.sessionId = id;
     p.nickname = e.nickname;
     p.color = this.leastUsedColor();
+    p.skin = skinCode(e.skin);
     p.x = spawn.x;
     p.y = spawn.y;
     p.hp = PLAYER.MAX_HP;
@@ -571,6 +575,7 @@ export class Match {
     rt.loadoutId = e.loadoutId;
     rt.partyId = partyId;
     rt.dropId = dropId;
+    rt.tutorial = tutorialSpawn !== null;
     if (e.snapshot) this.loadLoadout(rt, e.snapshot);
     giveFreeKit(rt);
     syncPublic(rt);
@@ -1156,6 +1161,7 @@ export class Match {
       report.victims = [...rt.victims];
       report.unplaced = unplaced.map(toSettled);
     }
+    if (rt.touch) report.touch = true;
     rt.exitReport = report;
     this.exitReports.push(report);
 
@@ -1360,6 +1366,8 @@ function newRuntime(
     exitSettled: false,
     partyId: "",
     dropId: "",
+    tutorial: false,
+    touch: false,
   };
 }
 

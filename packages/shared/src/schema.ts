@@ -107,6 +107,8 @@ export class Player extends Schema {
   @type("uint8") role = 0;
   /** HP bar maximum (PLAYER.MAX_HP; NPCs: BOSSES[kind].hp / guards[i].hp / MARAUDER[class].hp). */
   @type("uint16") maxHp = 100;
+  /** Character skin code (pass.ts SKIN_CODES): 0 = default, 1 = Alpha Veteran (Alpha Pass tier 8). Humans only. */
+  @type("uint8") skin = 0;
 }
 
 /**

@@ -143,6 +143,8 @@ export interface HudSnapshot {
   pingMs: number | null;
   /** The canvas full map is open (the touch HUD hides its bottom bar and compass over it). */
   mapOpen?: boolean;
+  /** The local player's drawn position and aim (the first-raid tutorial reads it); null off the map. */
+  pose?: { x: number; y: number; aim: number } | null;
 }
 
 /** Panel keys the input layer forwards (Tab / T / Esc / M); owned by the overlay UIs. */

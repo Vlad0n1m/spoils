@@ -516,6 +516,8 @@ export class WorldDirectory {
         pool: res.pool,
         bossFill: res.bossFill,
         ...(t.partyId ? { partyId: t.partyId, ...(t.dropId ? { dropId: t.dropId } : {}) } : {}),
+        ...(t.tutorial ? { tutorial: true } : {}),
+        ...(t.skin ? { skin: t.skin } : {}),
       });
     } catch (e) {
       console.error(`[world] admission ${shard.matchId}/${entryId}: addHuman failed:`, e);

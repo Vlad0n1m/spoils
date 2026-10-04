@@ -296,7 +296,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     if (client) this.clock.setTimeout(() => client.leave(CLOSE_CODES.RESYNC, "resync"), 0);
   }
 
-  override onJoin(client: Client, _options: unknown, ticket: JoinTicket) {
+  override onJoin(client: Client, options: unknown, ticket: JoinTicket) {
     const prev = this.owners.get(ticket.userId);
     const rt = this.match.attachHuman(ticket.userId, client.sessionId);
     if (!rt) {
@@ -304,6 +304,8 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
       client.leave(CLOSE_CODES.NOT_IN_WORLD, "not_in_world");
       return;
     }
+    // Alpha Pass "phone" tester task: the client says it runs touch controls (cosmetic only).
+    if ((options as { touch?: unknown } | null)?.touch === true) rt.touch = true;
     this.owners.set(ticket.userId, client);
     const old = this.byRoster.get(rt.rosterIndex);
     if (old && old !== client) this.views.detach(rt.rosterIndex, old.view);

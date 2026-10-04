@@ -80,6 +80,10 @@ export interface EntryInit {
   partyId?: string;
   /** Party drop this entry follows (JoinTicket.dropId): spawn next to the drop's first member (spawn.ts). */
   dropId?: string;
+  /** Alpha (JoinTicket.tutorial): the player's first raid — spawn by pickTutorialSpawn (solo only). */
+  tutorial?: boolean;
+  /** Equipped skin id (JoinTicket.skin) → Player.skin. */
+  skin?: string;
 }
 
 /**
@@ -214,6 +218,10 @@ export interface PlayerRuntime {
   partyId: string;
   /** Party drop this entry was admitted with ("" = none). */
   dropId: string;
+  /** Alpha: admitted as a first-raid tutorial (pickTutorialSpawn). */
+  tutorial: boolean;
+  /** Alpha: a client of this entry joined on touch controls (PlayerExitReport.touch). */
+  touch: boolean;
 }
 
 export interface Bullet {
