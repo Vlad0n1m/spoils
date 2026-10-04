@@ -17,6 +17,8 @@ export const MENU_ICONS = {
   news: { src: "/lobby/menu_news.png", fallback: "/sprites/junk_battery.png" },
   leaderboards: { src: "/lobby/menu_leaderboards.png", fallback: "/sprites/junk_dogtag.png" },
   friends: { src: "/lobby/menu_friends.png", fallback: "/sprites/player.png" },
+  /** Daily tasks and rewards: no lobby art yet (point `src` at /lobby/menu_tasks.png once it exists). */
+  tasks: { src: "/sprites/crate.png", fallback: "/sprites/crate.png" },
   guilds: { src: "/lobby/menu_guilds.png", fallback: "/sprites/sandbags.png" },
 } as const satisfies Record<string, MenuIcon>;
 

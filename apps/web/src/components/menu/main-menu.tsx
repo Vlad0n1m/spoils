@@ -46,6 +46,9 @@ import { PartyPrompts } from "./party-prompts";
 import { PartyStrip } from "./party-strip";
 import { PlayButton, PlayMiniChip } from "./play-button";
 import { PlayController, type BattleStart, type RetryRequest } from "./play-controller";
+import { QuestsProvider, useQuests } from "./quests-context";
+import { QuestsSheet, type QuestsTab } from "./quests-sheet";
+import { QuestsStrip } from "./quests-strip";
 import { SideButton, MENU_ICONS } from "./side-button";
 import { SignInSheet } from "./sign-in-sheet";
 import { MenuToast } from "./toast";
@@ -122,23 +125,25 @@ export function MainMenu({ initialPanel }: { initialPanel: PanelState }) {
   return (
     <LobbyProvider active={!battle}>
       <PartyProvider active={!battle}>
-        {mounted ? (
-          <MenuScreen initialPanel={initialPanel} hidden={Boolean(battle)} onBattle={onBattle} retry={retry} />
-        ) : (
-          <div className="relative h-[100dvh] overflow-hidden bg-[#090b08]" aria-busy="true">
-            <LobbyBackdrop />
-          </div>
-        )}
-        {battle && user && (
-          <BattleScreen
-            key={`${battle.roomId}:${battle.ticket.entryId ?? battle.ticket.issuedAt}`}
-            ticket={battle.ticket}
-            battleRoomId={battle.roomId}
-            nickname={user.nickname}
-            onLeave={onLeave}
-            onRetry={onRetry}
-          />
-        )}
+        <QuestsProvider active={!battle}>
+          {mounted ? (
+            <MenuScreen initialPanel={initialPanel} hidden={Boolean(battle)} onBattle={onBattle} retry={retry} />
+          ) : (
+            <div className="relative h-[100dvh] overflow-hidden bg-[#090b08]" aria-busy="true">
+              <LobbyBackdrop />
+            </div>
+          )}
+          {battle && user && (
+            <BattleScreen
+              key={`${battle.roomId}:${battle.ticket.entryId ?? battle.ticket.issuedAt}`}
+              ticket={battle.ticket}
+              battleRoomId={battle.roomId}
+              nickname={user.nickname}
+              onLeave={onLeave}
+              onRetry={onRetry}
+            />
+          )}
+        </QuestsProvider>
       </PartyProvider>
     </LobbyProvider>
   );
@@ -161,6 +166,7 @@ function MenuScreen({
   /** Friends dot: incoming friend requests or party invites. */
   const socialDot = socialDotCount(social) > 0;
   const inParty = registered && Boolean(social?.party);
+  const quests = useQuests();
 
   // ---- panels (URL state through the native history API: Next keeps useSearchParams in sync)
   const sp = useSearchParams();
@@ -242,6 +248,21 @@ function MenuScreen({
   const [signIn, setSignIn] = useState(false);
   const [guest, setGuest] = useState(false);
   const [more, setMore] = useState(false);
+  /** Daily tasks / rewards sheet (not a URL panel); focus goes back to its opener on close. */
+  const [questsTab, setQuestsTab] = useState<QuestsTab | null>(null);
+  const questsOpener = useRef<HTMLElement | null>(null);
+  const openQuests = useCallback((tab: QuestsTab) => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body && !active.closest('[role="dialog"]')) questsOpener.current = active;
+    setQuestsTab(tab);
+    playUi("click");
+  }, []);
+  const closeQuests = useCallback(() => {
+    setQuestsTab(null);
+    const el = questsOpener.current;
+    questsOpener.current = null;
+    if (el && el.isConnected) window.requestAnimationFrame(() => el.focus({ preventScroll: true }));
+  }, []);
 
   // ---- news dot
   const [newsSeen, setNewsSeen] = useState<NewsSeen | null>(null);
@@ -284,16 +305,22 @@ function MenuScreen({
       ? lastRaid
       : null;
 
-  // ---- hotkeys: I, B, L, N, H, F (desktop, not while typing, not over a sheet or modal)
-  const blocked = panel.panel !== null || signIn || guest || more || levelUp !== null;
+  // ---- hotkeys: I, B, L, N, H, F, T (desktop, not while typing, not over a sheet or modal)
+  const blocked = panel.panel !== null || signIn || guest || more || levelUp !== null || questsTab !== null;
   useEffect(() => {
     if (hidden) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || e.defaultPrevented) return;
       if (isTypingTarget(e.target)) return;
+      if (e.code === "KeyT" && !signIn && !guest && !more && !levelUp && !panel.panel) {
+        e.preventDefault();
+        if (questsTab) closeQuests();
+        else openQuests("today");
+        return;
+      }
       const p = PANEL_HOTKEYS[e.code];
       if (!p) return;
-      if (signIn || guest || more || levelUp) return;
+      if (signIn || guest || more || levelUp || questsTab) return;
       // A dialog inside a panel (sell dialog) owns the keyboard.
       if (document.querySelector('[role="dialog"] [role="dialog"][aria-modal="true"]')) return;
       e.preventDefault();
@@ -302,7 +329,7 @@ function MenuScreen({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [hidden, panel.panel, signIn, guest, more, levelUp, openPanel, closePanel]);
+  }, [hidden, panel.panel, signIn, guest, more, levelUp, questsTab, openPanel, closePanel, openQuests, closeQuests]);
 
   // ---- battle: close panels first, so the menu comes back clean
   const startBattle = useCallback(
@@ -312,6 +339,7 @@ function MenuScreen({
         window.history.replaceState(null, "", "/play");
       }
       setMore(false);
+      setQuestsTab(null);
       onBattle(b);
     },
     [panel.panel, onBattle],
@@ -357,7 +385,7 @@ function MenuScreen({
       >
         <LobbyBackdrop />
         <div className="relative z-10 flex h-full flex-col" inert={blocked}>
-          <MenuTopBar onCredits={() => openPanel("shop", "traders")} />
+          <MenuTopBar onCredits={() => openPanel("shop", "traders")} onRewards={() => openQuests("rewards")} />
           {/* Landscape phones (≤ 500 px tall, also below 768 px wide): the side columns instead of the
               dock, smaller tiles and a compact centre so the gear strip and PLAY both fit. */}
           <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[6.5rem_1fr_6.5rem] lg:grid-cols-[8.5rem_1fr_8.5rem] min-[1440px]:grid-cols-[9.5rem_1fr_9.5rem] [@media(max-height:500px)]:grid-cols-[5.5rem_1fr_5.5rem]">
@@ -365,13 +393,26 @@ function MenuScreen({
               <SideButton label="Inventory" icon={MENU_ICONS.inventory} hotkey="I" active={panel.panel === "inventory"} onClick={() => openPanel("inventory")} />
               <SideButton label="Shop" icon={MENU_ICONS.shop} hotkey="B" active={panel.panel === "shop"} onClick={() => openPanel("shop")} />
               <SideButton label="Info" icon={MENU_ICONS.info} hotkey="H" active={panel.panel === "info"} onClick={() => openPanel("info")} />
+              <SideButton
+                label="Tasks"
+                icon={MENU_ICONS.tasks}
+                hotkey="T"
+                dot={sessionKind === "user" && quests.unseen}
+                active={questsTab !== null}
+                onClick={() => openQuests("today")}
+              />
             </nav>
 
             {/* ≤ 640 px tall the hero is hidden: three rows (world, gear in the flexible one, PLAY), and
                 the column scrolls instead of stacking PLAY over the gear strip if it still overflows. */}
             <main className="relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto_auto_auto] gap-3 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 md:gap-4 md:px-4 md:pb-6 md:pt-5 [@media(max-height:640px)]:grid-rows-[auto_minmax(min-content,1fr)_auto] [@media(max-height:640px)]:overflow-y-auto [@media(max-height:500px)]:gap-2 [@media(max-height:500px)]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] [@media(max-height:500px)]:pt-2">
               <h1 className="sr-only">Main menu</h1>
-              <WorldCard />
+              {/* The world card and the daily tasks strip share one grid row (the row count stays put);
+                  on landscape phones the strip gives way to the Tasks side button. */}
+              <div className="flex min-w-0 flex-col gap-2">
+                <WorldCard />
+                <QuestsStrip onOpen={() => openQuests("today")} className="[@media(max-height:500px)]:hidden" />
+              </div>
               <HeroStage armor={armor} />
               <div className="min-w-0 [@media(max-height:640px)]:self-end">
               <GearStrip
@@ -464,6 +505,11 @@ function MenuScreen({
               setMore(false);
               openPanel("info");
             }}
+            onTasks={() => {
+              setMore(false);
+              openQuests("today");
+            }}
+            tasksDot={sessionKind === "user" && quests.unseen}
             friendsDot={socialDot}
             onFriends={() => {
               setMore(false);
@@ -497,9 +543,18 @@ function MenuScreen({
             level={levelUp.level}
             unlocks={unlocksBetween(levelUp.levelBefore, levelUp.level, s?.market.sellUnlockLevel)}
             onClose={() => setLevelUpDone(levelUp.entryId)}
+            onRewards={
+              sessionKind === "user"
+                ? () => {
+                    setLevelUpDone(levelUp.entryId);
+                    openQuests("rewards");
+                  }
+                : undefined
+            }
           />
         )}
-        <PartyPrompts hidden={hidden || signIn || guest || more || levelUp !== null} />
+        {questsTab && <QuestsSheet tab={questsTab} onTab={setQuestsTab} onClose={closeQuests} />}
+        <PartyPrompts hidden={hidden || signIn || guest || more || levelUp !== null || questsTab !== null} />
         <MenuToast />
       </div>
     </PlayController>

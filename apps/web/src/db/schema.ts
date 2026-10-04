@@ -93,6 +93,13 @@ export const users = pgTable(
      * everyone else. Granted by hand with SQL (README "Админка"), never from the app.
      */
     role: text("role").$type<"admin">(),
+    /**
+     * Equipped earn-only cosmetics (lib/quests, migration 008): ids from @extract/shared COSMETICS,
+     * NULL = none. Set only through POST /api/quests/equip, which checks cosmeticUnlocked.
+     */
+    title: text("title"),
+    nameColor: text("name_color"),
+    badgeFrame: text("badge_frame"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -932,3 +939,61 @@ export const adminAudit = pgTable(
 );
 
 export type AdminAuditRow = typeof adminAudit.$inferSelect;
+
+// ---------------------------------------------------------------------------- daily tasks (quests)
+
+/**
+ * Daily tasks (lib/quests, @extract/shared quests.ts, migration 008): QUEST.SLOTS rows per player.
+ * A finished slot (done_day set) gets a new task on the next UTC day; an open one carries over with
+ * its progress. rerolled_day = the UTC day of the slot's free swap (one per player per day). Dates
+ * are UTC days.
+ */
+export const questSlots = pgTable(
+  "quest_slots",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    slot: smallint("slot").notNull(),
+    questId: text("quest_id").notNull(),
+    need: integer("need").notNull(),
+    xp: integer("xp").notNull(),
+    progress: integer("progress").notNull().default(0),
+    issuedDay: date("issued_day").notNull(),
+    doneDay: date("done_day"),
+    rerolledDay: date("rerolled_day"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.slot] }),
+    slotRange: check("quest_slots_slot_range", sql`${t.slot} >= 0 and ${t.slot} < 3`),
+    progressRange: check("quest_slots_progress_range", sql`${t.progress} >= 0 and ${t.progress} <= ${t.need}`),
+  }),
+);
+
+/**
+ * Completed tasks: one row per (player, UTC day, slot), written in the exit transaction that
+ * finished it. Σ xp of a day ≤ QUEST.DAILY_XP_MAX; count(*) per player = task marks.
+ */
+export const questLog = pgTable(
+  "quest_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    day: date("day").notNull(),
+    slot: smallint("slot").notNull(),
+    questId: text("quest_id").notNull(),
+    xp: integer("xp").notNull(),
+    /** The raid entry whose exit finished the task. */
+    entryId: uuid("entry_id"),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userDaySlot: uniqueIndex("quest_log_user_day_slot_idx").on(t.userId, t.day, t.slot),
+  }),
+);
+
+export type QuestSlotRow = typeof questSlots.$inferSelect;
+export type QuestLogRow = typeof questLog.$inferSelect;

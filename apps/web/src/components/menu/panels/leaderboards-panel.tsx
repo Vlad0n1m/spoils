@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
-import type { LeaderboardBoard, LeaderboardDto, LeaderboardMeDto } from "@extract/shared";
+import type { CosmeticBadgesDto, EquippedCosmetics, LeaderboardBoard, LeaderboardDto, LeaderboardMeDto } from "@extract/shared";
 import { useLobby } from "@/lib/lobby/lobby-context";
+import { nameColorHex, titleName } from "@/lib/lobby/levels";
 import { LB_PERIODS, type LbPeriod } from "@/lib/lobby/panels";
 import { LevelBadge } from "../level-badge";
 import { fmtInt } from "../xp-bar";
@@ -40,11 +41,28 @@ function Rank({ rank }: { rank: number }) {
   );
 }
 
+type Badges = Record<string, Partial<EquippedCosmetics>>;
+
+/** Equipped titles / name colours / badge frames of the board's players (/api/quests/badges); {} on failure. */
+async function loadBadges(nicks: readonly string[]): Promise<Badges> {
+  if (nicks.length === 0) return {};
+  const q = new URLSearchParams();
+  for (const n of nicks.slice(0, 100)) q.append("n", n);
+  try {
+    const res = await fetch(`/api/quests/badges?${q.toString()}`, { credentials: "omit" });
+    const body = (await res.json().catch(() => null)) as CosmeticBadgesDto | null;
+    return res.ok && body && typeof body.badges === "object" && body.badges ? body.badges : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Leaderboards (WORLD v6 spec §6.3, D25): Level (all time), Raider kills and NPC kills for this
  * map / this week / all time. Public top 100 from /api/leaderboards; the caller's own rank from
  * /api/leaderboards/me, pinned at the bottom when outside the list. Refreshes every 30 s while open
- * and visible. Guests are not ranked.
+ * and visible. Guests are not ranked. Rows show each player's equipped title, name colour and badge
+ * frame (earn-only rewards) from /api/quests/badges.
  */
 export function LeaderboardsPanel({ board, period, onPeriod }: { board: LeaderboardBoard; period: LbPeriod; onPeriod: (p: LbPeriod) => void }) {
   const { user, sessionKind, visible } = useLobby();
@@ -53,6 +71,7 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
   /** undefined = loading, null = not on this board, "error" = the own-rank request failed. */
   const [me, setMe] = useState<LeaderboardMeDto | "error" | undefined>(undefined);
   const [error, setError] = useState(false);
+  const [badges, setBadges] = useState<Badges>({});
   const seq = useRef(0);
 
   const load = useCallback(async () => {
@@ -75,6 +94,8 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
       if (!res.ok || !body || !Array.isArray(body.rows)) throw new Error("bad");
       setData(body);
       setMe(meBody);
+      const b = await loadBadges(body.rows.map((r) => r.nickname));
+      if (my === seq.current) setBadges(b);
     } catch {
       if (my === seq.current) setError(true);
     }
@@ -139,6 +160,9 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
         <ol className="flex flex-col gap-1.5">
           {rows.map((r) => {
             const mine = myNick !== null && r.nickname === myNick;
+            const worn = badges[r.nickname];
+            const color = mine ? undefined : nameColorHex(worn?.color);
+            const title = titleName(worn?.title);
             return (
               <li
                 key={`${r.rank}-${r.nickname}`}
@@ -149,8 +173,17 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
                 aria-current={mine ? "true" : undefined}
               >
                 <Rank rank={r.rank} />
-                <LevelBadge level={r.level} size="sm" />
-                <span className="min-w-0 flex-1 truncate text-base tracking-wide">{r.nickname}</span>
+                <LevelBadge level={r.level} size="sm" frame={worn?.frame} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-base tracking-wide" style={color ? { color } : undefined}>
+                    {r.nickname}
+                  </span>
+                  {title && (
+                    <span className={clsx("font-body block truncate text-[0.65rem] font-bold uppercase tracking-wider", mine ? "text-black/65" : "text-white/55")}>
+                      {title}
+                    </span>
+                  )}
+                </span>
                 <span className={clsx("font-body shrink-0 text-sm font-bold tabular-nums", mine ? "text-black" : "text-white/85")}>{valueText(board, r.value)}</span>
               </li>
             );

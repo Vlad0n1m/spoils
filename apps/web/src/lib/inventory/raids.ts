@@ -39,6 +39,7 @@ import { releaseLoadout } from "./loadout";
 import { applyMove, isUuid, lockItem, lockLoadoutItems, lockMatchItems, addStack } from "./transition";
 import { worldDate } from "../world/clock";
 import { enqueueMatchSettled, enqueueRareExtracts } from "../chain/queue";
+import { advanceQuestsForExit } from "../quests/quests";
 
 /**
  * A raid still `running` this long after its `ends_at` (the wipe of a world shard) never reported
@@ -165,7 +166,8 @@ function utcDayStart(now: Date): Date {
  *   unless `by` is this user (D22); free-kit entries of live shards × FREE_KIT.AUTOSELL_MULT; one
  *   credit_ledger row (autosell, exit:<entryId>).
  * - XP (registered): xpForExit with ranked PvP victims (D24, pvp_kills rows), the daily soft cap
- *   and the first extract of the UTC day; users.xp / level / matches_played; the entry's loadout →
+ *   and the first extract of the UTC day, plus the daily tasks this exit finished (lib/quests, the
+ *   "quest" line, not in xp_grind); users.xp / level / matches_played; the entry's loadout →
  *   settled; the entry → exited.
  * A report without entryId (pre-v6 roster matches, removed in S8) is `unknown_entry` (HTTP 409).
  * Refused (status voided → HTTP 409) once the raid was voided.
@@ -367,10 +369,11 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
         from raid_exits where user_id = ${user!.id} and at >= ${dayStart} and entry_id <> ${entryId}`);
       // XP.PVP_DAILY_MAX ranked kills a UTC day pay the pvp line; the Kills board counts every ranked kill.
       const pvpPaid = Math.min(pvpRanked, Math.max(0, XP.PVP_DAILY_MAX - Number(g.rows[0]?.pvp ?? 0)));
+      const haulCr = sale.lines.filter((l) => l.def !== "junk_dogtag").reduce((a, l) => a + l.cr, 0);
       const r = xpForExit({
         exit: report.exit,
         onMapMs,
-        haulCr: sale.lines.filter((l) => l.def !== "junk_dogtag").reduce((a, l) => a + l.cr, 0),
+        haulCr,
         containers: Number(report.stats?.containersSearched ?? 0),
         marauders: npcKills - guardKills,
         guards: guardKills,
@@ -379,8 +382,24 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
         grindToday: Number(g.rows[0]?.grind ?? 0),
         firstExtractToday: Number(g.rows[0]?.first ?? 0) === 0,
       });
-      xp = r.total;
-      xpLines = r.lines;
+      // Daily tasks (lib/quests): progress from this report's counters; their XP joins the receipt as
+      // the "quest" line, after the first-extract bonus and outside xp_grind (the daily soft cap).
+      const quests = await advanceQuestsForExit(
+        tx,
+        user!.id,
+        {
+          exit: report.exit,
+          onMapMs,
+          haulCr,
+          containers: Number(report.stats?.containersSearched ?? 0),
+          marauders: npcKills - guardKills,
+          bodies: Number(report.stats?.corpsesSearched ?? 0),
+        },
+        entryId,
+        now,
+      );
+      xp = r.total + quests.xp;
+      xpLines = quests.completed.length > 0 ? [...r.lines, { key: "quest", qty: quests.completed.length, xp: quests.xp }] : r.lines;
       xpGrind = r.grind;
       const total = Number(user!.xp) + xp;
       level = levelForXp(total);

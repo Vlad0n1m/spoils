@@ -31,6 +31,7 @@ export function Panel({
   onTab,
   onClose,
   headerExtra,
+  tabLabels,
   children,
 }: {
   title: string;
@@ -40,6 +41,8 @@ export function Panel({
   onTab: (t: string) => void;
   onClose: () => void;
   headerExtra?: React.ReactNode;
+  /** Labels of tabs outside the URL panels (lib/lobby/panels TAB_LABEL covers those). */
+  tabLabels?: Readonly<Record<string, string>>;
   children: React.ReactNode;
 }) {
   const id = useId();
@@ -151,7 +154,7 @@ export function Panel({
                         : "bg-[#1d2333]/90 text-white/80 shadow-[0_3px_0_#000] hover:text-white active:translate-y-[2px] active:shadow-[0_1px_0_#000]",
                     )}
                   >
-                    <span className="optical-center">{TAB_LABEL[t] ?? t}</span>
+                    <span className="optical-center">{tabLabels?.[t] ?? TAB_LABEL[t] ?? t}</span>
                   </button>
                 );
               })}

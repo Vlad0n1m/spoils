@@ -1068,7 +1068,11 @@ export const XP = {
   DAILY_TIME_OVER_MULT: 0,
 } as const;
 
-export type XpKey = "extract" | "haul" | "containers" | "npc" | "guard" | "boss" | "pvp" | "first_extract" | "daily_cap";
+/**
+ * "quest" = daily tasks completed by this exit (quests.ts): added by the web after xpForExit, outside
+ * the daily soft cap (xp_grind) and the first-extract bonus; qty = tasks completed.
+ */
+export type XpKey = "extract" | "haul" | "containers" | "npc" | "guard" | "boss" | "pvp" | "first_extract" | "daily_cap" | "quest";
 /** One line of the XP receipt: `qty` units of `key` worth `xp` (daily_cap is negative). */
 export interface XpLine {
   key: XpKey;
@@ -1085,6 +1089,7 @@ export const XP_LINE_LABEL: Readonly<Record<XpKey, string>> = {
   pvp: "Raiders",
   first_extract: "First extract today",
   daily_cap: "Daily limit",
+  quest: "Daily task",
 };
 
 export interface XpInput {
@@ -1193,3 +1198,134 @@ export function levelProgress(xp: number): { level: number; into: number; need: 
 }
 
 export const STASH_CAPACITY = [20, 35, 55, 80] as const;
+
+// ---------------------------------------------------------------- level rewards (earn-only cosmetics)
+
+/**
+ * Level and task-mark rewards (docs/RETENTION.md §3, §5.1): titles, name colours and level-badge
+ * frames. Earn-only: never sold for SOL or CR, never tradable, and they change nothing in a raid (no
+ * power for money). A player equips one of each kind from those unlocked (users.title / name_color /
+ * badge_frame, checked on the web by cosmeticUnlocked). Marks count completed daily tasks
+ * (quests.ts): a counter, not a currency. The feature unlocks that already exist (market selling,
+ * bound traders) are listed by the web next to these (apps/web lib/lobby/levels.ts).
+ */
+export type CosmeticKind = "title" | "color" | "frame";
+/** How a badge frame is drawn around the level shield (CSS / SVG only, no art). */
+export type FrameStyle = "rope" | "rivets" | "stitch" | "solid" | "double" | "glow";
+export interface CosmeticDef {
+  id: string;
+  kind: CosmeticKind;
+  name: string;
+  /** Name colour, or the frame's colour. */
+  hex?: string;
+  style?: FrameStyle;
+  /** The frame pulses (prefers-reduced-motion keeps it still). */
+  animated?: boolean;
+}
+
+const COSMETIC_LIST: readonly CosmeticDef[] = [
+  { id: "t-scavenger", kind: "title", name: "Scavenger" },
+  { id: "t-raider", kind: "title", name: "Raider" },
+  { id: "t-runner", kind: "title", name: "Runner" },
+  { id: "t-veteran", kind: "title", name: "Veteran" },
+  { id: "t-pathfinder", kind: "title", name: "Pathfinder" },
+  { id: "t-night-runner", kind: "title", name: "Night Runner" },
+  { id: "t-legend", kind: "title", name: "Legend of the Outskirts" },
+  { id: "t-ghost", kind: "title", name: "Ghost" },
+  { id: "t-spoils-master", kind: "title", name: "Spoils Master" },
+  { id: "t-fixer", kind: "title", name: "Fixer" },
+  { id: "c-sand", kind: "color", name: "Sand", hex: "#e8d5a3" },
+  { id: "c-lime", kind: "color", name: "Lime", hex: "#ccff00" },
+  { id: "c-rust", kind: "color", name: "Rust", hex: "#e07a45" },
+  { id: "c-sky", kind: "color", name: "Sky", hex: "#4cc9ff" },
+  { id: "c-violet", kind: "color", name: "Violet", hex: "#b07bff" },
+  { id: "c-gold", kind: "color", name: "Gold", hex: "#ffc93c" },
+  { id: "c-ember", kind: "color", name: "Ember", hex: "#ff7a50" },
+  { id: "c-contract", kind: "color", name: "Contract Blue", hex: "#6f9bff" },
+  { id: "f-rope", kind: "frame", name: "Rope", hex: "#c8a26a", style: "rope" },
+  { id: "f-riveted", kind: "frame", name: "Riveted", hex: "#9ca3af", style: "rivets" },
+  { id: "f-stitched", kind: "frame", name: "Stitched", hex: "#f5f5f4", style: "stitch" },
+  { id: "f-steel", kind: "frame", name: "Steel", hex: "#cbd5e1", style: "solid" },
+  { id: "f-brass", kind: "frame", name: "Brass", hex: "#d4a537", style: "solid" },
+  { id: "f-gilded", kind: "frame", name: "Gilded", hex: "#ffc93c", style: "double" },
+  { id: "f-spoils", kind: "frame", name: "Spoils", hex: "#ccff00", style: "glow", animated: true },
+  { id: "f-contract", kind: "frame", name: "Contract", hex: "#6f9bff", style: "double" },
+  { id: "f-fixer", kind: "frame", name: "Fixer", hex: "#6f9bff", style: "glow", animated: true },
+];
+
+/** Every cosmetic by id. */
+export const COSMETICS: Readonly<Record<string, CosmeticDef>> = Object.fromEntries(COSMETIC_LIST.map((c) => [c.id, c]));
+
+/** Cosmetics reached at a player level (RETENTION.md §3). Levels not listed give none. */
+export const LEVEL_REWARDS: ReadonlyArray<{ level: number; ids: readonly string[] }> = [
+  { level: 2, ids: ["t-scavenger"] },
+  { level: 3, ids: ["f-rope"] },
+  { level: 4, ids: ["c-sand"] },
+  { level: 5, ids: ["t-raider", "c-lime"] },
+  { level: 6, ids: ["f-riveted"] },
+  { level: 7, ids: ["t-runner"] },
+  { level: 8, ids: ["c-rust"] },
+  { level: 9, ids: ["f-stitched"] },
+  { level: 10, ids: ["t-veteran", "c-sky"] },
+  { level: 12, ids: ["f-steel"] },
+  { level: 14, ids: ["t-pathfinder"] },
+  { level: 15, ids: ["c-violet", "f-brass"] },
+  { level: 17, ids: ["t-night-runner"] },
+  { level: 20, ids: ["t-legend", "c-gold", "f-gilded"] },
+  { level: 25, ids: ["c-ember", "t-ghost"] },
+  { level: 30, ids: ["f-spoils", "t-spoils-master"] },
+];
+
+/** Cosmetics reached at a number of task marks (completed daily tasks, RETENTION.md §5.1). */
+export const MARK_REWARDS: ReadonlyArray<{ marks: number; ids: readonly string[] }> = [
+  { marks: 10, ids: ["c-contract"] },
+  { marks: 25, ids: ["f-contract"] },
+  { marks: 50, ids: ["t-fixer"] },
+  { marks: 100, ids: ["f-fixer"] },
+];
+
+/** The cosmetic `id`, or null (unknown ids, non-strings). */
+export function cosmeticDef(id: unknown): CosmeticDef | null {
+  return typeof id === "string" && Object.prototype.hasOwnProperty.call(COSMETICS, id) ? COSMETICS[id]! : null;
+}
+
+/** Where `id` unlocks: at a level or at a number of marks; null for an id no reward table lists. */
+export function cosmeticUnlock(id: string): { by: "level" | "marks"; at: number } | null {
+  const l = LEVEL_REWARDS.find((r) => r.ids.includes(id));
+  if (l) return { by: "level", at: l.level };
+  const m = MARK_REWARDS.find((r) => r.ids.includes(id));
+  return m ? { by: "marks", at: m.marks } : null;
+}
+
+/** True when a player of `level` with `marks` task marks owns cosmetic `id`. */
+export function cosmeticUnlocked(id: string, level: number, marks: number): boolean {
+  const u = cosmeticDef(id) ? cosmeticUnlock(id) : null;
+  if (!u) return false;
+  const have = u.by === "level" ? level : marks;
+  return Number.isFinite(have) && have >= u.at;
+}
+
+/** Ids a player of `level` with `marks` owns, in table order (levels first). */
+export function unlockedCosmetics(level: number, marks: number): string[] {
+  return [
+    ...LEVEL_REWARDS.filter((r) => level >= r.level).flatMap((r) => r.ids),
+    ...MARK_REWARDS.filter((r) => marks >= r.marks).flatMap((r) => r.ids),
+  ];
+}
+
+/** Cosmetics reached exactly at `level` (empty for most levels). */
+export function levelRewardIds(level: number): string[] {
+  return [...(LEVEL_REWARDS.find((r) => r.level === Math.floor(level))?.ids ?? [])];
+}
+
+/** The first level above `level` with a cosmetic reward, or null past the table. */
+export function nextLevelReward(level: number): { level: number; ids: string[] } | null {
+  const r = LEVEL_REWARDS.find((x) => x.level > Math.floor(level));
+  return r ? { level: r.level, ids: [...r.ids] } : null;
+}
+
+/** The first mark reward above `marks`, or null past the table. */
+export function nextMarkReward(marks: number): { marks: number; ids: string[] } | null {
+  const r = MARK_REWARDS.find((x) => x.marks > Math.floor(marks));
+  return r ? { marks: r.marks, ids: [...r.ids] } : null;
+}
