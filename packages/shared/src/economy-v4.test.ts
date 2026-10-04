@@ -41,6 +41,12 @@ import { mulberry32 } from "./rng.js";
 import { bossKindOfLootKey, bossLootKey } from "./types.js";
 
 const m = generateMap("steppe");
+/**
+ * Map area in 24-block layouts (MAP_GEN_VERSION 3, where these numbers were tuned). Map v2 is 28
+ * blocks (1.36×) at the same loot density per km² (spots.ts balanceTiers), so per-map totals are
+ * compared per 24-block area.
+ */
+const AREA_K = (m.width * m.height) / (24 * 1024 * 24 * 1024);
 const junkCr = (def: string) => {
   const d = itemDef(def);
   return d?.cat === "junk" ? (d.value ?? 0) : 0;
@@ -125,7 +131,7 @@ test("Steppe container EV per zone class matches the v4 model (±10 %), value co
         a.cons += consCr(f.def) * f.qty;
         junk += j;
         cons += consCr(f.def) * f.qty;
-        if (c.zone === "elevator" || c.zone === "radar") junkHot += j;
+        if (c.tier >= 3) junkHot += j;
         if (junkCr(f.def) >= 650) {
           hv += f.qty;
           if (!c.zone) hvWild += f.qty;
@@ -143,11 +149,12 @@ test("Steppe container EV per zone class matches the v4 model (±10 %), value co
     assert.ok(near(a.junk / a.n, w, 0.1), `${cls} junk/container ${(a.junk / a.n).toFixed(1)} vs ${w}`);
   }
   assert.ok(Math.abs(acc.wild!.empty / acc.wild!.n - 0.83) < 0.03, `wild empty ${(acc.wild!.empty / acc.wild!.n).toFixed(3)}`);
-  assert.ok(near(junk / SEEDS, 21_300, 0.1), `junk per match ${(junk / SEEDS).toFixed(0)}`);
-  assert.ok(junkHot / junk >= 0.75, `elevator + radar share ${(junkHot / junk).toFixed(2)}`);
-  assert.ok(near(cons / SEEDS, 690, 0.15), `container consumables per match ${(cons / SEEDS).toFixed(0)}`);
+  // Map v2: totals per 24-block area (AREA_K); the T3/T4 share was "elevator + radar" (now + Relay Hill).
+  assert.ok(near(junk / SEEDS / AREA_K, 21_300, 0.1), `junk per 24-block area ${(junk / SEEDS / AREA_K).toFixed(0)}`);
+  assert.ok(junkHot / junk >= 0.75, `T3 + T4 share ${(junkHot / junk).toFixed(2)}`);
+  assert.ok(near(cons / SEEDS / AREA_K, 690, 0.15), `container consumables per 24-block area ${(cons / SEEDS / AREA_K).toFixed(0)}`);
   assert.equal(hvWild, 0, "no 650+ CR junk in the wilds");
-  assert.ok(near(hv / SEEDS, 7.1, 0.2), `high-value junk per match ${(hv / SEEDS).toFixed(1)}`);
+  assert.ok(near(hv / SEEDS / AREA_K, 7.1, 0.2), `high-value junk per 24-block area ${(hv / SEEDS / AREA_K).toFixed(1)}`);
 });
 
 // ───────────────────────── floor loot
@@ -204,10 +211,11 @@ test("Steppe floor loot per match: ≈ 1.5k CR-eq total (v5 tuning), wilds ≈ 6
   }
   // v5 iteration 2: T3/T4 spawn chance 0.15 / 0.2 → 0.1 / 0.12, HIGH heavy ammo 12 → 6, bandage 20 → 10,
   // medkit 8 → 4 (1.9k → 1.5k, medkits ≈ 1.0 → 0.33).
-  assert.ok(near(cons / SEEDS, 1_510, 0.15), `floor consumables per match ${(cons / SEEDS).toFixed(0)}`);
-  assert.ok(wildItems / SEEDS < 14, `wild floor items per match ${(wildItems / SEEDS).toFixed(1)}`);
-  assert.ok(wildValue / SEEDS < 350, `wild floor value per match ${(wildValue / SEEDS).toFixed(0)}`);
-  assert.ok(near(medkits / SEEDS, 0.33, 0.3), `medkits per match ${(medkits / SEEDS).toFixed(2)}`);
+  // Map v2: per 24-block area (AREA_K).
+  assert.ok(near(cons / SEEDS / AREA_K, 1_510, 0.15), `floor consumables per 24-block area ${(cons / SEEDS / AREA_K).toFixed(0)}`);
+  assert.ok(wildItems / SEEDS / AREA_K < 14, `wild floor items per 24-block area ${(wildItems / SEEDS / AREA_K).toFixed(1)}`);
+  assert.ok(wildValue / SEEDS / AREA_K < 350, `wild floor value per 24-block area ${(wildValue / SEEDS / AREA_K).toFixed(0)}`);
+  assert.ok(near(medkits / SEEDS / AREA_K, 0.33, 0.3), `medkits per 24-block area ${(medkits / SEEDS / AREA_K).toFixed(2)}`);
 });
 
 // ───────────────────────── pool release
@@ -249,7 +257,7 @@ test("uniqueTierScore: top / rare / rest", () => {
   assert.equal(uniqueTierScore("nope", 3), 0);
 });
 
-test("pool containers: T3/T4 crate/toolbox/weapon_box/safe only; guarded ≈ 68 % of placements on the Steppe", () => {
+test("pool containers: T3/T4 crate/toolbox/weapon_box/safe only; guarded ≈ 66 % of placements on the Steppe (map v2; 72 % on 24 blocks)", () => {
   assert.ok(!POOL_CONTAINER_KINDS.includes("stash") && !POOL_CONTAINER_KINDS.includes("fridge"));
   assert.equal(poolContainerEligible({ kind: "safe", tier: 2 }), false);
   assert.equal(poolContainerEligible({ kind: "stash", tier: 4 }), false);
@@ -257,11 +265,13 @@ test("pool containers: T3/T4 crate/toolbox/weapon_box/safe only; guarded ≈ 68 
   assert.equal(poolContainerWeight({ tier: 3 }), 16);
   assert.equal(poolContainerWeight({ tier: 4, guarded: true }), 100);
   const elig = m.containers.filter(poolContainerEligible);
-  assert.equal(elig.length, 70);
+  // Map v2 (MAP_GEN_VERSION 4): 93 eligible = 68.3 per 24-block area (70 on the 24-block layout).
+  assert.equal(elig.length, 93);
+  assert.ok(near(elig.length / AREA_K, 70, 0.05), `eligible per 24-block area ${(elig.length / AREA_K).toFixed(1)}`);
   const guarded = elig.filter((c) => containerGuarded(c, m.bosses));
-  assert.equal(guarded.length, 24);
-  assert.equal(guarded.filter((c) => c.zone === "elevator").length, 7);
-  assert.equal(guarded.filter((c) => c.zone === "radar").length, 17);
+  assert.equal(guarded.length, 27);
+  assert.equal(guarded.filter((c) => c.zone === "elevator").length, 8);
+  assert.equal(guarded.filter((c) => c.zone === "radar").length, 19);
   const w = (c: (typeof elig)[number]) => poolContainerWeight({ tier: c.tier, guarded: containerGuarded(c, m.bosses) });
   const share = guarded.reduce((a, c) => a + w(c), 0) / elig.reduce((a, c) => a + w(c), 0);
   assert.ok(share > 0.6 && share < 0.78, `guarded weight share ${share.toFixed(3)}`);

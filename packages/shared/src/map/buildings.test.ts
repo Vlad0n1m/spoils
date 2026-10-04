@@ -56,7 +56,24 @@ test("BSP buildings: every room reachable from outside, rooms disjoint, doors op
           }
         }
         assert.ok(ok, `${where}: room ${JSON.stringify(r)} unreachable`);
+        // Map v2 furniture never walls off a pocket: every walkable cell of the room is reached.
+        for (let cy = Math.ceil(r.y / g.cell); cy * g.cell + g.cell / 2 < r.y + r.h; cy++) {
+          for (let cx = Math.ceil(r.x / g.cell); cx * g.cell + g.cell / 2 < r.x + r.w; cx++) {
+            const i = cy * g.cols + cx;
+            assert.ok(g.blocked[i] || reached[i], `${where}: pocket at cell ${cx},${cy} in room ${JSON.stringify(r)}`);
+          }
+        }
       }
+      // Furniture: inside a room, clear of doors and windows, flags by kind.
+      const wins = b.walls.filter((wl) => wl.k === "window");
+      for (const f of b.furniture) {
+        assert.ok(b.building.rooms.some((r) => f.x >= r.x && f.y >= r.y && f.x + f.w <= r.x + r.w && f.y + f.h <= r.y + r.h), `${where}: ${f.k} outside the rooms`);
+        for (const d of b.building.doors) assert.ok(!overlaps(f, d, f.k === "shelf" && arch === "warehouse" ? 0 : 80), `${where}: ${f.k} blocks a door`);
+        for (const wn of wins) assert.ok(!overlaps(f, wn, 40), `${where}: ${f.k} in front of a window`);
+        const low = SOLID.MOVE | SOLID.SHOT;
+        assert.equal(f.f, f.k === "shelf" || f.k === "lockers" ? SOLID.ALL : low, `${where}: ${f.k} flags`);
+      }
+      if (ARCH[arch].winEvery > 0 && ARCH[arch].winEvery <= 320 && w >= 512 && h >= 512) assert.ok(wins.length >= 2, `${where}: windows ${wins.length}`);
     }
   }
 });

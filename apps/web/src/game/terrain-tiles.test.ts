@@ -9,8 +9,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { TERRAIN, TERRAIN_INDOOR, TERRAIN_KIND_MASK, generateMap, type Terrain } from "@extract/shared";
 import {
+  FLOOR_SPRITE,
   GROUND_BASE,
   GROUND_LAYERS,
+  GROUND_OVERLAYS,
+  floorPlan,
+  overlayMask,
   MASK_RES,
   MASK_RING,
   MaskScratch,
@@ -207,5 +211,62 @@ describe("kindMask", () => {
   it("chunk regions include the ring on every side", () => {
     const r = chunkMaskRegion(2, 5, 1024, 64);
     assert.deepEqual(r, { c0: 32 - MASK_RING, r0: 80 - MASK_RING, cols: 16 + 2 * MASK_RING, rows: 16 + 2 * MASK_RING });
+  });
+});
+
+describe("map v2 ground variety and floors", () => {
+  const g = groundKinds(map);
+  const cols = map.terrainCols, rows = map.terrainRows;
+
+  it("overlay and floor art is loaded by assets.ts", () => {
+    for (const ov of GROUND_OVERLAYS) assert.ok((SPRITE_NAMES as readonly string[]).includes(ov.sprite), ov.sprite);
+    for (const s of Object.values(FLOOR_SPRITE)) assert.ok((SPRITE_NAMES as readonly string[]).includes(s), s);
+  });
+
+  it("overlay masks are seamless across chunks, stay inside their base kind and cover part of it", () => {
+    for (const ov of GROUND_OVERLAYS) {
+      // The same global cell from two overlapping regions gets the same texel.
+      const a = { c0: 100, r0: 120, cols: 20, rows: 20 };
+      const b = { c0: 110, r0: 125, cols: 20, rows: 20 };
+      const oa = new Uint8Array(20 * 20 * 4), ob = new Uint8Array(20 * 20 * 4);
+      overlayMask(g, cols, rows, a, ov, oa);
+      overlayMask(g, cols, rows, b, ov, ob);
+      for (let r = 5; r < 20; r++) for (let c = 10; c < 20; c++) {
+        assert.equal(oa[(r * 20 + c) * 4], ob[((r - 5) * 20 + (c - 10)) * 4], `${ov.sprite} seam at ${c},${r}`);
+      }
+      // Whole map: an eroded overlay never touches a cell next to another kind.
+      const all = { c0: 0, r0: 0, cols, rows };
+      const out = new Uint8Array(cols * rows * 4);
+      assert.ok(overlayMask(g, cols, rows, all, ov, out), `${ov.sprite} appears on the Steppe`);
+      let on = 0, base = 0;
+      for (let i = 0; i < cols * rows; i++) {
+        if (g[i] === ov.base) {
+          base++;
+          if (out[i * 4]! >= 128) on++;
+        }
+        if (out[i * 4]! === 0 || !ov.erode) continue;
+        const c = i % cols, r = Math.floor(i / cols);
+        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+          const rr = Math.min(rows - 1, Math.max(0, r + dr)), cc = Math.min(cols - 1, Math.max(0, c + dc));
+          assert.equal(g[rr * cols + cc], ov.base, `${ov.sprite} leaks past its base at ${c},${r}`);
+        }
+      }
+      // Patches, not a repaint: a visible share of the base, never most of it.
+      const share = on / Math.max(1, base);
+      console.log(`[overlay] ${ov.sprite}: ${(share * 100).toFixed(1)} % of its base`);
+      assert.ok(share > 0.05 && share < 0.45, `${ov.sprite} covers ${(share * 100).toFixed(1)} % of its base`);
+    }
+  });
+
+  it("floorPlan: houses get a ceramic kitchen in their smallest room, warehouses concrete", () => {
+    const house = map.buildings.find((b) => b.arch === "houseM" && b.rooms.length >= 3)!;
+    const p = floorPlan(house);
+    assert.equal(p.main, "wood");
+    assert.equal(p.rooms.length, 1);
+    const [ri, st] = p.rooms[0]!;
+    assert.equal(st, "ceramic");
+    for (const r of house.rooms) assert.ok(r.w * r.h >= house.rooms[ri]!.w * house.rooms[ri]!.h);
+    assert.equal(floorPlan(map.buildings.find((b) => b.arch === "warehouse")!).main, "concrete");
+    for (const b of map.buildings) assert.ok(floorPlan(b).main in FLOOR_SPRITE, b.arch);
   });
 });

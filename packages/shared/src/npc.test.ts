@@ -25,6 +25,8 @@ import { ITEM_FLAG } from "./inventory.js";
 import { itemDef } from "./item-defs.js";
 import { WEAPONS } from "./items.js";
 import { generateMap, generateMapWithReport } from "./map/generate.js";
+import { zoneCamp } from "./map/spots.js";
+import { ZONE_CAMPS } from "./map/steppe.js";
 import { getWalkGrid, mapHash, reachedNear, floodWalk, terrainByteAt, zoneAt } from "./map/query.js";
 import { TERRAIN, TERRAIN_INDOOR, TERRAIN_KIND_MASK, type NpcPost } from "./map/types.js";
 import {
@@ -169,7 +171,7 @@ test("rollMarauderKit: deterministic, ≤ 1 sniper per top squad, armor by armor
   assert.ok(snipers > 1000, "the top class does field snipers");
 });
 
-test("rollNpcSpawns: deterministic, exactly 2 draws per post, frequency ≈ chance, E ≈ 38 NPCs with bosses", () => {
+test("rollNpcSpawns: deterministic, exactly 2 draws per post, frequency ≈ chance, E ≈ 47 NPCs with bosses", () => {
   assert.deepEqual(rollNpcSpawns(1234, posts, 7), rollNpcSpawns(1234, posts, 7));
   // Reference implementation of the draw contract.
   for (const seed of [1, 99, 123456]) {
@@ -188,26 +190,33 @@ test("rollNpcSpawns: deterministic, exactly 2 draws per post, frequency ≈ chan
   }
   const N = 20_000;
   const hits = new Map<number, number>();
-  let total = 0, maxSeen = 0;
+  let total = 0, maxSeen = 0, capped = 0;
   for (let s = 0; s < N; s++) {
     const seed = (s * 2654435761) >>> 0;
     const bosses = rollBossSpawns(seed, m.bosses);
     const bossNpcs = bossGroupNpcCount(bosses);
     const sp = rollNpcSpawns(seed, posts, bossNpcs);
+    // Frequencies from the uncapped roll: on the map v2 the boss groups + marauders pass
+    // NPC.MAX_PER_RAID in ≈ 1.6 % of raids, and the cap then drops road camps first (next test).
+    for (const x of rollNpcSpawns(seed, posts, 0)) hits.set(x.postId, (hits.get(x.postId) ?? 0) + 1);
     for (const x of sp) {
-      hits.set(x.postId, (hits.get(x.postId) ?? 0) + 1);
       const p = posts[x.postId]!;
       assert.ok(x.members >= p.size[0] && x.members <= p.size[1]);
     }
     const n = bossNpcs + sp.reduce((a, x) => a + x.members, 0);
     assert.ok(n <= NPC.MAX_PER_RAID);
+    if (rollNpcSpawns(seed, posts, 0).length !== sp.length) capped++;
     total += n;
     maxSeen = Math.max(maxSeen, n);
   }
   for (const p of posts) assert.ok(Math.abs((hits.get(p.id) ?? 0) / N - p.chance) < 0.015, `post ${p.id}`);
   // v5 iteration 2 (C4): NPC_CAMPS.radar.squads 2 → 1 (E marauders 33.4 → 30.9, E NPCs 40 → ≈ 38).
-  assert.ok(Math.abs(total / N - 38) < 1.5, `E NPCs per raid ${(total / N).toFixed(2)}`);
-  assert.ok(near(expectedMarauders(posts), 30.9, 0.03), `E marauders ${expectedMarauders(posts).toFixed(2)}`);
+  // Map v2 (MAP_GEN_VERSION 4): 36 % more area and five new places with squads by tier
+  // (steppe.ts ZONE_CAMPS): E marauders 30.9 → 40.4 (+31 % for +36 % area), E NPCs ≈ 47.3; the
+  // MAX_PER_RAID cap (60) trims a squad in ≈ 1.6 % of raids.
+  assert.ok(Math.abs(total / N - 47.3) < 1.5, `E NPCs per raid ${(total / N).toFixed(2)}`);
+  assert.ok(near(expectedMarauders(posts), 40.4, 0.03), `E marauders ${expectedMarauders(posts).toFixed(2)}`);
+  assert.ok(capped / N < 0.03, `capped raids ${(capped / N).toFixed(3)}`);
 });
 
 test("rollNpcSpawns cap: drops whole squads — road camps first, then T1, then T2 …", () => {
@@ -309,12 +318,13 @@ test("pool release with carriers (model of planAllocation): R 0 → 0; R 3 → b
   assert.ok(r3Carriers / N < 0.1, `R = 3 carriers ${(r3Carriers / N).toFixed(3)}/raid`);
 });
 
-test("Steppe npc posts: counts per zone, sizes / chances from NPC_CAMPS, ids = index, golden digest", () => {
+test("Steppe npc posts: counts per zone, sizes / chances from NPC_CAMPS (map v2 places: ZONE_CAMPS), ids = index, golden digest", () => {
   assert.ok(Array.isArray(m.npcPosts));
   posts.forEach((p, i) => assert.equal(p.id, i));
   for (const z of m.zones) {
-    const camp = NPC_CAMPS[z.id];
-    assert.ok(camp, `NPC_CAMPS has zone ${z.id}`);
+    const camp = zoneCamp(z);
+    // The ten places of the 24-block layout keep their NPC_CAMPS rows; new places use ZONE_CAMPS.
+    assert.equal(camp, NPC_CAMPS[z.id] ?? ZONE_CAMPS[z.id], `${z.id} camp row`);
     const zp = posts.filter((p) => p.zone === z.id);
     assert.equal(zp.length, camp.squads, `${z.id} posts`);
     for (const p of zp) {
@@ -348,8 +358,8 @@ test("Steppe npc posts: counts per zone, sizes / chances from NPC_CAMPS, ids = i
   assert.equal((h >>> 0).toString(16).padStart(8, "0"), GOLDEN_POSTS, "npc posts digest");
 });
 
-/** Golden digest of MapData.npcPosts (MAP_GEN_VERSION 2). Update only for an intended placement change. */
-const GOLDEN_POSTS = "8b0d6862"; // v5 iteration 2: one radar squad (NPC_CAMPS.radar.squads 2 → 1)
+/** Golden digest of MapData.npcPosts (MAP_GEN_VERSION 4). Update only for an intended placement change. */
+const GOLDEN_POSTS = "8fcf3adf"; // map v2: 28 blocks, 15 places (v5 iteration 2 on MAP_GEN_VERSION 2–3: "8b0d6862")
 
 test("Steppe npc posts: clearances, terrain, reachability, patrol radius", () => {
   const g = getWalkGrid(m);

@@ -1,5 +1,5 @@
 /**
- * Map v2 data types ("Steppe", map memo + critique). The layout is FIXED per map version
+ * Map data types ("Steppe" layout, map memo + critique; MAP_GEN_VERSION 4 = the 28-block "map v2"). The layout is FIXED per map version
  * (generateMap(id), memoized); the match seed drives only loot, bosses and weather. Server and
  * client build the same MapData locally, so static geometry never goes over the network — the
  * client sends mapHash(map) on join to catch generator drift.
@@ -55,14 +55,35 @@ export interface Road {
 
 export type PropKind =
   | "border" | "wall" | "window" | "concrete_wall" | "fence" | "crate" | "ship_container" | "shelf" | "wagon"
-  | "sandbags" | "car" | "logpile" | "watchtower" | "silo" | "water";
+  | "sandbags" | "car" | "logpile" | "watchtower" | "silo" | "water"
+  // MAP_GEN_VERSION 4 interiors (BuiltBuilding.furniture): low cover (MOVE|SHOT) unless noted.
+  | "table" | "desk" | "sofa" | "armchair" | "bed" | "counter"
+  /** Tall locker bank (ALL). */
+  | "lockers";
 
 /** A solid rectangle with collision flags `f` (SOLID bits) and a render kind. */
 export interface MapRect extends SolidRect {
   k: PropKind;
   /** 0 = horizontal, 1 = vertical sprite orientation. */
   o?: 0 | 1;
+  /**
+   * Render variant (art only, never collision; not part of mapHash): see PROP_VARIANTS. Absent = 0.
+   */
+  v?: number;
 }
+
+/**
+ * Render variants per prop kind (MapRect.v indexes these lists; the client maps them to sprites).
+ * fence: chain-link / wooden / corrugated / barbed; car: wreck / burnt / pickup; crate: plain /
+ * small / open / military; shelf: warehouse rack / metal / wooden; table: square / round.
+ */
+export const PROP_VARIANTS = {
+  fence: ["chain", "wood", "corrugated", "barbed"],
+  car: ["wreck", "burnt", "pickup"],
+  crate: ["plain", "small", "open", "military"],
+  shelf: ["rack", "metal", "wood"],
+  table: ["square", "round"],
+} as const;
 
 /** Trees collide with their trunk (MapCircle r); the canopy drawn around it is this many times bigger. */
 export const TREE_CANOPY_MULT = 2.6;
@@ -73,16 +94,30 @@ export interface MapCircle extends SolidCircle {
   k: CircleKind;
 }
 
-/** Cosmetic ground decal (render only; footstep material comes from the terrain grid). */
+/**
+ * Cosmetic decal (render only, never collision, not hashed; footstep material comes from the
+ * terrain grid). Ground stains: puddle, oil, dirt, debris. MAP_GEN_VERSION 4 decor drawn above
+ * floors: rugs, paper litter, brick / plank rubble, and street furniture without collision (lamp
+ * posts, sign posts, notice boards — a top-down post is mostly overhang).
+ */
+export type DecalKind =
+  | "puddle" | "oil" | "dirt" | "debris"
+  | "rug" | "rug_round" | "papers" | "bricks" | "planks" | "lamp" | "sign" | "board";
+
 export interface Decal {
   x: number;
   y: number;
+  /** Half extent (px): the sprite covers x ± r, y ± r. */
   r: number;
-  k: "puddle" | "oil" | "dirt" | "debris";
+  k: DecalKind;
+  /** Quarter turns (0–3) for decor that has a direction (lamp arm, rug, board). Absent = 0. */
+  a?: 0 | 1 | 2 | 3;
 }
 
 export type BuildingArch =
-  | "houseS" | "houseM" | "barn" | "shed" | "warehouse" | "office" | "shop" | "barracks" | "bunker";
+  | "houseS" | "houseM" | "barn" | "shed" | "warehouse" | "office" | "shop" | "barracks" | "bunker"
+  // MAP_GEN_VERSION 4: town and roadside buildings.
+  | "clinic" | "garage" | "diner";
 
 /**
  * A building footprint. Its walls/windows are ordinary entries of MapData.rects (k "wall" /

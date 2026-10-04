@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { WORLD } from "../constants.js";
 import { circleIsFree, SOLID } from "../geometry.js";
 import { mulberry32 } from "../rng.js";
 import { generateMap } from "./generate.js";
@@ -76,7 +77,8 @@ test("zoneAt / chunkRange / nearestWalkCell", () => {
   assert.equal(zoneAt(m, z.rect.x + z.rect.w, z.rect.y + 10)?.id === "elevator", false); // right edge is exclusive
   assert.equal(zoneAt(m, 100, 100), undefined);
   assert.deepEqual(chunkRange(-50, -50, 1500, 2100), { cx0: 0, cy0: 0, cx1: 1, cy1: 2 });
-  assert.deepEqual(chunkRange(24_000, 0, 99_999, 10), { cx0: 23, cy0: 0, cx1: 23, cy1: 0 });
+  // Clamped to the last chunk of the 28-block map (map v2).
+  assert.deepEqual(chunkRange(24_000, 0, 99_999, 10), { cx0: 23, cy0: 0, cx1: WORLD.BLOCKS - 1, cy1: 0 });
   const g = getWalkGrid(m);
   const wall = m.rects.find((q) => q.k === "wall" && q.w > 200)!;
   const i = nearestWalkCell(g, wall.x + wall.w / 2, wall.y + wall.h / 2, 96);

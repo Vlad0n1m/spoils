@@ -21,8 +21,11 @@ import { mapRuntime } from "./nav.js";
 import { counterUid, testMap } from "./test-utils.js";
 import type { RosterEntry } from "./types.js";
 
-/** MAP_GEN_VERSION 3: v2 geometry ("d066dcca") with SOLID.WINDOW flags on the windows (generate.test.ts). */
-const STEPPE_HASH = "eba1a43b";
+/**
+ * MAP_GEN_VERSION 4 (map v2: 28 blocks, 15 places, furnished interiors; generate.test.ts GOLDEN_HASH).
+ * 3 was the 24-block layout with SOLID.WINDOW windows ("eba1a43b").
+ */
+const STEPPE_HASH = "dda13fd8";
 
 function roster(humans: number): RosterEntry[] {
   return Array.from({ length: humans }, (_, i) => ({ userId: `u${i}`, nickname: `H${i}` }));

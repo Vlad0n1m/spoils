@@ -70,6 +70,18 @@ export function rngFor(seed: number, label: string): Rng {
   return mulberry32(h >>> 0);
 }
 
+/**
+ * Deterministic 0..n-1 from integer coordinates (art variants): no rng draw, so choosing a variant
+ * never shifts the rest of the layout.
+ */
+export function vhash(x: number, y: number, n: number): number {
+  let h = Math.imul(Math.round(x) | 0, 0x27d4eb2d) ^ Math.imul(Math.round(y) | 0, 0x165667b1);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x2c1b3c6d);
+  h ^= h >>> 12;
+  return (h >>> 0) % n;
+}
+
 export function grow(r: Rect, m: number): Rect {
   return { x: r.x - m, y: r.y - m, w: r.w + 2 * m, h: r.h + 2 * m };
 }

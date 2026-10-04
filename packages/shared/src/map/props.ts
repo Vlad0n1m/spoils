@@ -12,15 +12,16 @@ import type { Rect } from "../geometry.js";
 import type { Rng } from "../rng.js";
 import { ALL, FENCE, LOW, type GenCtx } from "./context.js";
 import { ROAD_MASK } from "./terrain.js";
-import { TERRAIN } from "./types.js";
-import { chance, pickW, ri } from "./util.js";
+import { TERRAIN, type Decal, type ZoneKind } from "./types.js";
+import { chance, pickW, ri, vhash } from "./util.js";
 
 // ───────────────────────── primitives (each checks placement, returns false when blocked)
 
-export function crate(ctx: GenCtx, x: number, y: number, margin = 32): boolean {
+/** Crate 64×64 (ALL). Art variant from the position (plain / small / open), or the military box. */
+export function crate(ctx: GenCtx, x: number, y: number, margin = 32, military = false): boolean {
   const r = { x: Math.round(x) - 32, y: Math.round(y) - 32, w: 64, h: 64 };
   if (!ctx.free(r, margin)) return false;
-  ctx.rect(r.x, r.y, 64, 64, ALL, "crate");
+  ctx.rect(r.x, r.y, 64, 64, ALL, "crate", undefined, 0, military ? 3 : vhash(r.x, r.y, 3));
   return true;
 }
 
@@ -56,13 +57,16 @@ export function shipContainer(ctx: GenCtx, x: number, y: number, vert: boolean, 
 }
 
 /** Car wreck 224×112 (MOVE|SHOT cover). `onRoad` allows the road band. */
-export function car(ctx: GenCtx, cx: number, cy: number, vert: boolean, onRoad: boolean, margin = 40): boolean {
+export function car(ctx: GenCtx, cx: number, cy: number, vert: boolean, onRoad: boolean, margin = 40, variant?: number): boolean {
   const w = vert ? 112 : 224, h = vert ? 224 : 112;
   const r = { x: Math.round(cx - w / 2), y: Math.round(cy - h / 2), w, h };
   if (onRoad ? !ctx.freeOnRoad(r, margin) : !ctx.free(r, margin)) return false;
-  ctx.rect(r.x, r.y, w, h, LOW, "car", vert ? 1 : 0);
+  ctx.rect(r.x, r.y, w, h, LOW, "car", vert ? 1 : 0, 0, variant ?? CAR_ART[vhash(r.x, r.y, CAR_ART.length)]!);
   return true;
 }
+
+/** Car art by weight: plain wreck twice as often as the burnt shell or the pickup. */
+const CAR_ART = [0, 0, 1, 2] as const;
 
 export function tree(ctx: GenCtx, x: number, y: number, r: number, margin = 40): boolean {
   // Footprint is the trunk box (+ margin): canopies may overlap, trunks keep a walkable gap.
@@ -92,7 +96,7 @@ export function bush(ctx: GenCtx, x: number, y: number, r: number): boolean {
  * gaps given as [start, length] offsets along the line. Segments that would hit anything are
  * dropped (a missing fence panel never breaks reachability; an extra one could).
  */
-export function fenceLine(ctx: GenCtx, x0: number, y0: number, x1: number, y1: number, gaps: Array<[number, number]>): void {
+export function fenceLine(ctx: GenCtx, x0: number, y0: number, x1: number, y1: number, gaps: Array<[number, number]>, style = 0): void {
   const horiz = y0 === y1;
   const len = horiz ? x1 - x0 : y1 - y0;
   const sorted = gaps.slice().sort((a, b) => a[0] - b[0]);
@@ -101,13 +105,74 @@ export function fenceLine(ctx: GenCtx, x0: number, y0: number, x1: number, y1: n
     if (b - a < 48) return;
     const r: Rect = horiz ? { x: x0 + a, y: y0 - 8, w: b - a, h: 16 } : { x: x0 - 8, y: y0 + a, w: 16, h: b - a };
     if (!ctx.free(r, 4)) return;
-    ctx.rect(r.x, r.y, r.w, r.h, FENCE, "fence", horiz ? 0 : 1);
+    ctx.rect(r.x, r.y, r.w, r.h, FENCE, "fence", horiz ? 0 : 1, 0, style);
   };
   for (const [at, gl] of sorted) {
     emit(cur, at);
     cur = Math.max(cur, at + gl);
   }
   emit(cur, len);
+}
+
+/** Fence art per zone kind (PROP_VARIANTS.fence): wooden in villages, corrugated in yards, barbed on bases. */
+export const FENCE_STYLE: Readonly<Record<ZoneKind, number>> = {
+  village: 1, farm: 1, lumber: 1, industrial: 2, gas: 0, rail: 0, quarry: 0, military: 3, checkpoint: 3,
+};
+
+/**
+ * Street furniture without collision (decals): lamp posts, sign posts, notice boards. The base must
+ * stand on open ground (no solid, not indoors, not in water); `a` turns the art (lamp arm) toward
+ * the road.
+ */
+export function decor(ctx: GenCtx, x: number, y: number, k: "lamp" | "sign" | "board", a: 0 | 1 | 2 | 3 = 0): boolean {
+  const base = { x: Math.round(x) - 20, y: Math.round(y) - 20, w: 40, h: 40 };
+  if (!ctx.inBounds(base, 64) || !ctx.blocks.free(base, 8)) return false;
+  const t = ctx.terrain.byteAt(x, y);
+  if ((t & 0x80) !== 0) return false;
+  const kind = t & 0x7f;
+  if (kind === TERRAIN.WATER || kind === TERRAIN.SHALLOW || kind === TERRAIN.BRIDGE) return false;
+  const r: Record<typeof k, number> = { lamp: 96, sign: 72, board: 80 };
+  ctx.decal(x, y, r[k], k, a);
+  return true;
+}
+
+/** Quarter turn that points +x art along (dx, dy). */
+export function quarterToward(dx: number, dy: number): 0 | 1 | 2 | 3 {
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 0 : 2;
+  return dy >= 0 ? 1 : 3;
+}
+
+/**
+ * Lamp posts along a road polyline inside `area`, every `step` px, alternating sides, arm over the
+ * road. Off-road (the curb + `out` px) so they never stand in a lane.
+ */
+export function streetLamps(ctx: GenCtx, pts: readonly number[], width: number, area: Rect, step = 560, out = 48): number {
+  let n = 0, side = 1, carry = step / 2;
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    const x0 = pts[i]!, y0 = pts[i + 1]!, dx = pts[i + 2]! - x0, dy = pts[i + 3]! - y0;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len === 0) continue;
+    const ux = dx / len, uy = dy / len;
+    let s = carry;
+    for (; s < len; s += step) {
+      const px = x0 + ux * s, py = y0 + uy * s;
+      const off = width / 2 + out;
+      const lx = px - uy * off * side, ly = py + ux * off * side;
+      side = -side;
+      if (lx < area.x || ly < area.y || lx > area.x + area.w || ly > area.y + area.h) continue;
+      if (decor(ctx, lx, ly, "lamp", quarterToward(px - lx, py - ly))) n++;
+    }
+    carry = s - len;
+  }
+  return n;
+}
+
+/** Decor decal on open ground inside a room or yard (rubble, litter): never on a solid. */
+export function groundDecal(ctx: GenCtx, x: number, y: number, r: number, k: Decal["k"]): boolean {
+  const base = { x: Math.round(x) - 16, y: Math.round(y) - 16, w: 32, h: 32 };
+  if (!ctx.inBounds(base, 64) || !ctx.blocks.free(base, 4)) return false;
+  ctx.decal(x, y, r, k);
+  return true;
 }
 
 /** Random point in `area`. */
@@ -197,9 +262,9 @@ export function clutter(
   ctx: GenCtx,
   rng: Rng,
   area: Rect,
-  n: { crates?: number; barrels?: number; logpiles?: number; decals?: number; decal?: "oil" | "dirt" | "debris" },
+  n: { crates?: number; barrels?: number; logpiles?: number; decals?: number; decal?: "oil" | "dirt" | "debris"; military?: boolean },
 ): void {
-  if (n.crates) scatter(rng, area, n.crates, (x, y) => crate(ctx, x, y, 40));
+  if (n.crates) scatter(rng, area, n.crates, (x, y) => crate(ctx, x, y, 40, n.military));
   if (n.barrels) scatter(rng, area, n.barrels, (x, y) => barrel(ctx, x, y, 32));
   if (n.logpiles) scatter(rng, area, n.logpiles, (x, y) => logpile(ctx, x, y, chance(rng, 0.5)));
   if (n.decals && n.decal) {
