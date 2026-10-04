@@ -20,7 +20,7 @@ import {
  * ago). Every query is either on an index or bounded to the window (spec of the admin step):
  * - online: raids_world_cycle_idx + raid_entries_match_idx; stale actives via the one-active partial index;
  * - entries: raid_entries_cycle_user_idx (cycle_id >= the window's first cycle) + created_at;
- * - exits: raid_exits_at_idx; PvP kills: pvp_kills_board_idx (ranked = any, at >= since);
+ * - exits: raid_exits_at_cover_idx (index-only); PvP kills: pvp_kills_board_idx (ranked = any, at >= since);
  * - CR: credit_ledger_reason_at_idx: a loose index scan of the reasons (recursive CTE), then one
  *   (reason, at >= since) range per reason (LATERAL, so the plan does not depend on table stats);
  * - treasury: money_ledger_account_at_idx (account 'house'); all-time house totals on the same index;

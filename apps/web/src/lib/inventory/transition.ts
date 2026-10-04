@@ -112,9 +112,9 @@ export async function moveItem(
   return applyMove(tx, it, patch, ev);
 }
 
-/** moveItem for a row the caller already locked and checked. */
-export async function applyMove(tx: Tx, it: LockedItem, patch: ItemPatch, ev: ItemEventInfo): Promise<LockedItem> {
-  const next: LockedItem = {
+/** The row after `patch` (pure: applyMove and applyMoves write exactly this). */
+export function nextOf(it: LockedItem, patch: ItemPatch): LockedItem {
+  return {
     ...it,
     state: patch.state,
     ownerId: patch.ownerId !== undefined ? patch.ownerId : it.ownerId,
@@ -127,6 +127,26 @@ export async function applyMove(tx: Tx, it: LockedItem, patch: ItemPatch, ev: It
     lockRaids: Math.max(0, it.lockRaids + (patch.lockRaidsDelta ?? 0)),
     bound: it.bound || patch.bind === true,
   };
+}
+
+/** The item_events row of a move (applyMove and applyMoves journal exactly this). */
+function eventRow(it: LockedItem, next: LockedItem, ev: ItemEventInfo): typeof itemEvents.$inferInsert {
+  return {
+    itemId: it.id,
+    fromState: it.state,
+    toState: next.state,
+    fromOwner: it.ownerId,
+    toOwner: next.ownerId,
+    matchId: next.matchId ?? it.matchId,
+    reason: ev.reason,
+    refId: ev.refId,
+    durability: next.durability,
+  };
+}
+
+/** moveItem for a row the caller already locked and checked. */
+export async function applyMove(tx: Tx, it: LockedItem, patch: ItemPatch, ev: ItemEventInfo): Promise<LockedItem> {
+  const next = nextOf(it, patch);
   await tx.execute(sql`
     update items set
       state = ${next.state},
@@ -139,21 +159,71 @@ export async function applyMove(tx: Tx, it: LockedItem, patch: ItemPatch, ev: It
       version = version + 1,
       updated_at = now()
     where id = ${it.id}`);
-  await tx
-    .insert(itemEvents)
-    .values({
-      itemId: it.id,
-      fromState: it.state,
-      toState: next.state,
-      fromOwner: it.ownerId,
-      toOwner: next.ownerId,
-      matchId: next.matchId ?? it.matchId,
-      reason: ev.reason,
-      refId: ev.refId,
-      durability: next.durability,
-    })
-    .onConflictDoNothing();
+  await tx.insert(itemEvents).values(eventRow(it, next, ev)).onConflictDoNothing();
   return next;
+}
+
+/**
+ * lockItem for many ids in one statement (`FOR UPDATE` in id order, so two batch lockers never
+ * deadlock). Keyed by the lowercase id; ids that are not uuids or do not exist are absent.
+ */
+export async function lockItems(tx: Tx, ids: readonly string[]): Promise<Map<string, LockedItem>> {
+  const uniq = [...new Set(ids.filter(isUuid).map((id) => id.toLowerCase()))];
+  const out = new Map<string, LockedItem>();
+  for (let i = 0; i < uniq.length; i += MOVE_BATCH) {
+    const part = uniq.slice(i, i + MOVE_BATCH);
+    const res = await tx.execute<ItemRow>(sql`
+      select * from items where id in (${sql.join(part.map((id) => sql`${id}::uuid`), sql`, `)}) order by id for update`);
+    for (const r of res.rows) out.set(String(r.id).toLowerCase(), fromRow(r));
+  }
+  return out;
+}
+
+/** Rows per statement of lockItems / applyMoves (well under Postgres' 65 535 bind parameters). */
+const MOVE_BATCH = 500;
+
+export interface PlannedMove {
+  /** The locked row as it is now (lockItems / lockMatchItems), already checked by the caller. */
+  it: LockedItem;
+  patch: ItemPatch;
+  ev: ItemEventInfo;
+}
+
+/**
+ * applyMove for many locked, checked rows of distinct items: one UPDATE … FROM (VALUES …) and one
+ * multi-row journal insert per MOVE_BATCH moves instead of two statements per item (the shard-end
+ * N+1, docs/DB_REVIEW.md). Writes exactly what applyMove writes, journal rows in `moves` order.
+ * Returns the rows after the moves, in order.
+ */
+export async function applyMoves(tx: Tx, moves: readonly PlannedMove[]): Promise<LockedItem[]> {
+  const nexts = moves.map((m) => nextOf(m.it, m.patch));
+  if (new Set(nexts.map((n) => n.id)).size !== nexts.length) throw new Error("applyMoves: an item moves twice in one batch");
+  for (let i = 0; i < moves.length; i += MOVE_BATCH) {
+    const part = nexts.slice(i, i + MOVE_BATCH);
+    const rows = part.map(
+      (n) =>
+        sql`(${n.id}::uuid, ${n.state}::item_state, ${n.ownerId}::uuid, ${n.matchId}::uuid, ${n.loadoutId}::uuid, ${n.durability}::float8, ${n.lockRaids}::smallint, ${n.bound}::boolean)`,
+    );
+    // The id list lets the planner fetch the rows by primary key instead of hashing all of items.
+    await tx.execute(sql`
+      update items set
+        state = v.state,
+        owner_id = v.owner_id,
+        match_id = v.match_id,
+        loadout_id = v.loadout_id,
+        durability = v.durability,
+        lock_raids = v.lock_raids,
+        bound = v.bound,
+        version = version + 1,
+        updated_at = now()
+      from (values ${sql.join(rows, sql`, `)}) as v(id, state, owner_id, match_id, loadout_id, durability, lock_raids, bound)
+      where items.id = v.id and items.id in (${sql.join(part.map((n) => sql`${n.id}::uuid`), sql`, `)})`);
+    await tx
+      .insert(itemEvents)
+      .values(moves.slice(i, i + MOVE_BATCH).map((m, k) => eventRow(m.it, part[k]!, m.ev)))
+      .onConflictDoNothing();
+  }
+  return nexts;
 }
 
 /** Locks every item of a match still in_raid (end sweep, void). Ordered by id to avoid deadlocks. */

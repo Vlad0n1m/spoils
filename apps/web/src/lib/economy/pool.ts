@@ -24,7 +24,7 @@ import {
   type SettledItem,
 } from "@extract/shared";
 import type { Tx } from "../inventory/db";
-import { applyMove, lockItem, type LockedItem } from "../inventory/transition";
+import { applyMove, applyMoves, lockItem, lockItems, nextOf, type LockedItem, type PlannedMove } from "../inventory/transition";
 import { PARAM, getNumberParam, lockNumberParam, setParam } from "./params";
 import { itemRefValueCr, toRaidDur } from "./value";
 
@@ -66,13 +66,21 @@ export interface PoolEntryResult {
 export async function enterPool(tx: Tx, matchId: string, cands: readonly PoolCandidate[]): Promise<PoolEntryResult> {
   const out: PoolEntryResult = { pooled: [], destroyed: [], taxed: [], skipped: [] };
   const entering: Array<{ uid: string; value: number }> = [];
+  // Set-based (docs/DB_REVIEW.md): every candidate is locked in one statement and the moves are
+  // written in one batch, instead of three statements per item. `rows` follows the moves, so a
+  // candidate listed twice finds its item already moved and is skipped, as one by one.
+  const rows = await lockItems(tx, cands.map((c) => c.id));
+  const moves: PlannedMove[] = [];
   for (const c of cands) {
-    const it = await lockItem(tx, c.id);
+    const it = rows.get(c.id.toLowerCase());
     if (!it || it.state !== "in_raid" || it.matchId !== matchId) {
       out.skipped.push(c.id);
       continue;
     }
-    const moved = await poolOne(tx, it, c, c.refId ?? matchId);
+    const move = poolMove(it, c, c.refId ?? matchId);
+    const moved = nextOf(it, move.patch);
+    rows.set(it.id, moved);
+    moves.push(move);
     if (moved.state === "destroyed") out.destroyed.push(it.id);
     else {
       out.pooled.push(it.id);
@@ -81,28 +89,28 @@ export async function enterPool(tx: Tx, matchId: string, cands: readonly PoolCan
       }
     }
   }
+  await applyMoves(tx, moves);
   if (entering.length > 0) out.taxed = await applyTreasuryTax(tx, matchId, entering);
   return out;
 }
 
-async function poolOne(tx: Tx, it: LockedItem, c: PoolCandidate, refId: string): Promise<LockedItem> {
+/** The pool entry of one in-raid item: lost_pool at poolEntry's durability, or destroyed. */
+function poolMove(it: LockedItem, c: PoolCandidate, refId: string): PlannedMove {
   const cur =
     c.reportedPct !== undefined && Number.isFinite(c.reportedPct) ? Math.min(it.durability, c.reportedPct) : it.durability;
   const dur = poolEntry({ dur: cur, bound: it.bound }, c.broke);
   if (dur === null) {
-    return applyMove(
-      tx,
+    return {
       it,
-      { state: "destroyed", ownerId: null, matchId: null, loadoutId: null, durability: Math.max(0, cur) },
-      { reason: "destroy", refId },
-    );
+      patch: { state: "destroyed", ownerId: null, matchId: null, loadoutId: null, durability: Math.max(0, cur) },
+      ev: { reason: "destroy", refId },
+    };
   }
-  return applyMove(
-    tx,
+  return {
     it,
-    { state: "lost_pool", ownerId: null, matchId: null, loadoutId: null, durability: dur },
-    { reason: c.reason, refId },
-  );
+    patch: { state: "lost_pool", ownerId: null, matchId: null, loadoutId: null, durability: dur },
+    ev: { reason: c.reason, refId },
+  };
 }
 
 /** 1% tax on entering value; taken items lost_pool → treasury. Returns the taken ids. */
@@ -143,32 +151,35 @@ export async function expireToTreasury(
   cands: readonly ExpireCandidate[],
 ): Promise<{ treasury: string[]; destroyed: string[]; skipped: string[] }> {
   const out = { treasury: [] as string[], destroyed: [] as string[], skipped: [] as string[] };
+  // Set-based like enterPool: one lock statement, one batch of moves.
+  const rows = await lockItems(tx, cands.map((c) => c.id));
+  const moves: PlannedMove[] = [];
   for (const c of cands) {
-    const it = await lockItem(tx, c.id);
+    const it = rows.get(c.id.toLowerCase());
     if (!it || it.state !== "in_raid" || it.matchId !== matchId) {
       out.skipped.push(c.id);
       continue;
     }
     const dur =
       c.reportedPct !== undefined && Number.isFinite(c.reportedPct) ? Math.min(it.durability, c.reportedPct) : it.durability;
-    if (it.bound || !(dur > 0)) {
-      await applyMove(
-        tx,
-        it,
-        { state: "destroyed", ownerId: null, matchId: null, loadoutId: null, durability: Math.max(0, dur) },
-        { reason: "destroy", refId: matchId },
-      );
-      out.destroyed.push(it.id);
-      continue;
-    }
-    await applyMove(
-      tx,
-      it,
-      { state: "treasury", ownerId: null, matchId: null, loadoutId: null, durability: dur },
-      { reason: "expire", refId: matchId },
-    );
-    out.treasury.push(it.id);
+    const move: PlannedMove =
+      it.bound || !(dur > 0)
+        ? {
+            it,
+            patch: { state: "destroyed", ownerId: null, matchId: null, loadoutId: null, durability: Math.max(0, dur) },
+            ev: { reason: "destroy", refId: matchId },
+          }
+        : {
+            it,
+            patch: { state: "treasury", ownerId: null, matchId: null, loadoutId: null, durability: dur },
+            ev: { reason: "expire", refId: matchId },
+          };
+    rows.set(it.id, nextOf(it, move.patch));
+    moves.push(move);
+    if (move.patch.state === "destroyed") out.destroyed.push(it.id);
+    else out.treasury.push(it.id);
   }
+  await applyMoves(tx, moves);
   return out;
 }
 

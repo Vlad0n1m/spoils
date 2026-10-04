@@ -108,6 +108,8 @@ export const users = pgTable(
   (t) => ({
     emailIdx: uniqueIndex("users_email_idx").on(t.email),
     nickIdx: uniqueIndex("users_nickname_idx").on(t.nickname),
+    /** Case-insensitive nickname lookup (lib/social/common.ts findUserByNickname; migration 010). */
+    nickLowerIdx: index("users_nickname_lower_idx").on(sql`lower(${t.nickname})`),
     depositIdx: uniqueIndex("users_deposit_idx").on(t.depositAddress),
     /** One account per wallet (NULLs do not collide). */
     walletIdx: uniqueIndex("users_wallet_pubkey_idx").on(t.walletPubkey),
@@ -362,6 +364,10 @@ export const items = pgTable(
     match: index("items_match_idx").on(t.matchId),
     loadout: index("items_loadout_idx").on(t.loadoutId),
     pool: index("items_state_def_idx").on(t.state, t.defId, t.rarity),
+    /** Tradable giveaway kits issued (lib/inventory/starter.ts tradableKitsIssued; migration 010). */
+    giveawayTradable: index("items_giveaway_tradable_idx")
+      .on(t.id)
+      .where(sql`origin = 'giveaway' and bound = false`),
     durRange: check(
       "items_durability_range",
       sql`${t.durability} >= 0 and ${t.durability} <= ${t.maxDurability} and ${t.maxDurability} <= 100`,
@@ -392,6 +398,10 @@ export const itemEvents = pgTable(
   (t) => ({
     once: uniqueIndex("item_events_once").on(t.itemId, t.reason, t.refId),
     item: index("item_events_item_idx").on(t.itemId, t.at),
+    /** Pool allocations of a match / an entry (raids.ts poolAllocatedIds, voidEntryTx; migration 010). */
+    match: index("item_events_match_idx")
+      .on(t.matchId, t.reason)
+      .where(sql`match_id is not null`),
   }),
 );
 
@@ -540,7 +550,12 @@ export const raidExits = pgTable(
     user: index("raid_exits_user_idx").on(t.userId, t.at),
     matchUser: index("raid_exits_match_user_idx").on(t.matchId, t.userId),
     cycle: index("raid_exits_cycle_idx").on(t.cycleId),
-    at: index("raid_exits_at_idx").on(t.at),
+    /**
+     * Time ranges answered from the index alone (migration 010, replaces raid_exits_at_idx): the NPC
+     * leaderboard and its /me rank (lib/world/leaderboards.ts), /economy raids 24 h, admin exits and
+     * active players. The heap rows carry the jsonb report and are an order of magnitude wider.
+     */
+    atCover: index("raid_exits_at_cover_idx").on(t.at, t.userId, t.guest, t.exit, t.credits, t.npcKills, t.bossKills),
   }),
 );
 
@@ -714,6 +729,8 @@ export const trades = pgTable(
     oneTradePerListing: uniqueIndex("trades_listing_once").on(t.listingId),
     templateAt: index("trades_template_at_idx").on(t.template, t.at),
     buyerAt: index("trades_buyer_at_idx").on(t.buyerId, t.at),
+    /** Latest trades of every template (lib/market/market.ts marketHistory; migration 010). */
+    at: index("trades_at_idx").on(t.at),
   }),
 );
 

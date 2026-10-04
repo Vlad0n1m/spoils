@@ -401,7 +401,13 @@ const LISTING_COLUMNS = sql`l.id, l.item_id, i.def_id, i.rarity, i.durability, i
   u.nickname as seller_nick, l.template, l.price_minor, l.status, l.visible_at, l.expires_at, l.created_at,
   l.closed_at, l.fee_cr`;
 
-/** Open lots visible to the viewer (their own pending lots included), filtered and sorted. */
+/**
+ * Open lots visible to the viewer (their own pending lots included), filtered and sorted. Sorts on
+ * listing columns pick the page from `listings` alone and join items / users for those rows only
+ * (every listing has its item: FK, never deleted), so a page costs ~2 × limit primary-key lookups
+ * instead of a hash join over every item and user (docs/DB_REVIEW.md). The rarity sort needs
+ * items.rarity, so it joins first.
+ */
 export async function browseListings(db: Db, q: BrowseQuery): Promise<ListingRowDto[]> {
   const now = q.now ?? new Date();
   const limit = Math.max(1, Math.min(200, q.limit ?? 100));
@@ -414,18 +420,27 @@ export async function browseListings(db: Db, q: BrowseQuery): Promise<ListingRow
         : q.sort === "rarity"
           ? sql`i.rarity desc, l.price_minor asc`
           : sql`l.price_minor asc, l.created_at asc`;
-  const res = await db.execute<ListingReadRow>(sql`
-    select ${LISTING_COLUMNS}
-    from listings l
-    join items i on i.id = l.item_id
-    left join users u on u.id = l.seller_id
-    where l.status in ('pending', 'active')
+  const where = sql`l.status in ('pending', 'active')
       and l.expires_at > ${now}
       and (l.visible_at <= ${now} ${q.viewerId ? sql`or l.seller_id = ${q.viewerId}` : sql``})
       ${q.template ? sql`and l.template = ${q.template}` : sql``}
-      ${prefix ? sql`and l.template like ${prefix + "%"}` : sql``}
-    order by ${order}
-    limit ${limit}`);
+      ${prefix ? sql`and l.template like ${prefix + "%"}` : sql``}`;
+  const res =
+    q.sort === "rarity"
+      ? await db.execute<ListingReadRow>(sql`
+          select ${LISTING_COLUMNS}
+          from listings l
+          join items i on i.id = l.item_id
+          left join users u on u.id = l.seller_id
+          where ${where}
+          order by ${order}
+          limit ${limit}`)
+      : await db.execute<ListingReadRow>(sql`
+          select ${LISTING_COLUMNS}
+          from (select * from listings l where ${where} order by ${order} limit ${limit}) l
+          join items i on i.id = l.item_id
+          left join users u on u.id = l.seller_id
+          order by ${order}`);
   return res.rows.map((r) => toRow(r, q.viewerId));
 }
 

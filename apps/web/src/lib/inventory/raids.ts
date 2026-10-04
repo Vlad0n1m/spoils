@@ -36,7 +36,7 @@ import { enterPool, expireToTreasury, type PoolCandidate } from "../economy/pool
 import { fromRaidDur } from "../economy/value";
 import type { Db, Tx } from "./db";
 import { releaseLoadout } from "./loadout";
-import { applyMove, isUuid, lockItem, lockLoadoutItems, lockMatchItems, addStack } from "./transition";
+import { applyMove, applyMoves, isUuid, lockItem, lockLoadoutItems, lockMatchItems, addStack, type PlannedMove } from "./transition";
 import { worldDate } from "../world/clock";
 import { enqueueMatchSettled, enqueueRareExtracts } from "../chain/queue";
 import { advanceQuestsForExit } from "../quests/quests";
@@ -940,18 +940,13 @@ export async function voidOrphans(db: Db, boot: GameServerBoot, now = new Date()
 }
 
 async function voidRaidTx(tx: Tx, matchId: string, now: Date): Promise<void> {
-  for (const it of await lockMatchItems(tx, matchId)) {
-    if (it.loadoutId && it.ownerId) {
-      await applyMove(tx, it, { state: "in_stash", matchId: null, loadoutId: null }, { reason: "void", refId: matchId });
-    } else {
-      await applyMove(
-        tx,
-        it,
-        { state: "lost_pool", ownerId: null, matchId: null, loadoutId: null },
-        { reason: "void", refId: matchId },
-      );
-    }
-  }
+  // Every item of the raid in one batch of moves (docs/DB_REVIEW.md), not two statements per item.
+  const moves = (await lockMatchItems(tx, matchId)).map((it): PlannedMove =>
+    it.loadoutId && it.ownerId
+      ? { it, patch: { state: "in_stash", matchId: null, loadoutId: null }, ev: { reason: "void", refId: matchId } }
+      : { it, patch: { state: "lost_pool", ownerId: null, matchId: null, loadoutId: null }, ev: { reason: "void", refId: matchId } },
+  );
+  await applyMoves(tx, moves);
   const los = await tx
     .select({ id: loadouts.id, userId: loadouts.userId })
     .from(loadouts)

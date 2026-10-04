@@ -98,7 +98,12 @@ export async function leaderboard(
   };
 }
 
-/** The caller's own rank (`count(*) + 1` of values above theirs); null when they are not on the board. */
+/**
+ * The caller's own rank (`count(*) + 1` of values above theirs); null when they are not on the board.
+ * `b` is NOT MATERIALIZED: the caller's value is then computed for that user only (the uid filter is
+ * pushed into the board subquery) and the count reads the board once, instead of materializing the
+ * whole board first (level board: an index range instead of every user; docs/DB_REVIEW.md).
+ */
 export async function leaderboardMe(
   db: Db,
   userId: string,
@@ -109,7 +114,7 @@ export async function leaderboardMe(
   const p: LeaderboardPeriod = board === "level" ? "all" : period;
   const { q } = boardValues(board, p, now);
   const r = await db.execute<{ value: number | null; rank: number }>(sql`
-    with b as (${q}),
+    with b as not materialized (${q}),
          me as (select value from b where uid = ${userId}::uuid)
     select (select value from me)::int as value,
            ((select count(*) from b where b.value > (select value from me)) + 1)::int as rank`);
