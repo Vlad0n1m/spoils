@@ -10,6 +10,7 @@ import { safeAuthRedirect } from "@/lib/safe-auth-redirect";
 import { Reveal } from "@/components/reveal";
 import { authInputClass, authLabelClass } from "@/components/auth-field-styles";
 import { BRAND } from "@/lib/brand";
+import { ALPHA_SHORT } from "@/content/alpha";
 
 const glass =
   "rounded-[2rem] border border-white/10 bg-zooa-dark/80 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_20px_40px_-15px_rgba(0,0,0,0.35)] backdrop-blur md:p-8";
@@ -92,6 +93,7 @@ export function RegisterForm() {
           <p className="font-body mt-4 max-w-[52ch] text-base leading-relaxed text-white/65">
             Pick a nickname, secure password, and a real email. Your raider name is yours across raids.
           </p>
+          <AlphaNotice />
           <Link
             href="/auth/login"
             className="mt-8 inline-flex text-sm font-medium text-zooa-lime/90 underline-offset-4 transition hover:text-zooa-lime hover:underline"
@@ -167,5 +169,24 @@ export function RegisterForm() {
         </Reveal>
       </div>
     </div>
+  );
+}
+
+/** B12: the alpha rules in three lines, before the account exists (full text on /alpha). */
+function AlphaNotice() {
+  return (
+    <aside aria-labelledby="alpha-notice-title" className="mt-6 max-w-[52ch] rounded-xl border-2 border-amber-300/70 bg-amber-300/10 p-4">
+      <p id="alpha-notice-title" className="font-display text-xs uppercase tracking-[0.18em] text-amber-200">
+        Alpha test
+      </p>
+      <ul className="font-body mt-2 list-disc space-y-2.5 pl-5 text-sm leading-relaxed text-white/85 marker:text-amber-300">
+        {ALPHA_SHORT.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      <Link href="/alpha" className="mt-3 inline-flex min-h-11 items-center text-sm font-semibold text-amber-200 underline underline-offset-4 hover:text-white">
+        Read the alpha rules →
+      </Link>
+    </aside>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { QUEST } from "@extract/shared";
 import { ControlsSection, PlayerInstructions, RulesSection } from "@/components/play-instructions";
 import { useLobby } from "@/lib/lobby/lobby-context";
@@ -10,13 +11,34 @@ export function InfoPanel({ tab }: { tab: string }) {
   if (tab === "rules") {
     return (
       <>
+        <AlphaRulesLink />
         <RulesSection />
         <LevelsInfo />
       </>
     );
   }
   if (tab === "controls") return <ControlsSection />;
-  return <PlayerInstructions />;
+  return (
+    <>
+      <AlphaRulesLink />
+      <PlayerInstructions />
+    </>
+  );
+}
+
+/** B12: the alpha in one line and a link to the full rules on /alpha (a page of its own, not a menu panel). */
+function AlphaRulesLink() {
+  return (
+    <Link
+      href="/alpha"
+      className="toon-panel mb-4 flex min-h-[44px] items-center justify-between gap-3 bg-amber-300 px-4 py-2.5 text-black hover:bg-amber-200"
+    >
+      <span className="font-body text-sm font-semibold leading-snug">
+        Alpha test: a test balance, nothing to earn, one item wipe at the end. Level, cosmetics and pass rewards stay.
+      </span>
+      <span className="whitespace-nowrap text-sm font-extrabold">Alpha rules →</span>
+    </Link>
+  );
 }
 
 /** Rules · Levels and daily tasks (RETENTION.md §3, §5): what each level gives and how tasks pay. */
