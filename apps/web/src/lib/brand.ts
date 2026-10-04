@@ -15,3 +15,28 @@ export const BRAND = {
   edition: editionLabel(),
   fullName: brandFullName(NAME),
 } as const;
+
+/**
+ * Places of The Outskirts (map v2, MAP_GEN_VERSION 4) for copy outside the game (news, store
+ * pages, the lobby). Neutral names, no regional motifs. The generator's zone names
+ * (packages/shared map/steppe.ts STEPPE_ZONES) are the source of truth; brand.test.ts keeps this
+ * list equal to them.
+ */
+export const PLACE_NAMES = [
+  "Dawnfield",
+  "Red Barn Farm",
+  "Summer Cabins",
+  "Fuel Stop",
+  "Sawmill",
+  "Grain Elevator",
+  "Rail Depot",
+  "Bridge Checkpoint",
+  "Radar Base",
+  "Quarry",
+  // New in map v2.
+  "Millbrook",
+  "Pump Station",
+  "Ranger Station",
+  "Relay Hill",
+  "Truck Stop",
+] as const;

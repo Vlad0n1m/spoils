@@ -10,7 +10,8 @@ import { MARAUDER, NPC, NPC_CAMPS, npcClassOfTier } from "../npc.js";
 import type { Rng } from "../rng.js";
 import type { GenCtx } from "./context.js";
 import { floodWalk, getCollisionIndex, getWalkGrid, nearestWalkCell, reachedNear, walkCellOf } from "./query.js";
-import { BOSS_BUILDING_PREFS, BOSS_CHANCE, BOSS_GUARD_COUNT, EXTRACT_RADIUS, STEPPE_EXTRACTS } from "./steppe.js";
+import { BOSS_BUILDING_PREFS, BOSS_CHANCE, BOSS_GUARD_COUNT, CAMP_BY_TIER, EXTRACT_RADIUS, STEPPE_EXTRACTS, ZONE_CAMPS } from "./steppe.js";
+import { outdoorContainers } from "./props.js";
 import { ROAD_MASK } from "./terrain.js";
 import {
   TERRAIN,
@@ -20,6 +21,7 @@ import {
   type Building,
   type BuildingArch,
   type ContainerKind,
+  type ContainerSpot,
   type LootTier,
   type MapData,
   type MapSide,
@@ -56,8 +58,8 @@ export const SPAWN = {
 } as const;
 
 /**
- * 36–40 spawns in a band along the edges, ≥ 1400 px apart and ≥ 2000 px from any extract, never
- * inside a POI. Placed after POIs and before props so trees respect the reserved circle.
+ * Spawns in a band along the edges (40 on the 24-block layout, 48 on map v2), ≥ 1400 px apart and
+ * ≥ 2000 px from any extract, never inside a POI. Placed after POIs and before props so trees respect the reserved circle.
  */
 export function placeSpawns(ctx: GenCtx): void {
   const rng = ctx.rng("spawns");
@@ -105,12 +107,16 @@ const ROOM_KINDS: Record<BuildingArch, ReadonlyArray<readonly [ContainerKind, nu
   shop: [["fridge", 2], ["crate", 2], ["med_case", 1]],
   barracks: [["med_case", 2], ["weapon_box", 2], ["crate", 1]],
   bunker: [["safe", 2], ["weapon_box", 3], ["med_case", 1]],
+  clinic: [["med_case", 4], ["pc", 1], ["crate", 1]],
+  garage: [["toolbox", 4], ["crate", 2]],
+  diner: [["fridge", 3], ["crate", 2]],
 };
 
 /** Containers per room [min, max] by archetype (memo §4.6 table). */
 const PER_ROOM: Record<BuildingArch, readonly [number, number]> = {
   houseS: [1, 2], houseM: [1, 2], barn: [1, 3], shed: [1, 2], warehouse: [3, 5],
   office: [1, 2], shop: [1, 2], barracks: [1, 3], bunker: [2, 3],
+  clinic: [1, 2], garage: [1, 2], diner: [1, 2],
 };
 
 /** Better POIs get better boxes on top of the archetype table. */
@@ -163,7 +169,8 @@ function clearOf(x: number, y: number, rects: readonly Rect[], m: number): boole
 
 function wallSpot(rng: Rng, room: Rect, doors: readonly Rect[], furniture: readonly Rect[], placed: ReadonlyArray<[number, number]>): [number, number] | null {
   const IN = 40;
-  for (let attempt = 0; attempt < 12; attempt++) {
+  // 20 tries (12 before map v2): furnished rooms leave fewer free stretches of wall.
+  for (let attempt = 0; attempt < 20; attempt++) {
     const side = ri(rng, 0, 3);
     const horiz = side === 0 || side === 2;
     const span = horiz ? room.w : room.h;
@@ -193,16 +200,24 @@ function floorSpot(rng: Rng, room: Rect, doors: readonly Rect[], furniture: read
 
 // ───────────────────────── wilderness
 
+/**
+ * Wilderness spots per 24-block map area (the layout the economy was tuned on); placeWildSpots
+ * scales them with the map area so tier-0 density per km² stays the same on bigger maps.
+ */
 export const WILD = { STASHES: 80, LOOSE: 320, STASH_APART: 650 } as const;
+/** The area WILD counts are given for: 24 blocks of 1024 px squared. */
+const WILD_BASE_AREA = (24 * 1024) * (24 * 1024);
 
 /** Ground stashes (tier 0) in the forest and steppe, and loose loot spots across the map. */
 export function placeWildSpots(ctx: GenCtx): void {
   const rng = ctx.rng("wild-spots");
+  const scale = (ctx.width * ctx.height) / WILD_BASE_AREA;
+  const wantStashes = Math.round(WILD.STASHES * scale), wantLoose = Math.round(WILD.LOOSE * scale);
   const m = 600;
   const area: Rect = { x: m, y: m, w: ctx.width - 2 * m, h: ctx.height - 2 * m };
   const zoneHit = (x: number, y: number, pad: number) => ctx.zones.some((z) => inRect(grow(z.rect, pad), x, y));
   let stashes = 0;
-  for (let t = 0; t < 6000 && stashes < WILD.STASHES; t++) {
+  for (let t = 0; t < 8000 && stashes < wantStashes; t++) {
     const x = Math.round(area.x + rng() * area.w), y = Math.round(area.y + rng() * area.h);
     const k = ctx.terrain.kindAt(x, y);
     if (k !== TERRAIN.FOREST && !(k === TERRAIN.GRASS && chance(rng, 0.45))) continue;
@@ -214,15 +229,136 @@ export function placeWildSpots(ctx: GenCtx): void {
     ctx.reserve(r);
     stashes++;
   }
-  let loose = 0;
-  for (let t = 0; t < 8000 && loose < WILD.LOOSE; t++) {
+  // Tier-0 loose loot is capped at the v6 density (a bigger map has a bigger wilderness share, and
+  // every extra wild spot would be loot the economy never planned for).
+  const capWild = Math.round(V6_TIER_SPOTS.loot[0]! * scale);
+  let loose = 0, wild = 0;
+  for (let t = 0; t < 11000 && loose < wantLoose; t++) {
     const x = Math.round(area.x + rng() * area.w), y = Math.round(area.y + rng() * area.h);
     const k = ctx.terrain.kindAt(x, y);
     if (k === TERRAIN.WATER || (ctx.terrain.byteAt(x, y) & 0x80) !== 0) continue;
     if (!ctx.blocks.free({ x: x - 24, y: y - 24, w: 48, h: 48 }, 16)) continue;
     const z = ctx.zones.find((zz) => inRect(zz.rect, x, y));
+    if (!z && wild >= capWild) continue;
     ctx.loot(x, y, z ? (Math.max(1, z.tier - 1) as LootTier) : 0);
+    if (!z) wild++;
     loose++;
+  }
+}
+
+/**
+ * Static containers and loose loot spots per tier on the 24-block layout (MAP_GEN_VERSION 3, the
+ * economy's tuning point: §22 balance, loot economy v4). balanceTiers keeps a bigger map at the
+ * same density per km² (± a few %), so per-entry loot does not shift with the map size.
+ */
+export const V6_TIER_SPOTS = {
+  containers: [80, 48, 159, 52, 41],
+  loot: [178, 156, 139, 43, 31],
+  /**
+   * Safes per tier. A T3/T4 safe is worth ≈ 900 CR of junk (5× a pc, 10× a weapon box), so the
+   * safe count alone moves a tier's value by ± 7 % per safe: balanceTiers sets it exactly.
+   */
+  safes: [0, 0, 0, 4, 4],
+} as const;
+
+/** balanceTiers tops a tier up when it is below this share of its target… */
+export const TIER_FLOOR = 0.98;
+/** …and drops the newest loose loot spots of a tier above this share (containers are never dropped). */
+export const LOOT_CEIL = 1.05;
+
+/** Office-like rooms where a safe belongs (a converted container must stand indoors in one). */
+const SAFE_ARCHS: ReadonlySet<BuildingArch> = new Set<BuildingArch>(["office", "bunker", "barracks", "clinic", "warehouse"]);
+
+/**
+ * Exactly `want` safes in `tier`: extra safes (newest first) become pcs; missing ones are made from
+ * pcs / crates / toolboxes standing in office-like buildings of that tier, spread round-robin over
+ * the tier's zones (deterministic: candidates in container order, the zone order of MapData).
+ */
+function balanceSafes(ctx: GenCtx, rng: Rng, tier: LootTier, want: number): void {
+  const safes = ctx.containers.filter((c) => c.tier === tier && c.kind === "safe");
+  for (let i = safes.length - 1; i >= want; i--) safes[i]!.kind = "pc";
+  let need = want - Math.min(want, safes.length);
+  if (need <= 0) return;
+  const indoorSafe = (c: ContainerSpot) =>
+    ctx.buildings.some((b) => SAFE_ARCHS.has(b.arch) && b.zone === c.zone && inRect(b.floor, c.x, c.y));
+  const byZone = ctx.zones
+    .filter((z) => z.tier === tier)
+    .map((z) => shuffle(rng, ctx.containers.filter((c) => c.zone === z.id && (c.kind === "pc" || c.kind === "crate" || c.kind === "toolbox") && indoorSafe(c))));
+  for (let round = 0; need > 0 && byZone.some((l) => l.length > 0); round++) {
+    for (const list of byZone) {
+      if (need <= 0) break;
+      const c = list.shift();
+      if (!c) continue;
+      c.kind = "safe";
+      need--;
+    }
+  }
+}
+
+/**
+ * Per-tier top-up (after the POI layouts, room spots and wild spots): a tier 1–4 below
+ * TIER_FLOOR × its target (V6_TIER_SPOTS × map area / 24-block area) gets extra outdoor containers
+ * round-robin over its zones, and extra floor loot in its buildings' rooms; a tier whose loose loot
+ * is above LOOT_CEIL × its target loses its newest spots (the loose ones of placeWildSpots, which
+ * come after the room spots). Containers are never removed: layouts are tuned to land at or a little
+ * under the target, and generate.test.ts bounds every tier to ± 10 % per km².
+ */
+export function balanceTiers(ctx: GenCtx): void {
+  const rng = ctx.rng("tier-balance");
+  const scale = (ctx.width * ctx.height) / WILD_BASE_AREA;
+  for (let tier = 1 as LootTier; tier <= 4; tier = (tier + 1) as LootTier) {
+    const zones = ctx.zones.filter((z) => z.tier === tier);
+    if (zones.length === 0) continue;
+    const wantC = Math.round(V6_TIER_SPOTS.containers[tier]! * scale * TIER_FLOOR);
+    // A boss zone takes its top-ups inside the boss's guard radius (POOL.GUARDED_RADIUS_PX = 1600):
+    // pool uniques then stay about as boss-guarded per km² as on the 24-block layout.
+    const areaOf = (z: Zone): Rect => {
+      const inner = grow(z.rect, -160);
+      const b = ctx.bosses.find((q) => q.zone === z.id);
+      if (!b) return inner;
+      const g: Rect = { x: b.x - 1100, y: b.y - 1100, w: 2200, h: 2200 };
+      const x0 = Math.max(inner.x, g.x), y0 = Math.max(inner.y, g.y);
+      const x1 = Math.min(inner.x + inner.w, g.x + g.w), y1 = Math.min(inner.y + inner.h, g.y + g.h);
+      return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : inner;
+    };
+    const order = [...zones.filter((z) => z.boss), ...zones.filter((z) => !z.boss)];
+    for (let round = 0; round < 12; round++) {
+      let have = ctx.containers.filter((c) => c.tier === tier).length;
+      if (have >= wantC) break;
+      for (const z of order) {
+        if (have >= wantC) break;
+        const before = ctx.containers.length;
+        outdoorContainers(ctx, rng, areaOf(z), 1, tier, z.id);
+        have += ctx.containers.length - before;
+      }
+    }
+    const wantL = Math.round(V6_TIER_SPOTS.loot[tier]! * scale * TIER_FLOOR);
+    const capL = Math.round(V6_TIER_SPOTS.loot[tier]! * scale * LOOT_CEIL);
+    let over = ctx.lootSpots.filter((l) => l.tier === tier).length - capL;
+    for (let i = ctx.lootSpots.length - 1; i >= 0 && over > 0; i--) {
+      if (ctx.lootSpots[i]!.tier !== tier) continue;
+      ctx.lootSpots.splice(i, 1);
+      over--;
+    }
+    const rooms: Array<{ room: Rect; bi: number }> = [];
+    ctx.buildings.forEach((b, bi) => {
+      if (b.zone !== "" && ctx.zone(b.zone).tier === tier) for (const room of b.rooms) rooms.push({ room, bi });
+    });
+    // Rounded up: the rest of a tier lands a little under its target (top-ups stop at TIER_FLOOR).
+    balanceSafes(ctx, rng, tier, Math.ceil(V6_TIER_SPOTS.safes[tier]! * scale));
+    if (rooms.length === 0) continue;
+    let haveL = ctx.lootSpots.filter((l) => l.tier === tier).length;
+    for (let t = 0; t < rooms.length * 3 && haveL < wantL; t++) {
+      const { room, bi } = rooms[(t * 7) % rooms.length]!;
+      const b = ctx.buildings[bi]!;
+      const taken: Array<[number, number]> = [];
+      for (const c of ctx.containers) if (inRect(room, c.x, c.y)) taken.push([c.x, c.y]);
+      for (const l of ctx.lootSpots) if (inRect(room, l.x, l.y)) taken.push([l.x, l.y]);
+      const p = floorSpot(rng, room, b.doors, ctx.furniture[bi]!, taken);
+      if (!p) continue;
+      ctx.loot(p[0], p[1], tier);
+      haveL++;
+    }
   }
 }
 
@@ -270,6 +406,14 @@ const ROAD_CAMP_ROADS = ["highway", "ns", "ford", "radar", "rail"] as const;
 /** Road camps keep this far from the wild hunter cabins (the rat's reward stays unguarded). */
 const CABIN_CLEAR_PX = 800;
 
+/**
+ * Marauder squads of a zone: NPC_CAMPS (npc.ts) for the ten places it lists, the map v2 places'
+ * ZONE_CAMPS row, else CAMP_BY_TIER (steppe.ts).
+ */
+export function zoneCamp(z: Pick<Zone, "id" | "tier">): { squads: number; size: readonly [number, number]; chance: number } {
+  return NPC_CAMPS[z.id] ?? ZONE_CAMPS[z.id] ?? CAMP_BY_TIER[z.tier];
+}
+
 /** Squared distance from a point to a rect (0 inside). */
 function rectDist2(r: Rect, x: number, y: number): number {
   const dx = x < r.x ? r.x - x : x > r.x + r.w ? x - (r.x + r.w) : 0;
@@ -312,7 +456,7 @@ function npcPostClear(
 /**
  * Marauder posts (NPC MODEL v5 §2.2), placed last from the "npc-posts" rng stream. Adds no solids
  * and reserves nothing, so the layout and mapHash are unchanged.
- * - POI posts (NPC_CAMPS[zone.id].squads per zone): up to half of them on zone gates (a road entering
+ * - POI posts (zoneCamp(zone).squads: NPC_CAMPS, else the map v2 ZONE_CAMPS / CAMP_BY_TIER): up to half on zone gates (a road entering
  *   the zone, 256 px inside, beside the road), the rest in yards 192 px in front of exterior doors,
  *   then random outdoor points in the zone. ≥ POST_MIN_SEP_PX apart, ≥ BOSS_CLEAR_PX from any boss
  *   spot (guards hold the boss building, marauders the approaches), never indoors.
@@ -352,8 +496,8 @@ export function placeNpcPosts(ctx: GenCtx): void {
 
   let poiIdx = 0;
   for (const z of ctx.zones) {
-    const camp = NPC_CAMPS[z.id];
-    if (!camp || camp.squads <= 0) continue;
+    const camp = zoneCamp(z);
+    if (camp.squads <= 0) continue;
     const inZone = (x: number, y: number) => inRect(grow(z.rect, -96), x, y);
     // Gates: where a road crosses the zone border, 256 px inside, beside the road (or on it).
     const gates: Array<[number, number]> = [];

@@ -46,15 +46,17 @@ export function humanSideCap(n: number): number {
 }
 
 /**
- * v2 world: 24 × 1024 px blocks. The 20,480 px fallback (critique cut 8) is BLOCK = 853.
+ * MAP_GEN_VERSION 4 ("map v2" of the plan): 28 × 1024 px blocks = 28,672 px (+36 % area over the
+ * 24-block layout of versions 2–3).
+ * The fallback for weak devices (critique cut 8) is BLOCK = 853 (23,884 px).
  * The v1 4800 px map lives on as LEGACY_WORLD (map/legacy.ts) until the new generator lands —
  * code that clamps to the world must use MapData.width/height, never these constants directly.
  */
 export const WORLD = {
-  BLOCKS: 24,
+  BLOCKS: 28,
   BLOCK: 1024,
-  WIDTH: 24 * 1024,
-  HEIGHT: 24 * 1024,
+  WIDTH: 28 * 1024,
+  HEIGHT: 28 * 1024,
   /** Thickness of the boundary walls around the map. */
   BORDER: 40,
   /** Terrain grid resolution (ground tiles, footstep material, speed mult). */
@@ -175,8 +177,9 @@ export const LEGACY_WORLD = {
 /**
  * Bump on any intentional change to generated geometry or collision flags (invalidates client
  * caches + golden hash). 3: windows became SOLID.WINDOW (the dodge roll vaults them), same layout.
+ * 4: map v2 — 28 blocks, new POIs, furnished interiors, more windows, cover and decor.
  */
-export const MAP_GEN_VERSION = 3;
+export const MAP_GEN_VERSION = 4;
 
 export const PLAYER = {
   RADIUS: 24,

@@ -128,9 +128,10 @@ export class GenCtx {
     return true;
   }
 
-  rect(x: number, y: number, w: number, h: number, f: number, k: PropKind, o?: 0 | 1, reserveMargin = 0): MapRect {
+  rect(x: number, y: number, w: number, h: number, f: number, k: PropKind, o?: 0 | 1, reserveMargin = 0, v = 0): MapRect {
     const r: MapRect = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h), f, k };
     if (o !== undefined) r.o = o;
+    if (v) r.v = v;
     this.rects.push(r);
     this.reserve(grow(r, reserveMargin));
     return r;
@@ -143,8 +144,10 @@ export class GenCtx {
     return c;
   }
 
-  decal(x: number, y: number, r: number, k: Decal["k"]): void {
-    this.decals.push({ x: Math.round(x), y: Math.round(y), r: Math.round(r), k });
+  decal(x: number, y: number, r: number, k: Decal["k"], a?: 0 | 1 | 2 | 3): void {
+    const d: Decal = { x: Math.round(x), y: Math.round(y), r: Math.round(r), k };
+    if (a) d.a = a;
+    this.decals.push(d);
   }
 
   bush(x: number, y: number, r: number): void {
@@ -207,6 +210,7 @@ export class GenCtx {
     const built: BuiltBuilding = makeBuilding(rng, arch, zone, f, doorOrder(rng, side));
     for (const w of built.walls) this.rects.push(w);
     for (const w of built.furniture) this.rects.push(w);
+    for (const d of built.decor) this.decals.push(d);
     const floorByte = ARCH[arch].floor | TERRAIN_INDOOR;
     this.terrain.paintRect(f, () => floorByte);
     this.reserve(grow(f, 96));

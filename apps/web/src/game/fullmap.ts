@@ -35,7 +35,7 @@ export const TIER_COLORS: Record<LootTier, number> = {
 export const ZONE_KIND_LABEL: Record<ZoneKind, string> = {
   village: "Village",
   farm: "Farm",
-  lumber: "Sawmill",
+  lumber: "Forestry",
   industrial: "Industrial",
   gas: "Fuel stop",
   rail: "Rail yard",

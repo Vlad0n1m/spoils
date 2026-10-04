@@ -52,8 +52,8 @@ test("T1 cycle config matches the decisions table", () => {
   assert.equal(WORLD.GROUND_EXPIRE_MS, 600_000);
   assert.equal(WORLD.CORPSE_EXPIRE_MS, 900_000);
   assert.equal(WORLD.EXPIRE_WARN_MS, 60_000);
-  // Geometry is untouched by the cycle fields (one WORLD object).
-  assert.equal(WORLD.WIDTH, 24 * 1024);
+  // Geometry is untouched by the cycle fields (one WORLD object); map v2 is 28 blocks.
+  assert.equal(WORLD.WIDTH, 28 * 1024);
 });
 
 test("T1 worldCycleAt boundaries at k × 45 min; 32 cycles a day aligned to UTC midnight", () => {

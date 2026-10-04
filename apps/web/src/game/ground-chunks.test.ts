@@ -2,14 +2,22 @@
  * Run: apps/game-server/node_modules/.bin/tsx --test apps/web/src/game/ground-chunks.test.ts
  *
  * Chunk range math, the LRU, deterministic bake keys, per-chunk buckets, and a frame-by-frame
- * simulation of the real cache policy (ChunkCache) walking the 24,576 px map.
+ * simulation of the real cache policy (ChunkCache) walking the 28,672 px map (map v2).
  */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { WORLD, generateMap, legacyMapData, mapHash, mulberry32 } from "@extract/shared";
+import { PROP_VARIANTS } from "@extract/shared";
+import { Texture } from "pixi.js";
+import { SPRITE_NAMES } from "./assets";
 import {
   BUCKET_MARGIN,
+  CAR_ART,
+  CRATE_ART,
+  FENCE_ART,
+  FURNITURE_ART,
+  facingSprite,
   ChunkCache,
   ChunkLRU,
   bakeKey,
@@ -26,14 +34,16 @@ import {
 
 const map = generateMap("steppe");
 const grid = chunkGridOf(map);
+/** Chunks per side (28 on map v2). */
+const N = grid.cols;
 /** The renderer's view: 1600 × 900 world px at zoom 1, padded by CULL_MARGIN 160. */
 const HALF_W = 800 + 160;
 const HALF_H = 450 + 160;
 const viewAt = (x: number, y: number): ViewRect => ({ x0: x - HALF_W, y0: y - HALF_H, x1: x + HALF_W, y1: y + HALF_H });
 
 describe("chunk grid", () => {
-  it("is 24 × 24 on Steppe and 5 × 5 on the legacy 4800 px map", () => {
-    assert.deepEqual(grid, { chunk: WORLD.CHUNK, cols: 24, rows: 24 });
+  it("is 28 × 28 on the map v2 Steppe and 5 × 5 on the legacy 4800 px map", () => {
+    assert.deepEqual(grid, { chunk: WORLD.CHUNK, cols: 28, rows: 28 });
     assert.deepEqual(chunkGridOf(legacyMapData(7)), { chunk: 1024, cols: 5, rows: 5 });
   });
 
@@ -46,14 +56,14 @@ describe("chunk grid", () => {
         seen.add(k);
       }
     }
-    assert.equal(seen.size, 576);
-    assert.equal(Math.max(...seen), 575);
+    assert.equal(seen.size, N * N);
+    assert.equal(Math.max(...seen), N * N - 1);
   });
 
   it("span clamps to the grid and treats chunk edges as half-open", () => {
     assert.deepEqual(chunkSpan(grid, -5000, -5000, 1023, 1023.9), { cx0: 0, cy0: 0, cx1: 0, cy1: 0 });
     assert.deepEqual(chunkSpan(grid, 1024, 1024, 2047, 2048), { cx0: 1, cy0: 1, cx1: 1, cy1: 2 });
-    assert.deepEqual(chunkSpan(grid, 0, 0, 1e9, 1e9), { cx0: 0, cy0: 0, cx1: 23, cy1: 23 });
+    assert.deepEqual(chunkSpan(grid, 0, 0, 1e9, 1e9), { cx0: 0, cy0: 0, cx1: N - 1, cy1: N - 1 });
   });
 
   it("a padded 1600 × 900 view touches at most 3 × 3 chunks, nearest first", () => {
@@ -70,8 +80,8 @@ describe("chunk grid", () => {
       });
       for (let j = 1; j < d.length; j++) assert.ok(d[j - 1]! <= d[j]!);
       const { cx, cy } = chunkXY(grid, keys[0]!);
-      assert.equal(cx, Math.min(23, Math.floor(x / 1024)));
-      assert.equal(cy, Math.min(23, Math.floor(y / 1024)));
+      assert.equal(cx, Math.min(N - 1, Math.floor(x / 1024)));
+      assert.equal(cy, Math.min(N - 1, Math.floor(y / 1024)));
     }
   });
 
@@ -101,8 +111,8 @@ describe("bake keys", () => {
   it("are deterministic, unique per chunk and resolution, and pinned to the layout hash", () => {
     const h = mapHash(map);
     const keys = new Set<string>();
-    for (let cy = 0; cy < 24; cy++) for (let cx = 0; cx < 24; cx++) keys.add(bakeKey(map, h, cx, cy, 1));
-    assert.equal(keys.size, 576);
+    for (let cy = 0; cy < N; cy++) for (let cx = 0; cx < N; cx++) keys.add(bakeKey(map, h, cx, cy, 1));
+    assert.equal(keys.size, N * N);
     assert.equal(bakeKey(map, h, 3, 4, 1), bakeKey(generateMap("steppe"), mapHash(generateMap("steppe")), 3, 4, 1));
     assert.notEqual(bakeKey(map, h, 3, 4, 1), bakeKey(map, h, 3, 4, 0.5));
     assert.notEqual(bakeKey(map, h, 3, 4, 1), bakeKey(map, "deadbeef", 3, 4, 1));
@@ -240,8 +250,8 @@ describe("chunk buckets", () => {
       for (let i = 0; i < n; i += 7) {
         const r = box(i);
         const s = chunkSpan(grid, r.x - BUCKET_MARGIN, r.y - BUCKET_MARGIN, r.x + r.w + BUCKET_MARGIN, r.y + r.h + BUCKET_MARGIN);
-        for (let cy = 0; cy < 24; cy++) {
-          for (let cx = 0; cx < 24; cx++) {
+        for (let cy = 0; cy < N; cy++) {
+          for (let cx = 0; cx < N; cx++) {
             const inside = cx >= s.cx0 && cx <= s.cx1 && cy >= s.cy0 && cy <= s.cy1;
             assert.equal(list[chunkKey(grid, cx, cy)]!.includes(i), inside);
           }
@@ -257,8 +267,8 @@ describe("chunk buckets", () => {
   });
 
   it("the map border reaches every edge chunk", () => {
-    for (let c = 0; c < 24; c++) {
-      for (const [cx, cy] of [[c, 0], [c, 23], [0, c], [23, c]] as const) {
+    for (let c = 0; c < N; c++) {
+      for (const [cx, cy] of [[c, 0], [c, N - 1], [0, c], [N - 1, c]] as const) {
         assert.ok(b.rects[chunkKey(grid, cx, cy)]!.some((i) => map.rects[i]!.k === "border"), `edge chunk ${cx},${cy}`);
       }
     }
@@ -266,7 +276,41 @@ describe("chunk buckets", () => {
 
   it("keeps per-chunk work small (props per bake)", () => {
     let max = 0;
-    for (let k = 0; k < 576; k++) max = Math.max(max, b.rects[k]!.length + b.circles[k]!.length + b.decals[k]!.length);
+    for (let k = 0; k < N * N; k++) max = Math.max(max, b.rects[k]!.length + b.circles[k]!.length + b.decals[k]!.length);
     assert.ok(max < 200, `max ${max} objects in one chunk`);
+  });
+});
+
+describe("map v2 prop art", () => {
+  it("every variant list matches PROP_VARIANTS and names a loaded sprite", () => {
+    assert.equal(CRATE_ART.length, PROP_VARIANTS.crate.length);
+    assert.equal(CAR_ART.length, PROP_VARIANTS.car.length);
+    assert.equal(FENCE_ART.length, PROP_VARIANTS.fence.length);
+    for (const n of [...CRATE_ART, ...CAR_ART, ...FENCE_ART, ...Object.values(FURNITURE_ART)]) {
+      assert.ok((SPRITE_NAMES as readonly string[]).includes(n!), `${n} is loaded by assets.ts`);
+    }
+    // Every furniture kind the generator places has art.
+    const kinds = new Set(map.rects.map((r) => r.k));
+    for (const k of ["desk", "sofa", "armchair", "bed", "counter", "lockers"] as const) {
+      assert.ok(kinds.has(k), `${k} on the map`);
+      assert.ok(FURNITURE_ART[k], `${k} art`);
+    }
+  });
+
+  it("facingSprite turns the art's back onto the wall side it stands against", () => {
+    const r = { x: 100, y: 200, w: 144, h: 64 };
+    const v = { x: 100, y: 200, w: 64, h: 144 };
+    const cases = [
+      { side: 0, rect: r, at: [172, 198] },
+      { side: 1, rect: v, at: [166, 272] },
+      { side: 2, rect: r, at: [172, 266] },
+      { side: 3, rect: v, at: [98, 272] },
+    ] as const;
+    for (const c of cases) {
+      const s = facingSprite(Texture.EMPTY, "sofa", c.rect, c.side);
+      assert.ok(Math.abs(s.rotation - (c.side * Math.PI) / 2) < 1e-9, `side ${c.side} rotation`);
+      assert.deepEqual([s.position.x, s.position.y], c.at, `side ${c.side} anchored on its wall`);
+      s.destroy();
+    }
   });
 });

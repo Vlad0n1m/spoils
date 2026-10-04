@@ -1,7 +1,7 @@
 /**
  * Chunked baked ground (WP-M3, map memo §9, perf memo P1 #5).
  *
- * The 24,576 px map is cut into 1024 px chunks (24 × 24). Each visible chunk is baked once into a
+ * The 28,672 px map (map v2) is cut into 1024 px chunks (28 × 28). Each visible chunk is baked once into a
  * RenderTexture holding everything static below the players: terrain tiles with soft edges, roads,
  * rails, floors, decals, static shadows, and all static solids (walls, windows, crates, rocks,
  * trunks, cars, containers, wagons, shelves, sandbags, fences, log piles, barrels). Players never
@@ -475,6 +475,77 @@ export function propSprite(
 }
 
 /**
+ * Furniture art whose "back" (the top edge of the art: a sofa's backrest, a bed's headboard, a
+ * desk's monitor) stands against wall side `side` (MapRect.v: 0 N, 1 E, 2 S, 3 W): rotated
+ * side × 90° and anchored on that wall. `uniform` keeps the art's aspect (desks and tables whose
+ * art includes chairs: the chairs overhang into the room instead of squashing the desk).
+ */
+export function facingSprite(texture: Texture, name: SpriteName, r: Rect, side: number, uniform = false, pad = 2): Sprite {
+  const s = new Sprite(texture);
+  const tw = texture.width || 1;
+  const th = texture.height || 1;
+  const c = SPRITE_CONTENT[name] ?? { x: 0, y: 0, w: tw, h: th };
+  const q = ((side % 4) + 4) % 4;
+  const odd = q % 2 === 1;
+  const along = odd ? r.h : r.w;
+  const depth = odd ? r.w : r.h;
+  const sx = (along + 2 * pad) / c.w;
+  const sy = uniform ? sx : (depth + 2 * pad) / c.h;
+  s.anchor.set((c.x + c.w / 2) / tw, c.y / th);
+  s.scale.set(sx, sy);
+  s.rotation = (q * Math.PI) / 2;
+  const back =
+    q === 0 ? { x: r.x + r.w / 2, y: r.y - pad }
+    : q === 1 ? { x: r.x + r.w + pad, y: r.y + r.h / 2 }
+    : q === 2 ? { x: r.x + r.w / 2, y: r.y + r.h + pad }
+    : { x: r.x - pad, y: r.y + r.h / 2 };
+  s.position.set(back.x, back.y);
+  return s;
+}
+
+/**
+ * Art keeping its aspect over rect `r`: fitted inside it, or (`byWidth`) scaled so the art's width
+ * spans the rect's long side — tables whose art includes chairs let the chairs overhang.
+ */
+export function fitSprite(texture: Texture, name: SpriteName, r: Rect, pad = 2, rotation = 0, byWidth = false): Sprite {
+  const s = new Sprite(texture);
+  const tw = texture.width || 1;
+  const th = texture.height || 1;
+  const c = SPRITE_CONTENT[name] ?? { x: 0, y: 0, w: tw, h: th };
+  // A quarter turn swaps the box the art has to fit.
+  const quarter = Math.abs(Math.round(rotation / (Math.PI / 2)) * (Math.PI / 2) - rotation) < 1e-6 && Math.round(rotation / (Math.PI / 2)) % 2 !== 0;
+  const bw = quarter ? r.h : r.w;
+  const bh = quarter ? r.w : r.h;
+  const k = byWidth ? (bw + 2 * pad) / c.w : Math.min((bw + 2 * pad) / c.w, (bh + 2 * pad) / c.h);
+  s.anchor.set((c.x + c.w / 2) / tw, (c.y + c.h / 2) / th);
+  s.scale.set(k);
+  s.rotation = rotation;
+  s.position.set(r.x + r.w / 2, r.y + r.h / 2);
+  return s;
+}
+
+/** Sprite name per MapRect.v (PROP_VARIANTS order); a missing texture falls back to the first. */
+export const CRATE_ART: readonly SpriteName[] = ["crate", "crate_small", "crate_open", "crate_military"];
+export const CAR_ART: readonly SpriteName[] = ["car_wreck", "car_wreck_burnt", "car_wreck_pickup"];
+export const FENCE_ART: readonly SpriteName[] = ["fence", "fence_wood", "fence_corrugated", "fence_barbed"];
+export const FURNITURE_ART: Partial<Record<MapRect["k"], SpriteName>> = {
+  desk: "desk",
+  sofa: "sofa",
+  armchair: "armchair",
+  bed: "bed",
+  counter: "counter",
+  lockers: "lockers",
+};
+
+/** The variant's texture, or the base art's when that file did not load. */
+function variantTex(tex: Textures, list: readonly SpriteName[], v: number | undefined): { t: Texture; name: SpriteName } {
+  const name = list[v ?? 0] ?? list[0]!;
+  const t = tex[name];
+  if (t && t !== Texture.EMPTY) return { t, name };
+  return { t: tex[list[0]!], name: list[0]! };
+}
+
+/**
  * Walls in the cartoon style: thick dark outline, warm fill, lighter top edge. Outlines for the
  * whole set are drawn first and fills second, so walls meeting at a corner merge into one shape.
  */
@@ -599,11 +670,63 @@ export function buildChunkProps(
 
   for (const i of decalIds) {
     const d: Decal = map.decals[i]!;
-    if (d.k !== "puddle") continue;
-    const s = propSprite(tex.puddle, "puddle", { x: d.x - d.r, y: d.y - d.r, w: 2 * d.r, h: 2 * d.r }, false, 0, propHash(d.x, d.y) < 0.5);
-    s.rotation = propHash(d.x, d.y, 1) * Math.PI * 2;
-    s.alpha = 0.92;
-    decals.addChild(s);
+    const box: Rect = { x: d.x - d.r, y: d.y - d.r, w: 2 * d.r, h: 2 * d.r };
+    const turn = ((d.a ?? 0) * Math.PI) / 2;
+    switch (d.k) {
+      case "puddle": {
+        const s = propSprite(tex.puddle, "puddle", box, false, 0, propHash(d.x, d.y) < 0.5);
+        s.rotation = propHash(d.x, d.y, 1) * Math.PI * 2;
+        s.alpha = 0.92;
+        decals.addChild(s);
+        break;
+      }
+      // Map v2 decor: rugs and litter lie on the floor (under furniture), street furniture stands
+      // with the props. No collision anywhere.
+      case "rug":
+        decals.addChild(fitSprite(tex.rug_red, "rug_red", box, 0, turn));
+        break;
+      case "rug_round":
+        decals.addChild(fitSprite(tex.rug_round, "rug_round", box, 0, propHash(d.x, d.y, 5) * Math.PI * 2));
+        break;
+      case "papers":
+        decals.addChild(fitSprite(tex.debris_papers, "debris_papers", box, 0, propHash(d.x, d.y, 6) * Math.PI * 2));
+        break;
+      case "bricks":
+        decals.addChild(fitSprite(tex.debris_bricks, "debris_bricks", box, 0, propHash(d.x, d.y, 6) * Math.PI * 2));
+        break;
+      case "planks":
+        decals.addChild(fitSprite(tex.debris_planks, "debris_planks", box, 0, propHash(d.x, d.y, 6) * Math.PI * 2));
+        break;
+      case "lamp": {
+        // Base on the left of the art, arm to the right: anchor on the base, turned toward the road.
+        const t = tex.lamp_post;
+        const c = SPRITE_CONTENT.lamp_post!;
+        const s = new Sprite(t);
+        const tw = t.width || 1, th = t.height || 1;
+        s.anchor.set((c.x + c.h / 2) / tw, (c.y + c.h / 2) / th);
+        s.scale.set((2 * d.r) / c.w);
+        s.rotation = turn;
+        s.position.set(d.x, d.y);
+        shadows.addChild(discShadow(bt, d.x + 4, d.y + 6, 14, 0.25));
+        low.addChild(s);
+        break;
+      }
+      case "sign": {
+        const t = tex.sign_post;
+        const c = SPRITE_CONTENT.sign_post!;
+        const s = new Sprite(t);
+        s.anchor.set((c.x + c.w / 2) / (t.width || 1), (c.y + c.h) / (t.height || 1));
+        s.scale.set((2 * d.r) / c.h);
+        s.position.set(d.x, d.y);
+        low.addChild(s);
+        break;
+      }
+      case "board":
+        low.addChild(fitSprite(tex.sign_board, "sign_board", box, 0));
+        break;
+      default:
+        break; // dirt / oil / debris: the ground builder draws them under the floors
+    }
   }
 
   const border: MapRect[] = [];
@@ -621,22 +744,49 @@ export function buildChunkProps(
       case "wall":
         wallList.push(r);
         break;
-      case "window":
-        windows.push(r);
+      case "window": {
+        // Map v2 art: a framed pane (one in five cracked) stretched over the 112 × 24 opening.
+        const broken = propHash(r.x, r.y, 11) < 0.2;
+        const name: SpriteName = broken ? "window_h_broken" : "window_h";
+        const t = tex[name];
+        if (t && t !== Texture.EMPTY) low.addChild(propSprite(t, name, r, vertical, 3));
+        else windows.push(r);
         break;
+      }
       case "concrete_wall":
         concrete.push(r);
         break;
       case "water":
         break; // terrain draws the river; water runs are only collision
-      case "crate":
+      case "crate": {
         shadows.addChild(rectShadow(bt, r));
-        low.addChild(propSprite(tex.crate, "crate", r, false, 2));
+        const { t, name } = variantTex(tex, CRATE_ART, r.v);
+        low.addChild(name === "crate" ? propSprite(t, name, r, false, 2) : fitSprite(t, name, r, 4, propHash(r.x, r.y, 12) < 0.5 ? 0 : Math.PI / 2));
         break;
-      case "car":
+      }
+      case "car": {
         shadows.addChild(rectShadow(bt, r));
-        low.addChild(propSprite(tex.car_wreck, "car_wreck", r, vertical, 3, flip));
+        const { t, name } = variantTex(tex, CAR_ART, r.v);
+        low.addChild(propSprite(t, name, r, vertical, 3, flip));
         break;
+      }
+      case "table": {
+        shadows.addChild(rectShadow(bt, r, 0.18));
+        const name: SpriteName = r.v === 1 ? "table_round" : "table_wood";
+        low.addChild(fitSprite(tex[name], name, r, 2, vertical ? Math.PI / 2 : 0, true));
+        break;
+      }
+      case "desk":
+      case "sofa":
+      case "armchair":
+      case "bed":
+      case "counter":
+      case "lockers": {
+        const name = FURNITURE_ART[r.k]!;
+        shadows.addChild(rectShadow(bt, r, 0.18));
+        low.addChild(facingSprite(tex[name], name, r, r.v ?? 0, r.k === "desk"));
+        break;
+      }
       case "ship_container":
         shadows.addChild(rectShadow(bt, r, 0.3));
         low.addChild(propSprite(tex.shipping_container, "shipping_container", r, vertical, 2, flip));
@@ -648,7 +798,8 @@ export function buildChunkProps(
         low.addChild(propSprite(tex.sandbags_straight, "sandbags_straight", r, vertical, 6, flip));
         break;
       case "fence": {
-        // Chain-link segments along the fence, posts at both ends of each.
+        // Panels along the fence (chain-link, wooden, corrugated or barbed: MapRect.v by place).
+        const { t, name } = variantTex(tex, FENCE_ART, r.v);
         const along = vertical ? r.h : r.w;
         const n = Math.max(1, Math.round(along / 170));
         const seg = along / n;
@@ -656,7 +807,7 @@ export function buildChunkProps(
           const sr: Rect = vertical
             ? { x: r.x, y: r.y + k * seg, w: r.w, h: seg }
             : { x: r.x + k * seg, y: r.y, w: seg, h: r.h };
-          low.addChild(propSprite(tex.fence, "fence", sr, vertical, 4));
+          low.addChild(propSprite(t, name, sr, vertical, 4));
         }
         break;
       }
@@ -680,6 +831,16 @@ export function buildChunkProps(
         drawWagon(procedural, r);
         break;
       case "shelf":
+        if (r.v === 1 || r.v === 2) {
+          // Map v2 room shelves (metal / wooden art); warehouse racks stay procedural.
+          const name: SpriteName = r.v === 1 ? "shelf_metal" : "shelf_wood";
+          const t = tex[name];
+          if (t && t !== Texture.EMPTY) {
+            shadows.addChild(rectShadow(bt, r, 0.2));
+            low.addChild(propSprite(t, name, r, vertical, 3));
+            break;
+          }
+        }
         drawShelf(procedural, r);
         break;
       case "watchtower":
@@ -718,7 +879,11 @@ export function buildChunkProps(
       }
       case "barrel": {
         shadows.addChild(discShadow(bt, c.x + 4, c.y + 6, c.r));
-        const s = propSprite(tex.barrel, "barrel", { x: c.x - c.r, y: c.y - c.r, w: 2 * c.r, h: 2 * c.r }, false, 2);
+        // Map v2: one barrel in three is the blue drum.
+        const blue = propHash(c.x, c.y, 13) < 0.33 && tex.barrel_blue && tex.barrel_blue !== Texture.EMPTY;
+        const s = blue
+          ? propSprite(tex.barrel_blue, "barrel_blue", { x: c.x - c.r, y: c.y - c.r, w: 2 * c.r, h: 2 * c.r }, false, 2)
+          : propSprite(tex.barrel, "barrel", { x: c.x - c.r, y: c.y - c.r, w: 2 * c.r, h: 2 * c.r }, false, 2);
         s.rotation = propHash(c.x, c.y, 4) * Math.PI * 2;
         low.addChild(s);
         break;
@@ -827,7 +992,7 @@ export class GroundChunks {
     this.bt = makeBakeTextures();
     const { tiles, owned } = makeTileTextures(tex);
     this.ownedTiles = owned;
-    this.ground = new GroundBuilder(map, tiles, this.bt.softDisc, this.grid.chunk);
+    this.ground = new GroundBuilder(map, tiles, this.bt.softDisc, this.grid.chunk, tex);
     this.root.eventMode = "none";
     this.root.interactiveChildren = false;
     // A lost/restored WebGL context empties every RenderTexture: re-bake on demand (the overview

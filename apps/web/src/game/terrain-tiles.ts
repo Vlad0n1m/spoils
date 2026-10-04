@@ -18,6 +18,8 @@ import {
   TERRAIN_INDOOR,
   TERRAIN_KIND_MASK,
   mulberry32,
+  type Building,
+  type BuildingArch,
   type Decal,
   type MapData,
   type Terrain,
@@ -96,7 +98,8 @@ export const TILE_SPRITE: Record<Terrain, SpriteName | null> = {
   [TERRAIN.WOOD]: "wood_floor_tile",
   [TERRAIN.WATER]: null,
   [TERRAIN.BRIDGE]: null,
-  [TERRAIN.GRAVEL]: null,
+  // Map v2 art (the procedural gravel stays the fallback when the file is missing).
+  [TERRAIN.GRAVEL]: "gravel_tile",
   [TERRAIN.SHALLOW]: null,
 };
 
@@ -367,6 +370,113 @@ export function kindMask(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Pure: map v2 ground variety (overlay patches) and floors
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A ground-variety overlay (map v2): another tile of the same ground drawn in soft noise patches
+ * over `base` — dry and lush grass on the grass, rough dirt on dirt tracks and yards, cracked
+ * asphalt on roads and forecourts. Patches are a pure function of global terrain cells (value
+ * noise over a `lattice`-cell grid, smoothstep(lo, hi)), so neighbouring chunks agree, and an
+ * overlay never reaches past the edge of its base kind (`erode`: every neighbour cell must be base).
+ * The mask has one texel per terrain cell; the GPU's bilinear filter makes the 64 px soft edge.
+ */
+export interface GroundOverlay {
+  sprite: SpriteName;
+  base: Terrain;
+  lattice: number;
+  lo: number;
+  hi: number;
+  salt: number;
+  /** Require the 8 neighbours to be `base` too (false for grass: it is drawn under every layer). */
+  erode: boolean;
+}
+
+export const GROUND_OVERLAYS: readonly GroundOverlay[] = [
+  { sprite: "grass_dry_tile", base: TERRAIN.GRASS, lattice: 22, lo: 0.56, hi: 0.68, salt: 31, erode: false },
+  { sprite: "grass_lush_tile", base: TERRAIN.GRASS, lattice: 14, lo: 0.6, hi: 0.72, salt: 47, erode: false },
+  { sprite: "dirt_rough_tile", base: TERRAIN.DIRT, lattice: 10, lo: 0.5, hi: 0.62, salt: 59, erode: true },
+  { sprite: "asphalt_cracked_tile", base: TERRAIN.ASPHALT, lattice: 9, lo: 0.52, hi: 0.64, salt: 71, erode: true },
+];
+
+/**
+ * Coverage of `ov` per cell of `reg` (row-major, 0..1), written as opaque grey RGBA texels into `out`
+ * (length ≥ cols·rows·4). Returns true when any texel is non-zero (an empty overlay is skipped).
+ */
+export function overlayMask(
+  kinds: Uint8Array,
+  mapCols: number,
+  mapRows: number,
+  reg: CellRegion,
+  ov: GroundOverlay,
+  out: Uint8Array | Uint8ClampedArray,
+): boolean {
+  const at = (r: number, c: number) =>
+    kinds[Math.min(mapRows - 1, Math.max(0, r)) * mapCols + Math.min(mapCols - 1, Math.max(0, c))]!;
+  const span = ov.hi - ov.lo;
+  let any = false;
+  for (let r = 0; r < reg.rows; r++) {
+    const gr = reg.r0 + r;
+    for (let c = 0; c < reg.cols; c++) {
+      const gc = reg.c0 + c;
+      let v = 0;
+      let ok = !ov.erode || at(gr, gc) === ov.base;
+      if (ok && ov.erode) {
+        for (let dr = -1; dr <= 1 && ok; dr++) for (let dc = -1; dc <= 1; dc++) if (at(gr + dr, gc + dc) !== ov.base) { ok = false; break; }
+      }
+      if (ok) {
+        const n = 0.65 * valueNoise(gc, gr, ov.lattice, ov.salt) + 0.35 * valueNoise(gc, gr, Math.max(2, ov.lattice / 3), ov.salt + 1);
+        const t = Math.min(1, Math.max(0, (n - ov.lo) / span));
+        v = t * t * (3 - 2 * t);
+      }
+      const o = (r * reg.cols + c) * 4;
+      const b = Math.round(v * 255);
+      if (b > 0) any = true;
+      out[o] = b;
+      out[o + 1] = b;
+      out[o + 2] = b;
+      out[o + 3] = 255;
+    }
+  }
+  return any;
+}
+
+/** Floor art (map v2): planks, parquet, ceramic tiles or a concrete slab. */
+export type FloorStyle = "plank" | "wood" | "ceramic" | "concrete";
+
+export const FLOOR_SPRITE: Record<FloorStyle, SpriteName> = {
+  plank: "wood_floor_tile",
+  wood: "floor_wood_tile",
+  ceramic: "floor_ceramic_tile",
+  concrete: "floor_concrete_tile",
+};
+
+export const FLOOR_SCALE: Record<FloorStyle, number> = { plank: 0.75, wood: 0.75, ceramic: 0.5, concrete: 0.75 };
+
+/** Main floor per archetype; houses get a ceramic kitchen / bath in their smallest room. */
+const ARCH_FLOOR: Record<BuildingArch, FloorStyle> = {
+  houseS: "wood", houseM: "wood", barn: "plank", shed: "plank", warehouse: "concrete", office: "wood",
+  shop: "ceramic", barracks: "plank", bunker: "concrete", clinic: "ceramic", garage: "concrete", diner: "ceramic",
+};
+
+/** Floor of every room of a building: [main style, per-room overrides (room index → style)]. */
+export function floorPlan(b: Pick<Building, "arch" | "rooms">): { main: FloorStyle; rooms: Array<[number, FloorStyle]> } {
+  const main = ARCH_FLOOR[b.arch] ?? "wood";
+  const rooms: Array<[number, FloorStyle]> = [];
+  if ((b.arch === "houseM" || b.arch === "houseS") && b.rooms.length >= 2) {
+    let small = 0;
+    b.rooms.forEach((r, i) => { if (r.w * r.h < b.rooms[small]!.w * b.rooms[small]!.h) small = i; });
+    rooms.push([small, "ceramic"]);
+  }
+  if (b.arch === "diner" && b.rooms.length >= 2) {
+    let big = 0;
+    b.rooms.forEach((r, i) => { if (r.w * r.h > b.rooms[big]!.w * b.rooms[big]!.h) big = i; });
+    rooms.push([big, "wood"]);
+  }
+  return { main, rooms };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Browser: tile textures and the GPU ground builder (nothing here runs at import time)
 // ---------------------------------------------------------------------------------------------
 
@@ -571,6 +681,11 @@ export class GroundBuilder {
   private readonly decalRoot = new Container();
   private readonly floors = new Graphics();
   private readonly scratch = new MaskScratch();
+  /** Map v2 ground-variety overlays (only those whose tile loaded). */
+  private readonly overlays: Array<{ ov: GroundOverlay; tiling: TilingSprite; mask: Sprite; data: Uint8Array; source: BufferImageSource }> = [];
+  /** Map v2 floor tiles per style (fallback: the terrain kind's tile). */
+  private readonly floorTex: Partial<Record<FloorStyle, Texture>>;
+  private readonly floorMatrices = new Map<FloorStyle, Matrix>();
   private readonly kinds: Uint8Array;
   private readonly matrices = new Map<Terrain, Matrix>();
   /** Debug: ms of the last build() spent computing masks (perf harness / F3 overlay). */
@@ -581,12 +696,31 @@ export class GroundBuilder {
     private readonly tiles: TileTextures,
     private readonly softDisc: Texture,
     readonly chunk: number,
+    /** Map v2 art: overlay and floor tiles by sprite name (missing / EMPTY entries are skipped). */
+    extra: Partial<Record<SpriteName, Texture>> = {},
   ) {
     this.kinds = groundKinds(map);
     this.base = this.tiling(GROUND_BASE);
     this.root.addChild(this.base);
     const per = Math.ceil(chunk / map.terrainCell) + 2 * MASK_RING;
     const mw = per * MASK_RES;
+    const usable = (t: Texture | undefined): t is Texture => !!t && t !== Texture.EMPTY;
+    const addOverlays = (after: Terrain | null) => {
+      for (const ov of GROUND_OVERLAYS) {
+        if ((ov.base === GROUND_BASE ? null : ov.base) !== after) continue;
+        const t = extra[ov.sprite];
+        if (!usable(t)) continue;
+        const data = new Uint8Array(per * per * 4);
+        const source = new BufferImageSource({ resource: data, width: per, height: per, scaleMode: "linear", alphaMode: "no-premultiply-alpha" });
+        const mask = new Sprite(new Texture({ source }));
+        const tiling = new TilingSprite({ texture: t, width: this.chunk, height: this.chunk });
+        tiling.tileScale.set(TILE_SCALE[ov.base]);
+        this.root.addChild(mask, tiling);
+        tiling.mask = mask;
+        this.overlays.push({ ov, tiling, mask, data, source });
+      }
+    };
+    addOverlays(null);
     for (const layer of GROUND_LAYERS) {
       if (layer.kind === TERRAIN.ASPHALT) this.root.addChild(this.roads);
       const data = new Uint8Array(mw * mw * 4);
@@ -595,9 +729,15 @@ export class GroundBuilder {
       const tiling = this.tiling(layer.kind);
       // The mask sprite lives in the tree (so its transform updates) but is never drawn itself.
       this.root.addChild(mask, tiling);
+      addOverlays(layer.kind);
       if (layer.kind === TERRAIN.ASPHALT) this.root.addChild(this.dashes);
       tiling.mask = mask;
       this.layers.push({ layer, under: underBits(layer.kind), tiling, mask, data, source });
+    }
+    this.floorTex = {};
+    for (const st of Object.keys(FLOOR_SPRITE) as FloorStyle[]) {
+      const t = extra[FLOOR_SPRITE[st]];
+      if (usable(t)) this.floorTex[st] = t;
     }
     this.root.addChild(this.rails, this.decalRoot, this.floors);
   }
@@ -656,7 +796,21 @@ export class GroundBuilder {
       L.mask.height = reg.rows * cell;
       L.tiling.mask = L.mask;
     }
-    this.lastMaskMs = maskMs;
+    // Map v2 ground variety: one texel per terrain cell, bilinear on the GPU.
+    const t0 = performance.now();
+    for (const O of this.overlays) {
+      const baseHere = (present & (1 << O.ov.base)) !== 0;
+      const any = baseHere && overlayMask(this.kinds, map.terrainCols, map.terrainRows, reg, O.ov, O.data);
+      O.tiling.visible = any;
+      O.mask.visible = any;
+      if (!any) continue;
+      O.source.update();
+      this.place(O.tiling, x0, y0);
+      O.mask.position.set(reg.c0 * cell, reg.r0 * cell);
+      O.mask.width = reg.cols * cell;
+      O.mask.height = reg.rows * cell;
+    }
+    this.lastMaskMs = maskMs + performance.now() - t0;
     this.drawRoads(x0, y0);
     this.drawDecals(list.decals);
     this.drawFloors(list.buildings);
@@ -791,18 +945,38 @@ export class GroundBuilder {
     root.addChild(debris);
   }
 
-  /** Building floors: crisp rect in the floor's tile, darker inner edge, worn door thresholds. */
+  private floorMatrix(st: FloorStyle): Matrix {
+    let m = this.floorMatrices.get(st);
+    if (!m) {
+      m = new Matrix().scale(FLOOR_SCALE[st], FLOOR_SCALE[st]);
+      this.floorMatrices.set(st, m);
+    }
+    return m;
+  }
+
+  /**
+   * Building floors: crisp rect in the floor's tile, darker inner edge, worn door thresholds. Map v2:
+   * the floor art follows the archetype (parquet houses, ceramic shops and clinics, concrete
+   * warehouses …) and a house's smallest room gets a ceramic kitchen floor (floorPlan).
+   */
   private drawFloors(ids: readonly number[]) {
     const g = this.floors.clear();
     for (const i of ids) {
       const b = this.map.buildings[i]!;
       const f = b.floor;
-      g.rect(f.x, f.y, f.w, f.h).fill({
-        texture: this.tiles[b.floorTerrain],
-        textureSpace: "global",
-        matrix: this.fillMatrix(b.floorTerrain),
-        color: 0xffffff,
-      });
+      const plan = floorPlan(b);
+      const main = this.floorTex[plan.main];
+      g.rect(f.x, f.y, f.w, f.h).fill(
+        main
+          ? { texture: main, textureSpace: "global", matrix: this.floorMatrix(plan.main), color: 0xffffff }
+          : { texture: this.tiles[b.floorTerrain], textureSpace: "global", matrix: this.fillMatrix(b.floorTerrain), color: 0xffffff },
+      );
+      for (const [ri, st] of plan.rooms) {
+        const t = this.floorTex[st];
+        const r = b.rooms[ri];
+        if (!t || !r) continue;
+        g.rect(r.x, r.y, r.w, r.h).fill({ texture: t, textureSpace: "global", matrix: this.floorMatrix(st), color: 0xffffff });
+      }
       g.rect(f.x + 8, f.y + 8, f.w - 16, f.h - 16).stroke({ width: 16, color: 0x140e08, alpha: 0.3 });
       for (const d of b.doors) g.rect(d.x, d.y, d.w, d.h);
       if (b.doors.length) g.fill({ color: 0x281c10, alpha: 0.45 });
@@ -812,5 +986,6 @@ export class GroundBuilder {
   destroy() {
     this.root.destroy({ children: true });
     for (const L of this.layers) L.source.destroy();
+    for (const O of this.overlays) O.source.destroy();
   }
 }

@@ -106,7 +106,7 @@ describe("minimap window", () => {
   });
 
   it("clamps inside the map at the edges and on small maps", () => {
-    assert.deepEqual(minimapWindow(map, 100, 24_500), { x: 0, y: map.height - MINIMAP_WINDOW, w: MINIMAP_WINDOW, h: MINIMAP_WINDOW });
+    assert.deepEqual(minimapWindow(map, 100, map.height - 76), { x: 0, y: map.height - MINIMAP_WINDOW, w: MINIMAP_WINDOW, h: MINIMAP_WINDOW });
     assert.deepEqual(minimapWindow({ width: 3000, height: 2000 }, 1500, 1000), { x: 0, y: 0, w: 3000, h: 2000 });
   });
 });

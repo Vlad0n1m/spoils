@@ -9,7 +9,8 @@
  *   3. extracts (fixed by the template), POI layouts (BSP buildings, props), hunter cabins;
  *   4. side spawns (before props so trees keep the circles clear);
  *   5. props: road car wrecks, forest/steppe scatter, bushes, decals;
- *   6. spots: room containers + loot, wilderness stashes + loot, bosses, ambient emitters, then
+ *   6. spots: room containers + loot, wilderness stashes + loot, bosses, the per-tier density top-up
+ *      (balanceTiers: loot per km² stays at the 24-block layout's), ambient emitters, then
  *      marauder posts (NPC MODEL v5; own rng stream, no reservations, not part of mapHash);
  *   7. validation: flood-fill reachability drops/nudges unreachable spots (spots.ts).
  *
@@ -23,6 +24,7 @@ import { ALL, GenCtx } from "./context.js";
 import { buildPois } from "./pois.js";
 import { roadCars, wildProps } from "./props.js";
 import {
+  balanceTiers,
   placeAmbient,
   placeBosses,
   placeBuildingSpots,
@@ -115,7 +117,9 @@ export function generateMapWithReport(
   wildProps(ctx);
   placeBuildingSpots(ctx);
   placeWildSpots(ctx);
+  // Bosses before the tier top-up: T3/T4 top-ups go next to the boss (POOL guarded radius).
   placeBosses(ctx);
+  balanceTiers(ctx);
   placeAmbient(ctx);
   // Last, from its own rng stream and reserving nothing: posts never move geometry (not hashed).
   placeNpcPosts(ctx);

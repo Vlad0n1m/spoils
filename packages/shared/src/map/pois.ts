@@ -3,6 +3,11 @@
  * scatter inside POIs looked noisy in the prototype); rail and quarry are mostly scatter
  * (critique: lot templates time-boxed). Each POI draws from its own rng stream.
  *
+ * Map v2 (MAP_GEN_VERSION 4) adds Millbrook (street rows of shops, a diner, a clinic, offices and a
+ * garage on the crossroads, houses behind), the Pump Station (fenced works with water tanks), the
+ * Ranger Station, Relay Hill (a small walled T3 post) and the Truck Stop, grows the Radar Base by an
+ * office, and dresses POIs with fence styles, lamp posts and sign posts at their road entrances.
+ *
  * Every layout only *proposes* geometry: buildings and props go through the placement hash, so a
  * POI never overlaps a road, the river or another POI, and validation (spots.ts) later drops any
  * spot that ended up unreachable.
@@ -13,23 +18,29 @@ import type { Rng } from "../rng.js";
 import { ARCH } from "./buildings.js";
 import { ALL, LOW, type GenCtx } from "./context.js";
 import {
+  FENCE_STYLE,
   barrel,
   car,
   clutter,
   crate,
+  decor,
   fenceLine,
+  groundDecal,
   logpile,
   outdoorContainers,
   pointIn,
+  quarterToward,
   rock,
   sandbags,
   scatter,
   shipContainer,
+  streetLamps,
   tree,
   bush,
 } from "./props.js";
-import { TERRAIN, type BuildingArch, type MapSide, type Zone } from "./types.js";
-import { chance, grow, pickW, polyXAtY, polyYAtX, ri, rs } from "./util.js";
+import { ROAD_MASK } from "./terrain.js";
+import { TERRAIN, TERRAIN_INDOOR, type BuildingArch, type MapSide, type Zone } from "./types.js";
+import { chance, grow, inRect, pick, pickW, polyXAtY, polyYAtX, ri, rs, shuffle } from "./util.js";
 
 export function buildPois(ctx: GenCtx): void {
   zarya(ctx);
@@ -42,7 +53,13 @@ export function buildPois(ctx: GenCtx): void {
   checkpoint(ctx);
   radar(ctx);
   quarry(ctx);
+  millbrook(ctx);
+  pumpworks(ctx);
+  ranger(ctx);
+  relay(ctx);
+  truckstop(ctx);
   hunterCabins(ctx);
+  zoneSigns(ctx);
 }
 
 const inner = (z: Zone, m: number): Rect => grow(z.rect, -m);
@@ -119,13 +136,13 @@ function buildLot(ctx: GenCtx, rng: Rng, z: Zone, lot: Rect, front: MapSide, arc
     // Front fence (road side) with a wide gate near the middle.
     const fx = front === 1 ? lot.x + lot.w - 24 : lot.x + 24;
     const gate = ri(rng, Math.floor(lot.h * 0.3), Math.floor(lot.h * 0.6) - 192);
-    fenceLine(ctx, fx, lot.y + 24, fx, lot.y + lot.h - 24, [[gate, 192]]);
+    fenceLine(ctx, fx, lot.y + 24, fx, lot.y + lot.h - 24, [[gate, 192]], FENCE_STYLE[z.kind]);
     // North side fence with a back gap (never a closed ring). It stops 40 px short of the front
     // fence: touching panels would fail each other's placement check.
     const x0 = front === 1 ? lot.x + 24 : lot.x + 64;
     const x1 = front === 1 ? lot.x + lot.w - 64 : lot.x + lot.w - 24;
     const gapAt = front === 1 ? 24 : x1 - x0 - 24 - 176;
-    fenceLine(ctx, x0, lot.y + 24, x1, lot.y + 24, [[gapAt, 176]]);
+    fenceLine(ctx, x0, lot.y + 24, x1, lot.y + 24, [[gapAt, 176]], FENCE_STYLE[z.kind]);
   }
   // Yard clutter.
   const yard = grow(lot, -72);
@@ -182,9 +199,9 @@ function kolkhoz(ctx: GenCtx): void {
     const w = ri(rng, 640, 960), h = ri(rng, 480, 640);
     const [x, y] = pointIn(rng, { x: area.x, y: area.y, w: area.w - w, h: area.h - h });
     if (!ctx.free({ x, y, w, h }, 32)) continue;
-    fenceLine(ctx, x, y, x + w, y, [[Math.floor(w / 2) - 96, 192]]);
-    fenceLine(ctx, x, y + 40, x, y + h, []);
-    fenceLine(ctx, x + w, y + 40, x + w, y + h, [[Math.floor(h / 2) - 80, 160]]);
+    fenceLine(ctx, x, y, x + w, y, [[Math.floor(w / 2) - 96, 192]], 1);
+    fenceLine(ctx, x, y + 40, x, y + h, [], 1);
+    fenceLine(ctx, x + w, y + 40, x + w, y + h, [[Math.floor(h / 2) - 80, 160]], 1);
     scatter(rng, { x: x + 48, y: y + 48, w: w - 96, h: h - 96 }, 2, (px, py) => logpile(ctx, px, py, chance(rng, 0.5), 48));
     break;
   }
@@ -269,11 +286,13 @@ function elevator(ctx: GenCtx): void {
         // Security booth first (it needs a clear pad), then the container maze around it.
         ctx.scatterBuilding(rng, "shed", z.id, pin, 40);
         containerYard(ctx, rng, pin);
-        outdoorContainers(ctx, rng, pin, 7, z.tier, z.id);
+        // Map v2: 7 → 4 per yard; balanceTiers tops the tier up next to the Foreman instead.
+        outdoorContainers(ctx, rng, pin, 4, z.tier, z.id);
       }
     }
   }
   clutter(ctx, rng, inner(z, 128), { crates: 4, barrels: 4, decals: 10, decal: "oil" });
+  streetLamps(ctx, ctx.road("highway").pts, 256, z.rect, 640);
 }
 
 /**
@@ -324,6 +343,9 @@ function depot(ctx: GenCtx): void {
   clutter(ctx, rng, south, { crates: 4, barrels: 3, decals: 4, decal: "debris" });
   scatter(rng, inner(z, 128), 4, (x, y) => shipContainer(ctx, x, y, chance(rng, 0.5), 64));
   outdoorContainers(ctx, rng, inner(z, 128), 8, z.tier, z.id);
+  // Map v2: chain-link along the yard's north edge (roads cut their own gates), two walk-through gaps.
+  const fy = z.rect.y + 48;
+  fenceLine(ctx, z.rect.x + 64, fy, z.rect.x + z.rect.w - 64, fy, [[Math.floor(z.rect.w * 0.3), 224], [Math.floor(z.rect.w * 0.7), 224]], FENCE_STYLE[z.kind]);
 }
 
 // ───────────────────────── Bridge Checkpoint
@@ -355,6 +377,10 @@ function checkpoint(ctx: GenCtx): void {
   if (ctx.freeOnRoad({ x: bx + 320, y: roadY + 16, w: 48, h: 112 }, 0)) ctx.rect(bx + 320, roadY + 16, 48, 112, ALL, "concrete_wall", 1);
   clutter(ctx, rng, area, { crates: 3, barrels: 2, decals: 3, decal: "debris" });
   outdoorContainers(ctx, rng, area, 2, z.tier, z.id);
+  // Map v2: barbed wire on the land side of the post (east edge), with a gap on each shoulder.
+  const ex = z.rect.x + z.rect.w - 40;
+  fenceLine(ctx, ex, z.rect.y + 64, ex, z.rect.y + z.rect.h - 64, [[Math.floor(z.rect.h * 0.2), 192], [Math.floor(z.rect.h * 0.7), 192]], FENCE_STYLE[z.kind]);
+  streetLamps(ctx, hw, 256, z.rect, 560);
 }
 
 // ───────────────────────── Radar Base: walled military compound
@@ -396,6 +422,9 @@ function radar(ctx: GenCtx): void {
   slot("warehouse", 3340, 460, 1216, 768, 2);
   slot("bunker", 3700, 3240, 704, 704, 3);
   slot("barracks", 2140, 1560, 1088, 448, 2);
+  // Map v2: the base grew to 5.6 blocks — a staff office next to the command office, inside the
+  // Commander's guard radius (POOL.GUARDED_RADIUS_PX), so pool uniques stay as boss-guarded as on v6.
+  slot("office", 3400, 1400, 768, 576, 3);
   // Radar dish with a sandbag ring.
   const dx = zx + 1500, dy = zy + 3500;
   if (ctx.free({ x: dx - 136, y: dy - 136, w: 272, h: 272 }, 32)) {
@@ -414,8 +443,10 @@ function radar(ctx: GenCtx): void {
   const yard: Rect = { x: area.x, y: area.y + Math.floor(area.h * 0.5), w: area.w, h: Math.ceil(area.h * 0.5) };
   scatter(rng, yard, 8, (x, y) => sandbags(ctx, x, y, chance(rng, 0.5), 72));
   scatter(rng, yard, 3, (x, y) => shipContainer(ctx, x, y, chance(rng, 0.5), 112));
-  clutter(ctx, rng, area, { crates: 10, barrels: 6, decals: 8, decal: "debris" });
-  outdoorContainers(ctx, rng, area, 8, z.tier, z.id);
+  clutter(ctx, rng, area, { crates: 10, barrels: 6, decals: 8, decal: "debris", military: true });
+  // Map v2: 8 → 5 scattered boxes; balanceTiers tops the tier up next to the Commander instead.
+  outdoorContainers(ctx, rng, area, 5, z.tier, z.id);
+  streetLamps(ctx, ctx.road("radar").pts, 160, z.rect, 700);
   ctx.ambient.push({ x: zx + 2560, y: zy + 900, r: 1000, k: "generator" });
 }
 
@@ -447,14 +478,255 @@ function hunterCabins(ctx: GenCtx): void {
   const rng = ctx.rng("poi:cabins");
   const area: Rect = { x: 1600, y: 1600, w: ctx.width - 3200, h: ctx.height - 3200 };
   let placed = 0;
-  for (let t = 0; t < 400 && placed < 4; t++) {
+  // Spread the cabins: one per sixth of the map (3 columns × 2 rows; map v2 has room for 6).
+  const region = (x: number, y: number) => Math.min(2, Math.floor((x * 3) / ctx.width)) + (y < ctx.height / 2 ? 0 : 3);
+  for (let t = 0; t < 600 && placed < 6; t++) {
     const [x, y] = pointIn(rng, area);
     if (ctx.terrain.kindAt(x, y) !== TERRAIN.FOREST) continue;
     if (ctx.zones.some((zz) => x > zz.rect.x - 900 && x < zz.rect.x + zz.rect.w + 900 && y > zz.rect.y - 900 && y < zz.rect.y + zz.rect.h + 900)) continue;
-    // Spread the cabins: one per map quadrant.
-    const q = (x < ctx.width / 2 ? 0 : 1) + (y < ctx.height / 2 ? 0 : 2);
-    if (ctx.buildings.some((b) => b.zone === "" && ((b.floor.x < ctx.width / 2 ? 0 : 1) + (b.floor.y < ctx.height / 2 ? 0 : 2)) === q)) continue;
+    const q = region(x, y);
+    if (ctx.buildings.some((b) => b.zone === "" && region(b.floor.x, b.floor.y) === q)) continue;
     const bi = ctx.scatterBuilding(rng, "shed", "", { x: x - 300, y: y - 300, w: 600, h: 600 }, 6, 128);
     if (bi >= 0) placed++;
+  }
+}
+
+// ───────────────────────── Millbrook: a small town on the crossroads (map v2)
+
+/** Town front-row archetypes: every quadrant draws its row from these. */
+const TOWN_FRONT: ReadonlyArray<readonly [BuildingArch, number]> = [
+  ["shop", 3], ["office", 2], ["diner", 1.5], ["clinic", 1.2], ["garage", 1.2], ["houseM", 1],
+];
+
+/**
+ * A row of buildings along a street: doors face the street (`front`), alleys of 160–256 px between
+ * them. `dir` +1 walks away from the crossroads to the right/down, −1 to the left/up. The first
+ * archetypes in `first` are used before random picks, so every town gets its diner and clinic.
+ */
+function streetRow(
+  ctx: GenCtx, rng: Rng, z: Zone, area: Rect, front: MapSide, dir: 1 | -1, first: BuildingArch[],
+): number {
+  const horizStreet = front === 0 || front === 2;
+  const span = horizStreet ? area.w : area.h;
+  let cur = 0, n = 0;
+  for (let k = 0; k < 6 && cur < span; k++) {
+    const arch = first[k] ?? pickW(rng, TOWN_FRONT);
+    const a = ARCH[arch];
+    // Street-facing size: the long side along the street.
+    const along = Math.min(rs(rng, a.w[0], a.w[1], 32), 960);
+    const depth = Math.min(rs(rng, a.h[0], a.h[1], 32), horizStreet ? area.h : area.w);
+    if (cur + along > span) break;
+    const at = dir > 0 ? (horizStreet ? area.x : area.y) + cur : (horizStreet ? area.x + area.w : area.y + area.h) - cur - along;
+    const floor: Rect = horizStreet
+      ? { x: at, y: front === 0 ? area.y : area.y + area.h - depth, w: along, h: depth }
+      : { x: front === 3 ? area.x : area.x + area.w - depth, y: at, w: depth, h: along };
+    const bi = ctx.building(rng, arch, z.id, floor, { door: front, margin: 32 });
+    if (bi >= 0) n++;
+    cur += along + ri(rng, 160, 256);
+  }
+  return n;
+}
+
+function millbrook(ctx: GenCtx): void {
+  const z = ctx.zone("millbrook");
+  const rng = ctx.rng("poi:millbrook");
+  const hw = ctx.road("highway").pts, ns = ctx.road("ns").pts;
+  const X = Math.round(polyXAtY(ns, z.rect.y + z.rect.h / 2));
+  const Y = Math.round(polyYAtX(hw, X));
+  const t = ctx.terrain;
+  // Sidewalks: concrete along both streets inside the town (never over a road cell).
+  const pave = (pts: readonly number[], half: number) =>
+    t.paintPolyline(pts, half, (old, i) => {
+      if (t.roadMask[i] !== ROAD_MASK.NONE || (old & TERRAIN_INDOOR) !== 0) return old;
+      const cx = ((i % t.cols) + 0.5) * t.cell, cy = (Math.floor(i / t.cols) + 0.5) * t.cell;
+      return inRect(z.rect, cx, cy) ? TERRAIN.CONCRETE : old;
+    });
+  pave(hw, 128 + 128);
+  pave(ns, 80 + 128);
+  // Quadrants around the crossroads (street + sidewalk + setback kept clear).
+  const gapH = 128 + 160, gapV = 80 + 160;
+  const L = z.rect.x + 96, R = z.rect.x + z.rect.w - 96, T = z.rect.y + 96, B = z.rect.y + z.rect.h - 96;
+  const nw: Rect = { x: L, y: T, w: X - gapV - L, h: Y - gapH - T };
+  const ne: Rect = { x: X + gapV, y: T, w: R - X - gapV, h: Y - gapH - T };
+  const sw: Rect = { x: L, y: Y + gapH, w: X - gapV - L, h: B - Y - gapH };
+  const se: Rect = { x: X + gapV, y: Y + gapH, w: R - X - gapV, h: B - Y - gapH };
+  // Front rows on the highway (main street); the ns street gets the corner buildings' side doors.
+  const firsts: BuildingArch[][] = shuffle(rng, [["diner"], ["clinic"], ["shop"], ["garage"]]);
+  streetRow(ctx, rng, z, nw, 2, -1, firsts[0]!);
+  streetRow(ctx, rng, z, ne, 2, 1, firsts[1]!);
+  streetRow(ctx, rng, z, sw, 0, -1, firsts[2]!);
+  streetRow(ctx, rng, z, se, 0, 1, firsts[3]!);
+  // Back lots: houses behind the shops, wooden yard fences, sheds.
+  for (const q of [nw, ne, sw, se]) {
+    for (let i = 0; i < 2; i++) ctx.scatterBuilding(rng, chance(rng, 0.5) ? "houseM" : "houseS", z.id, q, 30, 64);
+    if (chance(rng, 0.5)) ctx.scatterBuilding(rng, "shed", z.id, q, 20, 64);
+    clutter(ctx, rng, q, { crates: 2, barrels: 2, decals: 3, decal: "dirt" });
+    scatter(rng, q, 2, (x, y) => tree(ctx, x, y, ri(rng, 26, 34), 56), 6);
+    scatter(rng, q, 2, (x, y) => bush(ctx, x, y, ri(rng, 48, 64)), 6);
+    scatter(rng, q, 1, (x, y) => groundDecal(ctx, x, y, ri(rng, 48, 72), pick(rng, ["bricks", "planks", "papers"] as const)), 6);
+  }
+  // Parked cars along the curbs (off the centre lane), lamp posts, a notice board on the corner.
+  for (let k = 0; k < 6; k++) {
+    const x = z.rect.x + 256 + Math.floor(rng() * (z.rect.w - 512));
+    if (Math.abs(x - X) < 360) continue;
+    const curb = (chance(rng, 0.5) ? -1 : 1) * (128 - 64);
+    car(ctx, x, Math.round(polyYAtX(hw, x)) + curb, false, true, 48);
+  }
+  streetLamps(ctx, hw, 256, z.rect, 520);
+  streetLamps(ctx, ns, 160, z.rect, 520);
+  decor(ctx, X + gapV - 64, Y - gapH + 64, "board", 0);
+  outdoorContainers(ctx, rng, grow(z.rect, -128), 3, z.tier, z.id);
+}
+
+// ───────────────────────── Pump Station: fenced water works (map v2)
+
+function pumpworks(ctx: GenCtx): void {
+  const z = ctx.zone("pumpworks");
+  const rng = ctx.rng("poi:pumpworks");
+  const area = inner(z, 176);
+  ctx.scatterBuilding(rng, "warehouse", z.id, area, 60);
+  ctx.scatterBuilding(rng, "office", z.id, area, 40);
+  ctx.scatterBuilding(rng, "garage", z.id, area, 40);
+  // Water tanks (big ALL circles drawn as silos) with lanes between them.
+  let tanks = 0;
+  for (let t = 0; t < 60 && tanks < 3; t++) {
+    const [x, y] = pointIn(rng, grow(area, -160));
+    if (!ctx.free({ x: x - 150, y: y - 150, w: 300, h: 300 }, 72)) continue;
+    ctx.circle(x, y, 140, ALL, "silo", 150);
+    tanks++;
+  }
+  scatter(rng, area, 2, (x, y) => shipContainer(ctx, x, y, chance(rng, 0.5), 96));
+  clutter(ctx, rng, area, { crates: 4, barrels: 5, decals: 6, decal: "oil" });
+  outdoorContainers(ctx, rng, area, 4, z.tier, z.id);
+  // Corrugated perimeter 32 px inside the zone; the service road makes its own gate, plus a back gap.
+  const { x, y, w, h } = z.rect;
+  const m = 32, style = FENCE_STYLE[z.kind];
+  fenceLine(ctx, x + m, y + m, x + w - m, y + m, [], style);
+  fenceLine(ctx, x + m, y + h - m, x + w - m, y + h - m, [[Math.floor(w / 2) - 120, 240]], style);
+  fenceLine(ctx, x + m, y + m + 40, x + m, y + h - m - 40, [[Math.floor(h / 2) - 120, 240]], style);
+  fenceLine(ctx, x + w - m, y + m + 40, x + w - m, y + h - m - 40, [], style);
+  streetLamps(ctx, ctx.road("pump").pts, 160, z.rect, 600);
+  ctx.ambient.push({ x: Math.round(x + w / 2), y: Math.round(y + h / 2), r: 900, k: "generator" });
+}
+
+// ───────────────────────── Ranger Station (map v2)
+
+function ranger(ctx: GenCtx): void {
+  const z = ctx.zone("ranger");
+  const rng = ctx.rng("poi:ranger");
+  const area = inner(z, 144);
+  ctx.scatterBuilding(rng, "houseS", z.id, area, 40);
+  ctx.scatterBuilding(rng, "shed", z.id, area, 40);
+  for (let t = 0; t < 30; t++) {
+    const [tx, ty] = pointIn(rng, area);
+    if (!ctx.free({ x: tx, y: ty, w: 128, h: 128 }, 48)) continue;
+    ctx.rect(tx, ty, 128, 128, ALL, "watchtower");
+    break;
+  }
+  scatter(rng, area, 4, (x, y) => logpile(ctx, x, y, chance(rng, 0.5), 56));
+  clutter(ctx, rng, area, { crates: 2, barrels: 1, decals: 3, decal: "dirt" });
+  scatter(rng, area, 1, (x, y) => decor(ctx, x, y, "board", 0), 10);
+  outdoorContainers(ctx, rng, area, 3, z.tier, z.id);
+}
+
+// ───────────────────────── Relay Hill: small walled T3 post (map v2)
+
+function relay(ctx: GenCtx): void {
+  const z = ctx.zone("relay");
+  const rng = ctx.rng("poi:relay");
+  const { x: zx, y: zy, w: zw, h: zh } = z.rect;
+  const T = 48, G = 256;
+  const westGate = Math.round(polyYAtX(ctx.road("relay").pts, zx)) - G / 2;
+  const southGate = zx + Math.floor(zw * 0.6);
+  const wall = (x: number, y: number, w: number, h: number) => {
+    if (w > 0 && h > 0) ctx.rect(x, y, w, h, ALL, "concrete_wall", w >= h ? 0 : 1);
+  };
+  wall(zx, zy, zw, T);
+  wall(zx, zy + zh - T, southGate - zx, T);
+  wall(southGate + G, zy + zh - T, zx + zw - southGate - G, T);
+  wall(zx, zy + T, T, westGate - zy - T);
+  wall(zx, westGate + G, T, zy + zh - T - westGate - G);
+  wall(zx + zw - T, zy + T, T, zh - 2 * T);
+  for (const [tx, ty] of [[zx + zw - 240, zy + 112], [zx + 112, zy + zh - 240]] as const) {
+    if (ctx.free({ x: tx, y: ty, w: 128, h: 128 }, 0)) ctx.rect(tx, ty, 128, 128, ALL, "watchtower");
+  }
+  const area = inner(z, 192);
+  const north: Rect = { x: area.x, y: area.y, w: area.w, h: Math.floor(area.h * 0.55) };
+  ctx.scatterBuilding(rng, "office", z.id, north, 60, 64);
+  const south: Rect = { x: area.x, y: area.y + Math.floor(area.h * 0.45), w: area.w, h: Math.ceil(area.h * 0.55) };
+  ctx.scatterBuilding(rng, "bunker", z.id, south, 60, 64);
+  ctx.scatterBuilding(rng, "shed", z.id, area, 40, 64);
+  // Relay mast (round base) in a sandbag ring.
+  for (let t = 0; t < 40; t++) {
+    const [mx, my] = pointIn(rng, grow(area, -200));
+    if (!ctx.free({ x: mx - 300, y: my - 300, w: 600, h: 600 }, 0)) continue;
+    ctx.circle(mx, my, 96, ALL, "silo", 104);
+    sandbags(ctx, mx - 96, my - 260, false, 0);
+    sandbags(ctx, mx - 96, my + 212, false, 0);
+    sandbags(ctx, mx + 212, my - 96, true, 0);
+    break;
+  }
+  scatter(rng, area, 4, (x, y) => sandbags(ctx, x, y, chance(rng, 0.5), 72));
+  clutter(ctx, rng, area, { crates: 4, barrels: 3, decals: 4, decal: "debris", military: true });
+  outdoorContainers(ctx, rng, area, 2, z.tier, z.id);
+  ctx.ambient.push({ x: Math.round(zx + zw / 2), y: Math.round(zy + zh / 2), r: 800, k: "generator" });
+}
+
+// ───────────────────────── Truck Stop (map v2)
+
+function truckstop(ctx: GenCtx): void {
+  const z = ctx.zone("truckstop");
+  const rng = ctx.rng("poi:truckstop");
+  const hw = ctx.road("highway").pts;
+  const roadY = Math.round(polyYAtX(hw, z.rect.x + z.rect.w / 2));
+  const area = inner(z, 128);
+  const north: Rect = { x: area.x, y: area.y, w: area.w, h: roadY - 200 - area.y };
+  const south: Rect = { x: area.x, y: roadY + 200, w: area.w, h: area.y + area.h - roadY - 200 };
+  ctx.scatterBuilding(rng, "diner", z.id, north, 50, 64);
+  ctx.scatterBuilding(rng, "garage", z.id, south, 50, 64);
+  // Pump islands on the forecourt, trucks and a trailer on the lot.
+  for (let i = 0; i < 2; i++) {
+    for (let t = 0; t < 30; t++) {
+      const [x, y] = pointIn(rng, south);
+      if (!ctx.free({ x: x - 40, y: y - 120, w: 80, h: 240 }, 48)) continue;
+      barrel(ctx, x, y - 64, 0);
+      barrel(ctx, x, y + 64, 0);
+      break;
+    }
+  }
+  scatter(rng, south, 2, (x, y) => car(ctx, x, y, chance(rng, 0.5), false, 56, 2));
+  scatter(rng, north, 1, (x, y) => shipContainer(ctx, x, y, false, 96));
+  clutter(ctx, rng, area, { crates: 2, barrels: 2, decals: 5, decal: "oil" });
+  streetLamps(ctx, hw, 256, z.rect, 480);
+  outdoorContainers(ctx, rng, area, 3, z.tier, z.id);
+}
+
+// ───────────────────────── sign posts where roads enter a place (map v2 decor)
+
+function zoneSigns(ctx: GenCtx): void {
+  for (const z of ctx.zones) {
+    let placed = 0;
+    for (const road of ctx.roads) {
+      if (road.kind === "rail" || placed >= 3) continue;
+      const p = road.pts;
+      for (let i = 0; i + 3 < p.length && placed < 3; i += 2) {
+        const ax = p[i]!, ay = p[i + 1]!, bx = p[i + 2]!, by = p[i + 3]!;
+        const ina = inRect(z.rect, ax, ay), inb = inRect(z.rect, bx, by);
+        if (ina === inb) continue;
+        // Walk from the outside end toward the zone until the border, then step back 200 px.
+        const dx = bx - ax, dy = by - ay;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len === 0) continue;
+        const ux = (ina ? -dx : dx) / len, uy = (ina ? -dy : dy) / len;
+        let ox = ina ? bx : ax, oy = ina ? by : ay;
+        for (let s = 0; s < len && !inRect(z.rect, ox + ux * 32, oy + uy * 32); s += 32) {
+          ox += ux * 32;
+          oy += uy * 32;
+        }
+        const off = road.width / 2 + 56;
+        const sx = ox - ux * 200 - uy * off, sy = oy - uy * 200 + ux * off;
+        if (decor(ctx, sx, sy, "sign", quarterToward(-uy, ux))) placed++;
+      }
+    }
   }
 }
