@@ -7,6 +7,7 @@
 import { createGameAudioSystem } from "./audio/game-audio";
 import { createBossHudSystem } from "./boss-hud";
 import { createCameraSystem } from "./camera";
+import { createKillPopSystem } from "./combat-fx";
 import { createCinematicSystem, createHitmarkerSystem, createLowHpSystem } from "./cinematics";
 import { createAmbientSystem, createWorldFxSystem } from "./effects";
 import { createWeatherSystem } from "./env/weather-fx";
@@ -39,6 +40,8 @@ export const SYSTEM_FACTORIES: readonly SystemFactory[] = [
   () => new SoundVizSystem(),
   // Crosshair hitmarker on dealt hits / kills, screen layer.
   () => createHitmarkerSystem(),
+  // "MARAUDER DOWN" / "+name" kill pop with a streak counter, screen layer.
+  () => createKillPopSystem(),
   // Party mates: chevron / ghost ring / × in view, arrows with name + distance at the screen edge
   // (under the intro card, the cinematics, the boss bar and the full map).
   () => createPartySystem(),

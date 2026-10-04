@@ -166,6 +166,44 @@ describe("CameraRig", () => {
   });
 });
 
+describe("kill punch and reduce screen shake", () => {
+  it("a punch pushes the zoom in about 3% and settles back", () => {
+    const rig = new CameraRig();
+    rig.update(16);
+    rig.punch();
+    let peak = 1;
+    for (let i = 0; i < 10; i++) {
+      rig.update(10);
+      peak = Math.max(peak, rig.zoomMul);
+    }
+    assert.ok(peak > 1.02 && peak <= 1.031, `peak ${peak}`);
+    for (let t = 0; t < 1000; t += 16) rig.update(16);
+    assert.equal(rig.zoomMul, 1);
+  });
+
+  it("noShake drops shake and punch and softens the kick", () => {
+    const rig = new CameraRig();
+    rig.noShake = true;
+    rig.shake(8);
+    rig.punch();
+    rig.kick(0, 10);
+    rig.update(1);
+    assert.equal(rig.shakeScale, 0);
+    assert.equal(rig.zoomMul, 1);
+    // Only the kick remains: straight back along -x, at REDUCED_SHAKE_KICK.
+    assert.ok(rig.shakeX < -3 && rig.shakeX > -3.6, `kick ${rig.shakeX}`);
+    assert.equal(rig.shakeY, 0);
+  });
+
+  it("reduced motion also skips the punch", () => {
+    const rig = new CameraRig();
+    rig.reduced = true;
+    rig.punch();
+    rig.update(50);
+    assert.equal(rig.zoomMul, 1);
+  });
+});
+
 describe("camera system", () => {
   it("exposes no rig before init and is safe to dispose twice", () => {
     const s = createCameraSystem();

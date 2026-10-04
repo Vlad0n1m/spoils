@@ -33,4 +33,10 @@ describe("audio settings popover", () => {
     assert.equal(sanitizeSettings({ reduceFlashes: "yes" }).reduceFlashes, false);
     assert.equal(sanitizeSettings(null).reduceFlashes, false);
   });
+
+  it("reduceShake survives storage round-trips and defaults off", () => {
+    assert.equal(DEFAULT_SETTINGS.reduceShake, false);
+    assert.equal(sanitizeSettings({ reduceShake: true }).reduceShake, true);
+    assert.equal(sanitizeSettings({ reduceShake: 1 }).reduceShake, false);
+  });
 });

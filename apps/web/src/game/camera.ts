@@ -15,9 +15,13 @@
  *
  * Reduced motion (`prefers-reduced-motion`, or the `extract.motion.v1` key = "reduce" / "full"):
  * no kick, no shake (also the legacy one), no zoom moves or pans; look-ahead is halved.
+ * "Reduce screen shake" (settings popover, AudioSettings.reduceShake): no shake (also the legacy
+ * one) and no kill zoom punch, the recoil kick at REDUCED_SHAKE_KICK; zoom moves and pans stay.
  */
 
 import { WEAPONS, type EventsMsg, type WeaponId } from "@extract/shared";
+import { getSettings, subscribeSettings } from "./audio/settings";
+import { ZOOM_PUNCH, zoomPunch } from "./combat-fx";
 import type { GameContext, GameSystem } from "./systems";
 
 // ---------------------------------------------------------------- tuning
@@ -39,6 +43,8 @@ export const RECOIL_PX: Record<WeaponId, number> = {
   smg: 2, lmg: 4, revolver: 7, crossbow: 3,
 };
 export const KICK = { TAU_MS: 40, MAX_PX: 14 } as const;
+/** Recoil kick multiplier under "Reduce screen shake". */
+export const REDUCED_SHAKE_KICK = 0.35;
 
 export const SHAKE = {
   TAU_MS: 70,
@@ -58,6 +64,8 @@ export const SHAKE = {
   RADIUS_PER_POWER: 120,
   /** Weapons v2: a hand grenade blast (BoomMsg) = power 9 (felt up to ≈ 1080 px). */
   GRENADE_POWER: 9,
+  /** A kill by the local player: a short thump with the zoom punch. */
+  KILL_AMP: 2.2,
 } as const;
 
 export const MOTION_KEY = "extract.motion.v1";
@@ -193,6 +201,8 @@ export class CameraRig {
   shakeScale = 1;
 
   reduced = false;
+  /** "Reduce screen shake": no shake / punch, a softer kick (camera stays otherwise). */
+  noShake = false;
 
   private lookX = 0;
   private lookY = 0;
@@ -205,6 +215,10 @@ export class CameraRig {
   private focusTau = 600;
   private zoomTarget = 1;
   private zoomTau = 400;
+  /** zoomMul without the kill punch. */
+  private zoomBase = 1;
+  private punchAt = Number.NEGATIVE_INFINITY;
+  private punchAmt = 0;
   private kickX = 0;
   private kickY = 0;
   private amp = 0;
@@ -218,6 +232,7 @@ export class CameraRig {
 
   /** Recoil: the view jumps `px` screen px against `angle` and springs back. */
   kick(angle: number, px: number): void {
+    if (this.noShake) px *= REDUCED_SHAKE_KICK;
     if (!(px > 0)) return;
     let x = this.kickX - Math.cos(angle) * px;
     let y = this.kickY - Math.sin(angle) * px;
@@ -232,11 +247,20 @@ export class CameraRig {
 
   /** Short random shake; the strongest request wins. */
   shake(amp: number): void {
+    if (this.noShake) return;
     if (amp > this.amp) this.amp = Math.min(SHAKE.MAX, amp);
+  }
+
+  /** Kill punch: the zoom pushes in by `amount` (fraction) and settles (combat-fx zoomPunch). */
+  punch(amount: number = ZOOM_PUNCH.AMOUNT): void {
+    if (this.noShake || this.reduced) return;
+    this.punchAt = this.t;
+    this.punchAmt = amount;
   }
 
   /** Jump the zoom multiplier (e.g. the intro starts wide), then use zoomTo to ease back. */
   snapZoom(mul: number): void {
+    this.zoomBase = mul;
     this.zoomMul = mul;
     this.zoomTarget = mul;
   }
@@ -266,7 +290,9 @@ export class CameraRig {
     this.lookY = approach(this.lookY, this.lookTY * look, dt, LOOK.TAU_MS);
     this.focusX = approach(this.focusX, red ? 0 : this.focusTX, dt, this.focusTau);
     this.focusY = approach(this.focusY, red ? 0 : this.focusTY, dt, this.focusTau);
-    this.zoomMul = red ? 1 : approach(this.zoomMul, this.zoomTarget, dt, this.zoomTau);
+    this.zoomBase = red ? 1 : approach(this.zoomBase, this.zoomTarget, dt, this.zoomTau);
+    const punch = red || this.noShake ? 0 : zoomPunch(this.t - this.punchAt, this.punchAmt);
+    this.zoomMul = this.zoomBase * (1 + punch);
     const kd = Math.exp(-dt / KICK.TAU_MS);
     this.kickX *= kd;
     this.kickY *= kd;
@@ -288,7 +314,7 @@ export class CameraRig {
     const a = this.amp;
     this.shakeX = this.kickX + a * Math.sin(t * 0.093) * Math.cos(t * 0.057);
     this.shakeY = this.kickY + a * Math.sin(t * 0.081 + 1.3) * Math.cos(t * 0.049 + 0.4);
-    this.shakeScale = 1;
+    this.shakeScale = this.noShake ? 0 : 1;
   }
 
   /** Back to neutral (new raid). */
@@ -296,7 +322,8 @@ export class CameraRig {
     this.lookX = this.lookY = this.lookTX = this.lookTY = 0;
     this.focusX = this.focusY = this.focusTX = this.focusTY = 0;
     this.kickX = this.kickY = this.amp = 0;
-    this.zoomMul = this.zoomTarget = 1;
+    this.zoomMul = this.zoomTarget = this.zoomBase = 1;
+    this.punchAt = Number.NEGATIVE_INFINITY;
     this.offX = this.offY = this.shakeX = this.shakeY = 0;
   }
 }
@@ -384,6 +411,7 @@ class CameraSystem implements GameSystem {
   private readonly pointer = new PointerTracker();
   private readonly look = { x: 0, y: 0 };
   private unsub: (() => void) | null = null;
+  private unsubSettings: (() => void) | null = null;
   private mql: MediaQueryList | null = null;
   private readonly onMql = () => {
     // The OS preference flipped: re-read (a stored override still wins) and tell every listener.
@@ -399,6 +427,10 @@ class CameraSystem implements GameSystem {
     this.pointer.attach(ctx.app.canvas as HTMLCanvasElement);
     this.unsub = subscribeReducedMotion((v) => {
       if (this.rig) this.rig.reduced = v;
+    });
+    rig.noShake = getSettings().reduceShake;
+    this.unsubSettings = subscribeSettings((s) => {
+      if (this.rig) this.rig.noShake = s.reduceShake;
     });
     this.mql = motionQuery();
     this.mql?.addEventListener?.("change", this.onMql);
@@ -444,6 +476,13 @@ class CameraSystem implements GameSystem {
     if (ev.hits) {
       for (const h of ev.hits) if (h && h.t === sid) rig.shake(hitShake(h.d));
     }
+    if (ev.kills) {
+      for (const k of ev.kills) {
+        if (!k || k.killerId !== sid || !k.victimId || k.victimId === sid) continue;
+        rig.punch();
+        rig.shake(SHAKE.KILL_AMP);
+      }
+    }
     if (Array.isArray(ev.booms)) {
       const p = ctx.selfPos();
       for (const b of ev.booms) {
@@ -457,6 +496,8 @@ class CameraSystem implements GameSystem {
     this.pointer.detach();
     this.unsub?.();
     this.unsub = null;
+    this.unsubSettings?.();
+    this.unsubSettings = null;
     this.mql?.removeEventListener?.("change", this.onMql);
     this.mql = null;
     if (activeRig === this.rig) activeRig = null;
