@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { BREAK_CHANCE_ON_DEATH, MATCH, RARITY_NAMES, WORLD, type WeaponId } from "@extract/shared";
 import { Reveal } from "@/components/reveal";
+import { Trailer } from "@/components/trailer";
+import { ALPHA_SHORT, alphaWipeText } from "@/content/alpha";
 import { BRAND } from "@/lib/brand";
 import { rarityHex } from "@/lib/items-ui";
 
@@ -33,9 +35,17 @@ function LandingNav() {
       <Link href="/" className="toon-text-thin text-2xl tracking-wide text-zooa-lime md:text-3xl">
         <span className="optical-center">{BRAND.name}</span>
       </Link>
-      <Link href="/play" className="toon-btn min-h-11 text-base tracking-wide">
-        <span className="optical-center">Play</span>
-      </Link>
+      <nav className="flex items-center gap-2 md:gap-3">
+        <Link href="/alpha" className="toon-btn-ghost min-h-11 px-4 text-sm tracking-wide md:text-base">
+          <span className="optical-center">Alpha rules</span>
+        </Link>
+        <Link href="/news" className="toon-btn-ghost hidden min-h-11 px-4 text-sm tracking-wide sm:inline-flex md:text-base">
+          <span className="optical-center">News</span>
+        </Link>
+        <Link href="/play" className="toon-btn min-h-11 text-base tracking-wide">
+          <span className="optical-center">Play</span>
+        </Link>
+      </nav>
     </header>
   );
 }
@@ -79,6 +89,13 @@ function Hero() {
 
       <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-4 pb-16 pt-24 text-center">
         <Reveal delay={0}>
+          <Link
+            href="/alpha"
+            className="mb-4 inline-flex items-center gap-2 rounded-full border-[3px] border-black bg-amber-300 px-4 py-1.5 text-sm font-bold tracking-wide text-black shadow-[0_3px_0_#000] md:text-base"
+          >
+            <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-rose-600" aria-hidden />
+            ALPHA TEST · free · test balance →
+          </Link>
           <h1
             className="toon-text text-[clamp(4rem,15vw,11rem)] leading-none tracking-wide text-zooa-lime"
             style={{ textShadow: "0 10px 0 #000" }}
@@ -133,7 +150,7 @@ function Hero() {
           >
             <span className="optical-center">Play</span>
           </Link>
-          <p className="font-body text-sm font-semibold text-white/75">Free to play · no wallet needed · real players only</p>
+          <p className="font-body text-sm font-semibold text-white/80">Alpha test · free to play · no wallet needed · real players only</p>
         </Reveal>
       </div>
     </section>
@@ -275,10 +292,61 @@ function Footer() {
         </Link>
         <div className="flex w-full items-center justify-between border-t-[3px] border-black pt-6 text-sm text-white/50">
           <span className="toon-text-thin text-lg tracking-wide text-zooa-lime">{BRAND.name}</span>
-          <span className="font-body">Demo build</span>
+          <Link href="/alpha" className="font-body text-white/70 underline-offset-4 hover:underline">Alpha build · rules</Link>
         </div>
       </div>
     </footer>
+  );
+}
+
+function TrailerSection() {
+  return (
+    <section className="bg-[#0a100c] px-4 py-16 md:px-8 md:py-24">
+      <div className="mx-auto max-w-5xl">
+        <Reveal as="h2" className="toon-text text-center text-5xl tracking-wide text-white md:text-6xl">
+          See it in action
+        </Reveal>
+        <Reveal delay={80} className="mt-10">
+          <Trailer />
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+function AlphaSection() {
+  return (
+    <section className="bg-[#141a26] px-4 py-16 md:px-8 md:py-24">
+      <Reveal className="toon-panel mx-auto max-w-4xl bg-[#1d2333] p-6 md:p-10">
+        <span className="inline-block rounded-full border-[3px] border-black bg-amber-300 px-3 py-1 text-sm font-bold tracking-wide text-black">
+          ALPHA TEST
+        </span>
+        <h2 className="toon-text mt-4 text-4xl tracking-wide text-white md:text-5xl">Join the alpha</h2>
+        <ul className="font-body mt-6 space-y-3 text-base leading-relaxed text-white/85 md:text-lg">
+          {ALPHA_SHORT.map((line) => (
+            <li key={line} className="flex gap-3">
+              <span className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-zooa-lime" aria-hidden />
+              <span>{line}</span>
+            </li>
+          ))}
+          <li className="flex gap-3">
+            <span className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-zooa-lime" aria-hidden />
+            <span>
+              Play through the <strong className="text-white">Alpha Pass</strong> for founder-only titles, frames and a
+              skin that stay with you forever. Wipe date: {alphaWipeText()}.
+            </span>
+          </li>
+        </ul>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <Link href="/play" className="toon-btn min-h-14 px-8 text-xl tracking-wide">
+            <span className="optical-center">Play the alpha</span>
+          </Link>
+          <Link href="/alpha" className="toon-btn-ghost min-h-14 px-6 text-lg tracking-wide">
+            <span className="optical-center">Read the alpha rules</span>
+          </Link>
+        </div>
+      </Reveal>
+    </section>
   );
 }
 
@@ -287,6 +355,8 @@ export default function Home() {
     <div className="min-h-screen bg-[#0a100c] text-white">
       <Hero />
       <Marquee />
+      <TrailerSection />
+      <AlphaSection />
       <HowItWorks />
       <LootSection />
       <ComingSoon />
