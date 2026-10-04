@@ -123,16 +123,25 @@ export function PlayButton({ onFixInventory }: { onFixInventory: () => void }) {
         className={clsx(
           LOOK[v.look],
           "relative min-h-[4.5rem] w-full flex-col gap-1 py-2 md:min-h-[5.5rem]",
+          // Landscape phones (≤ 500 px tall): 4 rem so the world card, gear strip and PLAY all fit.
+          "[@media(max-height:500px)]:min-h-16 [@media(max-height:500px)]:gap-0 [@media(max-height:500px)]:py-1",
           "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black",
           action === null && "cursor-default disabled:opacity-100",
           base.kind === "loading" && "opacity-60",
         )}
       >
-        <span className="flex items-center gap-3 text-4xl tabular-nums tracking-wide md:text-5xl">
+        {/* One line always: long labels (DROPPING IN…, READY ✓ 4:59, GEAR IN RAID) get a smaller size. */}
+        <span
+          className={clsx(
+            "flex items-center gap-3 whitespace-nowrap tabular-nums tracking-wide",
+            v.label.length > 8 ? "text-3xl md:text-4xl" : "text-4xl md:text-5xl",
+            "[@media(max-height:500px)]:text-3xl",
+          )}
+        >
           {v.spinner && <span className="h-7 w-7 animate-spin rounded-full border-4 border-black border-t-transparent motion-reduce:animate-none" aria-hidden />}
           <span className="optical-center">{v.label}</span>
         </span>
-        <span id={subId} className={clsx("font-body text-sm font-bold tabular-nums", v.amber ? "text-amber-700" : "text-black/75")}>
+        <span id={subId} className={clsx("font-body text-sm font-bold tabular-nums [@media(max-height:500px)]:text-xs", v.amber ? "text-amber-700" : "text-black/75")}>
           {v.sub}
         </span>
       </button>

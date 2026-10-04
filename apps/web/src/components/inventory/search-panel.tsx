@@ -23,6 +23,8 @@ export interface SearchPanelProps {
   onTake: (index: number, item: InvItemView) => void;
   onTakeAll: () => void;
   onClose: () => void;
+  /** Touch HUD: a 44 px "Close" instead of the Esc keycap, no T keycap on Take all. */
+  touch?: boolean;
 }
 
 /** Sprite for the panel header. */
@@ -60,7 +62,7 @@ export function windowProgress(from: number, to: number, now: number): number {
   return Math.max(0, Math.min(1, (now - from) / (to - from)));
 }
 
-export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll, onClose }: SearchPanelProps) {
+export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll, onClose, touch = false }: SearchPanelProps) {
   const animating = search.revealed < search.total || !search.loaded;
   const now = useFrameClock(clockMs, animating);
   const opening = now < search.readyAt;
@@ -74,7 +76,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
     <section
       data-drop="loot"
       aria-label={`Searching ${search.title}`}
-      className="toon-panel flex w-[min(92vw,22rem)] flex-col bg-[#1d2333]/95 p-4"
+      className="toon-panel flex w-[min(92vw,22rem)] flex-col bg-[#1d2333]/95 p-4 [@media(max-height:500px)]:w-[20rem] [@media(max-height:500px)]:p-3 [@media(max-height:500px)_and_(max-width:731px)]:order-first"
     >
       <header className="flex items-center gap-3">
         <div className="relative grid h-14 w-14 shrink-0 place-items-center rounded-xl border-[3px] border-black bg-[#2b3142]">
@@ -83,7 +85,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
           {opening && <OpenRing progress={openP} />}
         </div>
         <div className="min-w-0 flex-1">
-          <h2 className="toon-text-thin truncate text-xl tracking-wide text-white">{search.title}</h2>
+          <h2 className="toon-text-thin truncate text-xl tracking-wide text-white [@media(max-height:500px)]:text-lg">{search.title}</h2>
           <p className="font-body mt-0.5 text-xs font-semibold text-white/60">
             {opening
               ? `Opening… ${Math.max(0, (search.readyAt - now) / 1000).toFixed(1)} s`
@@ -100,10 +102,10 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
         <button
           type="button"
           onClick={onClose}
-          className="toon-btn-ghost h-9 shrink-0 gap-1.5 px-2.5 text-sm"
-          aria-label="Close search (Esc)"
+          className={clsx("toon-btn-ghost shrink-0 gap-1.5 text-sm", touch ? "h-11 min-w-11 px-3" : "h-9 px-2.5")}
+          aria-label={touch ? "Close search" : "Close search (Esc)"}
         >
-          <span className="toon-key">Esc</span>
+          {touch ? <span className="optical-center">Close</span> : <span className="toon-key">Esc</span>}
         </button>
       </header>
 
@@ -161,7 +163,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
         className="toon-btn mt-4 min-h-12 w-full gap-2 text-lg tracking-wide"
       >
         <span className="optical-center">Take all</span>
-        <span className="toon-key">T</span>
+        {!touch && <span className="toon-key">T</span>}
       </button>
     </section>
   );

@@ -1,6 +1,6 @@
 /**
  * Run: apps/game-server/node_modules/.bin/tsx --test apps/web/src/game/touch-controls.test.ts
- * Pure parts only: stick maths and the button layout around the HUD.
+ * Pure parts only: stick maths and the button layout around the touch HUD and the thumb zones.
  */
 
 import assert from "node:assert/strict";
@@ -16,7 +16,10 @@ import {
   layoutTouchButtons,
   rectsOverlap,
   stickVector,
+  thumbZone,
 } from "./touch-controls";
+import { bossBarY } from "./boss-hud";
+import { zoneToastY } from "./fullmap";
 
 /** Landscape phones / tablets in CSS px (the Seeker is ~915 × 412). */
 const SCREENS: Array<[number, number]> = [
@@ -90,8 +93,30 @@ describe("touch button layout", () => {
   it("the wipe / boss stack at the top centre is never covered", () => {
     for (const [w, h] of SCREENS) {
       const top = hudReservedRects(w, h).find((a) => a.id === "top")!;
-      assert.ok(top.w >= Math.min(w - 24, 400) && top.h >= 200, "reserves the timer, wipe banner and boss toast");
+      // The touch HUD's top stack is ≤ 21.5 rem wide (compact timer, wipe banner and boss toast).
+      assert.ok(top.w >= Math.min(w - 24, 344) && top.h >= 190, "reserves the timer, wipe banner and boss toast");
       for (const r of layoutTouchButtons(w, h).values()) assert.ok(!rectsOverlap(r, top));
+    }
+  });
+
+  it("no button sits where a thumb lands to start a stick (bottom corners)", () => {
+    for (const [w, h] of SCREENS) {
+      const tz = thumbZone(w, h);
+      const corners = [
+        { x: 0, y: h - tz.h, w: tz.w, h: tz.h },
+        { x: w - tz.w, y: h - tz.h, w: tz.w, h: tz.h },
+      ];
+      assert.ok(tz.w >= 136 && tz.h >= 140, `${w}×${h}: thumb zone ${tz.w}×${tz.h}`);
+      for (const [id, r] of layoutTouchButtons(w, h)) {
+        for (const c of corners) assert.ok(!rectsOverlap(r, c), `${w}×${h}: ${id} in a thumb zone`);
+      }
+    }
+  });
+
+  it("short screens: boss bar and zone toast sit below the timer + compass (≈100 px)", () => {
+    for (const h of [360, 390, 412]) {
+      assert.ok(bossBarY(h) >= 104, `boss bar ${bossBarY(h)}`);
+      assert.ok(zoneToastY(h) >= bossBarY(h) + 20, `zone toast ${zoneToastY(h)}`);
     }
   });
 

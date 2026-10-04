@@ -49,11 +49,11 @@ export function LastRaidCard({ raid, onDismiss }: { raid: LastRaidDto; onDismiss
       className="toon-panel overflow-hidden bg-[#161b28]/95 animate-panel-in motion-reduce:animate-none"
     >
       <div className={clsx("h-2.5 border-b-[3px] border-black", exit.bar)} aria-hidden />
-      <div className="p-4">
+      <div className="p-4 [@media(max-height:500px)]:p-3">
         <p className="text-[0.65rem] tracking-[0.2em] text-white/55">LAST RAID · MAP #{raid.mapNumber}</p>
         <h2 className="toon-text-thin mt-1.5 text-2xl tracking-wide text-white">{exit.title}</h2>
 
-        <details className="group mt-3">
+        <details className="group mt-3 [@media(max-height:500px)]:mt-1">
           <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime [&::-webkit-details-marker]:hidden">
             <span className="toon-text-thin text-3xl tabular-nums tracking-wide text-zooa-lime">+{fmtInt(raid.xp)} XP</span>
             {raid.xpLines.length > 0 && (
@@ -80,7 +80,7 @@ export function LastRaidCard({ raid, onDismiss }: { raid: LastRaidDto; onDismiss
         {raid.level > raid.levelBefore && (
           <p className="font-body mt-1 text-sm font-semibold text-zooa-lime">Level {raid.level} reached</p>
         )}
-        <button type="button" onClick={onDismiss} className="toon-btn-ghost mt-4 min-h-11 w-full text-sm">
+        <button type="button" onClick={onDismiss} className="toon-btn-ghost mt-4 min-h-11 w-full text-sm [@media(max-height:500px)]:mt-2">
           <span className="optical-center">Dismiss</span>
         </button>
       </div>

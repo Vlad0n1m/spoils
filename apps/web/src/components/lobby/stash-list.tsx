@@ -77,7 +77,8 @@ export function StashList({
             aria-selected={filter === f.id}
             onClick={() => setFilter(f.id)}
             className={clsx(
-              "rounded-full border-2 border-black px-3 py-1.5 text-xs tracking-wide transition",
+              // Touch: 44 px tall chips.
+              "rounded-full border-2 border-black px-3 py-1.5 text-xs tracking-wide transition [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-4",
               filter === f.id ? "bg-zooa-lime text-black shadow-[0_2px_0_#000]" : "bg-black/30 text-white/75 hover:text-white",
             )}
           >

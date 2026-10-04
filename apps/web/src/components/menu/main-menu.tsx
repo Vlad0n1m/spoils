@@ -337,17 +337,22 @@ function MenuScreen({
         <LobbyBackdrop />
         <div className="relative z-10 flex h-full flex-col" inert={blocked}>
           <MenuTopBar onCredits={() => openPanel("shop", "traders")} />
-          <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[6.5rem_1fr_6.5rem] lg:grid-cols-[8.5rem_1fr_8.5rem] min-[1440px]:grid-cols-[9.5rem_1fr_9.5rem]">
-            <nav aria-label="Prepare" className="hidden flex-col items-center gap-3 overflow-y-auto pb-4 pt-5 md:flex">
+          {/* Landscape phones (≤ 500 px tall, also below 768 px wide): the side columns instead of the
+              dock, smaller tiles and a compact centre so the gear strip and PLAY both fit. */}
+          <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[6.5rem_1fr_6.5rem] lg:grid-cols-[8.5rem_1fr_8.5rem] min-[1440px]:grid-cols-[9.5rem_1fr_9.5rem] [@media(max-height:500px)]:grid-cols-[5.5rem_1fr_5.5rem]">
+            <nav aria-label="Prepare" className="hidden flex-col items-center gap-3 overflow-y-auto pb-4 pt-5 md:flex [@media(max-height:500px)]:flex [@media(max-height:500px)]:gap-2 [@media(max-height:500px)]:py-2">
               <SideButton label="Inventory" icon={MENU_ICONS.inventory} hotkey="I" active={panel.panel === "inventory"} onClick={() => openPanel("inventory")} />
               <SideButton label="Shop" icon={MENU_ICONS.shop} hotkey="B" active={panel.panel === "shop"} onClick={() => openPanel("shop")} />
               <SideButton label="Info" icon={MENU_ICONS.info} hotkey="H" active={panel.panel === "info"} onClick={() => openPanel("info")} />
             </nav>
 
-            <main className="relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto_auto_auto] gap-3 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 md:gap-4 md:px-4 md:pb-6 md:pt-5">
+            {/* ≤ 640 px tall the hero is hidden: three rows (world, gear in the flexible one, PLAY), and
+                the column scrolls instead of stacking PLAY over the gear strip if it still overflows. */}
+            <main className="relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto_auto_auto] gap-3 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 md:gap-4 md:px-4 md:pb-6 md:pt-5 [@media(max-height:640px)]:grid-rows-[auto_minmax(min-content,1fr)_auto] [@media(max-height:640px)]:overflow-y-auto [@media(max-height:500px)]:gap-2 [@media(max-height:500px)]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] [@media(max-height:500px)]:pt-2">
               <h1 className="sr-only">Main menu</h1>
               <WorldCard />
               <HeroStage armor={armor} />
+              <div className="min-w-0 [@media(max-height:640px)]:self-end">
               <GearStrip
                 stash={s}
                 stashError={stash.error}
@@ -357,6 +362,7 @@ function MenuScreen({
                 onStarter={() => openPanel("inventory", "stash")}
                 onRetry={() => void stash.reload()}
               />
+              </div>
               <MobileDock
                 active={panel.panel}
                 newsDot={newsDot}
@@ -372,7 +378,7 @@ function MenuScreen({
               )}
             </main>
 
-            <nav aria-label="World" className="hidden flex-col items-center gap-3 overflow-y-auto pb-4 pt-5 md:flex">
+            <nav aria-label="World" className="hidden flex-col items-center gap-3 overflow-y-auto pb-4 pt-5 md:flex [@media(max-height:500px)]:flex [@media(max-height:500px)]:gap-2 [@media(max-height:500px)]:py-2">
               <SideButton label="News" icon={MENU_ICONS.news} hotkey="N" dot={newsDot} active={panel.panel === "news"} onClick={() => openPanel("news")} />
               <SideButton
                 label="Leaderboards"
@@ -387,7 +393,7 @@ function MenuScreen({
           </div>
 
           {showCard && (
-            <div className="fixed inset-x-2 bottom-[calc(10.5rem+env(safe-area-inset-bottom))] z-30 max-h-[55vh] overflow-y-auto md:inset-x-auto md:bottom-36 md:left-[7.5rem] md:w-72 lg:hidden">
+            <div className="fixed inset-x-2 bottom-[calc(10.5rem+env(safe-area-inset-bottom))] z-30 max-h-[55vh] overflow-y-auto md:inset-x-auto md:bottom-36 md:left-[7.5rem] md:w-72 lg:hidden [@media(max-height:500px)]:inset-x-auto [@media(max-height:500px)]:bottom-[4.75rem] [@media(max-height:500px)]:left-[6.5rem] [@media(max-height:500px)]:max-h-[calc(100dvh-8.75rem)] [@media(max-height:500px)]:w-72">
               <LastRaidCard raid={lastRaid} onDismiss={dismissCard} />
             </div>
           )}

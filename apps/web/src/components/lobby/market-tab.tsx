@@ -46,7 +46,7 @@ export function MarketTab({ stash, sessionLoading = false }: { stash: Resource<S
                     {fmtCr(s.credits)} for listing fees · {(s.market.feeBps / 100).toFixed(s.market.feeBps % 100 ? 1 : 0)}% fee on sales
                   </p>
                 </div>
-                <Link href="/wallet" className="toon-btn-ghost min-h-10 shrink-0 whitespace-nowrap px-4 text-sm">
+                <Link href="/wallet" className="toon-btn-ghost min-h-10 shrink-0 whitespace-nowrap px-4 text-sm [@media(pointer:coarse)]:min-h-11">
                   <span className="optical-center">Top up</span>
                 </Link>
               </div>

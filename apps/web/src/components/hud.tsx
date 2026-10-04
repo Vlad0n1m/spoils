@@ -1,6 +1,7 @@
 "use client";
 
 import { AudioSettingsButton } from "./audio-settings";
+import { useTouchMode } from "./use-touch-mode";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 import { BREAK_CHANCE_ON_DEATH, HEAL, WEAPONS, itemDef, type WeaponId } from "@extract/shared";
@@ -67,6 +68,7 @@ function useClockFrames(store: HudStore, frame: (clockMs: number) => void) {
 }
 
 const isInPlay = (s: HudSnapshot) => Boolean(s.self && s.self.alive && s.self.extractedAt === 0);
+const mapOpenSlice = (s: HudSnapshot) => s.mapOpen === true;
 
 /**
  * In-raid HUD. Pointer events are off for the whole layer so aiming/shooting on the canvas is
@@ -82,37 +84,55 @@ export const Hud = memo(function Hud({
   onLeave: () => void;
 }) {
   const inPlay = useHud(store, isInPlay);
+  // Touch (game/touch-controls.ts mounts sticks + buttons): a compact bottom bar between the two
+  // thumb zones, the menu / audio chips top left instead of in the right thumb's corner, USE
+  // instead of the F keycap. hudReservedRects() in touch-controls.ts mirrors this layout.
+  const touch = useTouchMode();
+  // Touch: the full map (MAP button) fills a short screen; the bar and compass would cover it.
+  const mapOpen = useHud(store, mapOpenSlice) && touch;
 
   return (
     <div className="pointer-events-none absolute inset-0 select-none text-white">
       {inPlay && <LowHpVignette store={store} />}
 
-      <KillFeed store={store} selfNickname={selfNickname} />
+      <KillFeed store={store} selfNickname={selfNickname} touch={touch} />
 
       <div className="absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center gap-2">
-        <PhaseTimer store={store} />
-        {inPlay && <ExtractCompass store={store} />}
-        {inPlay && <WipeBanner store={store} />}
-        <BossToast store={store} />
+        <PhaseTimer store={store} touch={touch} />
+        {inPlay && !mapOpen && <ExtractCompass store={store} />}
+        {inPlay && <WipeBanner store={store} touch={touch} />}
+        <BossToast store={store} touch={touch} />
       </div>
 
       {inPlay && (
         <>
           <ExtractRing store={store} />
-          <div className="absolute bottom-3 left-1/2 flex w-max max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col items-center gap-2">
-            <InteractHint store={store} />
+          <div
+            className={clsx(
+              "absolute left-1/2 flex w-max max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col items-center gap-2",
+              touch ? "bottom-2" : "bottom-3",
+              mapOpen && "hidden",
+            )}
+          >
+            <InteractHint store={store} touch={touch} />
             <ActionProgress store={store} />
-            <BottomBar store={store} />
+            <BottomBar store={store} touch={touch} />
           </div>
         </>
       )}
 
-      <PingBadge store={store} />
-      {/* Volume / mute / sound-ring toggle; sits right above the controls chip. */}
-      <div className="absolute bottom-14 right-3 hidden md:block">
-        <AudioSettingsButton direction="up" align="right" />
-      </div>
-      <ControlsHelp onLeave={onLeave} />
+      <PingBadge store={store} touch={touch} />
+      {touch ? (
+        <TouchMenu onLeave={onLeave} />
+      ) : (
+        <>
+          {/* Volume / mute / sound-ring toggle; sits right above the controls chip. */}
+          <div className="absolute bottom-14 right-3 hidden md:block">
+            <AudioSettingsButton direction="up" align="right" />
+          </div>
+          <ControlsHelp onLeave={onLeave} />
+        </>
+      )}
     </div>
   );
 });
@@ -134,7 +154,7 @@ function phaseTimerSlice(s: HudSnapshot) {
   };
 }
 
-function PhaseTimer({ store }: { store: HudStore }) {
+function PhaseTimer({ store, touch }: { store: HudStore; touch: boolean }) {
   const { phase, countdown, urgent, aliveCount } = useHud(store, phaseTimerSlice, shallowEqual);
 
   let label: React.ReactNode;
@@ -157,7 +177,9 @@ function PhaseTimer({ store }: { store: HudStore }) {
   return (
     <div
       className={clsx(
-        "toon-panel flex items-center gap-3 px-4 py-2 text-base tracking-wide md:text-lg",
+        // Touch: ~17 rem wide so the right-hand buttons fit beside it on a 740 px phone.
+        "toon-panel flex items-center tracking-wide",
+        touch ? "gap-2 px-3 py-1.5 text-sm" : "gap-3 px-4 py-2 text-base md:text-lg",
         urgent && "animate-pulse bg-[#3a1620]/95",
       )}
     >
@@ -178,7 +200,7 @@ function PhaseTimer({ store }: { store: HudStore }) {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/sprites/player.png" alt="" className="h-6 w-6" draggable={false} />
         <span className="toon-text-thin tabular-nums">
-          <span className="text-white/60">On map </span>
+          {!touch && <span className="text-white/60">On map </span>}
           {aliveCount}
         </span>
       </span>
@@ -189,14 +211,15 @@ function PhaseTimer({ store }: { store: HudStore }) {
 const wipeWarnSlice = (s: HudSnapshot) => s.wipeWarn;
 
 /** "Wipe in 5:00 — head for an extract": shown for a few seconds after each threshold (D2). */
-function WipeBanner({ store }: { store: HudStore }) {
+function WipeBanner({ store, touch }: { store: HudStore; touch: boolean }) {
   const warn = useHud(store, wipeWarnSlice);
   if (!warn) return null;
   return (
     <div
       role="alert"
       className={clsx(
-        "toon-panel animate-outcome-enter px-5 py-2 text-base tracking-wide md:text-lg",
+        "toon-panel animate-outcome-enter tracking-wide",
+        touch ? "px-4 py-1.5 text-sm" : "px-5 py-2 text-base md:text-lg",
         warn <= 60 ? "bg-[#3a1620]/95 text-rose-200" : "bg-[#3a2a10]/95 text-amber-200",
       )}
     >
@@ -214,7 +237,7 @@ function bossSlice(s: HudSnapshot) {
  * Boss event toast (D13), derived from BattleState: on join ("BOSS EVENT · Foreman holds the
  * Grain Elevator") and when the boss state changes ("Foreman is down").
  */
-function BossToast({ store }: { store: HudStore }) {
+function BossToast({ store, touch }: { store: HudStore; touch: boolean }) {
   const key = useHud(store, bossSlice);
   const [shown, setShown] = useState<{ key: string; title: string; sub: string; down: boolean } | null>(null);
   useEffect(() => {
@@ -233,14 +256,15 @@ function BossToast({ store }: { store: HudStore }) {
     <div
       role="status"
       className={clsx(
-        "toon-panel animate-outcome-enter flex flex-col items-center px-5 py-2 text-center",
+        "toon-panel animate-outcome-enter flex flex-col items-center text-center",
+        touch ? "max-w-[21.5rem] px-4 py-1.5" : "px-5 py-2",
         shown.down ? "bg-[#161b28]/95" : "bg-[#2a0d10]/95",
       )}
     >
-      <span className={clsx("toon-text-thin text-lg tracking-[0.2em]", shown.down ? "text-zooa-lime" : "text-rose-400")}>
+      <span className={clsx("toon-text-thin tracking-[0.2em]", touch ? "text-base" : "text-lg", shown.down ? "text-zooa-lime" : "text-rose-400")}>
         {shown.title}
       </span>
-      {!shown.down && <span className="font-body text-sm font-semibold text-white/85">{shown.sub}</span>}
+      {!shown.down && <span className={clsx("font-body font-semibold text-white/85", touch ? "text-xs" : "text-sm")}>{shown.sub}</span>}
     </div>
   );
 }
@@ -307,11 +331,12 @@ function sameEntries(a: KillFeedEntry[], b: KillFeedEntry[]) {
   return a.length === b.length && a.every((e, i) => e.id === b[i]!.id);
 }
 
-function KillFeed({ store, selfNickname }: { store: HudStore; selfNickname: string }) {
+function KillFeed({ store, selfNickname, touch }: { store: HudStore; selfNickname: string; touch: boolean }) {
   const fresh = useHud(store, killFeedSlice, sameEntries);
   if (fresh.length === 0) return null;
   return (
-    <ol className="absolute left-3 top-3 flex max-w-[min(22rem,40vw)] flex-col gap-1.5" aria-label="Kill feed">
+    // Touch: below the menu / audio chips of the top-left corner.
+    <ol className={clsx("absolute left-3 flex max-w-[min(22rem,40vw)] flex-col gap-1.5", touch ? "top-[4.25rem]" : "top-3")} aria-label="Kill feed">
       {fresh.map((e) => {
         // NPC MODEL v5: NPC names come by role ("Marauder ✕ Vlad", personal "You ✕ Marauder").
         const n = killFeedNames(e, selfNickname);
@@ -425,8 +450,10 @@ function ExtractRingView({ store, startedAtMs, channelMs }: { store: HudStore; s
   });
   const initial = progress(store.clockNow());
   return (
-    <div className="absolute bottom-[clamp(13rem,30vh,17rem)] left-1/2 flex -translate-x-1/2 flex-col items-center gap-2">
-      <div className="relative h-32 w-32">
+    // Short (landscape phone) screens: smaller and anchored under the timer + compass (~100 px), so
+    // it sits between the top stack and the bottom bar at any height up to 500 px.
+    <div className="absolute bottom-[clamp(13rem,30vh,17rem)] left-1/2 flex -translate-x-1/2 flex-col items-center gap-2 [@media(max-height:500px)]:bottom-auto [@media(max-height:500px)]:top-[6.75rem]">
+      <div className="relative h-32 w-32 [@media(max-height:500px)]:h-24 [@media(max-height:500px)]:w-24">
         <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90" aria-hidden>
           <circle cx="64" cy="64" r={RING_R} fill="rgba(13,17,26,0.85)" stroke="#000" strokeWidth="18" />
           <circle cx="64" cy="64" r={RING_R} fill="none" stroke="#2a3346" strokeWidth="11" />
@@ -451,7 +478,10 @@ function ExtractRingView({ store, startedAtMs, channelMs }: { store: HudStore; s
       </div>
       <div className="toon-chip px-4 py-1.5 text-center text-sm tracking-wide">
         <span className="toon-text-thin text-zooa-lime">Extracting</span>
-        <span className="font-body text-white/80"> — stay in the circle, damage restarts it</span>
+        <span className="font-body text-white/80">
+          {" "}
+          — stay in the circle<span className="[@media(max-height:500px)]:hidden">, damage restarts it</span>
+        </span>
       </div>
     </div>
   );
@@ -459,14 +489,14 @@ function ExtractRingView({ store, startedAtMs, channelMs }: { store: HudStore; s
 
 const hintSlice = (s: HudSnapshot) => s.interactHint;
 
-function InteractHint({ store }: { store: HudStore }) {
+function InteractHint({ store, touch }: { store: HudStore; touch: boolean }) {
   const hint = useHud(store, hintSlice);
   if (!hint) return null;
-  // Renderer formats hints as "F — <action>"; show the key as a keycap.
+  // Renderer formats hints as "F — <action>"; show the key as a keycap (the USE button on touch).
   const m = /^F\s*[—–-]\s*(.+)$/.exec(hint);
   return (
     <div className="toon-chip flex items-center gap-2 px-3 py-1.5 text-sm tracking-wide md:text-base">
-      <span className="toon-key">F</span>
+      {touch ? <span className="toon-key px-1.5">USE</span> : <span className="toon-key">F</span>}
       <span className="toon-text-thin">{m ? m[1] : hint}</span>
     </div>
   );
@@ -563,9 +593,22 @@ function bottomBarSlice(s: HudSnapshot): HudSelf | null {
 
 const NO_ROLL: HudSelf["roll"] = { readyAtMs: 0, cdStartMs: 0, rolling: false };
 
-function BottomBar({ store }: { store: HudStore }) {
+function BottomBar({ store, touch }: { store: HudStore; touch: boolean }) {
   const self = useHud(store, bottomBarSlice, deepEqual);
   if (!self) return null;
+  if (touch) {
+    // Touch: ~28 rem wide and 5.75 rem tall so it fits between the thumb zones. Roll and quiet walk
+    // are the ROLL button and a part-deflected move stick; bandage / medkit counts are on their
+    // buttons, so only the carry line of the meds panel stays.
+    return (
+      <div className="flex items-end gap-2">
+        <VitalsPanel self={self} compact />
+        <WeaponSlotCard slot={self.slots[0]} index={0} active={self.active === 0} reserve={reserveFor(self, self.slots[0])} compact />
+        <WeaponSlotCard slot={self.slots[1]} index={1} active={self.active === 1} reserve={reserveFor(self, self.slots[1])} compact />
+        <CarryPanel self={self} />
+      </div>
+    );
+  }
   return (
     <div className="flex items-end gap-2 md:gap-3">
       <MovePanel store={store} />
@@ -649,24 +692,24 @@ function reserveFor(self: HudSelf, slot: HudSlot): number {
   return self.ammo[WEAPONS[slot.weapon].ammo];
 }
 
-function VitalsPanel({ self }: { self: HudSelf }) {
+function VitalsPanel({ self, compact = false }: { self: HudSelf; compact?: boolean }) {
   const hpPct = clamp01(self.hp / Math.max(1, self.maxHp));
   const hpColor = hpPct > 0.6 ? "#4ade80" : hpPct > 0.3 ? "#facc15" : "#f43f5e";
   const armorPct = self.armor > 0 ? clamp01(self.armorDur / Math.max(1, self.armorMax)) : 0;
   return (
-    <div className="toon-panel flex w-[15.5rem] flex-col gap-2 p-2.5 md:w-[17rem]">
+    <div className={clsx("toon-panel flex flex-col", compact ? "w-[12.5rem] gap-1.5 p-2" : "w-[15.5rem] gap-2 p-2.5 md:w-[17rem]")}>
       <div className="flex items-center gap-2">
-        <span className="toon-text-thin w-9 text-sm text-rose-300">HP</span>
-        <Bar pct={hpPct} color={hpColor} height="h-6" />
+        <span className={clsx("toon-text-thin text-sm text-rose-300", compact ? "w-7" : "w-9")}>HP</span>
+        <Bar pct={hpPct} color={hpColor} height={compact ? "h-5" : "h-6"} />
         <span className="toon-text-thin w-10 text-right text-lg tabular-nums">{Math.ceil(self.hp)}</span>
       </div>
       <div className={clsx("flex items-center gap-2", self.armor === 0 && "opacity-50")}>
-        <span className="relative grid h-9 w-9 shrink-0 place-items-center">
+        <span className={clsx("relative grid shrink-0 place-items-center", compact ? "h-7 w-7" : "h-9 w-9")}>
           {self.armor > 0 ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={armorIcon(self.armor)} alt="" className="h-9 w-9 object-contain" draggable={false} />
+            <img src={armorIcon(self.armor)} alt="" className={clsx("object-contain", compact ? "h-7 w-7" : "h-9 w-9")} draggable={false} />
           ) : (
-            <span className="h-7 w-7 rounded-lg border-2 border-dashed border-white/40" />
+            <span className={clsx("rounded-lg border-2 border-dashed border-white/40", compact ? "h-6 w-6" : "h-7 w-7")} />
           )}
           {self.armor > 0 && (
             <span className="toon-key absolute -bottom-1 -right-1 h-4 min-w-4 bg-sky-300 px-0.5 text-[0.6rem]">
@@ -703,16 +746,20 @@ function WeaponSlotCard({
   index,
   active,
   reserve,
+  compact = false,
 }: {
   slot: HudSlot;
   index: 0 | 1;
   active: boolean;
   reserve: number;
+  /** Touch HUD: 5.25 × 5.5 rem instead of 6.5 × 6–7 rem. */
+  compact?: boolean;
 }) {
   const weapon = slot.weapon as WeaponId | "";
+  const box = compact ? "h-[5.25rem] w-[5.5rem]" : "h-[6.5rem] w-24 md:w-28";
   if (!weapon) {
     return (
-      <div className="relative grid h-[6.5rem] w-24 place-items-center rounded-2xl border-[3px] border-dashed border-black/80 bg-[#1d2333]/60 md:w-28">
+      <div className={clsx("relative grid place-items-center rounded-2xl border-[3px] border-dashed border-black/80 bg-[#1d2333]/60", box)}>
         <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>
         <span className="text-xs tracking-wide text-white/50">Empty</span>
       </div>
@@ -723,8 +770,9 @@ function WeaponSlotCard({
   return (
     <div
       className={clsx(
-        "relative flex h-[6.5rem] w-24 flex-col items-center justify-between rounded-2xl border-[3px] border-black px-1.5 pb-1.5 pt-1 shadow-[0_4px_0_#000] transition-transform duration-150 md:w-28",
-        active ? "-translate-y-2" : "opacity-80",
+        "relative flex flex-col items-center justify-between rounded-2xl border-[3px] border-black px-1.5 pb-1.5 pt-1 shadow-[0_4px_0_#000] transition-transform duration-150",
+        box,
+        active ? (compact ? "-translate-y-1.5" : "-translate-y-2") : "opacity-80",
       )}
       style={{
         background: `linear-gradient(180deg, ${color}66 0%, #1d2333f0 70%)`,
@@ -741,9 +789,14 @@ function WeaponSlotCard({
         {slot.broken ? "Broken" : slot.free ? "Free" : rarityName(slot.rarity)}
       </span>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={weaponIcon(weapon)} alt={def.name} className="mt-5 h-11 w-20 object-contain drop-shadow-[0_2px_0_rgba(0,0,0,0.6)]" draggable={false} />
+      <img
+        src={weaponIcon(weapon)}
+        alt={def.name}
+        className={clsx("object-contain drop-shadow-[0_2px_0_rgba(0,0,0,0.6)]", compact ? "mt-4 h-8 w-16" : "mt-5 h-11 w-20")}
+        draggable={false}
+      />
       <div className="flex items-baseline gap-1 tabular-nums">
-        <span className={clsx("toon-text-thin text-xl", slot.mag === 0 ? "text-rose-400" : "text-white")}>{slot.mag}</span>
+        <span className={clsx("toon-text-thin", compact ? "text-lg leading-6" : "text-xl", slot.mag === 0 ? "text-rose-400" : "text-white")}>{slot.mag}</span>
         <span className="text-xs text-white/70">/ {reserve}</span>
       </div>
     </div>
@@ -782,6 +835,23 @@ function MedsPanel({ self }: { self: HudSelf }) {
   );
 }
 
+/** Touch HUD: the meds panel's carry line only (the counts are on the bandage / medkit buttons). */
+function CarryPanel({ self }: { self: HudSelf }) {
+  return (
+    <div
+      className="toon-panel flex h-[5.25rem] flex-col items-center justify-center gap-1 px-2 text-xs tabular-nums text-white/80"
+      aria-label={`Storage ${self.storageUsed} of ${self.storageCap}`}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/sprites/backpack.png" alt="" className="h-6 w-6 object-contain" draggable={false} />
+      <span>
+        {self.storageUsed}/{self.storageCap}
+      </span>
+      {self.creditsEstimate > 0 && <span className="text-[0.65rem] text-amber-300">≈{fmtCr(self.creditsEstimate)}</span>}
+    </div>
+  );
+}
+
 function MedRow({ icon, count, keyHint, title }: { icon: string; count: number; keyHint: string; title: string }) {
   return (
     <div className={clsx("flex items-center gap-1.5", count === 0 && "opacity-45")} title={title}>
@@ -797,13 +867,17 @@ function MedRow({ icon, count, keyHint, title }: { icon: string; count: number; 
 
 const pingSlice = (s: HudSnapshot) => s.pingMs;
 
-function PingBadge({ store }: { store: HudStore }) {
+function PingBadge({ store, touch }: { store: HudStore; touch: boolean }) {
   const pingMs = useHud(store, pingSlice);
   const tone =
     pingMs == null ? "bg-zinc-500" : pingMs < 100 ? "bg-emerald-400" : pingMs < 200 ? "bg-amber-400" : "bg-rose-500";
   return (
     <div
-      className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-full bg-black/55 px-2 py-1 text-[0.65rem] tabular-nums text-white/75"
+      className={clsx(
+        "absolute flex items-center gap-1.5 rounded-full bg-black/55 px-2 py-1 text-[0.65rem] tabular-nums text-white/75",
+        // Touch: next to the menu / audio chips (the bottom-left corner is the move stick's).
+        touch ? "left-[7.25rem] top-6" : "bottom-3 left-3",
+      )}
       title="Round-trip time to the game server"
     >
       <span className={clsx("h-2 w-2 rounded-full", tone)} aria-hidden />
@@ -907,6 +981,83 @@ function ControlsHelp({ onLeave }: { onLeave: () => void }) {
           <span className="optical-center">{open ? "Hide" : "Controls"}</span>
         </span>
       </button>
+    </div>
+  );
+}
+
+const TOUCH_CONTROLS: Array<[string, string]> = [
+  ["Left stick", "Move · push less to walk quietly"],
+  ["Right stick", "Aim · push past the ring to shoot"],
+  ["ROLL", "Dodge roll"],
+  ["USE", "Search / pick up"],
+  ["RELOAD · SWAP", "Reload · switch weapon"],
+  ["Bandage · medkit", "Heal"],
+  ["Bag · MAP", "Inventory · full map"],
+  ["Extract", "Stand in an open extraction circle"],
+];
+
+/**
+ * Touch HUD menu, top-left (the bottom corners belong to the sticks): a 44 px menu button with the
+ * touch legend and "Leave raid" (two taps), and the audio settings next to it. Shown at every
+ * width, so phones narrower than 768 px can leave a raid too.
+ */
+function TouchMenu({ onLeave }: { onLeave: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  return (
+    <div className="pointer-events-none absolute left-3 top-3 flex items-start gap-2">
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => {
+            setOpen((v) => !v);
+            setConfirmLeave(false);
+          }}
+          aria-expanded={open}
+          aria-controls="hud-touch-menu"
+          aria-label={open ? "Close menu" : "Menu: controls and leave raid"}
+          className="toon-chip pointer-events-auto grid h-11 w-11 place-items-center text-white active:translate-y-[2px]"
+        >
+          {open ? (
+            <svg viewBox="0 0 20 20" className="h-5 w-5" aria-hidden>
+              <path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 20 20" className="h-5 w-5" aria-hidden>
+              <path d="M4 5.5h12M4 10h12M4 14.5h12" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
+            </svg>
+          )}
+        </button>
+        {open && (
+          <div
+            id="hud-touch-menu"
+            className="toon-panel pointer-events-auto absolute left-0 top-[3.25rem] z-10 max-h-[calc(100dvh-5rem)] w-72 overflow-y-auto overscroll-contain p-3"
+          >
+            <ul className="space-y-1.5">
+              {TOUCH_CONTROLS.map(([k, v]) => (
+                <li key={k} className="flex items-baseline justify-between gap-3">
+                  <span className="toon-text-thin shrink-0 text-xs tracking-wide text-zooa-lime">{k}</span>
+                  <span className="font-body text-right text-xs font-semibold text-white/85">{v}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="font-body mt-3 border-t-2 border-black/50 pt-2 text-xs leading-snug text-white/65">
+              Dying breaks each item with a {Math.round(BREAK_CHANCE_ON_DEATH * 100)}% chance; the rest drops for others.
+            </p>
+            <button
+              type="button"
+              onClick={() => (confirmLeave ? onLeave() : setConfirmLeave(true))}
+              className={clsx(
+                "mt-3 min-h-11 w-full rounded-xl border-2 border-black text-sm tracking-wide shadow-[0_3px_0_#000] active:translate-y-[2px] active:shadow-[0_1px_0_#000]",
+                confirmLeave ? "bg-rose-500 text-white" : "bg-white/90 text-black",
+              )}
+            >
+              {confirmLeave ? "Sure? Unextracted loot is at risk" : "Leave raid"}
+            </button>
+          </div>
+        )}
+      </div>
+      <AudioSettingsButton direction="down" align="left" large />
     </div>
   );
 }

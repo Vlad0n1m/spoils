@@ -63,9 +63,11 @@ export interface AudioSettingsProps {
   align?: "left" | "right";
   /** Open the panel above (HUD bottom corner) or below (top bar) the button. */
   direction?: "up" | "down";
+  /** 44 px button (touch HUD) instead of 40 px. */
+  large?: boolean;
 }
 
-export function AudioSettingsButton({ className, align = "right", direction = "down" }: AudioSettingsProps) {
+export function AudioSettingsButton({ className, align = "right", direction = "down", large = false }: AudioSettingsProps) {
   const [s, update] = useAudioSettings();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -103,7 +105,10 @@ export function AudioSettingsButton({ className, align = "right", direction = "d
       <button
         ref={button}
         type="button"
-        className="toon-chip flex h-10 w-10 items-center justify-center text-white transition-transform hover:brightness-110 active:translate-y-[2px]"
+        className={clsx(
+          "toon-chip flex items-center justify-center text-white transition-transform hover:brightness-110 active:translate-y-[2px]",
+          large ? "h-11 w-11" : "h-10 w-10",
+        )}
         aria-label="Audio settings"
         aria-expanded={open}
         aria-controls={panelId}

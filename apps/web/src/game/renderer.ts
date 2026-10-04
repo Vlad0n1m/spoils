@@ -465,14 +465,20 @@ export class GameRenderer implements GameRendererApi {
     this.effects = null;
     this.remoteFx.clear();
 
+    // Textures first, while the GL renderer still exists: destroying them after app.destroy() threw
+    // "Cannot read properties of null (reading 'gc')" from GlTextureSystem on every raid exit.
+    if (this.tex) {
+      try {
+        destroyTextures(this.tex);
+      } catch {
+        /* GPU side already gone (lost context): nothing left to free */
+      }
+      this.tex = null;
+    }
     if (this.app) {
       this.app.ticker.remove(this.tick);
       this.app.destroy(true, { children: true });
       this.app = null;
-    }
-    if (this.tex) {
-      destroyTextures(this.tex);
-      this.tex = null;
     }
     this.icons?.destroy();
     this.icons = null;
@@ -1401,7 +1407,13 @@ export class GameRenderer implements GameRendererApi {
       move: p ? { rollCooldownMs: p.rollCooldownMs, rolling: p.rolling, walking: p.walking } : null,
     });
     this.counts = stickyCounts(this.counts, snapshot);
-    snapshot = { ...snapshot, aliveCount: this.counts.alive, totalPlayers: this.counts.total };
+    snapshot = {
+      ...snapshot,
+      aliveCount: this.counts.alive,
+      totalPlayers: this.counts.total,
+      // The full map is the only system that blocks input (fullmap.ts): it is open.
+      mapOpen: this.systemsReady && this.systems.some((s) => s.isInputBlocked?.() === true),
+    };
     if (this.touch) {
       const s = snapshot.self;
       this.touch.sync({

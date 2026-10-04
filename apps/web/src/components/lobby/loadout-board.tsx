@@ -20,7 +20,7 @@ import {
   type StashView,
 } from "@/lib/lobby/loadout-model";
 import { describeItem } from "@/lib/items-ui";
-import { registerDraftFlush, trackDraftSave } from "@/lib/lobby/draft-flush";
+import { flushDraft, registerDraftFlush, trackDraftSave } from "@/lib/lobby/draft-flush";
 import { panelHref } from "@/lib/lobby/panels";
 import { ItemCard, EmptySlot } from "./item-card";
 import { StashList } from "./stash-list";
@@ -91,19 +91,25 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
       }),
     [],
   );
+  const reloadRef = useRef(reload);
+  reloadRef.current = reload;
   useEffect(
     () => () => {
-      if (!pending.current) return;
-      // keepalive lets the request outlive the unmount / navigation.
-      void trackDraftSave(
-        fetch("/api/loadout/draft", {
-          method: "PUT",
-          credentials: "include",
-          keepalive: true,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ entries: pending.current }),
-        }),
-      ).catch(() => {});
+      if (pending.current) {
+        // keepalive lets the request outlive the unmount / navigation.
+        void trackDraftSave(
+          fetch("/api/loadout/draft", {
+            method: "PUT",
+            credentials: "include",
+            keepalive: true,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ entries: pending.current }),
+          }),
+        ).catch(() => {});
+      }
+      // The menu behind shows this draft (gear strip, PLAY's "N items at risk"): refetch the stash
+      // once the saves landed, or a panel closed right after an edit keeps showing the old loadout.
+      if (dirty.current) void flushDraft().then(() => reloadRef.current());
     },
     [],
   );
@@ -216,7 +222,10 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
       <section className="toon-panel bg-[#161b28]/95 p-5 lg:col-span-5">
         <header className="flex items-baseline justify-between gap-3">
           <h2 className="toon-text-thin text-2xl tracking-wide text-white">Stash</h2>
-          <p className="font-body text-xs text-white/55">Click to equip</p>
+          <p className="font-body text-xs text-white/55">
+            <span className="[@media(hover:none)]:hidden">Click to equip</span>
+            <span className="hidden [@media(hover:none)]:inline">Tap to equip</span>
+          </p>
         </header>
         <div className="mt-4">
           <StashList
@@ -230,7 +239,10 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
               <>
                 Your stash is empty.{" "}
                 {!stash.starterClaimed && (
-                  <Link href={panelHref({ panel: "inventory", tab: "stash" })} className="text-zooa-lime underline-offset-4 hover:underline">
+                  <Link
+                    href={panelHref({ panel: "inventory", tab: "stash" })}
+                    className="inline-flex min-h-11 items-center text-zooa-lime underline-offset-4 hover:underline"
+                  >
                     Claim the starter kit
                   </Link>
                 )}
@@ -345,7 +357,7 @@ function StepBtn({ children, onClick, disabled, label }: { children: React.React
       aria-label={label}
       onClick={onClick}
       disabled={disabled}
-      className="grid h-6 w-6 place-items-center rounded-md border-2 border-black bg-white text-sm text-black shadow-[0_2px_0_#000] disabled:opacity-40"
+      className="grid h-6 w-6 place-items-center rounded-md border-2 border-black bg-white text-sm text-black shadow-[0_2px_0_#000] disabled:opacity-40 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11 [@media(pointer:coarse)]:text-lg"
     >
       {children}
     </button>

@@ -106,7 +106,7 @@ export function TraderJunker({
                   type="button"
                   aria-label="Fewer packs"
                   onClick={() => setPacks((p) => ({ ...p, [def]: Math.max(1, n - 1) }))}
-                  className="grid h-7 w-7 place-items-center rounded-md border-2 border-black bg-white text-black shadow-[0_2px_0_#000]"
+                  className="grid h-7 w-7 place-items-center rounded-md border-2 border-black bg-white text-black shadow-[0_2px_0_#000] [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11"
                 >
                   −
                 </button>
@@ -115,7 +115,7 @@ export function TraderJunker({
                   type="button"
                   aria-label="More packs"
                   onClick={() => setPacks((p) => ({ ...p, [def]: Math.min(20, n + 1) }))}
-                  className="grid h-7 w-7 place-items-center rounded-md border-2 border-black bg-white text-black shadow-[0_2px_0_#000]"
+                  className="grid h-7 w-7 place-items-center rounded-md border-2 border-black bg-white text-black shadow-[0_2px_0_#000] [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11"
                 >
                   +
                 </button>
@@ -124,7 +124,7 @@ export function TraderJunker({
                 type="button"
                 onClick={() => buy(def)}
                 disabled={!afford || busy !== null}
-                className="toon-btn min-h-10 min-w-[6.5rem] px-3 text-sm"
+                className="toon-btn min-h-10 min-w-[6.5rem] px-3 text-sm [@media(pointer:coarse)]:min-h-11"
               >
                 <span className="optical-center tabular-nums">{busy === def ? "…" : fmtCr(cost)}</span>
               </button>
@@ -152,7 +152,7 @@ export function TraderJunker({
                 type="button"
                 onClick={() => buyBoundItem(o.def)}
                 disabled={locked || !afford || busy !== null}
-                className="toon-btn ml-auto min-h-10 min-w-[6.5rem] px-3 text-sm"
+                className="toon-btn ml-auto min-h-10 min-w-[6.5rem] px-3 text-sm [@media(pointer:coarse)]:min-h-11"
               >
                 <span className="optical-center tabular-nums">{busy === `bound:${o.def}` ? "…" : fmtCr(o.cr)}</span>
               </button>

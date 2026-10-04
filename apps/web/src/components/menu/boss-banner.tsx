@@ -51,9 +51,9 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
 
   const nextLine =
     next === undefined ? null : next === null ? (
-      <p className="font-body hidden text-xs font-semibold text-white/65 md:block">Next map: no boss</p>
+      <p className="font-body hidden text-xs font-semibold text-white/65 md:block [@media(max-height:500px)]:hidden">Next map: no boss</p>
     ) : (
-      <p className="font-body hidden text-xs font-semibold text-rose-200 md:block">
+      <p className="font-body hidden text-xs font-semibold text-rose-200 md:block [@media(max-height:500px)]:hidden">
         Next map: <span className="uppercase tracking-wide">{next.name}</span> at the {next.zoneName}
       </p>
     );
@@ -86,7 +86,7 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
       <div
         key={drop}
         className={clsx(
-          "flex items-center gap-3 rounded-2xl border-[3px] border-black bg-rose-500 px-3 py-2 text-black shadow-[0_4px_0_#000]",
+          "flex items-center gap-3 rounded-2xl border-[3px] border-black bg-rose-500 px-3 py-2 text-black shadow-[0_4px_0_#000] [@media(max-height:500px)]:py-1",
           drop > 0 && "animate-banner-drop motion-reduce:animate-none",
         )}
       >
@@ -94,10 +94,10 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
           <BossFace />
           <span className="min-w-0">
             <span className="block text-[0.7rem] tracking-[0.2em] text-black/75">BOSS EVENT</span>
-            <span className="mt-0.5 block text-sm leading-tight tracking-wide md:text-lg">
+            <span className="mt-0.5 block text-sm leading-tight tracking-wide md:text-lg [@media(max-height:500px)]:text-sm">
               {boss.name} holds the {boss.zoneName}
             </span>
-            <span className="font-body mt-0.5 hidden text-xs font-bold text-black/75 md:block">
+            <span className="font-body mt-0.5 hidden text-xs font-bold text-black/75 md:block [@media(max-height:500px)]:hidden">
               T{boss.tier} · {boss.guards} {boss.guards === 1 ? "guard" : "guards"}
             </span>
           </span>

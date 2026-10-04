@@ -138,6 +138,8 @@ export interface HudSnapshot {
   killTally?: KillTally;
   /** Round-trip latency in ms, null until measured. */
   pingMs: number | null;
+  /** The canvas full map is open (the touch HUD hides its bottom bar and compass over it). */
+  mapOpen?: boolean;
 }
 
 /** Panel keys the input layer forwards (Tab / T / Esc / M); owned by the overlay UIs. */
