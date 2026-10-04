@@ -1,0 +1,11 @@
+{
+  "//": "Type-check of the server probe against the game server: apps/game-server/node_modules/.bin/tsc -p scripts/load/tsconfig.json",
+  "extends": "../../apps/game-server/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "types": ["node"],
+    "typeRoots": ["../../apps/game-server/node_modules/@types"]
+  },
+  "include": ["server-probe.mts"]
+}
