@@ -88,6 +88,11 @@ export const users = pgTable(
      */
     walletPubkey: text("wallet_pubkey"),
     walletLinkedAt: timestamp("wallet_linked_at", { withTimezone: true }),
+    /**
+     * Staff role (lib/admin/guard.ts, migration 006): 'admin' opens /admin and /api/admin/**; NULL for
+     * everyone else. Granted by hand with SQL (README "Админка"), never from the app.
+     */
+    role: text("role").$type<"admin">(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -101,6 +106,8 @@ export const users = pgTable(
     /** WORLD v6 level board (xp desc). */
     xpIdx: index("users_xp_idx").on(t.xp.desc().nullsFirst()),
     creditsNonNeg: check("users_credits_non_negative", sql`${t.credits} >= 0`),
+    /** A typo in the grant SQL ('Admin') fails loudly instead of silently granting nothing. */
+    roleKnown: check("users_role_known", sql`${t.role} is null or ${t.role} = 'admin'`),
   }),
 );
 
@@ -898,3 +905,30 @@ export type Party = typeof parties.$inferSelect;
 export type PartyMember = typeof partyMembers.$inferSelect;
 export type PartyInvite = typeof partyInvites.$inferSelect;
 export type PartyDropRow = typeof partyDrops.$inferSelect;
+
+// ---------------------------------------------------------------------------- admin
+
+/**
+ * Admin audit (lib/admin/params.ts, migration 006): one row per admin change (who, when, old → new).
+ * action 'param_set' with target = the economy_params key. admin_nickname is copied so the row
+ * still reads after the account is gone (admin_id then becomes NULL).
+ */
+export const adminAudit = pgTable(
+  "admin_audit",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    adminId: uuid("admin_id").references(() => users.id, { onDelete: "set null" }),
+    adminNickname: text("admin_nickname").notNull(),
+    action: text("action").notNull(),
+    target: text("target").notNull(),
+    oldValue: jsonb("old_value"),
+    newValue: jsonb("new_value"),
+    note: text("note"),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    at: index("admin_audit_at_idx").on(t.at),
+  }),
+);
+
+export type AdminAuditRow = typeof adminAudit.$inferSelect;

@@ -227,3 +227,30 @@ The web manifest, the page theme colour, the TWA and the webshell all use `#0807
 - Отпечаток SHA-256 ключа подписи в `apps/web/public/.well-known/assetlinks.json` (и `package_name`, если меняется `packageId`), путь к keystore в `twa/twa-manifest.json`
 
 Секреты в репозиторий не кладутся: `.env` заполняется вручную.
+
+### Админка
+
+`/admin` — метрики альфы (онлайн, входы и исходы за 7 дней, CR по причинам, вещи по состояниям, доход казны, KPI
+из `docs/ALPHA_PLAN.md` §4), стоп-краны экономики с подтверждением и журналом, место под просмотр повторов. Видна
+только пользователю с `users.role = 'admin'`: гостю, игроку без роли и не вошедшему `/admin` и `/api/admin/**`
+отвечают 404. Роль читается из базы на каждый запрос, поэтому выдача и снятие действуют сразу. Кнопки выдачи роли в
+приложении нет — только SQL.
+
+1. На существующей базе один раз применить миграцию (новая база получает всё через `pnpm db:push` / сервис `migrate`):
+   `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/web/migrations/006_admin_role.sql`
+2. Зарегистрироваться в игре обычным способом, затем выдать себе роль по нику:
+
+   ```sql
+   update users set role = 'admin' where nickname = 'ТВОЙ_НИК' returning id, nickname, role;
+   ```
+
+   В docker: `docker compose exec postgres psql -U postgres -d extract -c "update users set role = 'admin' where nickname = 'ТВОЙ_НИК' returning nickname, role;"`.
+   Других значений, кроме `'admin'` и `NULL`, база не примет (опечатка `'Admin'` даст ошибку, а не тихий отказ).
+3. Снять роль: `update users set role = null where nickname = 'НИК';`. Кто админ: `select nickname from users where role = 'admin';`
+4. Журнал изменений стоп-кранов (он же на странице `/admin/params`):
+   `select at, admin_nickname, target, old_value, new_value, note from admin_audit order by at desc limit 20;`
+
+Стоп-краны сейчас — только существующие ключи `economy_params`, которые читает World v6: `autosell_mult` (в полосе
+регулятора 0.6–1.3; крон `economy-daily` продолжает двигать его от нового значения) и `pool_risk_k` (0–2; 0 —
+стоп выдачи пула входам, сумка босса заполняется отдельно). `pool_max_per_match` показан только для чтения: World v6
+его не читает. Паузы рынка и продажи наборов в `economy_params` ещё нет.
