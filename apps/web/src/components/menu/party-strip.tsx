@@ -16,8 +16,8 @@ const SMALL_BTN =
  * READY / NOT READY / IN RAID / OFFLINE), then the caller's own controls: members toggle "Follow"
  * (their ready state), the leader gets "+" (opens Friends to invite), everyone "Leave" (tap
  * twice). One row of 44 px targets: the member chips scroll sideways on their own (a fade marks a
- * cut edge) while the controls stay pinned on the right, so a narrow phone never paints chips under
- * the buttons; on a phone the labels shorten ("Follow") and your own chip goes last (the one chip
+ * cut edge; tall desktops wrap them onto more rows instead, so every member shows) while the
+ * controls stay pinned on the right, so a narrow phone never paints chips under the buttons; on a phone the labels shorten ("Follow") and your own chip goes last (the one chip
  * that fits is a mate's or the leader's). The menu puts it right above PLAY in the right column.
  */
 export function PartyStrip({ onInvite }: { onInvite: () => void }) {
@@ -76,7 +76,7 @@ export function PartyStrip({ onInvite }: { onInvite: () => void }) {
             ref={listRef}
             onScroll={measure}
             aria-label="Party members"
-            className="flex items-center gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            className="flex items-center gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [@media(min-width:1024px)_and_(min-height:700px)]:flex-wrap"
           >
             {party.members.map((m) => {
               const chip = memberChip(m);

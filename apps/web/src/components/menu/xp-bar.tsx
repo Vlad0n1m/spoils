@@ -107,7 +107,7 @@ export function XpBar({ xp, variant = "bar" }: { xp: number; variant?: "bar" | "
     >
       {fill}
       <span className="absolute inset-x-0 top-0 h-1/2 bg-white/15" aria-hidden />
-      <span className="menu-label absolute inset-0 grid place-items-center text-[0.75rem] leading-none tabular-nums text-white [text-shadow:none] [-webkit-text-stroke:0.22em_#000] short:text-[0.72rem]" aria-hidden>
+      <span className="menu-label absolute inset-0 grid place-items-center text-[0.75rem] leading-none tabular-nums text-white [text-shadow:none] [-webkit-text-stroke:0.22em_#000]" aria-hidden>
         <span className="optical-center">
           {fmtInt(p.into)} / {fmtInt(p.need)} XP
         </span>

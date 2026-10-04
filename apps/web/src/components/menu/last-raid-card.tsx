@@ -62,9 +62,9 @@ export function LastRaidCard({ raid, onDismiss }: { raid: LastRaidDto; onDismiss
             )}
           </summary>
           {raid.xpLines.length > 0 && (
-            <ul className="font-body mt-2 space-y-1 border-t-2 border-black/40 pt-2 text-sm">
+            <ul className="font-body mt-2 space-y-1.5 border-t-2 border-black/40 pt-2 text-sm">
               {raid.xpLines.map((l, i) => (
-                <li key={`${l.key}-${i}`} className="flex justify-between gap-3 text-white/80">
+                <li key={`${l.key}-${i}`} className="flex justify-between gap-3 leading-snug text-white/80">
                   <span className="min-w-0 truncate">{xpLineText(l)}</span>
                   <span className={clsx("shrink-0 tabular-nums font-semibold", l.xp < 0 ? "text-amber-300" : "text-white")}>
                     {l.xp < 0 ? "−" : "+"}

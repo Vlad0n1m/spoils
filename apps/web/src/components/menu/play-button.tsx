@@ -102,13 +102,14 @@ export function PlayButton({ onFixInventory, className }: { onFixInventory: () =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kindKey]);
 
-  const long = v.label.length > 8;
+  // The ✓ glyph comes from a fallback font and sits low: "READY ✓" takes the smaller size too.
+  const long = v.label.length > 8 || v.label.includes("✓");
   return (
     <div className={clsx("relative flex w-full flex-col items-stretch", className)}>
       {state.kind === "error" && (
         <p
           role="alert"
-          className="font-body mb-3 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-2xl border-[3px] border-black bg-rose-400 px-3 py-1.5 text-center text-sm font-bold text-black shadow-[0_3px_0_#000] short:mb-2 short:py-1 short:text-xs"
+          className="font-body mb-3 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-2xl border-[3px] border-black bg-rose-400 px-3 py-1.5 text-center text-sm font-bold leading-snug text-black shadow-[0_3px_0_#000] short:mb-2 short:py-1 short:text-xs"
         >
           <span>{state.message}</span>
           {state.fix === "inventory" && (
@@ -139,7 +140,7 @@ export function PlayButton({ onFixInventory, className }: { onFixInventory: () =
           aria-describedby={subId}
           data-look={v.look}
           className={clsx(
-            "play-btn h-[6.75rem] w-full gap-1.5 px-4 md:h-[7.5rem] short:!h-[5.6rem] short:gap-1 tiny:!h-[5rem]",
+            "play-btn h-[6.75rem] w-full gap-2.5 px-4 md:h-[7.5rem] short:!h-[5.6rem] short:gap-1.5 tiny:!h-[5rem] tiny:gap-1",
             "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black",
             v.look === "armed" && "animate-stripes motion-reduce:animate-none",
             action === null && "cursor-default",

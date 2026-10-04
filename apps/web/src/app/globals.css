@@ -119,8 +119,12 @@ button {
  * Cartoon game UI: thick black outlines and a hard drop shadow, same language as the sprites
  * in /public/sprites. Used by the HUD, lobby and landing.
  */
-.toon-panel {
-  @apply rounded-2xl border-[3px] border-black bg-[#1d2333]/90 shadow-[0_4px_0_#000];
+/* In the components layer so a panel's own `bg-*` / `rounded-*` / `border-*` utilities win (outside a
+   layer this rule came after the utilities and every panel fell back to the translucent #1d2333/90). */
+@layer components {
+  .toon-panel {
+    @apply rounded-2xl border-[3px] border-black bg-[#1d2333]/90 shadow-[0_4px_0_#000];
+  }
 }
 
 .toon-chip {
