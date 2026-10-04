@@ -196,8 +196,8 @@ idosgames-title-bootstrap; скелет `get_host_scaffold`), docs.idosgames.com
 3. Nginx: положить `deploy/nginx/spoils-idos.conf`, заменить `SPOILS_DOMAIN`, выпустить сертификат
    (`certbot --nginx -d idos.<домен> -d game-idos.<домен>`). Нужен https: cookie издания `Secure`.
 4. Проверка: `curl -sI https://idos.<домен>/play | grep -i content-security-policy` должен показать
-   `frame-ancestors 'self' https://idosgames.com https://www.idosgames.com …`. На основном домене этого
-   заголовка нет.
+   `frame-ancestors 'self' https://idosgames.com https://www.idosgames.com …`. На основном домене
+   заголовок другой: только `frame-ancestors 'self'` (аудит безопасности, `src/lib/security-headers.mjs`).
 5. После смены `IDOS_BUILD`, `IDOS_FRAME_ANCESTORS` или любого `NEXT_PUBLIC_*` — пересобрать образ
    (тот же `up -d --build`).
 

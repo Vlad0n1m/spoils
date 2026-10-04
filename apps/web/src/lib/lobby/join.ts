@@ -18,6 +18,7 @@ import type { Db } from "../inventory/db";
 import { MAX_LOADOUT_ENTRIES, getDraft, lockLoadout, saveDraft, unlockLoadout } from "../inventory/loadout";
 import { RAID_USER_VOID_GRACE_MS, voidStaleForUser } from "../inventory/raids";
 import { getStash } from "../inventory/stash";
+import { isGuestPlayEnabled } from "../guest-play";
 import { signJoinTicket } from "../join-ticket";
 import { partyJoinPlan, savePartyDrop, type PartyJoinPlan } from "../social/party";
 import { worldNow } from "../world/clock";
@@ -57,6 +58,11 @@ export async function lockAndIssueTicket(
 ): Promise<JoinResult> {
   if (c.kind === "anon") return { ok: false, status: 401, error: "unauthenticated", message: "Sign in first." };
   if (c.kind === "guest") {
+    // A guest cookie sealed while guest play was on stays valid for its TTL: re-check the switch
+    // here, or turning guest play off would not stop those sessions from joining (security audit).
+    if (!isGuestPlayEnabled()) {
+      return { ok: false, status: 403, error: "guest_play_disabled", message: "Guest play is off. Create an account to play." };
+    }
     return {
       ok: true,
       ticket: signJoinTicket({ userId: c.userId, nickname: c.nickname, loadoutId: "", ...world }),

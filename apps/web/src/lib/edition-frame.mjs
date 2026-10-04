@@ -90,7 +90,7 @@ export function frameAncestorsDirective(sources) {
 }
 
 /**
- * next.config `headers()` entries. Main build: none (the config does not even define headers()).
+ * The edition's frame-ancestors rule (security-headers.mjs adds the common headers). Main build: none.
  * Edition: a CSP that only sets frame-ancestors (it restricts nothing else). No X-Frame-Options is
  * sent: browsers that know frame-ancestors ignore it, and DENY/SAMEORIGIN would block old ones.
  * @param {Record<string, string | undefined>} env

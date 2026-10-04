@@ -68,7 +68,7 @@ export const SHORT_RAID_MS = 15 * 60_000;
  * A finished shard frees its entries' gear at the latest this long after the wipe (web
  * RAID_USER_VOID_GRACE_MS in lib/inventory/raids.ts; a server module, so the number is mirrored).
  */
-export const SETTLE_GRACE_MS = 5 * 60_000;
+export const SETTLE_GRACE_MS = 12 * 60_000;
 
 const LOADING = { kind: "loading" } as const;
 

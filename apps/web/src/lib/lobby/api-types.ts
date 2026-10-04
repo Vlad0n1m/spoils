@@ -137,11 +137,11 @@ export interface EconomyStatsDto {
  * ms) so the lobby can correct its countdowns.
  * - entry_closed: `openAt` = when the next entry window opens.
  * - world_starting: `retryInMs` (the shard of this cycle is not registered yet).
- * - in_raid: `settlesAt` = when the entry's shard is voided at the latest (ends_at + 5 min), if known.
+ * - in_raid: `settlesAt` = when the entry's shard is voided at the latest (ends_at + RAID_USER_VOID_GRACE_MS, 12 min), if known.
  * - loadout codes: `key` = the offending slot.
  */
 export interface WorldJoinErrorBody {
-  error: WorldJoinError | "conflict" | "no_user";
+  error: WorldJoinError | "conflict" | "no_user" | "guest_play_disabled";
   message: string;
   serverTime: number;
   openAt?: number;

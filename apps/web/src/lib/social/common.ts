@@ -29,12 +29,16 @@ export interface UserRef {
   level: number;
 }
 
-/** A registered user by nickname, case-insensitive (an exact-case match wins). */
+/**
+ * A registered user by nickname, case-insensitive: an exact-case match wins, then the oldest account
+ * (security audit: with "Vlad" and a later impostor "vLAD", "vlad" must always name the original;
+ * register now refuses case-insensitive duplicates, older pairs may still exist).
+ */
 export async function findUserByNickname(q: Q, nickname: string): Promise<UserRef | null> {
   const r = await q.execute<{ id: string; nickname: string; level: number }>(sql`
     select id, nickname, level from users
     where lower(nickname) = lower(${nickname})
-    order by (nickname = ${nickname}) desc
+    order by (nickname = ${nickname}) desc, created_at asc, id asc
     limit 1`);
   const u = r.rows[0];
   return u ? { id: String(u.id), nickname: u.nickname, level: Number(u.level) } : null;

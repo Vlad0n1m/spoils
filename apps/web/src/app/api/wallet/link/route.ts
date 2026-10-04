@@ -34,7 +34,8 @@ export async function POST(req: Request) {
   const deny = registeredOnly(c);
   if (deny || c.kind !== "user") return deny!;
 
-  const gate = walletLinkLimiter.begin(clientIp(req), c.userId);
+  const ip = clientIp(req);
+  const gate = walletLinkLimiter.begin(ip, c.userId);
   if (!gate.ok) {
     const res = apiError(429, "rate_limited", "Too many attempts. Wait a minute and try again.");
     res.headers.set("Retry-After", String(gate.retryAfterSec));
@@ -43,16 +44,16 @@ export async function POST(req: Request) {
 
   const parsed = linkBodySchema.safeParse(await readJson(req));
   if (!parsed.success) {
-    walletLinkLimiter.fail(c.userId);
+    walletLinkLimiter.fail(c.userId, ip);
     return apiError(400, "bad_body", "The wallet answer was incomplete. Try again.");
   }
   const r = await linkWallet(db, c.userId, proofFromBody(parsed.data));
   if (!r.ok) {
-    if (!NOT_COUNTED.has(r.error)) walletLinkLimiter.fail(c.userId);
+    if (!NOT_COUNTED.has(r.error)) walletLinkLimiter.fail(c.userId, ip);
     const e = LINK_ERRORS[r.error];
     return apiError(e.status, r.error, e.message);
   }
-  walletLinkLimiter.succeed(c.userId);
+  walletLinkLimiter.succeed(c.userId, ip);
   return json({ wallet: r.wallet });
 }
 

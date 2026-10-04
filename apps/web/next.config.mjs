@@ -1,7 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
-import { editionHeaders, editionPublicEnv, isIdosBuildEnv, parseFrameAncestors, wildcardSources } from "./src/lib/edition-frame.mjs";
+import { editionPublicEnv, isIdosBuildEnv, parseFrameAncestors, wildcardSources } from "./src/lib/edition-frame.mjs";
+import { securityHeaders } from "./src/lib/security-headers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
@@ -14,7 +15,7 @@ loadEnv({ path: path.join(here, ".env.local"), override: true });
 /**
  * iDos Games edition (IDOS_BUILD=1, docs/IDOS_EDITION.md): inlines NEXT_PUBLIC_IDOS_BUILD=1 and sends
  * CSP frame-ancestors (IDOS_FRAME_ANCESTORS or the iDos defaults). Off by default: the main build's
- * config gets neither `env` nor `headers`. Both are fixed at build time.
+ * config gets no `env`. Headers of both builds: src/lib/security-headers.mjs. Fixed at build time.
  */
 const idosBuild = isIdosBuildEnv(process.env);
 if (idosBuild) {
@@ -24,14 +25,7 @@ if (idosBuild) {
   const wild = wildcardSources(sources);
   if (wild.length > 0) console.warn(`IDOS_FRAME_ANCESTORS: ${wild.join(" ")} lets every site under it frame the signed-in edition; prefer the exact shell origin`);
 }
-const idosEdition = idosBuild
-  ? {
-      env: editionPublicEnv(process.env),
-      async headers() {
-        return editionHeaders(process.env);
-      },
-    }
-  : {};
+const idosEdition = idosBuild ? { env: editionPublicEnv(process.env) } : {};
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -45,6 +39,11 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: "1mb",
     },
+  },
+  // The app never uses next/image: no optimizer endpoint to attack (security audit, sharp/AVIF advisories).
+  images: { unoptimized: true },
+  async headers() {
+    return securityHeaders(process.env);
   },
   ...idosEdition,
 };

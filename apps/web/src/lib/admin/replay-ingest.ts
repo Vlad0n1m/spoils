@@ -1,5 +1,5 @@
 import { HEADERS, REPLAY } from "@extract/shared";
-import { checkGameServerSignature } from "../game-server-hmac";
+import { checkGameServerSignature, readCappedText } from "../game-server-hmac";
 import type { Db } from "../inventory/db";
 import { checkReplayData, replayChunkUploadSchema, storeReplayChunk } from "./replay";
 
@@ -15,27 +15,6 @@ import { checkReplayData, replayChunkUploadSchema, storeReplayChunk } from "./re
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
-
-/** The body as text, or null once it grows past `max` bytes (the rest is not read). */
-export async function readCappedText(req: Request, max: number): Promise<string | null> {
-  const declared = Number(req.headers.get("content-length") ?? "");
-  if (Number.isFinite(declared) && declared > max) return null;
-  if (!req.body) return "";
-  const reader = req.body.getReader();
-  const parts: Uint8Array[] = [];
-  let n = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    n += value.byteLength;
-    if (n > max) {
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    parts.push(value);
-  }
-  return Buffer.concat(parts).toString("utf8");
-}
 
 export async function handleReplayIngest(req: Request, db: Db, secret: string, now: number = Date.now()): Promise<Response> {
   const text = await readCappedText(req, REPLAY.MAX_BODY_BYTES);
