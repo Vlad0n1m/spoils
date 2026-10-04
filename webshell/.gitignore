@@ -1,0 +1,5 @@
+# `solana-mobile webshell init android` generates the Android project here; only the templates are versioned.
+/android/
+# Never commit signing keys (keep them outside the repo anyway).
+*.keystore
+*.jks
