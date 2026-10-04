@@ -30,9 +30,12 @@ const BASE = 200;
 /** Gap between the minimap and the top-right corner (px). */
 export const MINIMAP_MARGIN = 16;
 
-/** Laid-out minimap side (px) for a screen; it sits MINIMAP_MARGIN from the top-right corner. */
+/**
+ * Laid-out minimap side (px) for a screen; it sits MINIMAP_MARGIN from the top-right corner. Short
+ * screens (landscape phones, < 480 px tall) go down to 100 px so more of the world stays visible.
+ */
 export function minimapSize(screenW: number, screenH: number): number {
-  return Math.max(120, Math.min(BASE, Math.min(screenW, screenH) * 0.24));
+  return Math.max(screenH < 480 ? 100 : 120, Math.min(BASE, Math.min(screenW, screenH) * 0.24));
 }
 
 function rgb(c: number): [number, number, number] {

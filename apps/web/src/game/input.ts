@@ -8,7 +8,9 @@
  * T take all, M full map, Esc close.
  *
  * Phones (touch-controls.ts): an analog move stick (part deflection = quiet walk), an aim stick
- * that fires past its fire threshold, and buttons that go through press(). While those sticks are
+ * that only aims, and buttons that go through press(). Firing is automatic (auto-fire.ts): while
+ * the aim stick is held and the renderer's setTouchAutoFire check says the aim line is on an enemy,
+ * the touch trigger is pulled. While those sticks are
  * mounted (setTouchSticks), finger pointer events on the canvas never aim or fire; without them (a
  * touch laptop whose primary pointer is a mouse or trackpad) a finger aims and fires like the mouse.
  *
@@ -120,7 +122,8 @@ export class InputController {
   /** Touch twin-stick (touch-controls.ts): analog move vector, aim direction, trigger. */
   private touchMove: { x: number; y: number } | null = null;
   private touchAim: number | null = null;
-  private touchFire = false;
+  /** Phones: whether the aim line along an angle is on an enemy right now (auto-fire.ts), null = never fire. */
+  private autoFire: ((angle: number) => boolean) | null = null;
   /**
    * Semi-auto weapons fire on a press, so a held fire stick re-presses every this many ms
    * (the weapon's fire interval; 0 = automatic weapon, the trigger is simply held).
@@ -211,12 +214,15 @@ export class InputController {
   }
 
   /**
-   * The touch trigger for one sample. Automatic weapons: held. Semi-auto: a press on the first
-   * sample, then one released sample, then a new press every touchRepeatMs while the stick stays
-   * past the fire threshold, so holding the stick keeps firing at the weapon's rate.
+   * The touch trigger for one sample: pulled while the aim stick is held and the auto-fire check
+   * says the aim line is on an enemy. Automatic weapons: held. Semi-auto: a press on the first
+   * sample, then one released sample, then a new press every touchRepeatMs while the aim stays on
+   * target, so it keeps firing at the weapon's rate.
    */
   private sampleTouchFire(): boolean {
-    if (!this.touchFire || this.fireBlocked) {
+    const aim = this.touchAim;
+    const on = aim !== null && !this.fireBlocked && !!this.autoFire && this.autoFire(aim);
+    if (!on) {
       this.touchPressAt = null;
       this.touchHigh = false;
       return false;
@@ -259,10 +265,17 @@ export class InputController {
     this.touchMove = v && Number.isFinite(v.x) && Number.isFinite(v.y) ? { x: v.x, y: v.y } : null;
   }
 
-  /** Aim stick: direction in radians (screen axes = world axes) and trigger; null aim = released. */
-  setTouchAim(angle: number | null, fire: boolean): void {
+  /** Aim stick: direction in radians (screen axes = world axes); null = released. It never fires by itself. */
+  setTouchAim(angle: number | null): void {
     this.touchAim = angle !== null && Number.isFinite(angle) ? angle : null;
-    this.touchFire = this.touchAim !== null && fire;
+  }
+
+  /**
+   * Phones: auto-fire check, called once per input sample with the aim stick's angle (the renderer
+   * passes autoFireTarget over the client's visible entities). null = the touch trigger never pulls.
+   */
+  setTouchAutoFire(check: ((angle: number) => boolean) | null): void {
+    this.autoFire = check;
   }
 
   /** Re-press interval of a held fire stick: the semi-auto weapon's fire interval, 0 = automatic. */
@@ -377,7 +390,6 @@ export class InputController {
     this.keys.clear();
     this.touchMove = null;
     this.touchAim = null;
-    this.touchFire = false;
     this.touchPressAt = null;
     this.touchHigh = false;
     this.fireHeld = false;

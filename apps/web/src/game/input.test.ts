@@ -288,29 +288,43 @@ describe("InputController", () => {
       assert.ok(Math.abs((ctl.touchMoveAngle ?? 0) - Math.PI / 2) < 1e-9);
     });
 
-    it("the aim stick aims, fires only while aiming, and is blocked by an open panel", () => {
+    it("the aim stick only aims; auto-fire pulls the trigger while the aim is on target, never through a panel", () => {
       const { ctl } = setup();
+      let onTarget = false;
+      const asked: number[] = [];
+      ctl.setTouchAutoFire((a) => {
+        asked.push(a);
+        return onTarget;
+      });
       assert.equal(ctl.touchAimAngle, null);
-      ctl.setTouchAim(1.25, false);
+      ctl.setTouchAim(1.25);
       assert.equal(ctl.touchAimAngle, 1.25);
-      assert.equal(ctl.sampleFire(), false, "aiming without the trigger");
-      ctl.setTouchAim(1.25, true);
-      assert.equal(ctl.sampleFire(), true);
-      assert.equal(ctl.sampleFire(), true, "automatic weapon: the trigger stays held");
-      ctl.setTouchAim(null, true);
+      assert.equal(ctl.sampleFire(), false, "aiming off target: no fire");
+      assert.deepEqual(asked, [1.25], "the check gets the stick's angle");
+      onTarget = true;
+      assert.equal(ctl.sampleFire(), true, "on target: fire");
+      assert.equal(ctl.sampleFire(), true, "automatic weapon: the trigger stays held while on target");
+      onTarget = false;
+      assert.equal(ctl.sampleFire(), false, "off target again: released");
+      onTarget = true;
+      ctl.setTouchAim(null);
       assert.equal(ctl.touchAimAngle, null);
-      assert.equal(ctl.sampleFire(), false, "no fire without an aim");
-      ctl.setTouchAim(0, true);
+      assert.equal(ctl.sampleFire(), false, "no fire without the aim stick, even with a target on the line");
+      ctl.setTouchAim(0);
       ctl.setFireBlocked(true);
       assert.equal(ctl.sampleFire(), false, "panel open: no fire");
       ctl.setFireBlocked(false);
       assert.equal(ctl.sampleFire(), true);
+      ctl.setTouchAutoFire(null);
+      assert.equal(ctl.sampleFire(), false, "no auto-fire check: never fires");
     });
 
-    it("a held fire stick re-presses a semi-auto weapon at its fire interval, with a release in between", () => {
+    it("auto-fire re-presses a semi-auto weapon at its fire interval while on target, with a release in between", () => {
       const { ctl, setNow } = setup();
+      let onTarget = true;
+      ctl.setTouchAutoFire(() => onTarget);
       ctl.setTouchRepeatMs(280);
-      ctl.setTouchAim(0, true);
+      ctl.setTouchAim(0);
       const got: boolean[] = [];
       for (let t = 1000; t <= 1600; t += 33) {
         setNow(t);
@@ -319,11 +333,11 @@ describe("InputController", () => {
       // Presses at 1000, then the first sample ≥ 1280 (1297), then ≥ 1577 (1594).
       const pressedAt = got.flatMap((v, i) => (v ? [1000 + i * 33] : []));
       assert.deepEqual(pressedAt, [1000, 1297, 1594]);
-      // Releasing and pressing again fires at once.
-      ctl.setTouchAim(0, false);
+      // Leaving the target and coming back on it fires at once.
+      onTarget = false;
       setNow(1610);
       assert.equal(ctl.sampleFire(), false);
-      ctl.setTouchAim(0, true);
+      onTarget = true;
       setNow(1643);
       assert.equal(ctl.sampleFire(), true);
       // Never two pressed samples in a row, even with an interval shorter than a sample.
@@ -353,11 +367,12 @@ describe("InputController", () => {
     it("a flick's first shot carries the stick direction, not the previous facing", () => {
       const { ctl } = setup();
       ctl.setTouchRepeatMs(250); // semi-auto: this one press is the whole shot
-      // Facing right from the move stick, then one pointermove flicks the aim stick left past FIRE_AT.
+      // Facing right from the move stick, then one pointermove flicks the aim stick left onto an enemy.
+      ctl.setTouchAutoFire((a) => a === Math.PI);
       ctl.setTouchMove({ x: 1, y: 0 });
       let aim = sampleAim(0.4, ctl.touchFacing, false);
       assert.equal(aim, 0, "the move stick steers the facing");
-      ctl.setTouchAim(Math.PI, true);
+      ctl.setTouchAim(Math.PI);
       // The renderer's input loop runs before its per-frame aim update: the sample must take the stick now.
       const fire = ctl.sampleFire();
       aim = sampleAim(aim, ctl.touchFacing, false);
@@ -365,7 +380,7 @@ describe("InputController", () => {
       assert.equal(aim, Math.PI);
       // A panel open: the aim stays frozen; no stick held: the last aim (mouse) stays.
       assert.equal(sampleAim(0.3, ctl.touchFacing, true), 0.3);
-      ctl.setTouchAim(null, false);
+      ctl.setTouchAim(null);
       ctl.setTouchMove(null);
       assert.equal(ctl.touchFacing, null);
       assert.equal(sampleAim(0.3, ctl.touchFacing, false), 0.3);
@@ -398,8 +413,9 @@ describe("InputController", () => {
 
     it("blur and detach release the sticks", () => {
       const { ctl, win } = setup();
+      ctl.setTouchAutoFire(() => true);
       ctl.setTouchMove({ x: 1, y: 0 });
-      ctl.setTouchAim(0, true);
+      ctl.setTouchAim(0);
       win.fire("blur", {});
       assert.deepEqual(ctl.movement(), { mx: 0, my: 0 });
       assert.equal(ctl.touchAimAngle, null);

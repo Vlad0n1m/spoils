@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useTouchMode } from "./use-touch-mode";
 import {
   BACKPACK_SLOTS,
   BREAK_CHANCE_ON_DEATH,
@@ -44,7 +45,7 @@ const STEPS: { title: string; body: string; icon: string }[] = [
   {
     title: "Move quietly",
     icon: "/sprites/shotgun.png",
-    body: `Space rolls (${ROLL_CD_S} s cooldown). Shift walks quietly: half speed, short footstep range. Sounds you hear show up as markers around you — steps, shots, looting, extracts — with an arrow when it is behind you.`,
+    body: `Space rolls (${ROLL_CD_S} s cooldown). Shift walks quietly: half speed, short footstep range. Sounds you hear show up as markers around you — steps, shots, looting, extracts — with an arrow when it is behind you. On a phone the left stick moves and the right stick aims: firing is automatic while the aim line is on an enemy (never on party mates).`,
   },
   {
     title: "Locals",
@@ -198,10 +199,39 @@ const MENU_KEYS: Array<[string, string]> = [
   ["H", "Info"],
 ];
 
-/** Info · Controls (WORLD v6 spec §6.3). */
+/** Phones (touch mode): the sticks and buttons of game/touch-controls.ts. */
+const TOUCH_KEYS: Array<[string, string]> = [
+  ["Left stick", "Move · push it part way to walk quietly"],
+  ["Right stick", "Aim · firing is automatic: your gun shoots while the aim line is on an enemy (the reticle turns red), never at party mates"],
+  ["ROLL", `Dodge roll (${ROLL_CD_S} s cooldown)`],
+  ["USE", "Search / pick up"],
+  ["Reload · swap", "Reload · switch weapon"],
+  ["Bandage · medkit", "Heal"],
+  ["Grenade", "Tap: throw ahead · drag: aim and range"],
+  ["Bag · MAP", "Inventory · full map"],
+];
+
+function TouchControlsBlock() {
+  return (
+    <Block title="On a phone">
+      <ul className="divide-y divide-white/10">
+        {TOUCH_KEYS.map(([k, what]) => (
+          <li key={k} className="flex min-h-10 items-center justify-between gap-3 py-1.5">
+            <span>{what}</span>
+            <span className="toon-key shrink-0 px-1.5 font-sans text-[0.7rem]">{k}</span>
+          </li>
+        ))}
+      </ul>
+    </Block>
+  );
+}
+
+/** Info · Controls (WORLD v6 spec §6.3). Phones see their touch controls first. */
 export function ControlsSection() {
+  const touch = useTouchMode();
   return (
     <div className="flex flex-col gap-4">
+      {touch && <TouchControlsBlock />}
       <Block title="In a raid">
         <ul className="divide-y divide-white/10">
           {KEYS.map(([keys, what]) => (
@@ -228,6 +258,7 @@ export function ControlsSection() {
           ))}
         </ul>
       </Block>
+      {!touch && <TouchControlsBlock />}
     </div>
   );
 }
