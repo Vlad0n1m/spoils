@@ -4,8 +4,9 @@
  * the scripted humans (human.ts; 1 by default = a PvE measurement, 2–24 = a multi-human lobby with
  * PvP) and the NPCs the match spawns itself (boss groups from rollBossSpawns, marauder squads from
  * rollNpcSpawns over map.npcPosts — the server NPC system). Per raid: a fresh lost pool sampled
- * like the seeded DB pool (pool-mirror.ts seedPool) and the web's release rule mirrored in-process
- * (poolReleasePlanV4 + boss slots + T3/T4 containers + v5 marauder carriers → containerLoot).
+ * like the seeded DB pool (pool-mirror.ts seedPool) and the legacy per-match release rule mirrored
+ * in-process (poolReleasePlanV4 + boss slots + T3/T4 containers + v5 marauder carriers → containerLoot;
+ * the pre-v6 raids/start wiring — WORLD v6 releases per entry, see world-harness.ts).
  *
  *   T=apps/game-server/node_modules/.bin/tsx; B=apps/game-server/src/sim/econ/loot-yield.bench.ts
  *   $T $B --strategy rat|poi|full|boss|fighter|npcfarm [--seeds 40] [--seed0 1] [--kit starter|free|hunter]
@@ -25,7 +26,7 @@
  * --lobby-r: the lobby's riskUnits for the pool release (default: Σ the scripted humans' own kits —
  *   3 for a starter / hunter kit, 0 for the free kit); lobby members that are not scripted are not
  *   simulated, only their risk drives poolReleasePlanV4.
- * --wiring v5 (default): raids/start carries bosses[] (raidBossSlots), containers[].guarded and
+ * --wiring v5 (default): the legacy raids/start request carries bosses[] (raidBossSlots), containers[].guarded and
  *   carriers[] (raidNpcCarriers over rollNpcSpawns); "v4": no carriers; "prod": the pre-v5
  *   planLaunch request (bossSlots 0, no bosses[] / guarded / carriers).
  * --stance (single human) / --hunt-share (lobby: the chance a non-rat, non-full human hunts other
@@ -42,6 +43,11 @@
  * Scripted humans are attached as connected clients (Match.attachHuman), so they get their
  * per-listener sounds; the "hunt" stance uses them to walk toward gunfire. NPC accuracy / reaction
  * on its own: npc-threat.bench.ts.
+ *
+ * WORLD v6 world mode (spec §8.4): `--world` runs up to 4 shard-cycles of the persistent world (45-minute
+ * map, drop-in entries, server pool placement, event boss, respawns, A6 expiry, the wipe) with scripted
+ * humans arriving over the cycle — see world-harness.ts for the flags and the records it writes
+ * (DIR/yield-world[-tag].json / .md).
  *
  * Kits: "starter" = a giveaway kit (rifle r0 + armor_1 + backpack_1, 90 light rounds, 3 bandages,
  * 1 medkit; 3 risk units); "hunter" = rifle r1 + armor_2 + backpack_2, 180 light rounds, 3
@@ -94,6 +100,7 @@ import {
   type PvpStance,
   type Strategy,
 } from "./human.js";
+import { worldCli } from "./world-harness.js";
 import {
   fromRaidDur,
   mirrorAllocatePool,
@@ -323,9 +330,9 @@ export interface LobbyRecord {
   npc: { spawned: NpcCountsRec; killedByHumans: NpcCountsRec };
 }
 
-const ZERO_CONS = (): Consumables => ({ ammoRounds: 0, ammo_light: 0, ammo_shell: 0, ammo_heavy: 0, bandage: 0, medkit: 0, cr: 0 });
+export const ZERO_CONS = (): Consumables => ({ ammoRounds: 0, ammo_light: 0, ammo_shell: 0, ammo_heavy: 0, bandage: 0, medkit: 0, cr: 0 });
 
-function addConsumable(c: Consumables, def: string, qty: number): void {
+export function addConsumable(c: Consumables, def: string, qty: number): void {
   if (def === "ammo_light" || def === "ammo_shell" || def === "ammo_heavy") {
     c[def] += qty;
     c.ammoRounds += qty;
@@ -337,7 +344,7 @@ function addConsumable(c: Consumables, def: string, qty: number): void {
   c.cr += consumableUnitCr(def) * qty;
 }
 
-function uniqueOut(s: SettledItem, origin: UniqueOrigin): UniqueOut {
+export function uniqueOut(s: SettledItem, origin: UniqueOrigin): UniqueOut {
   const durPct = fromRaidDur(s.def, s.dur);
   const v = { def: s.def, rarity: s.rarity, dur: durPct };
   return {
@@ -346,7 +353,7 @@ function uniqueOut(s: SettledItem, origin: UniqueOrigin): UniqueOut {
   };
 }
 
-function haulOf(items: readonly SettledItem[], originOf: (uid: string) => UniqueOrigin): Haul {
+export function haulOf(items: readonly SettledItem[], originOf: (uid: string) => UniqueOrigin): Haul {
   const consumables = ZERO_CONS();
   const uniques: UniqueOut[] = [];
   let junkItems = 0;
@@ -373,7 +380,7 @@ export function applySharedOverrides(set: Record<string, unknown>): void {
 }
 
 /** A giveaway kit like the owner's test account (3 risk units), or the hunter kit. */
-function starterLoadout(userId: string, kit: Kit = "starter"): LoadoutSnapshot {
+export function starterLoadout(userId: string, kit: Kit = "starter"): LoadoutSnapshot {
   const e = (key: SlotKey, def: string, qty: number, uid = "", rarity = 0, durPct = 100) =>
     ({ key, uid, def, qty, rarity, dur: toRaidDur(def, durPct) });
   if (kit === "hunter") {
@@ -423,7 +430,7 @@ export function runYieldRaid(o: YieldOptions): RaidRecord {
 const ZERO_NPC = (): NpcCountsRec => ({ boss: 0, guard: 0, marauder: 0 });
 
 /** Killer / victim role name: "human" for scripted humans, else the NPC role. */
-function roleName(rt: PlayerRuntime | undefined): "human" | "boss" | "guard" | "marauder" | "env" {
+export function roleName(rt: PlayerRuntime | undefined): "human" | "boss" | "guard" | "marauder" | "env" {
   if (!rt) return "env";
   switch (rt.pub.role) {
     case NPC_ROLE.BOSS: return "boss";
@@ -453,7 +460,7 @@ export function runLobbyRaid(o: LobbyOptions): { records: RaidRecord[]; lobby: L
   const riskOf = ownUids.map((s) => s.size);
   const lobbyR = o.lobbyR ?? riskOf.reduce((a, b) => a + b, 0);
 
-  // raids/start: a fresh seeded-like pool, the web's release rule mirrored in-process.
+  // Legacy raids/start (pre-v6): a fresh seeded-like pool, the per-match release rule mirrored in-process.
   const pool = seedPool(o.poolSize ?? 700, mulberry32((o.seed ^ 0x5eed9001) >>> 0));
   const sizeBefore = pool.length;
   const topBefore = topTierCount(pool);
@@ -462,7 +469,7 @@ export function runLobbyRaid(o: LobbyOptions): { records: RaidRecord[]; lobby: L
   if (o.bossAi) Object.assign(BOSS_AI as unknown as Record<string, unknown>, o.bossAi);
   if (o.set) applySharedOverrides(o.set);
   const map: MapData = matchMap(matchSeed, "steppe");
-  // The match rolls its NPCs from the match seed alone; the room makes the same rolls for raids/start.
+  // The match rolls its NPCs from the match seed alone; the legacy room made the same rolls for raids/start.
   const spawned = rollBossSpawns(matchSeed, map.bosses);
   const posts = npcPostsOf(map);
   const squads = rollNpcSpawns(matchSeed, posts, bossGroupNpcCount(spawned));
@@ -698,7 +705,7 @@ export function runLobbyRaid(o: LobbyOptions): { records: RaidRecord[]; lobby: L
 }
 
 /** Prefix every own uid of a loadout (several scripted humans in one raid). */
-function withUidPrefix(lo: LoadoutSnapshot, prefix: string): LoadoutSnapshot {
+export function withUidPrefix(lo: LoadoutSnapshot, prefix: string): LoadoutSnapshot {
   return { ...lo, loadoutId: `${prefix}${lo.loadoutId}`, entries: lo.entries.map((e) => (e.uid ? { ...e, uid: `${prefix}${e.uid}` } : e)) };
 }
 
@@ -720,7 +727,7 @@ function holdPoolWeapon(rt: PlayerRuntime, kind: BossKind): void {
 
 // ---------------------------------------------------------------- summary
 
-function round2(v: number): number {
+export function round2(v: number): number {
   return Math.round(v * 100) / 100;
 }
 
@@ -1042,7 +1049,11 @@ export function lobbyMarkdown(lobbies: readonly LobbyRecord[], note = ""): strin
   return L.join("\n") + "\n";
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href && process.argv.includes("--world")) {
+  const stale = staleShared();
+  if (stale.length) console.warn(`[loot-yield] WARNING: shared sources newer than packages/shared/dist (rebuild it): ${stale.slice(0, 5).join(", ")}`);
+  worldCli(arg, resolve(arg("out") ?? join(tmpdir(), "extract-econ")), arg("tag") ?? "", stale);
+} else if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const num = (name: string): number | undefined => (arg(name) !== undefined ? Number(arg(name)) : undefined);
   const strategy = (arg("strategy") ?? "rat") as Strategy;
   if (!STRATEGIES.includes(strategy)) throw new Error(`--strategy must be one of ${STRATEGIES.join("|")}`);

@@ -27,7 +27,14 @@
  * - fighter: like poi (nearest POIs in the tier band) but engages every NPC it sees — measures
  *         consumable use (found vs used) for an average fighter; extracts with a full bag or at 12:00;
  * - npcfarm: (free-kit alt) walks from one low-tier camp (road camps, T0/T1 POI posts) to the next,
- *         kills the marauders there and loots their bodies; leaves dry, hurt, full or at 12:00.
+ *         kills the marauders there and loots their bodies; leaves dry, hurt, full or at 12:00;
+ * - tags: (WORLD v6 "tag tour", a free-kit late entry) searches only the bodies of other humans on the
+ *         map (their dog tags and whatever survived on them, D22) and leaves when none is left.
+ *         It knows every body on the map (an upper bound on what a real vulture finds).
+ *
+ * WORLD v6 entries (Match.world, world-harness.ts): every clock above counts from the entry
+ * (SelfState.enteredAt) instead of the match start, the extracts arm at SelfState.extractArmAt, and the
+ * last call is measured against the wipe (Match.world.durationMs) instead of MATCH.DURATION_MS.
  *
  * PvP stance (multi-human runs; other humans are told apart from NPCs by pub.role === 0):
  * - avoid:  walks away from humans it sees (rat / full default), shoots back when hit;
@@ -71,6 +78,7 @@ import {
   type BossKind,
   type BossSpot,
   type ConsumableId,
+  type Extract,
   type ItemLike,
   type NpcPost,
   type Rng,
@@ -80,15 +88,15 @@ import {
 } from "@extract/shared";
 import { activeWeapon, ammoCount, medCount, weaponDefOf } from "../bag.js";
 import { currentTarget, lootItems, type SearchTarget } from "../containers.js";
-import { extractAllowed, extractIsOpen } from "../extraction.js";
+import { extractIsOpen } from "../extraction.js";
 import { toPlain } from "../items.js";
 import type { Match } from "../match.js";
 import type { Pt } from "../nav.js";
 import type { PlayerRuntime } from "../types.js";
 import { fromRaidDur, refValueCr } from "./pool-mirror.js";
 
-export type Strategy = "rat" | "poi" | "full" | "boss" | "fighter" | "npcfarm";
-export const STRATEGIES: readonly Strategy[] = ["rat", "poi", "full", "boss", "fighter", "npcfarm"];
+export type Strategy = "rat" | "poi" | "full" | "boss" | "fighter" | "npcfarm" | "tags";
+export const STRATEGIES: readonly Strategy[] = ["rat", "poi", "full", "boss", "fighter", "npcfarm", "tags"];
 /** How a scripted human treats other humans (multi-human runs). */
 export type PvpStance = "avoid" | "defend" | "hunt";
 export const PVP_STANCES: readonly PvpStance[] = ["avoid", "defend", "hunt"];
@@ -100,6 +108,7 @@ export const DEFAULT_STANCE: Readonly<Record<Strategy, PvpStance>> = {
   boss: "defend",
   fighter: "hunt",
   npcfarm: "defend",
+  tags: "avoid",
 };
 /** Boss strategy target: a kind, or the nearest BossSpot to the spawn. */
 export type BossTarget = BossKind | "nearest";
@@ -130,12 +139,16 @@ export const LEAVE_AT_MS: Readonly<Record<Strategy, number>> = {
   boss: 15 * 60_000,
   fighter: 12 * 60_000,
   npcfarm: 12 * 60_000,
+  tags: 12 * 60_000,
 };
 
 export interface HumanOptions {
   strategy: Strategy;
   rng: Rng;
-  /** Override LEAVE_AT_MS[strategy] (rat: arrival time; others: departure time). */
+  /**
+   * Override LEAVE_AT_MS[strategy] (rat: arrival time; others: departure time), on the match clock.
+   * Default: LEAVE_AT_MS after the entry (SelfState.enteredAt; 0 for legacy roster humans).
+   */
   leaveAtMs?: number;
   /** boss strategy: which boss to hunt (default nearest BossSpot). */
   bossTarget?: BossTarget;
@@ -237,6 +250,8 @@ const RAT_DANGER_MS = 300_000;
 const RAT_DANGER_PX = 1200;
 /** Walk + channel + margin before the end of the raid: go now. */
 const LAST_CALL_MARGIN_MS = 60_000;
+/** WORLD v6: the same before the wipe, wider (a player heads out by the 5-minute wipe warning). */
+const WORLD_LAST_CALL_MARGIN_MS = 180_000;
 /** Path routing is ~1.35× the straight line on the Steppe. */
 const ROUTE_FACTOR = 1.35;
 const REPLAN_MS = 3000;
@@ -378,7 +393,7 @@ export class HumanAgent {
     this.strategy = opts.strategy;
     this.stance = opts.stance ?? DEFAULT_STANCE[opts.strategy];
     this.rng = opts.rng;
-    this.leaveAt = opts.leaveAtMs ?? LEAVE_AT_MS[opts.strategy];
+    this.leaveAt = opts.leaveAtMs ?? rt.self.enteredAt + LEAVE_AT_MS[opts.strategy];
     this.aim = this.rng() * Math.PI * 2;
     this.maxTier = opts.maxTier ?? 4;
     this.minTier = opts.minTier ?? 1;
@@ -731,17 +746,32 @@ export class HumanAgent {
     return this.storageFull() && this.fullStall >= FULL_STALL;
   }
 
+  /** The wipe (world entries) or the legacy raid end: the last-call reference. */
+  private get endMs(): number {
+    return this.m.world?.durationMs ?? MATCH.DURATION_MS;
+  }
+
+  /**
+   * May this player use extract `e` once it is armed (extractAllowed without the WORLD v6 arm, which
+   * pickExtract folds into the arrival time instead)?
+   */
+  private maskAllows(e: Extract): boolean {
+    if (this.rt.isNpc) return false;
+    const bit = this.m.extractBit.get(e.id);
+    return bit === undefined || (this.rt.self.extractMask & (1 << bit)) !== 0;
+  }
+
   /** Nearest usable extract that is still open when we would get there, and the walk time. */
   private pickExtract(): { id: string; x: number; y: number; r: number; etaMs: number } | null {
     const p = this.rt.pub;
     const clock = this.m.clock;
     let best: { id: string; x: number; y: number; r: number; etaMs: number } | null = null;
-    const blocked = [...this.m.state.extracts.values()].every((e) => !extractAllowed(this.m, this.rt, e) || this.badExtracts.has(e.id));
+    const blocked = [...this.m.state.extracts.values()].every((e) => !this.maskAllows(e) || this.badExtracts.has(e.id));
     if (blocked) this.badExtracts.clear();
     for (const e of this.m.state.extracts.values()) {
-      if (!extractAllowed(this.m, this.rt, e) || this.badExtracts.has(e.id)) continue;
+      if (!this.maskAllows(e) || this.badExtracts.has(e.id)) continue;
       const eta = (Math.hypot(e.x - p.x, e.y - p.y) * ROUTE_FACTOR / PLAYER.SPEED) * 1000;
-      const arrive = Math.max(clock + eta, e.openAt);
+      const arrive = Math.max(clock + eta, e.openAt, this.rt.self.extractArmAt);
       if (e.closeAt > 0 && e.closeAt < arrive + MATCH.EXTRACT_CHANNEL_MS + 20_000) continue;
       if (!best || eta < best.etaMs) best = { id: e.id, x: e.x, y: e.y, r: e.r, etaMs: eta };
     }
@@ -756,7 +786,7 @@ export class HumanAgent {
     const departAt = this.strategy === "rat" ? this.leaveAt - ex.etaMs - 5000 : this.leaveAt;
     if (clock >= departAt) why = "time";
     else if (this.strategy !== "full" && this.bagFull()) why = "full";
-    else if (MATCH.DURATION_MS - clock < ex.etaMs + MATCH.EXTRACT_CHANNEL_MS + LAST_CALL_MARGIN_MS) why = "last_call";
+    else if (this.endMs - clock < ex.etaMs + MATCH.EXTRACT_CHANNEL_MS + (this.m.world ? WORLD_LAST_CALL_MARGIN_MS : LAST_CALL_MARGIN_MS)) why = "last_call";
     else if (this.rt.pub.hp < 35 && medCount(this.rt, "bandage") + medCount(this.rt, "medkit") === 0) why = "hurt";
     else if (!this.avoider && this.rounds("w1") + this.rounds("w2") === 0) why = "dry";
     if (!why) return;
@@ -831,7 +861,15 @@ export class HumanAgent {
         return !!this.zone && zid === this.zone.id;
       case "npcfarm":
         return !!this.camp && Math.hypot(this.camp.x - x, this.camp.y - y) < npcLeashPx(this.camp) + 300;
+      case "tags":
+        return !this.inBossRoom(x, y);
     }
+  }
+
+  /** tags: a body worth a visit — another human's (never one of this user's own earlier entries). */
+  private tagBody(owner: number): boolean {
+    const o = this.m.rosterRuntime(owner);
+    return !!o && !o.isNpc && o !== this.rt && o.userId !== this.rt.userId;
   }
 
   private pickZone(): Zone | null {
@@ -880,8 +918,9 @@ export class HumanAgent {
     // A full bag only stops poi / boss / fighter / rat searching; "full" keeps opening everything to trade up.
     const full = this.bagFull() && this.strategy !== "full";
     const cs = this.m.map.containers;
+    const tags = this.strategy === "tags";
     if (!full) {
-      for (let idx = 0; idx < cs.length; idx++) {
+      for (let idx = 0; idx < cs.length && !tags; idx++) {
         const c = cs[idx]!;
         const id = `c${idx}`;
         if (this.searchedKeys.has(id) || this.blacklist.has(id)) continue;
@@ -896,7 +935,7 @@ export class HumanAgent {
       const bossIdx = this.bossRt()?.rosterIndex ?? -1;
       for (const t of this.m.containers.corpses()) {
         if (t.emptied || this.searchedKeys.has(t.key) || this.blacklist.has(t.key)) continue;
-        if (!this.allowedAt(t.x, t.y)) continue;
+        if (!this.allowedAt(t.x, t.y) || (tags && !this.tagBody(t.owner))) continue;
         // The hunted boss's body first (that is what the hunt was for).
         const sc = score(t.x, t.y, 2) * (t.owner === bossIdx ? 0.05 : 0.8);
         if (sc < bestScore) {
@@ -910,7 +949,7 @@ export class HumanAgent {
       const id = g.schema.id;
       if (this.blacklist.has(id) || !this.allowedAt(g.schema.x, g.schema.y)) continue;
       const v = humanValue(it);
-      if (v <= 0) continue;
+      if (v <= 0 || (tags && it.def !== "junk_dogtag")) continue;
       if (!planPlace(this.rt.self.slots, it).ok && !(this.worstDroppable() && v > this.worstDroppable()!.v * 1.25 + 5)) continue;
       const sc = score(g.schema.x, g.schema.y, 1) * 0.9;
       if (sc < bestScore) {
