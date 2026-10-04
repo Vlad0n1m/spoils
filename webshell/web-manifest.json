@@ -1,0 +1,14 @@
+{
+  "name": "SPOILS",
+  "short_name": "SPOILS",
+  "start_url": "https://SPOILS_DOMAIN/play",
+  "scope": "https://SPOILS_DOMAIN/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#08070B",
+  "theme_color": "#08070B",
+  "icons": [
+    { "src": "../apps/web/public/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "../apps/web/public/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

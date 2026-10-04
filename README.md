@@ -162,7 +162,18 @@ docker compose logs -f web game-server cron
   Bearer header (see `deploy/cron/schedule.json`). On Vercel the crons come from `apps/web/vercel.json` and Vercel sets
   `CRON_SECRET` itself.
 
-### Android app (Trusted Web Activity)
+### Android app (TWA, WebView shell)
+
+Two wrappers, same web game:
+
+- **TWA (Bubblewrap), `twa/` — primary** (owner's choice). Instructions below.
+- **WebView shell (`solana-mobile webshell`), `webshell/` — use when the wallet must work inside the APK.**
+  Solana Mobile's docs (checked 2026-10-04) warn that Chrome's Local Network Access restrictions break Mobile Wallet
+  Adapter connections in TWA wrappers such as Bubblewrap; the shell hands wallet intents to the wallet app natively
+  and needs no Digital Asset Links. The web already uses `@solana-mobile/wallet-standard-mobile` 0.6.0 (≥ 0.5.1
+  detects the shell). Commands: [`webshell/README.md`](webshell/README.md) — `webshell init` with
+  `webshell/web-manifest.json`, `webshell/patch-android.sh` (landscape, no pull-to-refresh, immersive), `webshell
+  build`. With the same package id and upload key as the TWA it installs as an update over it.
 
 The mobile app is the web game wrapped by [Bubblewrap](https://github.com/GoogleChromeLabs/bubblewrap) into an APK/AAB
 (tested on a Solana Seeker). Config: `twa/twa-manifest.json` (package `app.spoils.twa`, landscape, fullscreen, start
@@ -183,7 +194,9 @@ The keystore and its passwords never go into the repo (keep them in a password m
 losing the key means a new package on the store). Digital Asset Links: put the SHA-256 fingerprint of the signing key
 (`keytool -list -v -keystore ~/keys/spoils-upload.jks -alias spoils`, or the Play App Signing key from the Play
 Console) into `apps/web/public/.well-known/assetlinks.json` and deploy the web; without it the app shows a browser
-address bar. The icons `/icon-512.png` and `/icon-512-maskable.png` must be served by the web.
+address bar. The icons `/icon-512.png` and `/icon-512-maskable.png` must be served by the web
+(`apps/web/public/icon-512-maskable.png` does not exist yet: add it, or remove `maskableIconUrl` from
+`twa/twa-manifest.json`, before `bubblewrap update`).
 
 ### Что вписывает Влад
 
