@@ -27,6 +27,15 @@ test("dropId and partyId are appended after the existing fields and both are cov
   assert.notEqual(joinTicketPayload({ ...t, partyId: undefined }), p);
 });
 
+test("dropSize is appended after the party fields and covered; tickets without it sign the old string", () => {
+  const t = { ...base, dropId: "d", partyId: "p" };
+  assert.equal(joinTicketPayload({ ...t, dropSize: 2 }), "u.n.5.L.m.e.d.p.2");
+  assert.notEqual(joinTicketPayload({ ...t, dropSize: 3 }), joinTicketPayload({ ...t, dropSize: 2 }));
+  assert.equal(joinTicketPayload(t), "u.n.5.L.m.e.d.p", "a party ticket from before dropSize");
+  assert.equal(joinTicketPayload({ ...base, dropSize: 2 }), "u.n.5.L.m.e", "never signed without party fields");
+  assert.ok(PARTY.SPAWN_MIN_PX < PARTY.SPAWN_NEAR_PX);
+});
+
 test("a party drop is live for PARTY.DROP_TTL_MS", () => {
   const d = { createdAt: 1_000_000, expiresAt: 1_000_000 + PARTY.DROP_TTL_MS };
   assert.equal(partyDropLive(d, 1_000_000), true);

@@ -32,6 +32,8 @@ export interface ReplayShardMeta {
   shard: number;
   mapId: string;
   cycleStartsAt: number;
+  /** MapData.genVersion of the shard's map (the viewer warns when it is not the current one). */
+  genVersion: number;
 }
 
 export interface ReplayUploaderDeps {
@@ -103,6 +105,7 @@ export class ReplayUploader {
         shard: meta.shard,
         mapId: meta.mapId,
         cycleStartsAt: meta.cycleStartsAt,
+        genVersion: meta.genVersion,
         seq: chunk.seq,
         startMs: chunk.startMs,
         endMs: chunk.endMs,
@@ -207,6 +210,7 @@ export function startShardReplay(match: Match, uploader: ReplayUploader = replay
     shard: match.world.shard,
     mapId: match.map.id,
     cycleStartsAt: match.world.cycleStartsAt,
+    genVersion: match.map.genVersion,
   };
   return new ReplayRecorder(match, { onChunk: (c) => void uploader.submit(meta, c) });
 }

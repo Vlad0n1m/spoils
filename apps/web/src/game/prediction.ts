@@ -252,6 +252,11 @@ export class Predictor {
     return this.seq;
   }
 
+  /** Seq of the newest input handed out (ThrowMsg.q: the server throws right after applying it). */
+  get lastSeq(): number {
+    return this.seq;
+  }
+
   /** Latest server timing; null until the first state. */
   get serverTiming(): ServerTiming | null {
     return this.timing;

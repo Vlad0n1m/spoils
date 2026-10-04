@@ -27,6 +27,9 @@ import {
 } from "./rules";
 import type { PartyDropDto, PartyDto, PartyInviteDto, PartyMemberDto, PartyStateDto } from "./types";
 
+/** A real UUID (the ids are cast with ::uuid: anything looser, e.g. 36 dashes, would throw a 500). */
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const PARTY_ACTIONS = ["invite", "uninvite", "accept", "decline", "leave", "kick", "disband", "lead", "follow"] as const;
 export type PartyAction = (typeof PARTY_ACTIONS)[number];
 
@@ -316,7 +319,7 @@ async function invite(db: Db, me: string, nickname: string, now: number): Promis
 }
 
 async function acceptInvite(db: Db, me: string, partyId: string, now: number): Promise<SocialResult<{ partyId?: string }>> {
-  if (!/^[0-9a-f-]{36}$/i.test(partyId)) return fail("no_invite");
+  if (!UUID_RE.test(partyId)) return fail("no_invite");
   const mine0 = await currentMembership(db, me, now);
   return db.transaction(async (tx) => {
     await lockUsers(tx, [me]);
@@ -349,7 +352,7 @@ async function acceptInvite(db: Db, me: string, partyId: string, now: number): P
 }
 
 async function declineInvite(db: Db, me: string, partyId: string, now: number): Promise<SocialResult<{ partyId?: string }>> {
-  if (!/^[0-9a-f-]{36}$/i.test(partyId)) return fail("no_invite");
+  if (!UUID_RE.test(partyId)) return fail("no_invite");
   return db.transaction(async (tx) => {
     if (!(await lockParty(tx, partyId))) return fail("no_invite");
     const r = await tx.execute(sql`delete from party_invites where party_id = ${partyId}::uuid and to_id = ${me}::uuid returning party_id`);
@@ -450,7 +453,7 @@ export async function partyJoinPlan(
     const drop = buildPartyDrop({ dropId: randomUUID(), partyId: m.partyId, leaderId: self, members: ids, cycle: p.cycle, matchId: p.matchId, now: p.now });
     return { partyId: m.partyId, leader: true, drop, isNew: true };
   }
-  const want = p.dropId && /^[0-9a-f-]{36}$/i.test(p.dropId) ? p.dropId.toLowerCase() : undefined;
+  const want = p.dropId && UUID_RE.test(p.dropId) ? p.dropId.toLowerCase() : undefined;
   const d = await latestDrop(db, m.partyId, p.cycle, p.now, want);
   return { partyId: m.partyId, leader: false, drop: canFollowDrop(d, self, p.cycle, p.now) ? d : null, isNew: false };
 }

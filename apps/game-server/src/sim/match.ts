@@ -731,6 +731,7 @@ export class Match {
     }
     rt.connected = true;
     rt.queue.length = 0;
+    rt.pendingThrow = null;
     rt.lastQueuedSeq = -1;
     rt.triggerHeld = false;
     rt.pressPending = false;
@@ -744,6 +745,7 @@ export class Match {
     if (!rt) return;
     rt.connected = false;
     rt.queue.length = 0;
+    rt.pendingThrow = null;
     rt.triggerHeld = false;
     rt.pressPending = false;
     closeSearch(this, rt, "disconnect");
@@ -817,10 +819,44 @@ export class Match {
     return rt ? startHeal(this, rt, kind) : false;
   }
 
-  /** C2S.THROW (Weapons v2): throw a hand grenade toward `angle`, `frac` 0..1 of the throw range. */
+  /** Throw a hand grenade now toward `angle`, `frac` 0..1 of the throw range (tests, scripted humans). */
   throwGrenade(id: string, angle: number, frac: number): LiveGrenade | ThrowRefusal {
     const rt = this.actor(id);
     return rt ? throwGrenade(this, rt, angle, frac) : "dead";
+  }
+
+  /**
+   * C2S.THROW (Weapons v2) in input order: the client throws right after its input `seq` (ThrowMsg.q,
+   * default: the newest input queued so far), so the throw waits until the server has applied that
+   * input (applyInputs) and starts from the post-input position. Without this a throw right after a
+   * predicted roll end met the server one tick behind (still rolling) and was refused. Nothing is
+   * pending → thrown at once. A newer request replaces an older pending one.
+   */
+  requestThrow(id: string, angle: number, frac: number, seq?: number): LiveGrenade | ThrowRefusal | "queued" {
+    const rt = this.actor(id);
+    if (!rt || !rt.pub.alive) return "dead";
+    // The client cannot wait for an input it never sent: clamp to what has arrived.
+    const after = Math.min(seq !== undefined && Number.isFinite(seq) ? seq : rt.lastQueuedSeq, rt.lastQueuedSeq);
+    rt.pendingThrow = { a: angle, d: frac, seq: after };
+    if (this.throwDue(rt)) {
+      rt.pendingThrow = null;
+      return throwGrenade(this, rt, angle, frac);
+    }
+    return "queued";
+  }
+
+  /** No queued input comes before the pending throw any more (the queue is ordered by seq). */
+  private throwDue(rt: PlayerRuntime): boolean {
+    const t = rt.pendingThrow;
+    return !!t && (rt.queue.length === 0 || rt.queue[0]!.seq > t.seq);
+  }
+
+  /** Run the pending throw once every input before it is applied. */
+  private runPendingThrow(rt: PlayerRuntime): void {
+    const t = rt.pendingThrow;
+    if (!t || !this.throwDue(rt)) return;
+    rt.pendingThrow = null;
+    throwGrenade(this, rt, t.a, t.d);
   }
 
   searchClose(id: string): void {
@@ -1032,6 +1068,7 @@ export class Match {
       // No firing while rolling; a held auto trigger fires on the first input after the roll.
       if (!r.rolling) tryFire(this, rt);
       if (!p.alive) break;
+      if (rt.pendingThrow) this.runPendingThrow(rt);
     }
   }
 
@@ -1248,6 +1285,7 @@ function newRuntime(
     nextFireAt: 0,
     lastShotAt: -Infinity,
     nextThrowAt: 0,
+    pendingThrow: null,
     movedAt: 0,
     prevX: p.x,
     prevY: p.y,

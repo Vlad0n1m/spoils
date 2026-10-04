@@ -15,7 +15,8 @@
  *   events at all (no spectating): only the kill feed and their personal sends.
  * - HIT → the target (its copy carries `fa`, the quantized direction to the shooter), the shooter
  *   and every recipient that sees the target. `s` is blanked for recipients that do not see the
- *   shooter.
+ *   shooter. An area hit (grenade, MatchEvent.area) whose attacker does not see the target gives the
+ *   attacker only a position-less copy: t = "", x/y = the blast centre, d = 0 ("hit confirmed").
  * - KILL → everyone, names / ids / roles only (the kill feed; no position) — except a marauder or
  *   guard death, which goes to its killer only (a personal "You ✕ Marauder" row: NPC deaths must
  *   not become a map-wide radar of who is fighting where). Boss and human deaths are broadcast.
@@ -179,7 +180,15 @@ export function buildBatches(
       case "hit":
         for (const r of recipients) {
           const isTarget = r === ev.target;
-          if (!isTarget && (offMap(m, r) || (r !== ev.src && !vision.sees(r, ev.target)))) continue;
+          const seesTarget = isTarget || vision.sees(r, ev.target);
+          if (!isTarget && (offMap(m, r) || (r !== ev.src && !seesTarget))) continue;
+          if (!seesTarget && ev.area) {
+            // The thrower of a grenade that hurt someone they do not see: "hit confirmed" only. The
+            // target's id, spot and HP loss would turn every blast into a 240 px scan through bushes
+            // and sight-blocking fences; the blast centre is already theirs.
+            (batchOf(out, r).hits ??= []).push({ t: "", s: ev.msg.s, x: Math.round(ev.area.x * 10) / 10, y: Math.round(ev.area.y * 10) / 10, d: 0, ar: false });
+            continue;
+          }
           const knowsShooter = ev.src >= 0 && (r === ev.src || vision.sees(r, ev.src));
           let msg = knowsShooter || ev.msg.s === "" ? ev.msg : { ...ev.msg, s: "" };
           if (isTarget && ev.fa !== undefined) msg = { ...msg, fa: quantizeFa(ev.fa) };

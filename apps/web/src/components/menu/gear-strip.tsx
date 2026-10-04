@@ -106,6 +106,7 @@ export function GearStrip({
   const supplies = entries.filter((e) => !e.itemId);
   const meds = supplies.filter((e) => itemDef(e.def)?.cat === "med").reduce((n, e) => n + e.qty, 0);
   const ammo = supplies.filter((e) => itemDef(e.def)?.cat === "ammo").reduce((n, e) => n + e.qty, 0);
+  const nades = supplies.filter((e) => itemDef(e.def)?.cat === "throwable").reduce((n, e) => n + e.qty, 0);
   const locked = stash?.active?.status === "locked";
 
   return (
@@ -130,6 +131,7 @@ export function GearStrip({
       <p className="font-body flex items-center gap-2 text-sm font-semibold text-white/80">
         {meds > 0 && <span>{meds} {meds === 1 ? "med" : "meds"}</span>}
         {ammo > 0 && <span>· {ammo} ammo</span>}
+        {nades > 0 && <span>· {nades} {nades === 1 ? "grenade" : "grenades"}</span>}
         {locked && <span className="rounded-md border-2 border-black bg-amber-300 px-1.5 text-xs text-black">Locked</span>}
         <button
           type="button"

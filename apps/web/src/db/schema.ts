@@ -1020,6 +1020,8 @@ export const replays = pgTable(
     cycleId: integer("cycle_id").notNull(),
     shard: smallint("shard").notNull(),
     mapId: text("map_id").notNull(),
+    /** MAP_GEN_VERSION the shard's map was generated with (migration 009); null = unknown (older game server). */
+    genVersion: smallint("gen_version"),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
     lastMs: integer("last_ms").notNull().default(0),

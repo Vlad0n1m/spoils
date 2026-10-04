@@ -10,11 +10,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
-import { BREAK_CHANCE_ON_DEATH, type MatchSummaryMsg, type OutcomeMsg, type SoldLine } from "@extract/shared";
+import { BREAK_CHANCE_ON_DEATH, XP, type MatchSummaryMsg, type OutcomeMsg, type SoldLine } from "@extract/shared";
 import { playUi } from "@/game/audio/ui-sounds";
 import { buildReceipt, fmtClock, xpLineText } from "@/lib/items-ui";
 import type { RoomExit } from "@/lib/room-exit";
 import { killedByLine, npcKillsLine, npcLabels, type KillTally } from "@/game/npc-labels";
+import { earlyExtract } from "@/game/hud";
 import { DogTagRow, ItemStrip, SellReceipt } from "./inventory/outcome-receipt";
 
 /** Delay before the result card appears, so the player sees the moment of death / extraction. */
@@ -221,7 +222,7 @@ function ResultCard({
               empty="You only carried the free kit, so nothing was lost."
             />
           )}
-          <XpBlock outcome={outcome} />
+          <XpBlock outcome={outcome} enteredAtMs={enteredAtMs} />
         </div>
 
         <dl
@@ -287,7 +288,7 @@ function subtitle(o: OutcomeMsg): string {
  * XP of this exit (WORLD v6): granted by the web at settlement and re-sent in S2C.OUTCOME, so the
  * first outcome may come without it ("Counting XP…"). Guests earn none.
  */
-function XpBlock({ outcome }: { outcome: OutcomeMsg }) {
+function XpBlock({ outcome, enteredAtMs }: { outcome: OutcomeMsg; enteredAtMs: number }) {
   if (outcome.guest) {
     return (
       <p className="font-body rounded-xl border-2 border-black/60 bg-black/30 px-3 py-2 text-sm leading-relaxed text-white/70">
@@ -328,6 +329,11 @@ function XpBlock({ outcome }: { outcome: OutcomeMsg }) {
       ) : (
         <p className="font-body mt-1 text-sm text-white/55">
           No XP this time — extract after 8 minutes on the map, search containers and take down NPCs.
+        </p>
+      )}
+      {lines.length > 0 && earlyExtract(outcome, enteredAtMs) && (
+        <p className="font-body mt-2 text-xs leading-relaxed text-amber-200/90">
+          Stay {Math.round(XP.MIN_ONMAP_MS / 60_000)}+ min on the map for extract XP: this extract came after {fmtClock(outcome.atMs - enteredAtMs)}.
         </p>
       )}
       {outcome.level !== undefined && outcome.level > 0 && (

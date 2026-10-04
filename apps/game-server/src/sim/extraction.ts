@@ -73,6 +73,7 @@ function leaveMap(m: Match, rt: PlayerRuntime): void {
   cancelHeal(rt);
   closeSearch(m, rt, "left");
   rt.queue.length = 0;
+  rt.pendingThrow = null;
   rt.triggerHeld = false;
   rt.pressPending = false;
 }

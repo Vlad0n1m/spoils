@@ -14,6 +14,7 @@ const FILTERS: Array<{ id: StashFilter; label: string }> = [
   { id: "backpack", label: "Packs" },
   { id: "ammo", label: "Ammo" },
   { id: "med", label: "Meds" },
+  { id: "throwable", label: "Grenades" },
 ];
 
 /** Badge for a unique's state: why it can't be equipped or sold right now. */

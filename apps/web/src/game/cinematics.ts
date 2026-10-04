@@ -120,7 +120,8 @@ class HitmarkerSystem implements GameSystem {
     if (ev.hits) {
       for (const h of ev.hits) {
         if (!h || h.s !== sid || h.t === sid) continue;
-        const k: HitmarkerKind = h.d > 0 ? "hit" : "armor";
+        // t = "": a grenade hit on someone we do not see ("hit confirmed", d is withheld).
+        const k: HitmarkerKind = h.d > 0 || h.t === "" ? "hit" : "armor";
         if (kind === null || (kind === "armor" && k === "hit")) kind = k;
         hx = h.x;
         hy = h.y;

@@ -27,6 +27,7 @@ export async function POST(req: Request) {
   if (r.status === "no_user") return apiError(401, "no_user", "Sign in again.");
   if (r.status === "already") return apiError(409, "already_claimed", "You already claimed your starter kit.");
   if (r.status === "sold_out") return apiError(409, "sold_out", "Tradable kits are sold out. The free kit is still yours to claim.");
+  if (r.status === "sale_paused") return apiError(503, "sale_paused", "The tradable kit is paused for a moment. Try again later, or take the free kit.");
   if (r.status === "insufficient_funds") {
     return apiError(402, "insufficient_funds", `The tradable kit costs ${formatMinor(BigInt(r.priceMinor))}. Top up your wallet or take the free kit.`);
   }

@@ -20,7 +20,7 @@ import {
 import { Match } from "../sim/match.js";
 import { counterUid, testMap } from "../sim/test-utils.js";
 import type { ShardOpenOutcome } from "../net/web-api.js";
-import { HARD_STOP_AFTER_MS, OPEN_RETRY_MS, PARTY_FULL_DETAIL, WorldDirectory, type DirectoryDeps, type ShardRoom, type WorldCreateOptions } from "./directory.js";
+import { HARD_STOP_AFTER_MS, OPEN_RETRY_MS, PARTY_FULL_DETAIL, WorldDirectory, dropSeatCount, type DirectoryDeps, type ShardRoom, type WorldCreateOptions } from "./directory.js";
 import { PARTY_SPAWN_MAX_PX, PARTY_SPAWN_MIN_PX } from "../sim/spawn.js";
 
 const K = 663_000;
@@ -434,6 +434,13 @@ test("party drop admission: the first member needs room for a whole party; held 
     await g.dir.admit(lead);
     assert.equal(gs.drops.get(dropId)?.users.size, 1);
     const anchor = gm.currentOf(lead.userId)!.pub;
+    // The fillers stand far off (the test map's spawns all sit within 1050 px): a stranger next to the
+    // leader would send the members to a normal spawn (spawn.ts dropSpawnSafe).
+    for (const f of gm.allRuntimes()) {
+      if (f.isNpc || f.userId === lead.userId) continue;
+      f.pub.x = gm.map.width - 200;
+      f.pub.y = gm.map.height - 200;
+    }
     // Everyone else sees the held seats as taken.
     await assert.rejects(g.dir.admit(ticket(gs.matchId)), { message: "world_full" });
     // The members take their held seats (no capacity refusal) and land next to the leader.
@@ -485,5 +492,31 @@ test("party drop admission: the first member needs room for a whole party; held 
     assert.equal(es.drops.size, 0);
     e.dir.stop();
     r.dir.stop();
+    h.dir.stop();
+  }));
+
+test("party drop admission: a signed dropSize holds exactly that many seats (a pair never blocks four)", () =>
+  quiet(async () => {
+    assert.equal(dropSeatCount({}), PARTY.MAX_SIZE, "an older ticket without dropSize holds a full party");
+    assert.equal(dropSeatCount({ dropSize: 2 }), 2);
+    assert.equal(dropSeatCount({ dropSize: 99 }), PARTY.MAX_SIZE);
+    const h = harness(WC.startAt + 60_000);
+    await h.dir.start();
+    const s = h.dir.shardOfCycle(K)!;
+    const m = s.room.match as Match;
+    // 21 on the map: a pair (2 seats) fits, and a solo raider still gets the seat a 4-seat hold took.
+    while (m.humansOnMap() < WORLD.CAPACITY - 3) {
+      m.addHuman({ entryId: randomUUID(), userId: randomUUID(), nickname: "F", loadoutId: "", guest: false, level: 0, snapshot: null, pool: [], bossFill: [] });
+    }
+    const partyId = randomUUID();
+    const dropId = randomUUID();
+    const pair = (): JoinTicket => ({ ...ticket(s.matchId), partyId, dropId, dropSize: 2 });
+    await h.dir.admit(pair());
+    assert.equal(s.drops.get(dropId)?.size, 2);
+    await h.dir.admit(ticket(s.matchId));
+    // The mate takes the one held seat; the shard is now full.
+    await h.dir.admit(pair());
+    assert.equal(m.humansOnMap(), WORLD.CAPACITY);
+    await assert.rejects(h.dir.admit(ticket(s.matchId)), /world_full/);
     h.dir.stop();
   }));

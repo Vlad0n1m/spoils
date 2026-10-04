@@ -21,7 +21,7 @@ import { openShard } from "../inventory/world";
 import { worldJoin } from "../lobby/join";
 import type { Caller } from "../lobby/route-helpers";
 import { friendAction, listFriends } from "./friends";
-import { getPartyState, partyAction } from "./party";
+import { UUID_RE, getPartyState, partyAction } from "./party";
 import { friendPair } from "./rules";
 
 const { db, pool } = openTestDb();
@@ -328,7 +328,9 @@ describe("party drop", () => {
     assert.equal(drop?.dropExpiresAt, NOW + PARTY.DROP_TTL_MS);
     assert.equal(la.body.ticket.dropId, drop?.dropId);
     assert.equal(la.body.ticket.partyId, pid);
+    assert.equal(la.body.ticket.dropSize, 3, "the drop's member count: the shard holds 3 seats, not 4");
     assert.ok(sigOk(la.body.ticket), "dropId and partyId are signed");
+    assert.ok(!sigOk({ ...la.body.ticket, dropSize: 4 }), "a re-sized drop fails the signature");
     assert.ok(!sigOk({ ...la.body.ticket, dropId: randomUUID() }), "a re-pointed drop fails the signature");
     const rows = await db.select().from(partyDrops);
     assert.equal(rows.length, 1);
@@ -357,6 +359,19 @@ describe("party drop", () => {
     assert.ok(again.ok);
     if (again.ok) assert.equal(again.body.ticket.dropId, drop?.dropId);
     assert.equal((await db.select().from(partyDrops)).length, 1);
+  });
+
+  test("a malformed dropId (36 dashes, not a UUID) is ignored: the member's PLAY follows the live drop, never a 500", async () => {
+    assert.equal(UUID_RE.test("-".repeat(36)), false);
+    assert.ok(UUID_RE.test(randomUUID()));
+    const [a, b] = [await user(), await user()];
+    await party(a, b);
+    await openShard(db, shardReq());
+    const la = await worldJoin(db, a, undefined, NOW);
+    assert.ok(la.ok);
+    const lb = await worldJoin(db, b, undefined, NOW + 1_000, { dropId: "-".repeat(36) });
+    assert.ok(lb.ok, JSON.stringify(lb));
+    if (lb.ok && la.ok) assert.equal(lb.body.ticket.dropId, la.body.ticket.dropId, "the party's live drop");
   });
 
   test("after 60 s a member drops on their own (partyId only); solo players get no party fields", async () => {

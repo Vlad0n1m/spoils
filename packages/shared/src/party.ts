@@ -12,8 +12,11 @@
  *      "Follow leader". Their /api/world/join is pinned to the drop's shard and their ticket carries the
  *      same `dropId` and `partyId`. After `expiresAt` (createdAt + PARTY.DROP_TTL_MS) a member drops on
  *      their own (ticket with `partyId` only).
- *   3. Game server (next step): the first admitted ticket of a `dropId` picks the spawn; later tickets
- *      with the same `dropId` spawn within PARTY.SPAWN_NEAR_PX of a living member of that drop.
+ *   3. Game server (apps/game-server world/directory.ts, sim/spawn.ts): the first admitted ticket of a
+ *      `dropId` picks a normal spawn and holds `dropSize` seats on the shard for 60 s; later tickets
+ *      with the same `dropId` spawn PARTY.SPAWN_MIN_PX–PARTY.SPAWN_NEAR_PX from a living member of
+ *      that drop, unless a stranger is within 1200 px or the member's own body within 2000 px (then
+ *      a normal spawn).
  * Each member still locks their own loadout; the risk rule, pool limits and settlement stay per player.
  * Party members on the same shard: no damage between them (PARTY.FRIENDLY_FIRE = false, see
  * partyMates) and S2C.PARTY with their positions at ~PARTY.POS_HZ. Rejoin tickets (an active entry)
@@ -44,8 +47,13 @@ export const PARTY = {
    * passes through is the server's choice.
    */
   FRIENDLY_FIRE: false,
-  /** Later members of a drop spawn within this distance of a living member of the same drop. */
-  SPAWN_NEAR_PX: 160,
+  /**
+   * Later members of a drop spawn at most this far from a living member of the same drop
+   * (game server spawn.ts PARTY_SPAWN_MAX_PX)…
+   */
+  SPAWN_NEAR_PX: 300,
+  /** …and at least this far (spawn.ts PARTY_SPAWN_MIN_PX). */
+  SPAWN_MIN_PX: 150,
 } as const;
 
 export const FRIENDS = {
@@ -77,13 +85,15 @@ export interface PartyDropInfo {
 }
 
 /**
- * The party fields of a JoinTicket (both HMAC-signed, joinTicketPayload). `partyId`: the caller is in
+ * The party fields of a JoinTicket (all HMAC-signed, joinTicketPayload). `partyId`: the caller is in
  * a party of ≥ PARTY.MIN_SIZE (no friendly fire, S2C.PARTY). `dropId`: this join follows a live party
- * drop (spawn together). A ticket never carries a dropId without its partyId.
+ * drop (spawn together). `dropSize`: the drop's member count (seats the shard holds for it). A ticket
+ * never carries a dropId without its partyId, nor a dropSize without its dropId.
  */
 export interface PartyTicketFields {
   dropId?: string;
   partyId?: string;
+  dropSize?: number;
 }
 
 /** A drop can still be followed at `now`. */
@@ -100,9 +110,15 @@ export function partyMates(a: string | undefined | null, b: string | undefined |
   return !PARTY.FRIENDLY_FIRE && typeof a === "string" && a.length > 0 && a === b;
 }
 
-/** One party mate in S2C.PARTY: BattleState key ("p<rosterIndex>"), world px, alive. */
+/**
+ * One party mate in S2C.PARTY: BattleState self key ("p<rosterIndex>"), the mate's current
+ * BattleState.players key `id` (links the marker to the mate's entity while in view), nickname
+ * `name` (the name tag), world px, alive.
+ */
 export interface PartyMatePos {
   key: string;
+  id: string;
+  name: string;
   x: number;
   y: number;
   alive: boolean;

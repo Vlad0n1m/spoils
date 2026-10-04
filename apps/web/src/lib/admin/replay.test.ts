@@ -148,7 +148,8 @@ describe("replay ingest", () => {
     };
     const good = upload(id, 0);
     await bad({ ...good, extra: 1 }, "bad_body");
-    await bad({ ...good, v: 2 }, "bad_body");
+    await bad({ ...good, v: REPLAY.VERSION + 1 }, "bad_body");
+    await bad({ ...good, genVersion: 1.5 }, "bad_body");
     await bad({ ...good, matchId: "not-a-uuid" }, "bad_body");
     await bad({ ...good, seq: REPLAY.MAX_SEQ + 1 }, "bad_body");
     await bad({ ...good, endMs: good.startMs - 1 }, "bad_body");
@@ -200,6 +201,30 @@ describe("replay ingest", () => {
     const clash = await post(upload(id, 3, { cycleId: 900_001 }));
     assert.equal(clash.status, 409);
     assert.equal(await count("replay_chunks"), 3);
+  });
+});
+
+describe("replay map generator version", () => {
+  test("genVersion is stored from the first chunk that carries it and shows in the reads; an older game server leaves it null", async () => {
+    const id = randomUUID();
+    assert.deepEqual(await (await post(upload(id, 0, { genVersion: 3 }))).json(), { status: "stored", seq: 0 });
+    // A later chunk never rewrites it.
+    await post(upload(id, 1, { genVersion: 4 }));
+    let [row] = (await db.execute<{ gen_version: number | null }>(sql`select gen_version from replays where match_id = ${id}`)).rows;
+    assert.equal(row!.gen_version, 3);
+    assert.equal((await readReplay(db, id))?.replay.genVersion, 3);
+    assert.equal((await listReplays(db)).find((r) => r.matchId === id)?.genVersion, 3);
+    // An older game server sends none: null until a chunk with it arrives.
+    const old = randomUUID();
+    const { genVersion: _g, ...noVersion } = upload(old, 0);
+    await post(noVersion as ReplayChunkUpload);
+    [row] = (await db.execute<{ gen_version: number | null }>(sql`select gen_version from replays where match_id = ${old}`)).rows;
+    assert.equal(row!.gen_version, null);
+    await post(upload(old, 1, { genVersion: 4 }));
+    [row] = (await db.execute<{ gen_version: number | null }>(sql`select gen_version from replays where match_id = ${old}`)).rows;
+    assert.equal(row!.gen_version, 4);
+    // Out of range is refused.
+    assert.equal((await post(upload(randomUUID(), 0, { genVersion: 0 }))).status, 400);
   });
 });
 

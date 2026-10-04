@@ -1403,6 +1403,9 @@ class WorldFxSystem implements GameSystem {
       T.length = this.hitD.length = this.hitX.length = this.hitY.length = this.hitA.length = 0;
       for (const h of ev.hits) {
         if (!h || !(h.d > 0)) continue;
+        // No blood where we cannot see the target (bush, fence, a grenade's "hit confirmed"): the
+        // splat would mark a hidden player's spot.
+        if (h.t !== sid && (!h.t || !state?.players.has(h.t))) continue;
         let k = T.indexOf(h.t);
         if (k < 0) {
           k = T.length;

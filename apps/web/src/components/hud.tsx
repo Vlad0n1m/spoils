@@ -4,8 +4,8 @@ import { AudioSettingsButton } from "./audio-settings";
 import { useTouchMode } from "./use-touch-mode";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
-import { BREAK_CHANCE_ON_DEATH, GRENADE, HEAL, WEAPONS, itemDef, type WeaponId } from "@extract/shared";
-import { WIPE_URGENT_MS, bossToastText, deepEqual, shallowEqual, wipeWarnText, type HudStore } from "@/game/hud";
+import { BREAK_CHANCE_ON_DEATH, GRENADE, HEAL, WEAPONS, XP, itemDef, type WeaponId } from "@extract/shared";
+import { WIPE_URGENT_MS, bossToastText, deepEqual, extractXpLeftS, shallowEqual, wipeWarnText, type HudStore } from "@/game/hud";
 import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "@/game/types";
 import { NPC_TAG_COLOR, cssHex, killFeedNames, npcLabels, type FeedName } from "@/game/npc-labels";
 import { fmtClock, fmtCr, isKillWeapon, killWeaponIcon, killWeaponName, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
@@ -78,10 +78,13 @@ export const Hud = memo(function Hud({
   store,
   selfNickname,
   onLeave,
+  earnsXp = true,
 }: {
   store: HudStore;
   selfNickname: string;
   onLeave: () => void;
+  /** Registered players earn XP (guests do not): the compass shows the 8-minute extract XP timer. */
+  earnsXp?: boolean;
 }) {
   const inPlay = useHud(store, isInPlay);
   // Touch (game/touch-controls.ts mounts sticks + buttons): a compact bottom bar between the two
@@ -101,7 +104,7 @@ export const Hud = memo(function Hud({
 
       <div className="absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center gap-2">
         <PhaseTimer store={store} touch={touch} />
-        {inPlay && !mapOpen && <ExtractCompass store={store} />}
+        {inPlay && !mapOpen && <ExtractCompass store={store} earnsXp={earnsXp} />}
         {inPlay && <WipeBanner store={store} touch={touch} />}
         <BossToast store={store} touch={touch} />
       </div>
@@ -282,13 +285,15 @@ function compassSlice(s: HudSnapshot) {
     // Before the extract phase the top timer already counts down: "(closed)" would read as broken.
     early: !t.open && s.phase === "drop",
     name: s.extracts[0]?.name ?? "",
+    xpLeftS: extractXpLeftS(s.enteredAtMs, s.clockMs),
   };
 }
 
-function ExtractCompass({ store }: { store: HudStore }) {
+function ExtractCompass({ store, earnsXp }: { store: HudStore; earnsXp: boolean }) {
   const target = useHud(store, compassSlice, shallowEqual);
   if (!target) return null;
   const { deg, meters } = target;
+  const xpLeft = earnsXp ? target.xpLeftS : 0;
   return (
     <div
       className={clsx(
@@ -316,6 +321,14 @@ function ExtractCompass({ store }: { store: HudStore }) {
         {target.name || "Extract"}
         {target.open ? "" : target.early ? "" : " (closed)"} <span className="tabular-nums text-white">{meters} m</span>
       </span>
+      {xpLeft > 0 && (
+        <span
+          className="font-body whitespace-nowrap text-xs font-semibold text-amber-300"
+          title={`An extract earns XP after ${Math.round(XP.MIN_ONMAP_MS / 60_000)} minutes on the map`}
+        >
+          · Extract XP in <span className="tabular-nums">{fmtClock(xpLeft * 1000)}</span>
+        </span>
+      )}
     </div>
   );
 }

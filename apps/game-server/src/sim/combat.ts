@@ -208,14 +208,30 @@ export function damagePlayer(
     fa: from
       ? Math.atan2(from.y - p.y, from.x - p.x)
       : attacker && attacker !== rt ? Math.atan2(attacker.pub.y - p.y, attacker.pub.x - p.x) : undefined,
+    ...(weapon === "grenade" && from ? { area: { x: from.x, y: from.y } } : {}),
   });
   emitSound(m, rt, SoundKind.hurt, p.x, p.y);
   syncPublic(rt);
   if (p.hp <= 0) {
-    killPlayer(m, rt, attacker, weapon);
+    killPlayer(m, rt, attacker ?? selfKillCredit(m, rt, weapon), weapon);
     // The thud of the body: shorter range than the death cry, heard as a separate cue.
     emitSound(m, rt, SoundKind.bodyFall, p.x, p.y);
   }
+}
+
+/** A self-inflicted kill (own grenade) within this long of an enemy's last hit credits that enemy. */
+export const SELF_KILL_CREDIT_MS = 10_000;
+
+/**
+ * Who gets the kill when a player dies to their own grenade (attacker null): the last enemy who hit
+ * them within SELF_KILL_CREDIT_MS, so blowing yourself up never denies the attacker the kill, the
+ * victims entry (ranked PvP XP) or the full dog tag price. Null otherwise (a plain suicide).
+ */
+function selfKillCredit(m: Match, rt: PlayerRuntime, weapon: KillWeapon | ""): PlayerRuntime | null {
+  if (weapon !== "grenade") return null;
+  const by = rt.lastHitBy;
+  if (!by || by === rt || m.clock - rt.lastHitAt > SELF_KILL_CREDIT_MS) return null;
+  return by;
 }
 
 function round2(v: number): number {

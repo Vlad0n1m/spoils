@@ -1,6 +1,7 @@
 import { db } from "@/db/client";
 import { entriesSchema, worldJoin } from "@/lib/lobby/join";
 import { caller, json, readJson } from "@/lib/lobby/route-helpers";
+import { UUID_RE } from "@/lib/social/party";
 import { worldNow } from "@/lib/world/clock";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
     }
     entries = parsed.data;
   }
-  const dropId = typeof body?.dropId === "string" && /^[0-9a-f-]{36}$/i.test(body.dropId) ? body.dropId : undefined;
+  const dropId = typeof body?.dropId === "string" && UUID_RE.test(body.dropId) ? body.dropId : undefined;
   const r = await worldJoin(db, await caller(), entries, undefined, { dropId });
   return json(r.body, { status: r.ok ? 200 : r.status });
 }

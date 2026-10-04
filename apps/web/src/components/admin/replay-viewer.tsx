@@ -546,11 +546,19 @@ export function ReplayViewer({ replay: replay0, chunks: chunks0, now }: { replay
           </h1>
         </div>
         <p className="text-xs leading-relaxed text-white/50">
-          {fmtUtc(startedAtMs)} · записано {fmtClock(replay.lastMs)} · входов {replay.entries} · {fmtBytes(replay.bytes)} · кусков {replay.chunks} · генератор карты v{MAP_GEN_VERSION}
+          {fmtUtc(startedAtMs)} · записано {fmtClock(replay.lastMs)} · входов {replay.entries} · {fmtBytes(replay.bytes)} · кусков {replay.chunks} · генератор карты v
+          {replay.genVersion ?? "?"}
+          {replay.genVersion !== null && replay.genVersion !== MAP_GEN_VERSION ? ` (рисую v${MAP_GEN_VERSION})` : ""}
           <br />
           <span className="font-mono text-white/35">{replay.matchId}</span>
         </p>
       </div>
+      {replay.genVersion !== null && replay.genVersion !== MAP_GEN_VERSION && (
+        <p role="alert" className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm leading-relaxed text-amber-200">
+          Повтор записан на карте генератора v{replay.genVersion}, а просмотрщик рисует текущую v{MAP_GEN_VERSION}: стены, здания и
+          предметы могут не совпадать с тем, где ходили игроки. Позиции и события верны.
+        </p>
+      )}
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-2">

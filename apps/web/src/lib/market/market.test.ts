@@ -10,6 +10,7 @@ import { eq, sql } from "drizzle-orm";
 import { CONSUMABLES_CR, MARKET, boundOffer, mulberry32 } from "@extract/shared";
 import { creditLedger, itemEvents, items, listings, moneyLedger, trades, users } from "../../db/schema";
 import { closeTestDb, lockTestDb, makeItem, makeUser, openTestDb, resetDb } from "../inventory/test-db";
+import { PARAM, setParam } from "../economy/params";
 import { seedEconomy } from "../economy/seed";
 import { getEconomyStats } from "../lobby/economy-stats";
 import { HOUSE_ACCOUNT, browseListings, buyListing, cancelListing, createListing, expireListings, marketHistory, myListings } from "./market";
@@ -136,6 +137,26 @@ test("buy: money moves with a 5% fee, item changes owner, trade recorded", async
   assert.equal(BigInt(sum.rows[0]!.s), 0n);
   // The buyer now owns it and can list it again.
   assert.ok((await createListing(db, buyer, itemId, 2000n, OPTS)).ok);
+});
+
+test("stop-crane market_paused (admin): no new lots, no sales, nothing charged; cancelling still works; 0 reopens", async () => {
+  const seller = await user(0n);
+  const buyer = await user(5000n);
+  const { listingId } = await listed(seller, "rifle", 1000n);
+  const other = await makeItem(db, { def: "rifle", rarity: 1, ownerId: seller });
+  const cr = await creditsOf(seller);
+  await setParam(db, PARAM.MARKET_PAUSED, 1);
+  assert.deepEqual(await createListing(db, seller, other, 1000n, OPTS), { ok: false, code: "market_paused" });
+  assert.deepEqual(await buyListing(db, buyer, listingId, { feeBps: 500 }), { ok: false, code: "market_paused" });
+  assert.equal(await balanceOf(buyer), 5000n, "nothing charged");
+  assert.equal(await creditsOf(seller), cr, "no listing fee");
+  assert.equal((await itemRow(other)).state, "in_stash");
+  await setParam(db, PARAM.MARKET_PAUSED, 0);
+  assert.ok((await buyListing(db, buyer, listingId, { feeBps: 500 })).ok);
+  // Cancelling is never paused.
+  const second = await listed(seller, "rifle", 1000n);
+  await setParam(db, PARAM.MARKET_PAUSED, 1);
+  assert.ok((await cancelListing(db, seller, second.listingId)).ok);
 });
 
 test("buy race: N buyers click the same lot at once → exactly one wins, nobody else pays", async () => {

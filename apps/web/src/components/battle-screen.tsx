@@ -23,6 +23,7 @@ import { createHudStore, shallowEqual, type HudStore } from "@/game/hud";
 import type { GameRendererApi, HudSnapshot, PanelActions, RendererOptions } from "@/game/types";
 import { createRoomInventoryClient } from "@/game/inventory-client";
 import { cineExitOf, outcomeHoldMs } from "@/game/outcome-hold";
+import { warmSpritesFor } from "@/game/sprite-cache";
 import { Hud, useHud } from "./hud";
 import { InventoryOverlay } from "./inventory/inventory-overlay";
 import { MatchOutcomeOverlay } from "./match-outcome-overlay";
@@ -38,6 +39,8 @@ interface Props {
    * at most 5 times); other retry reasons offer a "Try again" button. Without it only "Back to lobby".
    */
   onRetry?: (exit: RoomExit) => void;
+  /** Registered player (guests earn no XP): the HUD shows the extract XP timer. */
+  earnsXp?: boolean;
 }
 
 const EMPTY_HUD: HudSnapshot = {
@@ -153,6 +156,13 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
 
   void (async () => {
     try {
+      // The server puts us on the map at the join and nothing is drawn until every sprite is in:
+      // fetch the renderer module and finish the sprite warm-up (sprite-cache.ts, capped) first, so
+      // the time on the map unseen is only the GPU upload. The menu already warmed most of them.
+      const rendererMod = import("@/game/renderer");
+      rendererMod.catch(() => {});
+      await warmSpritesFor();
+      if (disposed) return;
       const client = await getColyseusClient();
       const options: BattleJoinOptions = { ticket, mapHash: clientMapHash() };
       const joined = await client.joinById(battleRoomId, options, BattleState);
@@ -183,7 +193,7 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
       });
 
       // Dynamic import keeps Pixi out of the server bundle and out of the lobby's first load.
-      const mod = await import("@/game/renderer");
+      const mod = await rendererMod;
       if (disposed) return;
       // src/game/types.ts is the contract; the renderer module is built against it separately.
       const Renderer = mod.GameRenderer as unknown as new (o: RendererOptions) => GameRendererApi;
@@ -270,7 +280,7 @@ function screenSlice(s: HudSnapshot) {
 
 const killTallySlice = (s: HudSnapshot) => s.killTally ?? null;
 
-export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry }: Props) {
+export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry, earnsXp = true }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<{ dispose: () => void } | null>(null);
   const disposeTimerRef = useRef<number | undefined>(undefined);
@@ -378,7 +388,7 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry 
         </div>
       ) : (
         <>
-          <Hud store={hudStore} selfNickname={nickname} onLeave={onLeave} />
+          <Hud store={hudStore} selfNickname={nickname} onLeave={onLeave} earnsXp={earnsXp} />
           {overlayNodes.map((o) => (
             <Fragment key={o.id}>{o.node}</Fragment>
           ))}

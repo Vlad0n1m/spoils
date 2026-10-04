@@ -322,6 +322,8 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
           <dd className="text-right tabular-nums text-white">{entries.filter((e) => itemDef(e.def)?.cat === "ammo").reduce((s, e) => s + e.qty, 0)}</dd>
           <dt className="text-white/55">Meds</dt>
           <dd className="text-right tabular-nums text-white">{entries.filter((e) => itemDef(e.def)?.cat === "med").reduce((s, e) => s + e.qty, 0)}</dd>
+          <dt className="text-white/55">Grenades</dt>
+          <dd className="text-right tabular-nums text-white">{entries.filter((e) => itemDef(e.def)?.cat === "throwable").reduce((s, e) => s + e.qty, 0)}</dd>
         </dl>
         <p className="font-body text-xs leading-relaxed text-white/55">
           {entries.length === 0

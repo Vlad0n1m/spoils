@@ -20,6 +20,13 @@ export const PARAM = {
   POOL_MAX_PER_MATCH: "pool_max_per_match",
   /** UTC day (YYYY-MM-DD) the daily regulator last ran (runEconomyDaily, once per day). */
   DAILY_RAN_ON: "daily_ran_on",
+  /**
+   * Stop-crane (ALPHA_PLAN B7): 1 = the player market takes no new lots and sells none (list / buy
+   * answer 503 market_paused); cancelling a lot still works. 0 (default) = open.
+   */
+  MARKET_PAUSED: "market_paused",
+  /** Stop-crane (ALPHA_PLAN B7): 1 = the paid (tradable) starter kit is not sold; the free kit still is. */
+  KIT_SALE_PAUSED: "kit_sale_paused",
 } as const;
 
 const DEFAULTS: Record<string, number> = {
@@ -27,6 +34,8 @@ const DEFAULTS: Record<string, number> = {
   [PARAM.TAX_ACC]: 0,
   [PARAM.POOL_RISK_K]: POOL.RISK_K,
   [PARAM.POOL_MAX_PER_MATCH]: POOL.MAX_PER_MATCH,
+  [PARAM.MARKET_PAUSED]: 0,
+  [PARAM.KIT_SALE_PAUSED]: 0,
 };
 
 /** Reads a numeric param (no lock). Missing or malformed rows fall back to the default. */
@@ -50,6 +59,11 @@ export async function lockNumberParam(tx: Tx, key: string): Promise<number> {
   );
   const v = rows.rows[0]?.value;
   return typeof v === "number" && Number.isFinite(v) ? v : (DEFAULTS[key] ?? 0);
+}
+
+/** A 0/1 stop-crane param (PARAM.MARKET_PAUSED, PARAM.KIT_SALE_PAUSED) is on. */
+export async function pausedParam(db: Db | Tx, key: string): Promise<boolean> {
+  return (await getNumberParam(db, key)) >= 1;
 }
 
 export async function setParam(db: Db | Tx, key: string, value: unknown): Promise<void> {

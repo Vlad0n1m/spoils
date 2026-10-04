@@ -29,6 +29,7 @@ export const replayChunkUploadSchema = z
     shard: int(0, 64),
     mapId: z.string().regex(/^[a-z0-9_-]{1,32}$/),
     cycleStartsAt: int(0, Number.MAX_SAFE_INTEGER),
+    genVersion: int(1, 32_767).optional(),
     seq: int(0, REPLAY.MAX_SEQ),
     startMs: int(0, WORLD.CYCLE_MS),
     endMs: int(0, WORLD.CYCLE_MS),
@@ -84,7 +85,7 @@ export async function storeReplayChunk(db: Db, u: ReplayChunkUploadParsed, data:
   return db.transaction(async (tx) => {
     await tx
       .insert(replays)
-      .values({ matchId: u.matchId, cycleId: u.cycleId, shard: u.shard, mapId: u.mapId, startedAt: new Date(u.cycleStartsAt) })
+      .values({ matchId: u.matchId, cycleId: u.cycleId, shard: u.shard, mapId: u.mapId, genVersion: u.genVersion ?? null, startedAt: new Date(u.cycleStartsAt) })
       .onConflictDoNothing();
     const [row] = await tx
       .select({ cycleId: replays.cycleId, shard: replays.shard, mapId: replays.mapId })
@@ -117,6 +118,8 @@ export async function storeReplayChunk(db: Db, u: ReplayChunkUploadParsed, data:
         rawBytes: sql`${replays.rawBytes} + ${u.rawBytes}`,
         entries: sql`greatest(${replays.entries}, ${u.entries})`,
         lastMs: sql`greatest(${replays.lastMs}, ${u.endMs})`,
+        // A row opened by a chunk without it (older game server) learns the version from a later one.
+        ...(u.genVersion !== undefined ? { genVersion: sql`coalesce(${replays.genVersion}, ${u.genVersion})` } : {}),
         ...(u.final ? { endedAt: new Date(u.cycleStartsAt + u.endMs) } : {}),
         updatedAt: new Date(),
       })
@@ -135,6 +138,8 @@ export interface AdminReplay {
   mapNumber: number;
   shard: number;
   mapId: string;
+  /** MAP_GEN_VERSION the map was generated with; null = unknown (recorded before the column). */
+  genVersion: number | null;
   startedAt: string;
   /** null while the shard is still running (or it closed without a final chunk). */
   endedAt: string | null;
@@ -167,6 +172,7 @@ const replayCols = {
   cycleId: replays.cycleId,
   shard: replays.shard,
   mapId: replays.mapId,
+  genVersion: replays.genVersion,
   startedAt: replays.startedAt,
   endedAt: replays.endedAt,
   lastMs: replays.lastMs,
@@ -176,13 +182,14 @@ const replayCols = {
   rawBytes: replays.rawBytes,
 };
 
-function toAdminReplay(r: { matchId: string; cycleId: number; shard: number; mapId: string; startedAt: Date; endedAt: Date | null; lastMs: number; entries: number; chunks: number; bytes: number; rawBytes: number }): AdminReplay {
+function toAdminReplay(r: { matchId: string; cycleId: number; shard: number; mapId: string; genVersion: number | null; startedAt: Date; endedAt: Date | null; lastMs: number; entries: number; chunks: number; bytes: number; rawBytes: number }): AdminReplay {
   return {
     matchId: r.matchId,
     cycleId: r.cycleId,
     mapNumber: mapNumber(r.cycleId),
     shard: r.shard,
     mapId: r.mapId,
+    genVersion: r.genVersion,
     startedAt: r.startedAt.toISOString(),
     endedAt: r.endedAt ? r.endedAt.toISOString() : null,
     lastMs: r.lastMs,

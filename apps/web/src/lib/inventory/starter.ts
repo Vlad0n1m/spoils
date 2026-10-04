@@ -3,6 +3,7 @@ import { GIVEAWAY, GIVEAWAY_KIT, itemDef, mulberry32, pickWeighted, type Rng } f
 import { itemEvents, items, moneyLedger } from "../../db/schema";
 import { credit } from "../economy/ledger";
 import { giveawayLockRaids } from "../economy/config";
+import { PARAM, pausedParam } from "../economy/params";
 import type { Db, Tx } from "./db";
 import { addStack } from "./transition";
 
@@ -41,6 +42,8 @@ export type StarterResult =
   | { status: "already" }
   | { status: "no_user" }
   | { status: "sold_out" }
+  /** The admin paused the paid kit (economy_params kit_sale_paused); the free kit is unaffected. */
+  | { status: "sale_paused" }
   | { status: "insufficient_funds"; priceMinor: string };
 
 /** House account of the market money journal (lib/market/market.ts HOUSE_ACCOUNT). */
@@ -69,6 +72,8 @@ export async function claimStarter(
   opts: { paid?: boolean; rng?: Rng; lockRaids?: number; kitCap?: number; priceMinor?: bigint } = {},
 ): Promise<StarterResult> {
   const price = opts.priceMinor ?? BigInt(GIVEAWAY.KIT_PRICE_MINOR);
+  // Admin stop-crane (/admin/params): nothing is claimed, so the player can still take the free kit.
+  if (opts.paid && (await pausedParam(db, PARAM.KIT_SALE_PAUSED))) return { status: "sale_paused" };
   return db.transaction(async (tx) => {
     const u = await tx.execute<{ balance_cents: string; claimed: boolean }>(
       sql`select balance_cents, starter_claimed_at is not null as claimed from users where id = ${userId} for update`,

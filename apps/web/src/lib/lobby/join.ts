@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import {
+  PARTY,
   WORLD,
   isSlotKey,
   worldCycleAt,
@@ -46,13 +47,13 @@ export type JoinResult =
  * longer matches the draft (the player edited it after a cancelled search) is unlocked and
  * re-locked, so the raid always carries what the Loadout tab shows.
  * `world` (WORLD v6, worldJoin) puts the shard's matchId and the freshly minted entryId into the
- * signed ticket, plus the party's partyId / dropId for a party member (party.ts).
+ * signed ticket, plus the party's partyId / dropId / dropSize for a party member (party.ts).
  */
 export async function lockAndIssueTicket(
   db: Db,
   c: Caller,
   entries: LoadoutEntry[] | undefined,
-  world: { matchId: string; entryId: string; partyId?: string; dropId?: string },
+  world: { matchId: string; entryId: string; partyId?: string; dropId?: string; dropSize?: number },
 ): Promise<JoinResult> {
   if (c.kind === "anon") return { ok: false, status: 401, error: "unauthenticated", message: "Sign in first." };
   if (c.kind === "guest") {
@@ -233,7 +234,8 @@ export async function worldJoin(
   const r = await lockAndIssueTicket(db, c, entries, {
     matchId: shard.match_id,
     entryId: randomUUID(),
-    ...(plan ? { partyId: plan.partyId, ...(plan.drop ? { dropId: plan.drop.dropId } : {}) } : {}),
+    // dropSize: the game server holds this many seats for the drop (not PARTY.MAX_SIZE).
+    ...(plan ? { partyId: plan.partyId, ...(plan.drop ? { dropId: plan.drop.dropId, dropSize: dropSizeOf(plan.drop.members.length) } : {}) } : {}),
   });
   if (!r.ok) {
     const extra: Partial<WorldJoinErrorBody> = {};
@@ -275,4 +277,9 @@ async function lockedEntries(db: Db, loadoutId: string): Promise<LoadoutEntry[]>
   );
   const e = r.rows[0]?.entries;
   return Array.isArray(e) ? draftFromLocked(e) : [];
+}
+
+/** Seats a party drop holds on its shard: its member count, within PARTY.MIN_SIZE..PARTY.MAX_SIZE. */
+export function dropSizeOf(members: number): number {
+  return Math.max(PARTY.MIN_SIZE, Math.min(PARTY.MAX_SIZE, Math.floor(members) || PARTY.MAX_SIZE));
 }

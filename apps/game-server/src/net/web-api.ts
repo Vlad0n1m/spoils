@@ -281,7 +281,7 @@ export interface ExitSettled {
   levelUp?: boolean;
 }
 
-const XP_KEYS: readonly XpKey[] = ["extract", "haul", "containers", "npc", "guard", "boss", "pvp", "first_extract", "daily_cap"];
+const XP_KEYS: readonly XpKey[] = ["extract", "haul", "containers", "npc", "guard", "boss", "pvp", "first_extract", "daily_cap", "quest"];
 const MAX_XP_LINES = 16;
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 

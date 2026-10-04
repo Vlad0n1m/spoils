@@ -19,6 +19,8 @@ export function signJoinTicket(who: {
   /** Party (party.ts): signed after the WORLD v6 fields; absent for solo joins. */
   dropId?: string;
   partyId?: string;
+  /** Members of the drop (seats the game server holds), only with dropId. Signed after partyId. */
+  dropSize?: number;
 }): JoinTicket {
   // loadoutId "" = free kit (guests, empty loadout); it is signed so a ticket cannot be re-pointed
   // at someone else's locked gear. issuedAt is real wall time (ticket freshness, not world logic).
@@ -32,7 +34,10 @@ export function signJoinTicket(who: {
   if (who.entryId) unsigned.entryId = who.entryId;
   if (who.partyId) {
     unsigned.partyId = who.partyId;
-    if (who.dropId) unsigned.dropId = who.dropId;
+    if (who.dropId) {
+      unsigned.dropId = who.dropId;
+      if (who.dropSize !== undefined) unsigned.dropSize = who.dropSize;
+    }
   }
   const sig = createHmac("sha256", coreEnv().GAME_SERVER_HMAC_SECRET)
     .update(joinTicketPayload(unsigned))

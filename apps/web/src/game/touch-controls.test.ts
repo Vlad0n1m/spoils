@@ -8,8 +8,11 @@ import { describe, it } from "node:test";
 import {
   AIM_FROM,
   FIRE_AT,
+  GRENADE_DRAG_EDGE_PX,
   GRENADE_DRAG_FROM,
+  GRENADE_DRAG_MIN_SPAN,
   GRENADE_DRAG_SPAN,
+  dragRoom,
   grenadeDragAim,
   STICK_RADIUS,
   TOUCH_BUTTONS,
@@ -65,6 +68,16 @@ describe("touch grenade button (Weapons v2)", () => {
     assert.equal(grenadeDragAim(-(GRENADE_DRAG_FROM + GRENADE_DRAG_SPAN / 2), 0)!.frac, 0.5);
     assert.equal(grenadeDragAim(500, 500)!.frac, 1);
     assert.equal(grenadeDragAim(NaN, 3), null);
+    // Toward a near edge (button 45 px from the left edge): full range before the finger leaves the screen.
+    const room = dragRoom(45, 300, Math.PI, 844, 390);
+    assert.equal(room, 45);
+    assert.equal(grenadeDragAim(-(room - GRENADE_DRAG_EDGE_PX), 0, room)!.frac, 1);
+    assert.ok(grenadeDragAim(-30, 0, room)!.frac > 0.5);
+    // Plenty of room: the normal span.
+    assert.equal(grenadeDragAim(GRENADE_DRAG_FROM + GRENADE_DRAG_SPAN / 2, 0, dragRoom(45, 300, 0, 844, 390))!.frac, 0.5);
+    // Up against the edge: never a zero span.
+    assert.equal(grenadeDragAim(-(GRENADE_DRAG_FROM + GRENADE_DRAG_MIN_SPAN), 0, 0)!.frac, 1);
+    assert.ok(Math.abs(dragRoom(100, 100, Math.PI / 4, 844, 390) - 290 * Math.SQRT2) < 1e-6);
   });
 
   it("sits on the left side next to the meds", () => {

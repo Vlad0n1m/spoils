@@ -206,6 +206,12 @@ export interface ReplayChunkUpload {
   mapId: string;
   /** Wall ms of the cycle start (replays.started_at). */
   cycleStartsAt: number;
+  /**
+   * MapData.genVersion (MAP_GEN_VERSION) the shard's map was generated with (replays.gen_version):
+   * the viewer redraws the map from the current generator and warns when they differ. Optional for
+   * game servers built before it.
+   */
+  genVersion?: number;
   seq: number;
   startMs: number;
   endMs: number;

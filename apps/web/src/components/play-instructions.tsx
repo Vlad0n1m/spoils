@@ -185,6 +185,7 @@ const KEYS: Array<[string[], string]> = [
   [["1", "2"], "Switch weapon"],
   [["3"], "Bandage"],
   [["4"], "Medkit"],
+  [["G", "5"], "Throw grenade (at the cursor)"],
   [["M"], "Full map"],
   [["Esc"], "Close a panel"],
 ];

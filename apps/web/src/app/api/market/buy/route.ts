@@ -17,6 +17,7 @@ const MESSAGES: Record<string, string> = {
   rate_limited: "Buying too fast — wait a bit and try again.",
   insufficient_funds: "Not enough balance. Top up your wallet first.",
   no_user: "Sign in again.",
+  market_paused: "The market is paused for a moment. Nothing was charged; try again later.",
 };
 
 /** Buys one lot. Concurrency-safe: the listing row lock lets exactly one buyer win. */
@@ -28,7 +29,8 @@ export async function POST(req: Request) {
   if (!parsed.success) return apiError(400, "bad_body", "Pick a lot.");
   const r = await buyListing(db, c.userId, parsed.data.listingId, { feeBps: marketFeeBps() });
   if (!r.ok) {
-    const status = r.code === "not_found" ? 404 : r.code === "rate_limited" ? 429 : r.code === "no_user" ? 401 : 409;
+    const status =
+      r.code === "not_found" ? 404 : r.code === "rate_limited" ? 429 : r.code === "no_user" ? 401 : r.code === "market_paused" ? 503 : 409;
     return apiError(status, r.code, MESSAGES[r.code]);
   }
   return json(r);

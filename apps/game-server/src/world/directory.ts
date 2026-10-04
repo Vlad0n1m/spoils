@@ -17,8 +17,8 @@
  * is a WORLD_JOIN_ERR code ("<code>" or "<code>:<detail>").
  *
  * Party drops (shared party.ts, JoinTicket.dropId): the first admission of a dropId on a shard needs
- * room for a whole party (PARTY.MAX_SIZE: the ticket does not say how many follow) and holds those
- * seats for PARTY.DROP_TTL_MS; it is refused with "world_full:party" (PARTY_FULL_DETAIL) when the
+ * room for the whole drop (its signed JoinTicket.dropSize; PARTY.MAX_SIZE for an older ticket without
+ * one) and holds those seats for PARTY.DROP_TTL_MS, so a pair never blocks four seats; it is refused with "world_full:party" (PARTY_FULL_DETAIL) when the
  * shard cannot take them all. Later members of that drop take a held seat (no capacity refusal),
  * and every other admission counts the held seats as taken. Spawning together is the Match's
  * (spawn.ts pickDropSpawn).
@@ -109,6 +109,14 @@ export interface DropSeats {
   firstAt: number;
   /** Members that took a seat of this drop (first member included). */
   users: Set<string>;
+  /** Seats held for the drop: its signed JoinTicket.dropSize, PARTY.MAX_SIZE for a ticket without one. */
+  size: number;
+}
+
+/** Seats a drop holds (JoinTicket.dropSize, clamped; PARTY.MAX_SIZE when the ticket has none). */
+export function dropSeatCount(t: Pick<JoinTicket, "dropSize">): number {
+  const n = t.dropSize;
+  return typeof n === "number" && Number.isSafeInteger(n) ? Math.max(1, Math.min(PARTY.MAX_SIZE, n)) : PARTY.MAX_SIZE;
 }
 
 /** WORLD_JOIN_ERR.WORLD_FULL detail when the shard cannot take a whole party drop ("world_full:party"). */
@@ -436,14 +444,14 @@ export class WorldDirectory {
     let held = 0;
     for (const [id, d] of shard.drops) {
       if (now - d.firstAt > PARTY.DROP_TTL_MS) shard.drops.delete(id);
-      else held += Math.max(0, PARTY.MAX_SIZE - d.users.size);
+      else held += Math.max(0, d.size - d.users.size);
     }
     const humans = m.humansOnMap() + shard.inflight.size;
     const runtimes = m.allRuntimes().length;
     const runtimeCap = WORLD.MAX_RUNTIMES_PER_SHARD - WORLD.RUNTIME_HEADROOM;
     const dropId = t.partyId ? t.dropId : undefined;
     const drop = dropId ? shard.drops.get(dropId) : undefined;
-    if (dropId && drop && drop.partyId === t.partyId && !drop.users.has(t.userId) && drop.users.size < PARTY.MAX_SIZE) {
+    if (dropId && drop && drop.partyId === t.partyId && !drop.users.has(t.userId) && drop.users.size < drop.size) {
       // A seat held for this drop since its first member: only the hard runtime cap still applies.
       if (runtimes >= runtimeCap) throw joinErr(503, WORLD_JOIN_ERR.WORLD_FULL);
       drop.users.add(t.userId);
@@ -451,10 +459,11 @@ export class WorldDirectory {
     }
     if (dropId && !drop) {
       // The drop's first member: the whole party has to fit, or nobody of it is admitted here.
-      if (humans + held + PARTY.MAX_SIZE > WORLD.CAPACITY || runtimes + held + PARTY.MAX_SIZE > runtimeCap) {
+      const size = dropSeatCount(t);
+      if (humans + held + size > WORLD.CAPACITY || runtimes + held + size > runtimeCap) {
         throw joinErr(503, WORLD_JOIN_ERR.WORLD_FULL, PARTY_FULL_DETAIL);
       }
-      const seats: DropSeats = { partyId: t.partyId!, firstAt: now, users: new Set([t.userId]) };
+      const seats: DropSeats = { partyId: t.partyId!, firstAt: now, users: new Set([t.userId]), size };
       shard.drops.set(dropId, seats);
       return seats;
     }

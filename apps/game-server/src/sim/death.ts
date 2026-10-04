@@ -38,6 +38,7 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
   cancelHeal(rt);
   closeSearch(m, rt, "death");
   rt.queue.length = 0;
+  rt.pendingThrow = null;
   rt.triggerHeld = false;
   rt.pressPending = false;
 

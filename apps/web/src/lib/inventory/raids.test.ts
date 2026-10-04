@@ -196,6 +196,21 @@ describe("starter kit", () => {
     await assertCreditsConserved();
   });
 
+  test("stop-crane kit_sale_paused (admin): the paid kit is not sold, nothing charged; the free kit still is", async () => {
+    const u = await makeUser(db);
+    await setBalance(u, PRICE * 2n);
+    await setParam(db, PARAM.KIT_SALE_PAUSED, 1);
+    assert.equal((await claimStarter(db, u, { paid: true, lockRaids: 1 })).status, "sale_paused");
+    assert.equal(await balance(u), PRICE * 2n);
+    assert.equal((await db.select().from(items).where(eq(items.ownerId, u))).length, 0);
+    const r = await claimStarter(db, u, { lockRaids: 1 });
+    assert.ok(r.status === "claimed" && r.bound, "the free kit is unaffected");
+    await setParam(db, PARAM.KIT_SALE_PAUSED, 0);
+    const v = await makeUser(db);
+    await setBalance(v, PRICE);
+    assert.equal((await claimStarter(db, v, { paid: true, lockRaids: 1 })).status, "claimed");
+  });
+
   test("short of money or sold out → nothing claimed, the free kit stays available", async () => {
     const poor = await makeUser(db);
     await setBalance(poor, PRICE - 1n);
