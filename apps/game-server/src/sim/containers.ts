@@ -32,6 +32,8 @@ import {
   CONTAINER,
   CONTAINER_STATE,
   ContainerLoot,
+  DROP,
+  XP,
   Corpse,
   ITEM_FLAG,
   PLAYER,
@@ -90,7 +92,8 @@ export function demoChestRarity(spot: ContainerSpot): Rarity {
 export interface SearchTarget {
   /** Loot map key: c<idx> / k<corpseId>. */
   key: string;
-  kind: "container" | "corpse";
+  /** "drop" = a WORLD v6 supply crate (world-events.ts): a corpse-like target (Corpse "sd<n>"). */
+  kind: "container" | "corpse" | "drop";
   /** MapData.containers index; -1 for corpses. */
   idx: number;
   corpse: Corpse | null;
@@ -138,6 +141,9 @@ export class ContainerSystem {
   /** WORLD v6 (A6): corpses in death order = expiry order (constant CORPSE_EXPIRE_MS), consumed from `expHead`. */
   private readonly expQueue: SearchTarget[] = [];
   private expHead = 0;
+  /** WORLD v6 hot zones: refilled containers (never pool targets again) and their pending contents. */
+  readonly refilled = new Set<number>();
+  private readonly refillItems = new Map<number, ItemLike[]>();
   /** Live-mode pool uniques allocated to a boss that has not taken them (yet / did not spawn). */
   private readonly bossPool = new Map<BossKind, ItemLike[]>();
   private readonly legacyBossPool: ItemLike[] = [];
@@ -253,7 +259,7 @@ export class ContainerSystem {
    */
   poolTargetOk(idx: number): boolean {
     const spot = this.m.map.containers[idx];
-    return !!spot && poolContainerEligible(spot) && !this.poolPlaced.has(idx) && !this.pool.has(idx) &&
+    return !!spot && poolContainerEligible(spot) && !this.poolPlaced.has(idx) && !this.pool.has(idx) && !this.refilled.has(idx) &&
       this.stateOf(idx) === CONTAINER_STATE.UNTOUCHED && !this.targets.has(containerLootKey(idx));
   }
 
@@ -271,6 +277,12 @@ export class ContainerSystem {
     const m = this.m;
     const spot = m.map.containers[idx]!;
     const out: ItemLike[] = [];
+    // WORLD v6 hot zone refill: exactly the rolled event fungibles (CR economy only, no uniques).
+    const refill = this.refillItems.get(idx);
+    if (refill) {
+      this.refillItems.delete(idx);
+      return refill;
+    }
     if (m.mode === "demo") {
       const table = CHEST_TABLES[demoChestRarity(spot)];
       const rng = mulberry32(uniqueSeed(m.lootSeed, idx));
@@ -375,6 +387,65 @@ export class ContainerSystem {
     if (by) this.m.aoi.restrict(c, "spawn", by);
     this.m.disclosure.defer(`s${t.key}`, at.x, at.y, by && !by.isNpc ? [rt, by] : [rt], () => this.m.aoi.unrestrict(c));
     return t;
+  }
+
+  /**
+   * WORLD v6 supply crate (world-events.ts): a corpse-like search target "k<id>" with Corpse id
+   * "sd<n>", public at once (everyone saw it land), never expiring before the wipe (what is left
+   * inside is leftOnMap). Opening takes DROP.OPEN_MS; damage interrupts it (combat.ts).
+   */
+  addSupplyDrop(id: string, x: number, y: number, items: ItemLike[]): SearchTarget {
+    const c = new Corpse();
+    c.id = id;
+    c.x = x;
+    c.y = y;
+    c.label = "Supply drop";
+    c.color = 0;
+    c.rot = 0;
+    const t = this.createTarget({
+      key: corpseLootKey(id), kind: "drop", idx: -1, corpse: c, owner: -1, x, y, openMs: DROP.OPEN_MS, items,
+    });
+    this.corpseList.push(t);
+    this.m.state.corpses.set(id, c);
+    return t;
+  }
+
+  /** Nobody has searched `t` yet and nothing is revealed (a crate may still take a pool item). */
+  untouchedTarget(t: SearchTarget): boolean {
+    return !t.emptied && t.searchers.size === 0 && t.searchedBy.size === 0 && t.loot.revealed === 0;
+  }
+
+  /** Append an (already registered) item to an untouched target (pool item into a crate). */
+  addToUntouched(t: SearchTarget, it: ItemLike): boolean {
+    if (!this.untouchedTarget(t) || t.items.length >= 255) return false;
+    t.items.push(it);
+    t.initial.push(toPlain(it));
+    t.loot.total = t.items.length;
+    return true;
+  }
+
+  /**
+   * WORLD v6 hot zone (world-events.ts): an EMPTIED container goes back to UNTOUCHED holding
+   * exactly `items` (event fungibles). Its old search target is dropped (it held nothing: emptied),
+   * the public state flips at once (the hot zone is public), and it never becomes a pool target.
+   * Returns false when the container is not emptied.
+   */
+  refill(idx: number, items: ItemLike[]): boolean {
+    const spot = this.m.map.containers[idx];
+    if (!spot || this.stateOf(idx) !== CONTAINER_STATE.EMPTIED) return false;
+    const key = containerLootKey(idx);
+    const t = this.targets.get(key);
+    if (t) {
+      for (const rt of [...t.searchers]) closeSearch(this.m, rt, "refill");
+      this.targets.delete(key);
+      this.active.delete(t);
+      this.m.state.loot.delete(key);
+    }
+    this.truth[idx] = CONTAINER_STATE.UNTOUCHED;
+    if (this.m.state.containerState[idx] !== CONTAINER_STATE.UNTOUCHED) this.m.state.containerState[idx] = CONTAINER_STATE.UNTOUCHED;
+    this.refilled.add(idx);
+    this.refillItems.set(idx, items);
+    return true;
   }
 
   /**
@@ -575,7 +646,10 @@ export class ContainerSystem {
     if (t.kind === "corpse") rt.stats.corpsesSearched++;
     else {
       rt.stats.containersSearched++;
-      creditRaidXp(this.m, rt, "containers", rt.stats.containersSearched);
+      // WORLD v6 hot zone: a counted container inside the active hot POI pays × HOT.XP_MULT.
+      const hot = t.kind === "container" && rt.stats.containersSearched <= XP.CONTAINER_MAX && this.m.worldEvents.hotAt(t.x, t.y) !== null;
+      if (hot) rt.stats.hotContainers = (rt.stats.hotContainers ?? 0) + 1;
+      creditRaidXp(this.m, rt, "containers", rt.stats.containersSearched, hot);
     }
   }
 

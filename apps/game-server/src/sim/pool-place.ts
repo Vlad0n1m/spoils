@@ -7,7 +7,8 @@
  *   placed into a weighted-random valid target: an untouched pool-eligible T3/T4 container without
  *   a pool item this cycle (weight poolContainerWeight, guarded × GUARDED_WEIGHT near the living
  *   event boss) or a living T3/T4 POI marauder without a stowed pool item (npcCarrierWeight); every
- *   candidate at least POOL.PLACE_MIN_HUMAN_PX from each living human. No target → retry every
+ *   candidate at least POOL.PLACE_MIN_HUMAN_PX from each living human. A landed supply crate nobody
+ *   touched yet is a target too (world-events.ts, DROP.POOL_WEIGHT, one item per crate). No target → retry every
  *   POOL.PLACE_RETRY_MS. An extract before placement hands them back (PlayerExitReport.unplaced →
  *   pool, untaxed); the wipe leaves the rest on the map (leftOnMap, untaxed).
  * - boss bag items are stowed on the event boss once nobody hit it for POOL.BOSS_ENGAGED_MS; never
@@ -35,6 +36,7 @@ import { stow } from "./boss.js";
 import { isTrackedUnique, makeItem } from "./items.js";
 import type { Match } from "./match.js";
 import type { PlayerRuntime } from "./types.js";
+import type { DropRt } from "./world-events.js";
 
 /** A released entry item waiting for a valid target (the entrant died, or the delay passed). */
 export interface UnplacedPoolItem {
@@ -135,6 +137,8 @@ interface Candidate {
   weight: number;
   container: number;
   npc: PlayerRuntime | null;
+  /** A landed, untouched supply crate (world-events.ts): a pool target like a T3/T4 container. */
+  drop?: DropRt;
 }
 
 /**
@@ -164,6 +168,10 @@ export function poolCandidates(m: Match, minHumanPx: number): Candidate[] {
       out.push({ x: rt.pub.x, y: rt.pub.y, weight: npcCarrierWeight(post.tier), container: -1, npc: rt });
     }
   }
+  // WORLD v6 supply crates: untouched landed crates below DROP.POOL_MAX pool items.
+  for (const d of m.worldEvents.dropPoolCandidates()) {
+    if (far(d.x, d.y)) out.push({ x: d.x, y: d.y, weight: d.weight, container: -1, npc: null, drop: d.drop });
+  }
   return out;
 }
 
@@ -188,6 +196,7 @@ export function placeOne(m: Match, it: ItemLike): boolean {
     }
   }
   if (pick.npc) return stow(pick.npc, it);
+  if (pick.drop) return m.worldEvents.placeInDrop(pick.drop, it);
   if (m.containers.stateOf(pick.container) !== CONTAINER_STATE.UNTOUCHED) return false;
   m.containers.placePoolItem(pick.container, it);
   return true;

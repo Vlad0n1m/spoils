@@ -20,3 +20,4 @@ export * from "./party.js";
 export * from "./quests.js";
 export * from "./replay.js";
 export * from "./pass.js";
+export * from "./world-events.js";

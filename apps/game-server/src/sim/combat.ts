@@ -26,6 +26,7 @@ import {
   weaponHasFlash,
   weaponVariant,
   type KillWeapon,
+  isSupplyDropKey,
 } from "@extract/shared";
 import { cancelHeal, startReload } from "./actions.js";
 import { activeWeapon, ammoCount, syncPublic, weaponDefOf } from "./bag.js";
@@ -199,6 +200,8 @@ export function damagePlayer(
   }
   // Taking damage restarts the extraction channel.
   if (s.extractId) s.extractStartedAt = m.clock;
+  // WORLD v6: damage interrupts the supply crate's open channel (contests happen at the crate).
+  if (hpLoss > 0 && rt.search && m.clock < rt.search.readyAt && isSupplyDropKey(rt.search.key)) closeSearch(m, rt, "hit");
 
   m.emit({
     type: "hit",

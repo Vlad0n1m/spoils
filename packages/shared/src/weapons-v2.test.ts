@@ -335,8 +335,8 @@ test("trader offers are CR only and respect minRarity; consumables include bolts
   assert.ok(GRENADE.FUSE_MS > GRENADE.FLIGHT_MS);
 });
 
-test("replay: weapon codes are WEAPON_IDS then grenade (version 2); a chunk with the new weapons round-trips", () => {
-  assert.equal(REPLAY.VERSION, 2);
+test("replay: weapon codes are WEAPON_IDS then grenade (version ≥ 2); a chunk with the new weapons round-trips", () => {
+  assert.ok(REPLAY.VERSION >= 2);
   assert.deepEqual(REPLAY_WEAPONS, [...WEAPON_IDS, "grenade"]);
   for (const w of WEAPON_IDS) assert.equal(weaponCode(w), weaponVariant(w), `${w}: replay code = sound variant`);
   const chunk = {

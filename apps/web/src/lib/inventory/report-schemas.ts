@@ -54,6 +54,8 @@ const statsSchema = z.object({
   /** v5: marauders + guards killed (optional for older servers). */
   npcKills: z.number().int().min(0).max(1000).optional(),
   guardKills: z.number().int().min(0).max(1000).optional(),
+  /** WORLD v6: containers searched inside an active hot zone (× HOT_ZONE_XP_MULT; optional for older servers). */
+  hotContainers: z.number().int().min(0).max(1000).optional(),
 });
 
 export const playerExitReportSchema = z.object({

@@ -10,6 +10,7 @@ export const CAT_COLOR: Record<EventCat, string> = {
   spawn: "#74c0fc",
   boss: "#ffa94d",
   loot: "#e3c45a",
+  world: "#ffb020",
   wipe: "#ffffff",
 };
 

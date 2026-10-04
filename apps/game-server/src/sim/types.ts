@@ -30,6 +30,7 @@ import type {
   SettledItem,
   SoundMsg,
   WeaponId,
+  ReplayWorldEv,
 } from "@extract/shared";
 
 /**
@@ -189,7 +190,7 @@ export interface PlayerRuntime {
   /** Death: uniques that survived the break roll and stay on the map for others. */
   dropped: ItemLike[];
   /** RaidStats: bossKills = bosses killed, npcKills = marauders + guards killed, guardKills = the guards among them (v5). */
-  stats: { shotsFired: number; dmgDealt: number; containersSearched: number; corpsesSearched: number; bossKills: number; npcKills: number; guardKills: number };
+  stats: { shotsFired: number; dmgDealt: number; containersSearched: number; corpsesSearched: number; bossKills: number; npcKills: number; guardKills: number; hotContainers?: number };
   killedBy: string;
   /** Set once the player left the map (extract / death / timeout). NPCs get one too (never posted). */
   exitReport: PlayerExitReport | null;
@@ -275,6 +276,10 @@ export type MatchEvent =
    * byUserId = the killer's userId when a registered (non-guest) human, else null.
    */
   | { type: "world"; kind: "boss_killed"; boss: BossKind; by: string; byUserId: string | null }
+  /** WORLD v6 map event transition (world-events.ts): replay only, clients read BattleState.wev. */
+  | { type: "wev"; ev: ReplayWorldEv; n: number; x: number; y: number; r: number; zone: string }
+  /** WORLD v6 combat signals for one listener (world-events.ts already quantized them): [sector, band]…. */
+  | { type: "fight"; to: number; msg: number[] }
   | { type: "ended"; report: MatchEndReport; summary: MatchSummaryMsg };
 
 /** Accepted loadouts by userId (legacy roster mode; world entries come through addHuman). */

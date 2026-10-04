@@ -384,6 +384,7 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
         onMapMs,
         haulCr,
         containers: Number(report.stats?.containersSearched ?? 0),
+        hotContainers: Number(report.stats?.hotContainers ?? 0),
         marauders: npcKills - guardKills,
         guards: guardKills,
         bosses: bossKills,

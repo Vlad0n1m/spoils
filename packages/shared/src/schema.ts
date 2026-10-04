@@ -219,6 +219,32 @@ export class Extract extends Schema {
   @type("number") closeAt = 0;
 }
 
+/**
+ * WORLD v6 map event (world-events.ts): a supply drop or a hot zone, public to everyone on the map
+ * (BattleState.wev, keyed "d<n>" / "h<n>"). Never carries a player position.
+ */
+export class WorldEvent extends Schema {
+  /** WEV_KIND (1 supply drop, 2 hot zone). */
+  @type("uint8") kind = 0;
+  /** WEV_STATE (0 announced, 1 landed / active, 2 done). */
+  @type("uint8") state = 0;
+  /**
+   * Drop announced: the zone circle centre (the landing point is inside it); landed: the exact
+   * crate point. Hot zone: the POI centre.
+   */
+  @type("number") x = 0;
+  @type("number") y = 0;
+  /** Drop announced: zone circle radius; 0 once landed. Hot zone: 0 (the POI rect is MapData.zones[zoneId]). */
+  @type("uint16") r = 0;
+  /** Match clock of the landing / of the hot zone start. */
+  @type("number") at = 0;
+  /** Match clock when the flare burns out / the hot zone ends. */
+  @type("number") until = 0;
+  /** MapData zone id ("" = none) and display name. */
+  @type("string") zoneId = "";
+  @type("string") zone = "";
+}
+
 export class BattleState extends Schema {
   @type("string") matchId = "";
   /** MapId ("steppe"). */
@@ -267,9 +293,13 @@ export class BattleState extends Schema {
   @type("string") bossZone = "";
   /** 0 none · 1 alive · 2 killed. */
   @type("uint8") bossState = 0;
+  /** Supply drops and hot zones of this cycle (world-events.ts). Unfiltered: public, a few entries. */
+  @type({ map: WorldEvent }) wev = new MapSchema<WorldEvent>();
+  /** Full-map fight heat of the last FIGHT.HEAT_WINDOW_MS (encodeHeat: "cell:level,…", HEAT_CELL grid). */
+  @type("string") heat = "";
 }
 
 /** Every schema class (the no-@view lint and the codegen iterate this). */
-export const SCHEMA_CLASSES = [InvItem, Player, SelfState, GroundItem, Corpse, ContainerLoot, Extract, BattleState] as const;
+export const SCHEMA_CLASSES = [InvItem, Player, SelfState, GroundItem, Corpse, ContainerLoot, Extract, WorldEvent, BattleState] as const;
 /** The only fields allowed to carry view metadata. */
 export const VIEW_ROOT_FIELDS = ["players", "self", "items", "corpses", "loot"] as const;

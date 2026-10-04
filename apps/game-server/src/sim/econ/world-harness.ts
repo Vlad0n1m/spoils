@@ -506,7 +506,7 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
     const npcKills = rep.stats.npcKills ?? 0;
     const guards = rep.stats.guardKills ?? 0;
     const xp = xpForExit({
-      exit: rep.exit, onMapMs: rep.atMs - (rep.enteredAtMs ?? 0), haulCr: r.junkPaidCr, containers: rep.stats.containersSearched,
+      exit: rep.exit, onMapMs: rep.atMs - (rep.enteredAtMs ?? 0), haulCr: r.junkPaidCr, containers: rep.stats.containersSearched, hotContainers: rep.stats.hotContainers ?? 0,
       marauders: npcKills - guards, guards, bosses: rep.stats.bossKills, rankedPvp: rep.victims?.length ?? 0, grindToday: 0, firstExtractToday: false,
     });
     r.xp = xp.total;
@@ -629,6 +629,13 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
   res.respawn.consumablesCr = Math.round(res.respawn.consumablesCr);
   res.users = usedUsers.size;
   res.wallMs = Math.round(performance.now() - t0);
+  // WORLD v6 map events (world-events.ts): what the drops and hot zones added to this cycle.
+  const we = m.worldEvents;
+  console.log(
+    `[world] seed ${o.seed} events: drops ${we.drops.map((d) => `${d.plan.n}@${Math.round(d.plan.landAt / 60_000)}m ${d.zone?.name ?? "-"}${d.target ? ` searched ${d.target.searchedBy.size} pool ${d.poolItems}` : ""}`).join(", ") || "-"} · ` +
+      `hot ${we.hots.map((h) => `${h.plan.n}@${Math.round(h.plan.startAt / 60_000)}m ${h.zone?.name ?? "-"} refilled ${h.refilled.length}`).join(", ") || "-"} · ` +
+      `rolled junk ${we.rolled.junkCr} CR in ${we.rolled.items} stacks (budget left ${we.budget.left})`,
+  );
   return { result: res, entries: records };
 }
 
