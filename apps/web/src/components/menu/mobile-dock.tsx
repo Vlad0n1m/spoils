@@ -7,17 +7,20 @@ import { MENU_ICONS, type MenuIcon } from "./side-button";
 
 /**
  * Phone dock (WORLD v6 spec §6.1, < 768 px): five cells above PLAY — Inventory, Shop, News, Ranks
- * and More (Info, Friends, Guilds, Wallet, Account). Cells are ≥ 56 px tall.
+ * and More (Info, Friends, Guilds, Wallet, Account). Cells are ≥ 56 px tall. `moreDot` = friend
+ * requests or party invites waiting (Friends lives in More).
  */
 export function MobileDock({
   active,
   newsDot,
+  moreDot = false,
   onPanel,
   onMore,
   moreOpen,
 }: {
   active: LobbyPanel | null;
   newsDot: boolean;
+  moreDot?: boolean;
   onPanel: (p: LobbyPanel) => void;
   onMore: () => void;
   moreOpen: boolean;
@@ -51,7 +54,15 @@ export function MobileDock({
         {cell("shop", "Shop", MENU_ICONS.shop, active === "shop", () => onPanel("shop"))}
         {cell("news", "News", MENU_ICONS.news, active === "news", () => onPanel("news"), newsDot)}
         {cell("ranks", "Ranks", MENU_ICONS.leaderboards, active === "leaderboards", () => onPanel("leaderboards"), false, "Leaderboards")}
-        {cell("more", "More", { src: "/sprites/junk_toolbox.png", fallback: "/sprites/junk_toolbox.png" }, moreOpen, onMore, false, "More: info, friends, guilds, wallet, account")}
+        {cell(
+          "more",
+          "More",
+          { src: "/sprites/junk_toolbox.png", fallback: "/sprites/junk_toolbox.png" },
+          moreOpen || active === "friends",
+          onMore,
+          moreDot,
+          moreDot ? "More: info, friends (new), guilds, wallet, account" : "More: info, friends, guilds, wallet, account",
+        )}
       </ul>
     </nav>
   );

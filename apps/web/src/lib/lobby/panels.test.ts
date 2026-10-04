@@ -17,6 +17,7 @@ describe("parseLobbyPanel", () => {
     assert.deepEqual(parseLobbyPanel({ panel: "info" }), { panel: "info", tab: "howto", period: null });
     assert.deepEqual(parseLobbyPanel({ panel: "news" }), { panel: "news", tab: "feed", period: null });
     assert.deepEqual(parseLobbyPanel({ panel: "leaderboards" }), { panel: "leaderboards", tab: "level", period: "week" });
+    assert.deepEqual(parseLobbyPanel({ panel: "friends" }), { panel: "friends", tab: "friends", period: null });
   });
 
   it("valid tabs and periods are kept", () => {
@@ -42,7 +43,8 @@ describe("parseLobbyPanel", () => {
 
   it("junk params are ignored, never thrown on", () => {
     assert.deepEqual(parseLobbyPanel({ panel: "guilds" }), NO_PANEL);
-    assert.deepEqual(parseLobbyPanel({ panel: "friends", tab: "stash" }), NO_PANEL);
+    assert.deepEqual(parseLobbyPanel({ panel: "friends", tab: "stash" }), { panel: "friends", tab: "friends", period: null });
+    assert.deepEqual(parseLobbyPanel({ panel: "friends", tab: "party" }), { panel: "friends", tab: "party", period: null });
     assert.deepEqual(parseLobbyPanel({ panel: "<script>" }), NO_PANEL);
     assert.deepEqual(parseLobbyPanel({ tab: "nope" }), NO_PANEL);
     assert.deepEqual(parseLobbyPanel({ panel: "shop", tab: "loadout" }), { panel: "shop", tab: "market", period: null });
@@ -74,7 +76,7 @@ describe("panelHref", () => {
 });
 
 describe("hotkeys", () => {
-  it("I, B, L, N, H open Inventory, Shop, Leaderboards, News, Info", () => {
-    assert.deepEqual(PANEL_HOTKEYS, { KeyI: "inventory", KeyB: "shop", KeyL: "leaderboards", KeyN: "news", KeyH: "info" });
+  it("I, B, L, N, H, F open Inventory, Shop, Leaderboards, News, Info, Friends", () => {
+    assert.deepEqual(PANEL_HOTKEYS, { KeyI: "inventory", KeyB: "shop", KeyL: "leaderboards", KeyN: "news", KeyH: "info", KeyF: "friends" });
   });
 });

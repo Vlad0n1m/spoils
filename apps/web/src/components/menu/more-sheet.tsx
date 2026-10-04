@@ -10,10 +10,22 @@ const row =
   "font-body flex min-h-14 w-full items-center gap-3 rounded-2xl border-[3px] border-black bg-[#1d2333] px-4 text-left text-base font-semibold text-white shadow-[0_3px_0_#000] active:translate-y-[2px] active:shadow-[0_1px_0_#000] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70";
 
 /**
- * Phone "More" sheet (WORLD v6 spec §6.1): Info, Friends 🔒, Guilds 🔒, Wallet, Account. A bottom
- * sheet over the dock; Escape or the backdrop closes it.
+ * Phone "More" sheet (WORLD v6 spec §6.1): Info, Friends (red dot = requests or invites waiting),
+ * Guilds 🔒, Wallet, Account. A bottom sheet over the dock; Escape or the backdrop closes it.
  */
-export function MoreSheet({ onClose, onInfo, onLocked }: { onClose: () => void; onInfo: () => void; onLocked: (what: "Friends" | "Guilds") => void }) {
+export function MoreSheet({
+  onClose,
+  onInfo,
+  onFriends,
+  friendsDot = false,
+  onLocked,
+}: {
+  onClose: () => void;
+  onInfo: () => void;
+  onFriends: () => void;
+  friendsDot?: boolean;
+  onLocked: (what: "Guilds") => void;
+}) {
   const { sessionKind } = useLobby();
   const first = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -33,19 +45,20 @@ export function MoreSheet({ onClose, onInfo, onLocked }: { onClose: () => void; 
           <FallbackImg src={MENU_ICONS.info.src} fallback={MENU_ICONS.info.fallback} className="h-8 w-8 object-contain" />
           Info · how to play
         </button>
-        {(["Friends", "Guilds"] as const).map((w) => (
-          <button key={w} type="button" aria-disabled="true" className={`${row} text-white/60`} onClick={() => onLocked(w)}>
-            <span className="relative">
-              <FallbackImg
-                src={w === "Friends" ? MENU_ICONS.friends.src : MENU_ICONS.guilds.src}
-                fallback={w === "Friends" ? MENU_ICONS.friends.fallback : MENU_ICONS.guilds.fallback}
-                className="h-8 w-8 object-contain opacity-60 grayscale"
-              />
-              <LockSticker className="absolute -right-2 -top-2 h-4 w-4" />
-            </span>
-            {w} · coming soon
-          </button>
-        ))}
+        <button type="button" className={row} onClick={onFriends} aria-label={friendsDot ? "Friends and party, new" : "Friends and party"}>
+          <span className="relative">
+            <FallbackImg src={MENU_ICONS.friends.src} fallback={MENU_ICONS.friends.fallback} className="h-8 w-8 object-contain" />
+            {friendsDot && <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-black bg-rose-500" aria-hidden />}
+          </span>
+          Friends · party
+        </button>
+        <button type="button" aria-disabled="true" className={`${row} text-white/60`} onClick={() => onLocked("Guilds")}>
+          <span className="relative">
+            <FallbackImg src={MENU_ICONS.guilds.src} fallback={MENU_ICONS.guilds.fallback} className="h-8 w-8 object-contain opacity-60 grayscale" />
+            <LockSticker className="absolute -right-2 -top-2 h-4 w-4" />
+          </span>
+          Guilds · coming soon
+        </button>
         {sessionKind === "user" && (
           <Link href="/wallet" className={row}>
             <span className="grid h-8 w-8 place-items-center text-xl text-sol-400" aria-hidden>

@@ -208,12 +208,22 @@ export interface JoinTicket {
   matchId?: string;
   /** WORLD v6: the entry minted by the web at join. */
   entryId?: string;
+  /** Party drop this join follows (spawn together, party.ts). Signed; never without partyId. */
+  dropId?: string;
+  /** The caller's party (≥ PARTY.MIN_SIZE members): no friendly fire, S2C.PARTY. Signed. */
+  partyId?: string;
   sig: string;
 }
 
-/** Payload string that a JoinTicket signature covers: `${userId}.${nickname}.${issuedAt}.${loadoutId}.${matchId ?? ""}.${entryId ?? ""}`. */
+/**
+ * Payload string that a JoinTicket signature covers:
+ * `${userId}.${nickname}.${issuedAt}.${loadoutId}.${matchId ?? ""}.${entryId ?? ""}`, and only when the
+ * ticket has party fields, `.${dropId ?? ""}.${partyId ?? ""}` appended after them. A ticket without
+ * party fields signs exactly the old string, so tickets issued before parties stay valid.
+ */
 export function joinTicketPayload(t: Omit<JoinTicket, "sig">): string {
-  return `${t.userId}.${t.nickname}.${t.issuedAt}.${t.loadoutId}.${t.matchId ?? ""}.${t.entryId ?? ""}`;
+  const base = `${t.userId}.${t.nickname}.${t.issuedAt}.${t.loadoutId}.${t.matchId ?? ""}.${t.entryId ?? ""}`;
+  return t.dropId || t.partyId ? `${base}.${t.dropId ?? ""}.${t.partyId ?? ""}` : base;
 }
 
 // ---------------------------------------------------------------- WORLD v6: game server → web (HMAC-signed)
@@ -352,6 +362,18 @@ export interface WorldJoinResponse {
   loadoutId: string;
   entries: LoadoutEntry[];
   pruned: boolean;
+  /**
+   * Party (party.ts), absent for a solo join or a rejoin: the ticket's partyId, and its dropId when
+   * this join follows (or, for the leader, started) a live party drop.
+   */
+  party?: WorldJoinParty;
+}
+/** WorldJoinResponse.party. `dropExpiresAt`: wall ms the drop stays open for members (null = no drop). */
+export interface WorldJoinParty {
+  partyId: string;
+  dropId: string | null;
+  dropExpiresAt: number | null;
+  leader: boolean;
 }
 /** Error body of /api/world/join: { error, message, serverTime, openAt?, retryInMs?, settlesAt?, key? }. */
 export type WorldJoinError = "unauthenticated" | "entry_closed" | "world_starting" | "in_raid" | "entry_limit" | LoadoutErrCode;

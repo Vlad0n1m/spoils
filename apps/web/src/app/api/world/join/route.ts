@@ -6,13 +6,14 @@ import { worldNow } from "@/lib/world/clock";
 export const dynamic = "force-dynamic";
 
 /**
- * WORLD v6 PLAY (spec §4.7): body `{ entries? }` (the loadout to lock, else the saved draft).
+ * WORLD v6 PLAY (spec §4.7): body `{ entries?, dropId? }` (the loadout to lock, else the saved draft;
+ * the party drop to follow, else the party's newest live one — lib/social/party.ts).
  * 200 WorldJoinResponse (a fresh entry, or `rejoin: true` for the caller's active entry); errors
  * `{ error, message, serverTime, openAt?, retryInMs?, settlesAt?, key? }` (WorldJoinErrorBody).
  * Private: never cached.
  */
 export async function POST(req: Request) {
-  const body = (await readJson(req)) as { entries?: unknown } | null;
+  const body = (await readJson(req)) as { entries?: unknown; dropId?: unknown } | null;
   let entries;
   if (body?.entries !== undefined) {
     const parsed = entriesSchema.safeParse(body.entries);
@@ -21,6 +22,7 @@ export async function POST(req: Request) {
     }
     entries = parsed.data;
   }
-  const r = await worldJoin(db, await caller(), entries);
+  const dropId = typeof body?.dropId === "string" && /^[0-9a-f-]{36}$/i.test(body.dropId) ? body.dropId : undefined;
+  const r = await worldJoin(db, await caller(), entries, undefined, { dropId });
   return json(r.body, { status: r.ok ? 200 : r.status });
 }

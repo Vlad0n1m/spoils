@@ -10,6 +10,7 @@ import {
   type JoinTicket,
   type LoadoutEntry,
   type SlotKey,
+  type WorldJoinParty,
   type WorldJoinResponse,
 } from "@extract/shared";
 import type { Db } from "../inventory/db";
@@ -17,6 +18,7 @@ import { MAX_LOADOUT_ENTRIES, getDraft, lockLoadout, saveDraft, unlockLoadout } 
 import { RAID_USER_VOID_GRACE_MS, voidStaleForUser } from "../inventory/raids";
 import { getStash } from "../inventory/stash";
 import { signJoinTicket } from "../join-ticket";
+import { partyJoinPlan, savePartyDrop, type PartyJoinPlan } from "../social/party";
 import { worldNow } from "../world/clock";
 import type { WorldJoinErrorBody } from "./api-types";
 import { LOADOUT_ERR_TEXT, draftFromLocked, pruneDraft, sameLoadout } from "./loadout-model";
@@ -44,13 +46,13 @@ export type JoinResult =
  * longer matches the draft (the player edited it after a cancelled search) is unlocked and
  * re-locked, so the raid always carries what the Loadout tab shows.
  * `world` (WORLD v6, worldJoin) puts the shard's matchId and the freshly minted entryId into the
- * signed ticket.
+ * signed ticket, plus the party's partyId / dropId for a party member (party.ts).
  */
 export async function lockAndIssueTicket(
   db: Db,
   c: Caller,
   entries: LoadoutEntry[] | undefined,
-  world: { matchId: string; entryId: string },
+  world: { matchId: string; entryId: string; partyId?: string; dropId?: string },
 ): Promise<JoinResult> {
   if (c.kind === "anon") return { ok: false, status: 401, error: "unauthenticated", message: "Sign in first." };
   if (c.kind === "guest") {
@@ -139,11 +141,20 @@ type ActiveEntryRow = {
  *    the next cycle's).
  * 5. No running world row for this cycle (raids/open has not landed yet) → 503 `world_starting`.
  * 6. WORLD.MAX_ENTRIES_PER_CYCLE entries of this user this cycle → 409 `entry_limit`.
- * 7. lockAndIssueTicket with the shard's matchId and a fresh entryId (the web's raids/enter makes it
- *    an entry only when the game server admits it).
+ * 7. Party (lib/social/party.ts partyJoinPlan, registered users in a party of ≥ 2): the leader starts
+ *    (or reuses) the party's drop for this map; a member follows the live drop (`opts.dropId`, else the
+ *    party's newest) and is pinned to its shard while that runs. Loadout, risk and limits stay per player.
+ * 8. lockAndIssueTicket with the shard's matchId, a fresh entryId and the party fields (the web's
+ *    raids/enter makes it an entry only when the game server admits it); a new leader drop is saved.
  * Every body carries `serverTime` (= `now`, the world clock).
  */
-export async function worldJoin(db: Db, c: Caller, entries?: LoadoutEntry[], now = worldNow()): Promise<WorldJoinResult> {
+export async function worldJoin(
+  db: Db,
+  c: Caller,
+  entries?: LoadoutEntry[],
+  now = worldNow(),
+  opts: { dropId?: string } = {},
+): Promise<WorldJoinResult> {
   const fail = (status: number, error: WorldJoinErrorBody["error"], message: string, extra: Partial<WorldJoinErrorBody> = {}) =>
     ({ ok: false, status, body: { error, message, serverTime: now, ...extra } }) as const;
   if (c.kind === "anon") return fail(401, "unauthenticated", "Sign in first.");
@@ -195,7 +206,7 @@ export async function worldJoin(db: Db, c: Caller, entries?: LoadoutEntry[], now
     select match_id, room_id from raids
     where kind = 'world' and cycle_id = ${wc.cycle} and status = 'running' and room_id is not null
     order by started_at desc limit 1`);
-  const shard = cur.rows[0];
+  let shard = cur.rows[0];
   if (!shard) return fail(503, "world_starting", "The map is starting up. Try again in a few seconds.", { retryInMs: 3000 });
 
   const cnt = await db.execute<{ n: number }>(sql`
@@ -209,7 +220,21 @@ export async function worldJoin(db: Db, c: Caller, entries?: LoadoutEntry[], now
     );
   }
 
-  const r = await lockAndIssueTicket(db, c, entries, { matchId: shard.match_id, entryId: randomUUID() });
+  let plan: PartyJoinPlan | null = c.kind === "user" ? await partyJoinPlan(db, c.userId, { cycle: wc.cycle, matchId: shard.match_id, now, dropId: opts.dropId }) : null;
+  if (plan?.drop && !plan.leader && plan.drop.matchId !== shard.match_id) {
+    // Follow the leader into their shard while it runs; otherwise drop on your own.
+    const pin = await db.execute<{ match_id: string; room_id: string }>(sql`
+      select match_id, room_id from raids
+      where match_id = ${plan.drop.matchId} and kind = 'world' and cycle_id = ${wc.cycle} and status = 'running' and room_id is not null`);
+    if (pin.rows[0]) shard = pin.rows[0];
+    else plan = { ...plan, drop: null };
+  }
+
+  const r = await lockAndIssueTicket(db, c, entries, {
+    matchId: shard.match_id,
+    entryId: randomUUID(),
+    ...(plan ? { partyId: plan.partyId, ...(plan.drop ? { dropId: plan.drop.dropId } : {}) } : {}),
+  });
   if (!r.ok) {
     const extra: Partial<WorldJoinErrorBody> = {};
     if (r.key) extra.key = r.key;
@@ -220,6 +245,10 @@ export async function worldJoin(db: Db, c: Caller, entries?: LoadoutEntry[], now
     }
     return fail(r.status, r.error as WorldJoinErrorBody["error"], r.message, extra);
   }
+  if (plan?.drop && plan.isNew) await savePartyDrop(db, plan.drop);
+  const party: WorldJoinParty | undefined = plan
+    ? { partyId: plan.partyId, dropId: plan.drop?.dropId ?? null, dropExpiresAt: plan.drop?.expiresAt ?? null, leader: plan.leader }
+    : undefined;
   return {
     ok: true,
     body: {
@@ -234,6 +263,7 @@ export async function worldJoin(db: Db, c: Caller, entries?: LoadoutEntry[], now
       loadoutId: r.loadoutId,
       entries: r.entries,
       pruned: r.pruned,
+      ...(party ? { party } : {}),
     },
   };
 }

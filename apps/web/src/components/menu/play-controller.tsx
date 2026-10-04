@@ -9,8 +9,10 @@ import { readArmedCycle, writeArmedCycle } from "@/lib/lobby/news-seen";
 import { classifyJoinFailure, derivePlayState, playAction, type PlayError } from "@/lib/lobby/play-state";
 import type { WorldJoinErrorBody } from "@/lib/lobby/api-types";
 import { worldView } from "@/lib/lobby/world-clock";
+import { autoFollow } from "@/lib/social/menu";
 import { playUi } from "@/game/audio/ui-sounds";
 import { atRiskOf, loadoutOf } from "./gear-strip";
+import { useParty } from "./party-context";
 
 /** What the menu needs to switch to the battle stage. */
 export interface BattleStart {
@@ -51,8 +53,10 @@ const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms))
  * PLAY logic (WORLD v6 spec §6.5) around the pure derivePlayState: POST /api/world/join and its
  * failures, the armed auto-enter for the next map (sessionStorage `spoils.armed`, rand(0..4 s)
  * jitter, visible tabs only — a hidden tab gets "▶ Map open" in its title and the coin sound),
- * and the clock offset from every join answer. Renders only the provider: `children` come from the
- * menu, so the per-second state reaches the PLAY consumers alone.
+ * and the clock offset from every join answer. Party (useParty): a member with "Follow leader" on
+ * joins the leader's live drop by itself once per drop while PLAY could join (a hidden tab gets
+ * "▶ Party dropping" in its title instead); `joinDrop` is the drop prompt's PLAY. Renders only the
+ * provider: `children` come from the menu, so the per-second state reaches the PLAY consumers alone.
  */
 export function PlayController({
   onBattle,
@@ -69,6 +73,7 @@ export function PlayController({
   const lobby = useLobby();
   const { sessionLoading, sessionKind, stash, status, statusError, me, visible, adoptServerTime, reloadStatus, reloadMe, refreshSession } = lobby;
   const now = useNow();
+  const party = useParty();
 
   const [joining, setJoining] = useState(false);
   const joiningRef = useRef(false);
@@ -121,7 +126,7 @@ export function PlayController({
     now,
   });
 
-  const join = useCallback(async () => {
+  const join = useCallback(async (opts: { dropId?: string } = {}) => {
     if (joiningRef.current) return;
     joiningRef.current = true;
     setJoining(true);
@@ -141,7 +146,7 @@ export function PlayController({
             credentials: "include",
             cache: "no-store",
             headers: { "content-type": "application/json" },
-            body: "{}",
+            body: JSON.stringify(opts.dropId ? { dropId: opts.dropId } : {}),
           });
           status = res.status;
           body = await res.json().catch(() => null);
@@ -273,12 +278,42 @@ export function PlayController({
     document.title = `▶ Map open — ${BRAND.name}`;
     playUi("coin");
   }, [armed, joining, status, now, visible, join, setArmedCycle]);
+  // Party "Follow leader": once per drop, while PLAY could join; a hidden tab is pinged instead.
+  const followed = useRef<string | null>(null);
+  const baseKind = state.kind === "error" ? state.base.kind : state.kind;
+  const partyDrop = party.state?.drop ?? null;
+  const following = party.state?.party?.follow ?? false;
+  useEffect(() => {
+    if (joining) return;
+    const dropId = autoFollow({ drop: partyDrop, follow: following, playKind: baseKind, now, attempted: followed.current });
+    if (!dropId) return;
+    followed.current = dropId;
+    if (visible) {
+      void join({ dropId });
+      return;
+    }
+    if (pinged.current === null) pinged.current = document.title;
+    document.title = `▶ Party dropping — ${BRAND.name}`;
+    playUi("coin");
+  }, [partyDrop, following, baseKind, now, joining, visible, join]);
+  // A hidden tab that was pinged: join as soon as it is visible again while the drop is still open.
+  useEffect(() => {
+    if (!visible || !partyDrop || followed.current !== partyDrop.dropId || joining) return;
+    if (pinged.current === null || baseKind !== "ready" || now >= partyDrop.expiresAt) return;
+    void join({ dropId: partyDrop.dropId });
+    // Only on becoming visible.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
   useEffect(() => {
     if (!visible || pinged.current === null) return;
     document.title = pinged.current;
     pinged.current = null;
   }, [visible]);
 
-  const value = useMemo<PlayValue>(() => ({ state, press, disarm, join: () => void join() }), [state, press, disarm, join]);
+  const value = useMemo<PlayValue>(
+    () => ({ state, press, disarm, join: () => void join(), joinDrop: (dropId: string) => void join({ dropId }) }),
+    [state, press, disarm, join],
+  );
   return <PlayProvider value={value}>{children}</PlayProvider>;
 }
