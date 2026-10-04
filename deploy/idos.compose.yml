@@ -19,9 +19,8 @@
 name: spoils-idos
 
 services:
-  migrate:
-    env_file: !override
-      - .env.idos.local
+  # migrate and game-server take no env_file (docker-compose.yml: explicit variables, interpolated
+  # from --env-file .env.idos.local); only web reads the whole edition env file.
 
   web:
     build:
@@ -40,8 +39,6 @@ services:
       - "${WEB_BIND:-127.0.0.1}:${IDOS_WEB_PORT:-3100}:3000"
 
   game-server:
-    env_file: !override
-      - .env.idos.local
     environment:
       # Must differ from the main stack's id: each id voids only the shards of its own previous process.
       GAME_SERVER_ID: ${GAME_SERVER_ID:-idos-world-1}

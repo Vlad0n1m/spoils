@@ -1,10 +1,10 @@
 *.log
 .DS_Store
+# Env files of any name (security audit: .env.production, .env.prod, .env.bak ... were not ignored);
+# only the documented template is tracked.
 .env
-.env.*.local
-# iDos edition env file under its older name (the stack reads .env.idos.local, ignored above).
-.env.idos
-.env.local
+.env.*
+!.env.example
 .next
 .turbo
 .vercel
@@ -20,3 +20,10 @@ programs/.keys/
 programs/.anchor/
 programs/test-ledger/
 programs/**/*-keypair.json
+# Key material saved anywhere by habit (solana-keygen's default id.json, *keypair*.json, Android
+# signing stores) and loose JSON next to the Anchor workspace (programs/idl/ stays tracked).
+id.json
+**/*keypair*.json
+*.keystore
+*.jks
+programs/*.json
