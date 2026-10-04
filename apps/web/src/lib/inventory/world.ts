@@ -19,6 +19,7 @@ import { toRaidDur } from "../economy/value";
 import { LOADOUT_LOCK_TTL_MS, type Db, type Tx } from "./db";
 import { releaseLoadout } from "./loadout";
 import { applyMove, isUuid, lockItem } from "./transition";
+import { enqueueBossKill } from "../chain/queue";
 
 /**
  * WORLD v6 web side of the game server's WorldDirectory (spec §4.2): a shard opens (raids/open),
@@ -288,6 +289,7 @@ export async function recordWorldEvent(db: Db, ev: WorldEventReport, now = new D
   const up = await db.execute(sql`
     update raids set boss_killed_by = ${ev.by}, boss_killed_at = ${now}
     where match_id = ${ev.matchId} and kind = 'world' and boss_killed_at is null`);
+  if ((up.rowCount ?? 0) > 0) await enqueueBossKill(db, ev, now);
   if ((up.rowCount ?? 0) > 0) return { status: "applied" };
   const r = await db.execute<{ n: number }>(sql`select count(*)::int as n from raids where match_id = ${ev.matchId} and kind = 'world'`);
   return { status: Number(r.rows[0]?.n ?? 0) > 0 ? "duplicate" : "unknown" };

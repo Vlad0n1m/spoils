@@ -723,6 +723,42 @@ export const moneyLedger = pgTable(
   }),
 );
 
+// ---------------------------------------------------------------------------- on-chain events
+
+/**
+ * Outbox of game results for the spoils_events program on Solana (lib/chain, README "On-chain").
+ * Settlement enqueues a row in its own transaction (a savepoint: a failure here never breaks the
+ * game flow); the cron worker /api/cron/chain-events sends due rows signed by the server authority.
+ * kind: match | boss_kill | rare_extract. status: queued → sent, or failed after repeated program
+ * rejections (transport errors keep a row queued). tx_sig / tx_valid_until: the last signed
+ * transaction and the last block height its blockhash is valid for, so a retry first checks whether
+ * that transaction landed instead of recording the event twice. payload holds internal ids; only
+ * hashes of them go on chain.
+ */
+export const chainEvents = pgTable(
+  "chain_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    kind: text("kind").$type<"match" | "boss_kill" | "rare_extract">().notNull(),
+    /** match:<matchId> | boss:<matchId> | rare:<entryId>:<itemId or def>. */
+    dedupeKey: text("dedupe_key").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: text("status").$type<"queued" | "sent" | "failed">().notNull().default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAt: timestamp("next_at", { withTimezone: true }).defaultNow().notNull(),
+    txSig: text("tx_sig"),
+    txValidUntil: bigint("tx_valid_until", { mode: "number" }),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => ({
+    dedupe: uniqueIndex("chain_events_dedupe_idx").on(t.dedupeKey),
+    due: index("chain_events_status_next_idx").on(t.status, t.nextAt),
+    sent: index("chain_events_sent_at_idx").on(t.sentAt),
+  }),
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Match = typeof matches.$inferSelect;
@@ -742,3 +778,4 @@ export type CreditLedgerRow = typeof creditLedger.$inferSelect;
 export type Listing = typeof listings.$inferSelect;
 export type Trade = typeof trades.$inferSelect;
 export type WalletLinkNonce = typeof walletLinkNonces.$inferSelect;
+export type ChainEventRow = typeof chainEvents.$inferSelect;

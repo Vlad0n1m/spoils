@@ -106,7 +106,8 @@ services:
     restart: unless-stopped
 
   # Replaces Vercel Cron (apps/web/vercel.json) on the VPS. Schedule: deploy/cron/schedule.json
-  # (void-raids every 5 min, watch-deposits every 10 min, economy-daily at 00:05 UTC).
+  # (void-raids every 5 min, watch-deposits every 10 min, economy-daily at 00:05 UTC, chain-events
+  # every minute: queued game results to the Solana program, README "On-chain").
   # Only CRON_SECRET is passed in, not the whole .env.
   cron:
     image: node:20-bookworm-slim

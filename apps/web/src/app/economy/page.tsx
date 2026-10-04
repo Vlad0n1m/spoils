@@ -6,6 +6,7 @@ import type { EconomyStatsDto } from "@/lib/lobby/api-types";
 import { fmtCr } from "@/lib/items-ui";
 import { formatMinor } from "@/lib/market/config";
 import { BRAND } from "@/lib/brand";
+import { OnChainBlock } from "./on-chain";
 
 export const dynamic = "force-dynamic";
 
@@ -202,6 +203,7 @@ export default async function EconomyPage() {
             <p className="font-body mt-6 text-xs text-white/40">Updated {new Date(stats.generatedAt).toUTCString()}.</p>
           </>
         )}
+        <OnChainBlock />
       </main>
     </div>
   );
