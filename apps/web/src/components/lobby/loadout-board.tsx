@@ -188,7 +188,7 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
 
   const slot = (key: string, size: "sm" | "md" | "lg" = "md") => {
     const e = byKey.get(key as LoadoutEntry["key"]);
-    if (!e) return <EmptySlot label={SLOT_LABEL[key] ?? (key.startsWith("p") ? "Pocket" : "")} size={size} />;
+    if (!e) return <EmptySlot label={SLOT_LABEL[key] ? "Empty" : key.startsWith("p") ? "Pocket" : ""} size={size} />;
     const u = e.itemId ? stash.uniques.find((x) => x.id === e.itemId) : undefined;
     const d = itemDef(e.def);
     const stackable = !e.itemId && (d?.stack ?? 1) > 1;

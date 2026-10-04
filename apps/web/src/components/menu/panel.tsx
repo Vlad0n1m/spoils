@@ -8,12 +8,14 @@ export type PanelVariant = "screen" | "drawer-left" | "drawer-right" | "drawer-r
 
 /** Landscape phones (≤ 500 px tall, md+): the panel covers the top bar too, 8 px from the edges. */
 const SHORT = "md:[@media(max-height:500px)]:top-2 md:[@media(max-height:500px)]:bottom-2";
+/** Landscape phones: drawers widen to 44 rem (8 px from the edge) so the header's title, tabs, PLAY chip and × fit on one row without cutting off the last tab. */
+const SHORT_DRAWER = "md:[@media(max-height:500px)]:w-[min(44rem,calc(100vw-1rem))]";
 
 const VARIANT: Record<PanelVariant, string> = {
   screen: `md:inset-x-4 md:top-[4.5rem] md:bottom-4 md:mx-auto md:max-w-7xl md:animate-panel-in ${SHORT}`,
-  "drawer-left": `md:left-4 md:right-auto md:top-[4.5rem] md:bottom-4 md:w-[min(36rem,calc(100vw-2rem))] md:animate-drawer-in-left ${SHORT}`,
-  "drawer-right": `md:right-4 md:left-auto md:top-[4.5rem] md:bottom-4 md:w-[min(36rem,calc(100vw-2rem))] md:animate-drawer-in-right ${SHORT}`,
-  "drawer-right-wide": `md:right-4 md:left-auto md:top-[4.5rem] md:bottom-4 md:w-[min(44rem,calc(100vw-2rem))] md:animate-drawer-in-right ${SHORT}`,
+  "drawer-left": `md:left-4 md:right-auto md:top-[4.5rem] md:bottom-4 md:w-[min(36rem,calc(100vw-2rem))] md:animate-drawer-in-left ${SHORT} ${SHORT_DRAWER} md:[@media(max-height:500px)]:left-2`,
+  "drawer-right": `md:right-4 md:left-auto md:top-[4.5rem] md:bottom-4 md:w-[min(36rem,calc(100vw-2rem))] md:animate-drawer-in-right ${SHORT} ${SHORT_DRAWER} md:[@media(max-height:500px)]:right-2`,
+  "drawer-right-wide": `md:right-4 md:left-auto md:top-[4.5rem] md:bottom-4 md:w-[min(44rem,calc(100vw-2rem))] md:animate-drawer-in-right ${SHORT} ${SHORT_DRAWER} md:[@media(max-height:500px)]:right-2`,
 };
 
 /**
