@@ -74,14 +74,28 @@ function Marquee() {
 function Hero() {
   return (
     <section className="relative flex min-h-[100dvh] flex-col overflow-hidden">
-      {/* Map grass as the backdrop, darkened toward the edges so the sprites pop. */}
+      {/* Real fights from the game as a muted background loop (poster for reduced motion / slow loads),
+          darkened toward the edges so the title and the PLAY button stay readable. */}
+      <video
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover motion-reduce:hidden"
+        autoPlay
+        muted
+        loop
+        playsInline
+        preload="metadata"
+        poster="/landing/hero-poster.jpg"
+        aria-hidden
+      >
+        <source src="/landing/hero-loop.webm" type="video/webm" />
+        <source src="/landing/hero-loop.mp4" type="video/mp4" />
+      </video>
       <div
-        className="pointer-events-none absolute inset-0 opacity-70"
-        style={{ backgroundImage: `url(${S("grass_tile")})`, backgroundSize: "256px 256px" }}
+        className="pointer-events-none absolute inset-0 hidden bg-cover bg-center motion-reduce:block"
+        style={{ backgroundImage: "url(/landing/hero-poster.jpg)" }}
         aria-hidden
       />
       <div
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_75%_65%_at_50%_52%,rgba(10,16,12,0.15)_0%,rgba(10,16,12,0.7)_60%,#0a100c_100%)]"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_75%_65%_at_50%_50%,rgba(10,16,12,0.2)_0%,rgba(10,16,12,0.55)_65%,#0a100c_100%)]"
         aria-hidden
       />
 
