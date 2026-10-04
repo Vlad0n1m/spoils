@@ -82,6 +82,12 @@ export const users = pgTable(
     matchesPlayed: integer("matches_played").notNull().default(0),
     /** Set once by claimStarter: the giveaway kit is one per account. */
     starterClaimedAt: timestamp("starter_claimed_at", { withTimezone: true }),
+    /**
+     * Self-custody Solana wallet the player proved they own (Sign-In with Solana, lib/wallet/link.ts).
+     * Identity only: nothing is ever sent to or signed by it. Unrelated to depositAddress (custodial).
+     */
+    walletPubkey: text("wallet_pubkey"),
+    walletLinkedAt: timestamp("wallet_linked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -90,6 +96,8 @@ export const users = pgTable(
     emailIdx: uniqueIndex("users_email_idx").on(t.email),
     nickIdx: uniqueIndex("users_nickname_idx").on(t.nickname),
     depositIdx: uniqueIndex("users_deposit_idx").on(t.depositAddress),
+    /** One account per wallet (NULLs do not collide). */
+    walletIdx: uniqueIndex("users_wallet_pubkey_idx").on(t.walletPubkey),
     /** WORLD v6 level board (xp desc). */
     xpIdx: index("users_xp_idx").on(t.xp.desc().nullsFirst()),
     creditsNonNeg: check("users_credits_non_negative", sql`${t.credits} >= 0`),
@@ -136,6 +144,33 @@ export const withdrawals = pgTable(
   },
   (t) => ({
     userIdx: index("withdrawals_user_idx").on(t.userId),
+  }),
+);
+
+/**
+ * Sign-In with Solana challenges for linking users.wallet_pubkey (lib/wallet/link.ts): issued to one
+ * signed-in user, valid 10 minutes, single use (used_at is set by the first verify attempt that
+ * carries it, whatever its outcome). Rows an hour past expiry are pruned when new ones are issued.
+ */
+export const walletLinkNonces = pgTable(
+  "wallet_link_nonces",
+  {
+    nonce: text("nonce").primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** SIWS domain (request Host) and URI (origin) the message must carry. */
+    domain: text("domain").notNull(),
+    uri: text("uri").notNull(),
+    /** SIWS Chain ID: devnet | testnet | mainnet. */
+    chainId: text("chain_id").notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+  },
+  (t) => ({
+    userIdx: index("wallet_link_nonces_user_idx").on(t.userId),
+    expiresIdx: index("wallet_link_nonces_expires_idx").on(t.expiresAt),
   }),
 );
 
@@ -706,3 +741,4 @@ export type PvpKill = typeof pvpKills.$inferSelect;
 export type CreditLedgerRow = typeof creditLedger.$inferSelect;
 export type Listing = typeof listings.$inferSelect;
 export type Trade = typeof trades.$inferSelect;
+export type WalletLinkNonce = typeof walletLinkNonces.$inferSelect;
