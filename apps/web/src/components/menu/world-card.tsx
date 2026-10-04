@@ -5,7 +5,7 @@ import { WORLD } from "@extract/shared";
 import { BRAND } from "@/lib/brand";
 import { useLobby, useNow } from "@/lib/lobby/lobby-context";
 import { SHORT_RAID_MS } from "@/lib/lobby/play-state";
-import { fmtClockS, fmtLocalHm, secsUntil, worldView } from "@/lib/lobby/world-clock";
+import { fmtClockS, fmtLocalHm, mapLabel, secsUntil, worldView } from "@/lib/lobby/world-clock";
 import { BossBanner } from "./boss-banner";
 
 type Chip = { label: string; tone: string };
@@ -60,14 +60,14 @@ export function WorldCard() {
 
   return (
     <section
-      aria-label={`${BRAND.mapName}, map ${v.mapNumber}`}
+      aria-label={`${BRAND.mapName}, ${mapLabel(v.mapNumber)}`}
       // Landscape phones (≤ 500 px tall): tighter, and the raiders line joins the wipe-time line.
       className="toon-panel mx-auto w-full max-w-xl bg-[#121722]/90 p-3 backdrop-blur-sm md:p-4 [@media(max-height:500px)]:p-2.5"
     >
       <div className="flex items-center justify-between gap-3">
         <h2 className="min-w-0 truncate text-base tracking-wide text-white md:text-lg">
           <span className="optical-center">
-            {BRAND.mapName.toUpperCase()} <span className="text-white/50">·</span> Map #{v.mapNumber}
+            {BRAND.mapName.toUpperCase()} <span className="text-white/50">·</span> {mapLabel(v.mapNumber)}
           </span>
         </h2>
         <span className={clsx("inline-flex shrink-0 items-center gap-1.5 rounded-full border-[3px] border-black px-2.5 py-1 text-[0.7rem] tracking-[0.12em] shadow-[0_2px_0_#000]", chip.tone)}>

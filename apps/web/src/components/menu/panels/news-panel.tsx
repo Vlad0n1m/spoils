@@ -5,7 +5,7 @@ import clsx from "clsx";
 import Link from "next/link";
 import type { WorldEventDto, WorldEventsDto } from "@extract/shared";
 import { NEWS_POSTS } from "@/content/news";
-import { fmtLocalHm } from "@/lib/lobby/world-clock";
+import { fmtLocalHm, mapLabel } from "@/lib/lobby/world-clock";
 import { timeAgo } from "@/components/lobby/use-lobby";
 
 const FEED_LIMIT = 20;
@@ -18,10 +18,10 @@ export function eventText(e: WorldEventDto): string {
     return e.by ? `${name} killed by ${e.by}` : `${name} is down`;
   }
   const s = e.stats;
-  if (!s) return `Map #${e.mapNumber} wiped`;
+  if (!s) return `${mapLabel(e.mapNumber)} wiped`;
   const parts = [`${s.extracted} extracted`, `${s.died} died`];
   if (s.mia > 0) parts.push(`${s.mia} caught in the wipe`);
-  return `Map #${e.mapNumber} wiped · ${parts.join(", ")}`;
+  return `${mapLabel(e.mapNumber)} wiped · ${parts.join(", ")}`;
 }
 
 const TAG: Record<WorldEventDto["kind"], { label: string; tone: string }> = {
@@ -81,7 +81,7 @@ function Feed() {
           <div className="min-w-0">
             <p className="font-body text-sm font-semibold text-white">{eventText(e)}</p>
             <p className="font-body mt-0.5 text-xs text-white/60">
-              Map #{e.mapNumber} · {fmtLocalHm(e.at)} · {timeAgo(e.at)}
+              {mapLabel(e.mapNumber)} · {fmtLocalHm(e.at)} · {timeAgo(e.at)}
             </p>
           </div>
         </li>
