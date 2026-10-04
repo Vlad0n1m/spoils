@@ -157,6 +157,11 @@ export class SelfState extends Schema {
   @type("number") enteredAt = 0;
   /** WORLD v6: match clock when this player's extracts arm (enteredAt + EXTRACT_ARM_MS); see extractOpenAtFor. */
   @type("number") extractArmAt = 0;
+  /**
+   * In-raid XP estimate of this entry (Σ raidXpGain of the actions counted so far: containers,
+   * marauders, guards, bosses, PvP). HUD only; the web settles the real XP at exit.
+   */
+  @type("uint16") raidXp = 0;
 }
 
 /** Item lying on the ground. AOI-filtered. uid / mag / dur live in the server runtime only. */

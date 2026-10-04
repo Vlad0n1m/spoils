@@ -8,6 +8,7 @@
 import type { SlotKey } from "./inventory.js";
 import type { KillWeapon, WeaponId } from "./items.js";
 import type { SoundMsg } from "./sound.js";
+import type { RaidXpKey } from "./economy.js";
 
 /** Colyseus room names. */
 export const ROOMS = {
@@ -271,6 +272,19 @@ export interface EventsMsg {
   nades?: GrenadeMsg[];
   /** Weapons v2: grenades that exploded this tick. */
   booms?: BoomMsg[];
+  /** In-raid XP the recipient just earned (personal: only ever sent to the earner). */
+  xp?: XpMsg[];
+}
+
+/**
+ * One counted XP action of the recipient (raidXpGain): k = the XP line, xp = what it adds to the
+ * in-raid estimate (0 = capped, e.g. past XP.CONTAINER_MAX containers), n = this entry's count of
+ * that line so far. The running estimate is SelfState.raidXp; the settled XP comes at exit.
+ */
+export interface XpMsg {
+  k: RaidXpKey;
+  xp: number;
+  n: number;
 }
 
 /** Quantise an angle to 2π/64 (HitMsg.fa): enough for a damage arc, too coarse to aim with. */

@@ -1255,6 +1255,31 @@ export function xpForExit(i: XpInput): { total: number; grind: number; lines: Xp
   return { total: subtotal + first, grind, lines };
 }
 
+/** The XP lines a raid can grow while the player is on the map (the server counts them as they happen). */
+export type RaidXpKey = "containers" | "npc" | "guard" | "boss" | "pvp";
+
+/**
+ * In-raid XP estimate of one counted action (EventsMsg.xp, SelfState.raidXp): the xpForExit term it
+ * adds. `count` = this entry's count of that line after the action; a container past
+ * XP.CONTAINER_MAX adds 0 (the per-entry cap). Extract / haul / first-extract, the daily soft cap,
+ * the ranked-PvP checks the web makes and the MIA rule (no container XP) apply only at settlement,
+ * so the outcome screen's settled XP is authoritative and can differ.
+ */
+export function raidXpGain(key: RaidXpKey, count: number): number {
+  switch (key) {
+    case "containers":
+      return count >= 1 && count <= XP.CONTAINER_MAX ? XP.CONTAINER : 0;
+    case "npc":
+      return XP.NPC;
+    case "guard":
+      return XP.GUARD;
+    case "boss":
+      return XP.BOSS;
+    case "pvp":
+      return XP.PVP;
+  }
+}
+
 /** XP from level L to L+1. ~180 XP/raid: L5 ≈ 14 raids, L10 ≈ 50, L15 ≈ 105. */
 export function xpToNext(level: number): number {
   return 250 + 150 * level;

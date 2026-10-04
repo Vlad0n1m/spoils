@@ -591,7 +591,7 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
         if (seenCorpses.has(t.key)) continue;
         seenCorpses.add(t.key);
         if (t.npcCorpse) continue;
-        for (const it of t.initial) if (it.uid && itemDef(it.def)?.unique && !(it.flags & ITEM_FLAG.FREE)) corpseUids.add(it.uid);
+        for (const it of t.initial) if (it.uid && itemDef(it.def)?.unique && !(it.flags & (ITEM_FLAG.FREE | ITEM_FLAG.BROKEN))) corpseUids.add(it.uid);
       }
     }
     res.maxHumans = Math.max(res.maxHumans, m.humansOnMap());

@@ -9,6 +9,7 @@
 
 import type {
   BoomMsg,
+  XpMsg,
   BossKind,
   GrenadeMsg,
   HitMsg,
@@ -261,6 +262,8 @@ export type MatchEvent =
   | { type: "nade"; to: number; msg: GrenadeMsg }
   /** Weapons v2: a grenade blast for one recipient. */
   | { type: "boom"; to: number; msg: BoomMsg }
+  /** In-raid XP the recipient earned (xp.ts creditRaidXp): personal, to that player only. */
+  | { type: "xp"; to: number; msg: XpMsg }
   /** Add / remove a `loot` entry to / from one client's StateView (WP-B search sessions). */
   | { type: "view"; to: number; op: "add" | "remove"; key: string }
   | { type: "outcome"; to: number; msg: OutcomeMsg }
