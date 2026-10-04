@@ -8,7 +8,7 @@
  */
 
 import type { Room } from "colyseus.js";
-import type { BossKind, HealKind, KillWeapon, MapData, WeaponId } from "@extract/shared";
+import type { BossKind, HealKind, KillWeapon, MapData, RaidXpKey, WeaponId } from "@extract/shared";
 import type { KillTally } from "./npc-labels";
 
 export interface HudSlot {
@@ -66,6 +66,8 @@ export interface HudSelf {
   creditsEstimate: number;
   /** Allowed extracts for this player (bit i = MapData.extracts[i]); 0xff when unknown. */
   extractMask: number;
+  /** In-raid XP estimate (SelfState.raidXp); the settled XP comes on the outcome screen. */
+  raidXp: number;
 }
 
 export interface KillFeedEntry {
@@ -145,6 +147,18 @@ export interface HudSnapshot {
   mapOpen?: boolean;
   /** The local player's drawn position and aim (the first-raid tutorial reads it); null off the map. */
   pose?: { x: number; y: number; aim: number } | null;
+  /** In-raid XP actions of the last XP_GAIN_SHOW_MS, oldest first (EventsMsg.xp). */
+  xpGains?: XpGain[];
+}
+
+/** One counted XP action (EventsMsg.xp) as the HUD shows it. */
+export interface XpGain {
+  id: number;
+  k: RaidXpKey;
+  /** XP added to the estimate; 0 = the line is capped (containers past XP.CONTAINER_MAX). */
+  xp: number;
+  /** This entry's count of that line so far. */
+  n: number;
 }
 
 /** Panel keys the input layer forwards (Tab / T / Esc / M); owned by the overlay UIs. */

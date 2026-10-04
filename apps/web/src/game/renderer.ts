@@ -40,6 +40,7 @@ import {
   S2C,
   SOLID,
   WEAPONS,
+  XP,
   buildBushIndex,
   bushIndexAt,
   countOf,
@@ -69,6 +70,7 @@ import {
   type ShotMsg,
   type ThrowMsg,
   type WeaponId,
+  type XpMsg,
 } from "@extract/shared";
 import { COLORS, destroyTextures, loadTextures, type Textures } from "./assets";
 import { Effects } from "./effects";
@@ -79,7 +81,7 @@ import { EXPIRE_FADE_TAU_MS, expiryBlink, expiryFading } from "./expiry";
 import { InputController, sampleAim, type GrenadeAim } from "./input";
 import { GRENADE_TAP_FRAC, grenadeFracFor } from "./grenades";
 import { PerfOverlay, TouchControls, shouldUseTouch } from "./touch-controls";
-import { TouchCrosshair, setCanvasCrosshair, touchCrosshairDistance } from "./crosshair";
+import { TouchCrosshair, releaseCanvasCursor, setCanvasCrosshair, touchCrosshairDistance } from "./crosshair";
 import { Minimap, type MinimapExtract } from "./minimap";
 import { PartyTracker, type PartyMateView } from "./party";
 import { autoFireTarget, isPartyMate, type AutoFireCandidate } from "./auto-fire";
@@ -87,7 +89,8 @@ import { canStartHeal, decayFactor, inputCancelsHeal, moveFnFor, Predictor, read
 import { DelayQueue, shotCentre } from "./shots";
 import type { CameraView, GameContext, GameLayers, GameSystem, SystemCommand } from "./systems";
 import { SYSTEM_FACTORIES } from "./systems-registry";
-import type { GameRendererApi, HudSnapshot, KillFeedEntry, RendererOptions } from "./types";
+import type { GameRendererApi, HudSnapshot, KillFeedEntry, RendererOptions, XpGain } from "./types";
+import { KnownEmpty } from "./known-empty";
 import { WorldView, type ViewRect } from "./world";
 import { EMPTY_TALLY, bossKindOfLabel, corpseNpcRole, npcDisplayName, npcRoleName, tallyKill, type KillTally, type NpcRoleName } from "./npc-labels";
 import { getGameAudio } from "./audio/game-audio";
@@ -108,6 +111,10 @@ const HUD_INTERVAL_MS = 33;
 const PING_INTERVAL_MS = 2000;
 const KILL_FEED_MAX = 5;
 const KILL_FEED_TTL_MS = 6000;
+/** How long an XP gain stays in the HUD ticker (EventsMsg.xp). */
+export const XP_GAIN_SHOW_MS = 2400;
+const XP_POP_COLOR = 0xffd54a;
+const XP_CAP_COLOR = 0xb8b8b8;
 /** Padding around the viewport for culling, so big sprites do not pop at the edges. */
 const CULL_MARGIN = 160;
 /** Never let the local clock estimate run further than this ahead of the last server clock. */
@@ -277,6 +284,11 @@ export class GameRenderer implements GameRendererApi {
   private lastHudAt = 0;
   private pingMs: number | null = null;
   private killFeed: Array<KillFeedEntry & { receivedAt: number }> = [];
+  /** EventsMsg.xp of the last XP_GAIN_SHOW_MS (HUD XP ticker). */
+  private xpGains: Array<XpGain & { receivedAt: number }> = [];
+  private xpSeq = 0;
+  /** Containers / bodies this client searched and saw empty (no prompt, no glow, dimmed). */
+  private readonly known = new KnownEmpty();
   private killSeq = 0;
   /** The local player's kills this raid by victim kind (outcome screen: players vs NPCs). */
   private killTally: KillTally = { ...EMPTY_TALLY };
@@ -362,6 +374,10 @@ export class GameRenderer implements GameRendererApi {
     this.opts.mountEl.appendChild(app.canvas);
     app.canvas.style.display = "block";
     app.canvas.style.touchAction = "none";
+    // Pixi's event system writes canvas.style.cursor = cursorStyles.default ("inherit") on every
+    // pointer move; an inline cursor beats the .game-crosshair class, so the desktop crosshair never
+    // showed. "" leaves the inline style empty and the class (crosshair.ts) decides.
+    releaseCanvasCursor(app);
 
     // Weapons v2: crossbow bolts fly as the bolt sprite.
     this.effects = new Effects({ bolt: tex.bolt });
@@ -789,6 +805,7 @@ export class GameRenderer implements GameRendererApi {
   private onStatePatch() {
     const state = this.state;
     if (!state || this.stopped) return;
+    this.known.observe(state.loot);
     const now = performance.now();
     if (state.clockMs !== this.clockBase) {
       this.clockBase = state.clockMs;
@@ -852,12 +869,13 @@ export class GameRenderer implements GameRendererApi {
     if (Array.isArray(ev.shots)) for (const m of ev.shots) this.onShot(m);
     if (Array.isArray(ev.hits)) for (const m of ev.hits) this.onHit(m);
     if (Array.isArray(ev.kills)) for (const m of ev.kills) this.onKill(m);
+    if (Array.isArray(ev.xp)) for (const m of ev.xp) this.onXp(m);
     if (Array.isArray(ev.chest)) {
       const now = performance.now();
       for (const c of ev.chest) {
         const spot = this.containers?.at(c.idx);
         if (!spot || !this.effects) continue;
-        const color = containerSprite(spot.tier).color;
+        const color = containerSprite(spot).color;
         this.effects.ring(spot.x, spot.y, color, 80, 450, now);
         this.effects.burst(spot.x, spot.y, color, 16, 320, now);
       }
@@ -865,6 +883,18 @@ export class GameRenderer implements GameRendererApi {
     const ctx = this.ctx;
     if (!ctx || !this.systemsReady) return;
     for (const s of this.systems) if (s.onEvents) this.runSystem(s, () => s.onEvents!(ev, ctx));
+  }
+
+  /** In-raid XP (personal): a "+N XP" pop above the player and a line for the HUD ticker. */
+  private onXp(m: XpMsg) {
+    if (!m || typeof m.xp !== "number" || typeof m.k !== "string") return;
+    const now = performance.now();
+    this.xpGains.push({ id: ++this.xpSeq, k: m.k, xp: Math.max(0, m.xp), n: m.n | 0, receivedAt: now });
+    if (this.xpGains.length > 8) this.xpGains.shift();
+    const at = this.selfRender;
+    if (!at || !this.effects) return;
+    if (m.xp > 0) this.effects.popText(at.x, at.y - 30, `+${m.xp} XP`, XP_POP_COLOR, now, m.xp >= XP.BOSS ? 26 : 18);
+    else if (m.k === "containers") this.effects.popText(at.x, at.y - 30, "XP cap", XP_CAP_COLOR, now, 15);
   }
 
   private onShot(m: ShotMsg) {
@@ -1142,7 +1172,7 @@ export class GameRenderer implements GameRendererApi {
 
     const selfOnMap = controllable ? this.selfRender : null;
     this.worldView?.update(view, selfOnMap, dt);
-    this.containers?.update(view.x0, view.y0, view.x1, view.y1, state.containerState as unknown as ArrayLike<number>, now);
+    this.containers?.update(view.x0, view.y0, view.x1, view.y1, state.containerState as unknown as ArrayLike<number>, now, this.known);
 
     // Environment → darkness, tint, vision range.
     this.updateEnv(state, clock);
@@ -1236,7 +1266,7 @@ export class GameRenderer implements GameRendererApi {
       v.root.visible = v.alpha > 0.01;
       if (v.root.visible) {
         const look = this.corpseLook(id, c.label);
-        v.sync(c, look.npc, look.name);
+        v.sync(c, look.npc, look.name, this.known.corpse(id));
       }
     }
 
@@ -1499,6 +1529,7 @@ export class GameRenderer implements GameRendererApi {
 
   private emitHud(state: BattleState, clock: number, now: number) {
     while (this.killFeed.length && now - this.killFeed[0]!.receivedAt > KILL_FEED_TTL_MS) this.killFeed.shift();
+    while (this.xpGains.length && now - this.xpGains[0]!.receivedAt > XP_GAIN_SHOW_MS) this.xpGains.shift();
     const p = this.predictor;
     let snapshot: HudSnapshot = buildHud({
       state,
@@ -1512,6 +1543,7 @@ export class GameRenderer implements GameRendererApi {
       idx: this.idx,
       map: this.mapData,
       move: p ? { rollCooldownMs: p.rollCooldownMs, rolling: p.rolling, walking: p.walking } : null,
+      known: this.known,
     });
     this.counts = stickyCounts(this.counts, snapshot);
     snapshot = {
@@ -1522,6 +1554,7 @@ export class GameRenderer implements GameRendererApi {
       mapOpen: this.systemsReady && this.systems.some((s) => s.isInputBlocked?.() === true),
       // First-raid tutorial (tutorial.ts): the drawn position and the local aim.
       pose: this.selfRender ? { x: this.selfRender.x, y: this.selfRender.y, aim: this.aim } : null,
+      xpGains: this.xpGains.map(({ receivedAt: _r, ...g }) => g),
     };
     if (this.touch) {
       const s = snapshot.self;

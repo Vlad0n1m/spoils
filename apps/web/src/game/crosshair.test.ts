@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CROSSHAIR_CURSOR_CLASS, TOUCH_CROSSHAIR, crosshairAlpha, rayToScreenEdge, setCanvasCrosshair, touchCrosshairDistance } from "./crosshair";
+import { CROSSHAIR_CURSOR_CLASS, TOUCH_CROSSHAIR, crosshairAlpha, rayToScreenEdge, releaseCanvasCursor, setCanvasCrosshair, touchCrosshairDistance } from "./crosshair";
 
 const near = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
 
@@ -56,5 +56,16 @@ describe("crosshair", () => {
       [CROSSHAIR_CURSOR_CLASS, true],
       [CROSSHAIR_CURSOR_CLASS, false],
     ]);
+  });
+});
+
+describe("releaseCanvasCursor", () => {
+  it("empties Pixi's default cursor so its inline style cannot override the crosshair class", () => {
+    const cursorStyles: Record<string, unknown> = { default: "inherit", pointer: "pointer" };
+    const canvas = { style: { cursor: "inherit" } };
+    releaseCanvasCursor({ renderer: { events: { cursorStyles } }, canvas });
+    assert.equal(cursorStyles.default, "");
+    assert.equal(cursorStyles.pointer, "");
+    assert.equal(canvas.style.cursor, "");
   });
 });

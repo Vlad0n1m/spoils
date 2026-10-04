@@ -6,7 +6,7 @@ import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 import { BREAK_CHANCE_ON_DEATH, GRENADE, HEAL, WEAPONS, XP, itemDef, type WeaponId } from "@extract/shared";
 import { WIPE_URGENT_MS, bossToastText, deepEqual, extractXpLeftS, shallowEqual, wipeWarnText, type HudStore } from "@/game/hud";
-import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "@/game/types";
+import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry, XpGain } from "@/game/types";
 import { NPC_TAG_COLOR, cssHex, killFeedNames, npcLabels, type FeedName } from "@/game/npc-labels";
 import { fmtClock, fmtCr, isKillWeapon, killWeaponIcon, killWeaponName, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
 
@@ -112,6 +112,7 @@ export const Hud = memo(function Hud({
       >
         <PhaseTimer store={store} touch={touch} />
         {inPlay && !mapOpen && <ExtractCompass store={store} earnsXp={earnsXp} />}
+        {inPlay && earnsXp && <XpTicker store={store} touch={touch} />}
         {inPlay && <WipeBanner store={store} touch={touch} />}
         <BossToast store={store} touch={touch} />
       </div>
@@ -334,6 +335,78 @@ function ExtractCompass({ store, earnsXp }: { store: HudStore; earnsXp: boolean 
           title={`An extract earns XP after ${Math.round(XP.MIN_ONMAP_MS / 60_000)} minutes on the map`}
         >
           · Extract XP in <span className="tabular-nums">{fmtClock(xpLeft * 1000)}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** The "+N XP" bubble pops in, holds and fades over XP_GAIN_SHOW_MS (renderer.ts keeps it that long). */
+function xpPopIn(el: HTMLElement | null): void {
+  if (!el || typeof el.animate !== "function") return;
+  const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.animate(
+    still
+      ? [{ opacity: 1 }, { opacity: 1, offset: 0.8 }, { opacity: 0 }]
+      : [
+          { opacity: 0, transform: "translateY(6px) scale(0.8)" },
+          { opacity: 1, transform: "translateY(0) scale(1.12)", offset: 0.12 },
+          { transform: "translateY(0) scale(1)", offset: 0.22 },
+          { opacity: 1, offset: 0.75 },
+          { opacity: 0, transform: "translateY(-4px)" },
+        ],
+    { duration: 2400, easing: "ease-out", fill: "both" },
+  );
+}
+
+const XP_LINE_SHORT: Readonly<Record<XpGain["k"], string>> = {
+  containers: "Container",
+  npc: "Marauder",
+  guard: "Guard",
+  boss: "Boss",
+  pvp: "Raider",
+};
+
+function xpTickerSlice(s: HudSnapshot) {
+  const g = s.xpGains ?? [];
+  const last = g[g.length - 1];
+  return {
+    total: s.self?.raidXp ?? 0,
+    lastId: last?.id ?? 0,
+    lastXp: last?.xp ?? 0,
+    lastK: last?.k ?? "containers",
+    lastN: last?.n ?? 0,
+  };
+}
+
+/**
+ * In-raid XP: the running estimate of this raid (SelfState.raidXp) and the latest gain as a
+ * "+N XP · Marauder" bubble (EventsMsg.xp). A container past the per-entry cap shows "Container XP
+ * cap reached" instead. The settled XP (daily cap, extract and haul lines) comes on the outcome screen.
+ */
+function XpTicker({ store, touch }: { store: HudStore; touch: boolean }) {
+  const { total, lastId, lastXp, lastK, lastN } = useHud(store, xpTickerSlice, shallowEqual);
+  if (total === 0 && lastId === 0) return null;
+  const capped = lastId > 0 && lastXp === 0 && lastK === "containers";
+  return (
+    <div className={clsx("flex items-center gap-2", touch ? "text-xs" : "text-sm")}>
+      <span
+        className="toon-chip flex items-center gap-1.5 py-0.5 pl-1 pr-2.5 tracking-wide text-amber-200"
+        title="XP earned this raid so far (estimate: the daily limit and the extract XP are settled when you leave)"
+      >
+        <span className="grid h-6 w-6 place-items-center rounded-full border-2 border-black bg-amber-300 text-[0.6rem] text-black">XP</span>
+        <span className="toon-text-thin tabular-nums text-white">{total}</span>
+      </span>
+      {lastId > 0 && (
+        <span
+          key={lastId}
+          ref={xpPopIn}
+          className={clsx(
+            "toon-text-thin whitespace-nowrap",
+            capped ? "text-white/60" : "text-amber-300",
+          )}
+        >
+          {capped ? `Container XP cap reached (${XP.CONTAINER_MAX})` : `+${lastXp} XP · ${XP_LINE_SHORT[lastK]}${lastK === "containers" ? ` ${lastN}/${XP.CONTAINER_MAX}` : ""}`}
         </span>
       )}
     </div>

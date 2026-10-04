@@ -5,7 +5,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Container } from "pixi.js";
-import { RARITY_COLORS, type EventsMsg } from "@extract/shared";
+import { CONTAINER_KINDS, RARITY_COLORS, type EventsMsg } from "@extract/shared";
+import { SPRITE_NAMES } from "./sprite-cache";
 import { DAMAGE_ARC, DamageArcSystem, ROLL_ANIM_MS, containerSprite, damageArcAlpha, rollSpin } from "./entities";
 import type { GameContext } from "./systems";
 
@@ -20,13 +21,25 @@ describe("rollSpin", () => {
 });
 
 describe("containerSprite", () => {
-  it("maps tiers 0..4 to the crate and the four chest rarities", () => {
-    assert.equal(containerSprite(0).sprite, "crate");
-    assert.equal(containerSprite(1).sprite, "chest_common");
-    assert.equal(containerSprite(4).sprite, "chest_legendary");
-    assert.equal(containerSprite(4).color, RARITY_COLORS[3]);
-    assert.equal(containerSprite(99).sprite, "chest_legendary");
-    assert.equal(containerSprite(-3).sprite, "crate");
+  it("gives every container kind its own closed and opened-empty sprite", () => {
+    for (const kind of CONTAINER_KINDS) {
+      const closed = containerSprite({ kind, tier: 1 });
+      const open = containerSprite({ kind, tier: 1 }, true);
+      assert.equal(closed.sprite, `box_${kind}`);
+      assert.equal(open.sprite, `box_${kind}_open`);
+      assert.ok((SPRITE_NAMES as readonly string[]).includes(closed.sprite), closed.sprite);
+      assert.ok((SPRITE_NAMES as readonly string[]).includes(open.sprite), open.sprite);
+    }
+  });
+
+  it("keeps tiers readable: the glow colour by tier, a slightly bigger box higher up", () => {
+    assert.equal(containerSprite({ kind: "safe", tier: 0 }).color, RARITY_COLORS[0]);
+    assert.equal(containerSprite({ kind: "safe", tier: 1 }).color, RARITY_COLORS[0]);
+    assert.equal(containerSprite({ kind: "safe", tier: 2 }).color, RARITY_COLORS[1]);
+    assert.equal(containerSprite({ kind: "safe", tier: 4 }).color, RARITY_COLORS[3]);
+    assert.equal(containerSprite({ kind: "safe", tier: 99 }).color, RARITY_COLORS[3]);
+    assert.equal(containerSprite({ kind: "safe", tier: -3 }).color, RARITY_COLORS[0]);
+    assert.ok(containerSprite({ kind: "crate", tier: 4 }).size > containerSprite({ kind: "crate", tier: 0 }).size);
   });
 });
 

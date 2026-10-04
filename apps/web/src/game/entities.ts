@@ -21,13 +21,13 @@ import {
   WORLD,
   itemDef,
   type BossSpot,
+  type ContainerKind,
   type ContainerSpot,
   type EventsMsg,
   type WeaponId,
 } from "@extract/shared";
 import {
   AMMO_TINT,
-  CHEST_SIZE,
   COLORS,
   PLAYER_SPRITE_SIZE,
   WEAPON_GROUND_LENGTH,
@@ -39,6 +39,7 @@ import {
 import { BOSS_COLOR, BOSS_SCALE, GUARD_SCALE, GUARD_TINT, MARAUDER_TINT, hpFraction, kindOfNpc, npcNameTag, npcRole, type NpcRole } from "./boss";
 import { guardBadgeContext, npcBadgeContext } from "./boss-icons";
 import { NPC_CORPSE_TINT, NPC_RING_COLOR, NPC_TAG_COLOR, type NpcRoleName } from "./npc-labels";
+import type { KnownEmpty } from "./known-empty";
 import { SnapshotBuffer } from "./prediction";
 import type { GameContext, GameSystem } from "./systems";
 
@@ -546,7 +547,10 @@ export class CorpseView {
     c: { x: number; y: number; label: string; color: number; rot: number; opened: boolean; empty: boolean },
     npc: NpcRoleName | null = null,
     npcName = "",
+    /** This client searched the body and saw it empty (known-empty.ts), before the public flag. */
+    knownEmpty = false,
   ) {
+    const empty = c.empty || knownEmpty;
     this.root.position.set(c.x, c.y);
     if (this.sprite.texture === Texture.EMPTY) {
       const t = this.icons.get("corpse");
@@ -576,14 +580,16 @@ export class CorpseView {
       this.name.text = label;
       this.name.style.fill = npc ? NPC_TAG_COLOR[npc] : 0xd0d0d0;
     }
-    const key = `${c.opened}|${c.empty}|${npc ?? ""}`;
+    const key = `${c.opened}|${empty}|${npc ?? ""}`;
     if (key !== this.stateKey) {
       this.stateKey = key;
-      // Searched bodies read "done" at a glance; emptied ones fade into the ground. NPC bodies keep
-      // their olive tint so they never pass for a raider's.
+      // Searched bodies read "done" at a glance; emptied ones fade into the ground (ring too: no
+      // "lootable" halo on a body with nothing left). NPC bodies keep their olive tint so they never
+      // pass for a raider's.
       const base = npc ? NPC_CORPSE_TINT : 0xffffff;
-      this.sprite.tint = c.empty ? 0x5a5a5a : c.opened ? (npc ? 0x7d7a64 : 0xb0b0b0) : base;
-      this.name.alpha = c.empty ? 0.45 : 0.85;
+      this.sprite.tint = empty ? 0x5a5a5a : c.opened ? (npc ? 0x7d7a64 : 0xb0b0b0) : base;
+      this.name.alpha = empty ? 0.45 : 0.85;
+      this.ring.alpha = empty ? 0.25 : 1;
     }
   }
 
@@ -594,13 +600,31 @@ export class CorpseView {
 
 /* ---------------------------------------------------------------------------- containers */
 
-/** Static container look by MapData tier (0 = small cache .. 4 = legendary). */
-export function containerSprite(tier: number): { sprite: SpriteName; size: number; color: number } {
-  const t = Math.max(0, Math.min(4, Math.floor(tier)));
-  if (t === 0) return { sprite: "crate", size: 44, color: RARITY_COLORS[0] };
-  const r = (t - 1) as 0 | 1 | 2 | 3;
-  const sprites = ["chest_common", "chest_rare", "chest_epic", "chest_legendary"] as const;
-  return { sprite: sprites[r], size: CHEST_SIZE[r], color: RARITY_COLORS[r] };
+/** Drawn width (world px) of each container kind at tier 0; higher tiers draw a little bigger. */
+export const CONTAINER_DRAW_W: Readonly<Record<ContainerKind, number>> = {
+  crate: 46,
+  toolbox: 42,
+  fridge: 46,
+  pc: 50,
+  med_case: 42,
+  weapon_box: 58,
+  safe: 48,
+  stash: 48,
+};
+
+/**
+ * Static container look: the kind's own sprite (closed, or `open` = the opened-empty variant),
+ * its drawn width and the tier colour of its glow ring (RARITY_COLORS by tier, 0 = small cache ..
+ * 4 = legendary), which is what keeps tiers readable across kinds.
+ */
+export function containerSprite(
+  spot: { kind: ContainerKind; tier: number },
+  open = false,
+): { sprite: SpriteName; size: number; color: number } {
+  const t = Math.max(0, Math.min(4, Math.floor(spot.tier)));
+  const kind: ContainerKind = spot.kind in CONTAINER_DRAW_W ? spot.kind : "crate";
+  const sprite = `box_${kind}${open ? "_open" : ""}` as SpriteName;
+  return { sprite, size: Math.round(CONTAINER_DRAW_W[kind] * (1 + 0.05 * t)), color: RARITY_COLORS[Math.max(0, t - 1)] ?? RARITY_COLORS[0] };
 }
 
 interface ContainerMarker {
@@ -609,6 +633,8 @@ interface ContainerMarker {
   sprite: Sprite;
   state: number;
   phase: number;
+  /** Width the sprite is drawn at (fitWidth after a texture swap). */
+  size: number;
 }
 
 /**
@@ -648,15 +674,17 @@ export class ContainerLayer {
     const markers: Array<[number, ContainerMarker]> = [];
     for (const i of this.byChunk.get(key) ?? []) {
       const c = this.containers[i]!;
-      const look = containerSprite(c.tier);
+      const look = containerSprite(c);
       const sprite = new Sprite(this.tex[look.sprite]);
       sprite.anchor.set(0.5);
       fitWidth(sprite, look.size);
       const glow = new Graphics();
-      const gr = look.size * 0.62;
+      const gr = look.size * 0.66;
+      // Tier glow: the colour says the tier; T3 / T4 get a second, wider halo so they read from afar.
+      if (c.tier >= 3) glow.circle(0, 0, gr * 1.28).fill({ color: look.color, alpha: 0.12 });
       glow.circle(0, 0, gr).fill({ color: look.color, alpha: 0.22 });
-      glow.circle(0, 0, gr).stroke({ width: 3, color: look.color, alpha: 0.7 });
-      const m: ContainerMarker = { root: new Container(), glow, sprite, state: -1, phase: (i * 2.399) % (Math.PI * 2) };
+      glow.circle(0, 0, gr).stroke({ width: c.tier >= 3 ? 4 : 3, color: look.color, alpha: 0.75 });
+      const m: ContainerMarker = { root: new Container(), glow, sprite, state: -1, phase: (i * 2.399) % (Math.PI * 2), size: look.size };
       m.root.position.set(c.x, c.y);
       m.root.addChild(glow, sprite);
       root.addChild(m.root);
@@ -668,8 +696,19 @@ export class ContainerLayer {
     return chunk;
   }
 
-  /** Show the chunks overlapping the view rect and animate their markers. */
-  update(x0: number, y0: number, x1: number, y1: number, containerState: ArrayLike<number>, nowMs: number) {
+  /**
+   * Show the chunks overlapping the view rect and animate their markers. `known` (known-empty.ts):
+   * containers this client searched and saw empty draw as EMPTIED before the public flag flips.
+   */
+  update(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    containerState: ArrayLike<number>,
+    nowMs: number,
+    known: Pick<KnownEmpty, "containerState"> | null = null,
+  ) {
     const C = WORLD.CHUNK;
     const want = this.scratch;
     want.length = 0;
@@ -684,12 +723,25 @@ export class ContainerLayer {
       const chunk = this.chunks.get(k) ?? this.build(k);
       chunk.root.visible = true;
       for (const [i, m] of chunk.markers) {
-        const st = containerState[i] ?? CONTAINER_STATE.UNTOUCHED;
+        const pub = containerState[i] ?? CONTAINER_STATE.UNTOUCHED;
+        const st = known ? known.containerState(i, pub) : pub;
         if (st !== m.state) {
+          const wasEmpty = m.state === CONTAINER_STATE.EMPTIED;
           m.state = st;
+          const empty = st === CONTAINER_STATE.EMPTIED;
+          // Untouched: closed + tier glow. Opened by someone (things may be left): closed, no glow,
+          // a little dimmed. Emptied: the opened-empty sprite, dimmed — nothing to come back for.
+          if (empty !== wasEmpty) {
+            const look = containerSprite(this.containers[i]!, empty);
+            const tex = this.tex[look.sprite];
+            if (tex && tex !== Texture.EMPTY) {
+              m.sprite.texture = tex;
+              fitWidth(m.sprite, m.size);
+            }
+          }
           m.glow.visible = st === CONTAINER_STATE.UNTOUCHED;
-          m.sprite.tint = st === CONTAINER_STATE.EMPTIED ? 0x585858 : st === CONTAINER_STATE.OPENED ? 0x9a9a9a : 0xffffff;
-          m.sprite.alpha = st === CONTAINER_STATE.EMPTIED ? 0.8 : 1;
+          m.sprite.tint = empty ? 0x8c8c8c : st === CONTAINER_STATE.OPENED ? 0xc4c4c4 : 0xffffff;
+          m.sprite.alpha = empty ? 0.82 : 1;
         }
         if (st === CONTAINER_STATE.UNTOUCHED) {
           const p = 0.5 + 0.5 * Math.sin(nowMs / 400 + m.phase);
