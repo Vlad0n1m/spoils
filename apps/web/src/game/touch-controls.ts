@@ -306,12 +306,16 @@ export class TouchControls {
     } else {
       window.addEventListener("resize", this.layout);
     }
+    window.addEventListener("blur", this.releaseSticks);
+    document.addEventListener("visibilitychange", this.releaseSticks);
   }
 
   detach(): void {
     this.resizeObs?.disconnect();
     this.resizeObs = null;
     window.removeEventListener("resize", this.layout);
+    window.removeEventListener("blur", this.releaseSticks);
+    document.removeEventListener("visibilitychange", this.releaseSticks);
     this.root?.remove();
     this.root = null;
     this.move = null;
@@ -329,11 +333,8 @@ export class TouchControls {
     const prev = this.shown;
     if (s.active !== prev.active) {
       root.style.display = s.active ? "" : "none";
-      if (!s.active) {
-        // Fingers lifted while hidden never send pointerup to a display:none zone.
-        this.releaseStick(this.move, () => this.input.setTouchMove(null));
-        this.releaseStick(this.aim, () => this.input.setTouchAim(null, false));
-      }
+      // Fingers lifted while hidden never send pointerup to a display:none zone.
+      if (!s.active) this.releaseSticks();
     }
     if (s.canUse !== prev.canUse) {
       const use = this.buttons.get("interact")?.el;
@@ -343,6 +344,16 @@ export class TouchControls {
     if (s.medkits !== prev.medkits) this.setCount("medkit", s.medkits);
     this.shown = { ...s };
   }
+
+  /**
+   * The app lost focus (notification shade, a system dialog, the tab hidden): a finger on a stick may
+   * never get its pointerup, which would leave the stick claimed and dead to every later touch. Free
+   * both, like InputController does with its own touch state on blur.
+   */
+  private releaseSticks = () => {
+    this.releaseStick(this.move, () => this.input.setTouchMove(null));
+    this.releaseStick(this.aim, () => this.input.setTouchAim(null, false));
+  };
 
   private setCount(id: TouchButtonId, n: number) {
     const b = this.buttons.get(id);

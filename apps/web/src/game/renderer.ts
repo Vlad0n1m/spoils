@@ -70,7 +70,7 @@ import { ContainerLayer, CorpseView, ExtractView, IconCache, ItemView, PlayerVie
 import { FogOfWar, PLAYER_PAD, entityVisibility, fadeToward, fogLook, fogRange, type FogEye, type FogLook } from "./fog";
 import { buildHud, extractAllowed, personalExtractStatus, stickyCounts, type PlayerCounts } from "./hud";
 import { EXPIRE_FADE_TAU_MS, expiryBlink, expiryFading } from "./expiry";
-import { InputController } from "./input";
+import { InputController, sampleAim } from "./input";
 import { PerfOverlay, TouchControls, shouldUseTouch } from "./touch-controls";
 import { TouchCrosshair, setCanvasCrosshair, touchCrosshairDistance } from "./crosshair";
 import { Minimap, type MinimapExtract } from "./minimap";
@@ -82,7 +82,7 @@ import type { GameRendererApi, HudSnapshot, KillFeedEntry, RendererOptions } fro
 import { WorldView, type ViewRect } from "./world";
 import { EMPTY_TALLY, bossKindOfLabel, corpseNpcRole, npcDisplayName, npcRoleName, tallyKill, type KillTally, type NpcRoleName } from "./npc-labels";
 import { getGameAudio } from "./audio/game-audio";
-import { feedAimPointer, getCameraRig } from "./camera";
+import { feedAimPointer, getCameraRig, setTouchSticksActive } from "./camera";
 
 /** About this many world units are visible (by area), whatever the window size. */
 const VIEW_W = 1600;
@@ -395,6 +395,9 @@ export class GameRenderer implements GameRendererApi {
       this.touch = new TouchControls(this.opts.mountEl, this.input);
       this.touch.onPress = (t) => this.perf?.markInput(t);
       this.touch.attach();
+      // Fingers now belong to the sticks: finger events on the canvas no longer aim or fire.
+      this.input.setTouchSticks(true);
+      setTouchSticksActive(true);
       // Screen layer, above the fog; added before the systems so the full map covers it.
       this.touchCrosshair = new TouchCrosshair();
       this.layers.screen.addChild(this.touchCrosshair.root);
@@ -431,6 +434,7 @@ export class GameRenderer implements GameRendererApi {
       }
     }
     this.stopPing();
+    if (this.touch) setTouchSticksActive(false);
     this.touch?.detach();
     this.touch = null;
     this.perf?.detach();
@@ -1331,6 +1335,9 @@ export class GameRenderer implements GameRendererApi {
     const roll = input.sampleRoll();
     const walk = input.walkHeld();
     const seq = p.nextSeq();
+    // Phones: the stick's direction as of now, not the facing updateAim() left one frame ago, so a
+    // flick's first shot leaves along the stick (sampleAim).
+    this.aim = sampleAim(this.aim, input.touchFacing, this.inputBlockedNow);
     const sample: InputSample = { seq, mx, my, aim: this.aim, fire };
     if (roll) sample.roll = true;
     if (walk) sample.walk = true;
@@ -1377,7 +1384,7 @@ export class GameRenderer implements GameRendererApi {
   /** Aim from the rendered player position to the cursor, in world space (shake excluded). */
   private updateAim(w: number, h: number) {
     // Phones: the aim stick, else the facing follows the move stick.
-    const touchAim = this.input?.touchAimAngle ?? this.input?.touchMoveAngle ?? null;
+    const touchAim = this.input?.touchFacing ?? null;
     if (touchAim !== null) {
       this.aim = touchAim;
       return;

@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ROLL } from "@extract/shared";
-import { InputController, TOUCH_WALK_BELOW, isTypingTarget, type InputActions, type InputEnv, type TouchAction } from "./input";
+import { InputController, TOUCH_WALK_BELOW, isTypingTarget, sampleAim, type InputActions, type InputEnv, type TouchAction } from "./input";
 
 type Listener = (e: unknown) => void;
 class FakeTarget {
@@ -323,8 +323,30 @@ describe("InputController", () => {
       assert.deepEqual(calls, ["fullMap"]);
     });
 
-    it("finger pointer events on the canvas neither aim nor fire", () => {
+    it("a flick's first shot carries the stick direction, not the previous facing", () => {
+      const { ctl } = setup();
+      ctl.setTouchRepeatMs(250); // semi-auto: this one press is the whole shot
+      // Facing right from the move stick, then one pointermove flicks the aim stick left past FIRE_AT.
+      ctl.setTouchMove({ x: 1, y: 0 });
+      let aim = sampleAim(0.4, ctl.touchFacing, false);
+      assert.equal(aim, 0, "the move stick steers the facing");
+      ctl.setTouchAim(Math.PI, true);
+      // The renderer's input loop runs before its per-frame aim update: the sample must take the stick now.
+      const fire = ctl.sampleFire();
+      aim = sampleAim(aim, ctl.touchFacing, false);
+      assert.equal(fire, true);
+      assert.equal(aim, Math.PI);
+      // A panel open: the aim stays frozen; no stick held: the last aim (mouse) stays.
+      assert.equal(sampleAim(0.3, ctl.touchFacing, true), 0.3);
+      ctl.setTouchAim(null, false);
+      ctl.setTouchMove(null);
+      assert.equal(ctl.touchFacing, null);
+      assert.equal(sampleAim(0.3, ctl.touchFacing, false), 0.3);
+    });
+
+    it("finger pointer events on the canvas neither aim nor fire while the sticks are mounted", () => {
       const { ctl, canvas, win } = setup();
+      ctl.setTouchSticks(true);
       canvas.fire("pointerdown", pointer({ pointerType: "touch" }));
       win.fire("pointermove", pointer({ pointerType: "touch", type: "pointermove", clientX: 500 }));
       assert.equal(ctl.sampleFire(), false);
@@ -335,6 +357,16 @@ describe("InputController", () => {
       win.fire("pointerup", pointer({ pointerType: "touch", type: "pointerup" }));
       assert.equal(ctl.sampleFire(), true);
       assert.equal(ctl.sampleFire(), true, "still held");
+    });
+
+    it("without the sticks (a touch laptop with a mouse) a finger aims and fires like the mouse", () => {
+      const { ctl, canvas, win } = setup();
+      canvas.fire("pointerdown", pointer({ pointerType: "touch", clientX: 60, clientY: 70 }));
+      assert.equal(ctl.hasPointer, true);
+      assert.deepEqual([ctl.mouseX, ctl.mouseY], [50, 50]);
+      assert.equal(ctl.sampleFire(), true);
+      win.fire("pointerup", pointer({ pointerType: "touch", type: "pointerup" }));
+      assert.equal(ctl.sampleFire(), false, "the finger lifted");
     });
 
     it("blur and detach release the sticks", () => {

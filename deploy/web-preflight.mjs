@@ -29,6 +29,10 @@ if (production) {
   if (!/^[0-9a-fA-F]{64,}$/.test((env.MASTER_SEED_HEX ?? "").trim())) {
     warnings.push("MASTER_SEED_HEX (64+ hex chars) is missing or malformed: wallet registration will fail");
   }
+  // lib/wallet/request.ts: the Sign-In with Solana domain is pinned to these hosts; unset → localhost only.
+  if (!set("SIWS_ALLOWED_HOSTS")) {
+    warnings.push("SIWS_ALLOWED_HOSTS is unset: linking a Solana wallet only works on localhost (list the public host)");
+  }
 }
 
 for (const w of warnings) console.warn(`[preflight] warning: ${w}`);

@@ -301,6 +301,13 @@ export function getCameraRig(): CameraRig | null {
 
 /** Every attached PointerTracker (feedAimPointer moves them all). */
 const trackers = new Set<PointerTracker>();
+/** The touch sticks are mounted (renderer): fingers belong to them, not to the cursor. */
+let stickFingers = false;
+
+/** Renderer: the touch sticks were mounted (true) or removed (false). */
+export function setTouchSticksActive(on: boolean): void {
+  stickFingers = on;
+}
 
 /**
  * Phones: the touch aim point (the drawn crosshair, canvas px) stands in for the mouse, so the
@@ -312,7 +319,8 @@ export function feedAimPointer(x: number, y: number): void {
 
 /**
  * Cursor position in canvas px, from window pointer events (the renderer's input does the same).
- * Finger events are ignored: on a phone the fingers sit on the sticks, feedAimPointer aims.
+ * While the touch sticks are mounted, finger events are ignored: the fingers sit on the sticks and
+ * feedAimPointer aims. Without them (a touch laptop with a mouse) a finger moves the cursor.
  */
 export class PointerTracker {
   x = 0;
@@ -348,7 +356,7 @@ export class PointerTracker {
 
   private onMove = (e: PointerEvent) => {
     const c = this.canvas;
-    if (!c || e.pointerType === "touch") return;
+    if (!c || (stickFingers && e.pointerType === "touch")) return;
     const r = c.getBoundingClientRect();
     this.x = e.clientX - r.left;
     this.y = e.clientY - r.top;

@@ -7,8 +7,9 @@
  * 3 / 4 heal, R reload, F interact/search, Tab inventory, T take all, M full map, Esc close.
  *
  * Phones (touch-controls.ts): an analog move stick (part deflection = quiet walk), an aim stick
- * that fires past its fire threshold, and buttons that go through press(). Finger pointer events
- * on the canvas never aim or fire.
+ * that fires past its fire threshold, and buttons that go through press(). While those sticks are
+ * mounted (setTouchSticks), finger pointer events on the canvas never aim or fire; without them (a
+ * touch laptop whose primary pointer is a mouse or trackpad) a finger aims and fires like the mouse.
  *
  * DOM access goes through InputEnv so the controller runs under node:test with fakes.
  */
@@ -44,6 +45,17 @@ export type TouchAction = "roll" | "interact" | "reload" | "swap" | "bandage" | 
 export const TOUCH_WALK_BELOW = 0.55;
 /** Move stick deflection under which it does not steer the facing (aim follows movement). */
 const TOUCH_FACE_FROM = 0.2;
+
+/**
+ * Aim an input sample carries. A held touch stick (the aim stick, else the move stick past its dead
+ * zone) wins as of now: the renderer copies the stick into its own aim only after the input loop,
+ * so a flick that sets the angle and the trigger in one pointermove would otherwise send its first
+ * shot (the whole shot of a semi-auto, which fires on the press edge) along the previous facing.
+ * While a panel blocks input the aim stays frozen.
+ */
+export function sampleAim(aim: number, touchFacing: number | null, blocked: boolean): number {
+  return !blocked && touchFacing !== null ? touchFacing : aim;
+}
 
 /** The DOM surface the controller needs (window, document, clock). */
 export interface InputEnv {
@@ -105,6 +117,8 @@ export class InputController {
   private touchPressAt: number | null = null;
   /** The last sample carried the touch press. */
   private touchHigh = false;
+  /** The touch sticks are mounted: fingers belong to them, finger events on the canvas are ignored. */
+  private touchSticks = false;
   private attached = false;
   private readonly env: InputEnv;
 
@@ -251,6 +265,19 @@ export class InputController {
     const m = this.touchMove;
     if (!m || Math.hypot(m.x, m.y) < TOUCH_FACE_FROM) return null;
     return Math.atan2(m.y, m.x);
+  }
+
+  /** Facing from the touch sticks right now: the aim stick, else the move stick; null when neither steers. */
+  get touchFacing(): number | null {
+    return this.touchAim ?? this.touchMoveAngle;
+  }
+
+  /**
+   * The touch sticks are mounted (TouchControls): finger pointer events on the canvas then neither
+   * aim nor fire. Without them a finger on the canvas acts like the mouse.
+   */
+  setTouchSticks(on: boolean): void {
+    this.touchSticks = on;
   }
 
   /** Touch button press: the same paths as the keys (roll buffer, heal prediction, panels). */
@@ -400,9 +427,13 @@ export class InputController {
     this.releaseAll();
   };
 
+  /** A finger while the touch sticks own the fingers (only a mouse or a pen aims by position then). */
+  private isStickFinger(e: PointerEvent): boolean {
+    return this.touchSticks && e.pointerType === "touch";
+  }
+
   private onPointerMove = (e: PointerEvent) => {
-    // Fingers drive the touch sticks; only a mouse or a pen aims by position.
-    if (e.pointerType === "touch") return;
+    if (this.isStickFinger(e)) return;
     const rect = this.canvas.getBoundingClientRect();
     this.mouseX = e.clientX - rect.left;
     this.mouseY = e.clientY - rect.top;
@@ -410,8 +441,9 @@ export class InputController {
   };
 
   private onPointerDown = (e: PointerEvent) => {
-    // A tap on the open canvas (outside the sticks and buttons) neither aims nor fires.
-    if (e.pointerType === "touch") return;
+    // With the sticks mounted, a tap on the open canvas (outside the sticks and buttons) neither
+    // aims nor fires.
+    if (this.isStickFinger(e)) return;
     this.onPointerMove(e);
     // Clicking the canvas takes focus away from any HUD input / button so keys reach the game.
     const active = this.env.doc.activeElement as (Element & Focusable) | null;
@@ -427,7 +459,7 @@ export class InputController {
   };
 
   private onPointerUp = (e: PointerEvent) => {
-    if (e.pointerType === "touch") return;
+    if (this.isStickFinger(e)) return;
     if (e.button !== 0 && e.type !== "pointercancel") return;
     this.fireHeld = false;
   };

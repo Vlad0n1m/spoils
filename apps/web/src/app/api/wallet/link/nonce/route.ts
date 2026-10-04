@@ -26,6 +26,8 @@ export async function POST(req: Request) {
     return res;
   }
 
+  // Only our own hosts (SIWS_ALLOWED_HOSTS; localhost while unset): a forged Host must never put
+  // another domain into the message a wallet signs.
   const ctx = siwsContextFromRequest(req);
   if (!ctx) return apiError(400, "bad_host", "Open the game from its own address and try again.");
   const r = await issueLinkChallenge(db, c.userId, { ...ctx, chainId: siwsChainId() });

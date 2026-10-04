@@ -19,7 +19,8 @@ import type { LinkedWallet } from "@/lib/wallet/types";
  * Link flow: openChooser() prefetches the server nonce while the player picks a wallet, so the tap on
  * a wallet goes straight to the wallet (Android only launches the wallet app from a fresh tap). Then
  * solana:signIn when the wallet has it (one prompt; Phantom checks the domain), else connect +
- * signMessage of the same SIWS text, then POST /api/wallet/link. Nothing else is ever asked of the
+ * signMessage of the same SIWS text (also on the next tap after a signIn without a result: older
+ * Mobile Wallet Adapter wallets), then POST /api/wallet/link. Nothing else is ever asked of the
  * wallet: no transactions, no transfers.
  */
 
@@ -155,19 +156,40 @@ type SignInMethod = SolanaSignInFeature[typeof SolanaSignIn];
 type ConnectMethod = StandardConnectFeature[typeof StandardConnect];
 type SignMessageMethod = SolanaSignMessageFeature[typeof SolanaSignMessage];
 
+/**
+ * Wallets (by name) whose solana:signIn came back without a sign-in result. The Mobile Wallet Adapter
+ * always offers signIn, but MWA 1.x wallet apps authorize and ignore the sign-in payload, and
+ * wallet-standard-mobile then throws. The next tap on such a wallet uses connect + signMessage of the
+ * same SIWS text instead (not in the same tap: Android opens the wallet app only from a fresh tap).
+ */
+const signInWithoutResult = new Set<string>();
+
+/** wallet-standard-mobile's error for an authorization that carried no sign_in_result. */
+export function isMissingSignInResult(e: unknown): boolean {
+  const err = e as { message?: unknown; cause?: { message?: unknown } } | null;
+  return /no sign in result/i.test(`${String(err?.message ?? "")} ${String(err?.cause?.message ?? "")}`);
+}
+
 async function signChallenge(wallet: Wallet, ch: SiwsChallenge): Promise<SignedProof> {
-  const signIn = wallet.features[SolanaSignIn] as SignInMethod | undefined;
+  const signIn = signInWithoutResult.has(wallet.name) ? undefined : (wallet.features[SolanaSignIn] as SignInMethod | undefined);
   if (signIn) {
-    const [out] = await signIn.signIn({
-      domain: ch.domain,
-      statement: ch.statement,
-      uri: ch.uri,
-      version: ch.version,
-      chainId: ch.chainId,
-      nonce: ch.nonce,
-      issuedAt: ch.issuedAt,
-      expirationTime: ch.expirationTime,
-    });
+    let out: Awaited<ReturnType<SignInMethod["signIn"]>>[number] | undefined;
+    try {
+      [out] = await signIn.signIn({
+        domain: ch.domain,
+        statement: ch.statement,
+        uri: ch.uri,
+        version: ch.version,
+        chainId: ch.chainId,
+        nonce: ch.nonce,
+        issuedAt: ch.issuedAt,
+        expirationTime: ch.expirationTime,
+      });
+    } catch (e) {
+      if (!isMissingSignInResult(e)) throw e;
+      signInWithoutResult.add(wallet.name);
+      throw new FlowError("This wallet needs one more step. Tap it again to sign the link message.");
+    }
     if (!out) throw new FlowError("The wallet didn't return a signature. Try again.");
     return { address: out.account.address, signedMessage: out.signedMessage, signature: out.signature };
   }
