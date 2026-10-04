@@ -59,7 +59,7 @@ export default function AlphaRulesPage() {
           <p className="text-xs font-bold uppercase tracking-[0.18em] lg:text-[0.8125rem]">In short</p>
           <ul className="font-body mt-2 list-disc space-y-2 pl-5 text-[0.95rem] font-semibold leading-relaxed md:text-base">
             <li>It runs on a test balance. No real money goes in or out.</li>
-            <li>Nothing here can be earned or cashed out.</li>
+            <li>Nothing here can be cashed out — only exclusive rewards.</li>
             <li>One item wipe at the end of the alpha ({wipe}).</li>
             <li>Your level, cosmetics and Alpha Pass rewards survive the wipe.</li>
           </ul>
@@ -93,9 +93,9 @@ export default function AlphaRulesPage() {
           />
           <Section
             id="earn"
-            title="Nothing can be earned"
+            title="No cash-out, only exclusive rewards"
             items={[
-              "The alpha has no payouts of any kind. Items, CR and the test balance have no cash value.",
+              "The alpha has no payouts of any kind. Items, CR and the test balance have no cash value — what you earn are exclusive rewards: Alpha Pass titles, frames, name colours and the Alpha Veteran skin that stay with you forever.",
               "The game never pays anyone from its own wallet. Everything it takes in is shown on the Economy page.",
               <>
                 Do not buy or sell alpha accounts or items for real money: they will be wiped. See the open numbers on{" "}

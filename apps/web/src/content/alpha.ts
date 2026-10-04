@@ -22,6 +22,6 @@ export function alphaWipeText(date: string | null = ALPHA_WIPE_DATE): string {
 /** The three lines every entry point repeats (register block, Info panel). */
 export const ALPHA_SHORT = [
   "This is an alpha on a test balance. No real money goes in or out.",
-  "Nothing here can be earned or cashed out.",
+  "Nothing here can be cashed out — only exclusive rewards.",
   "One item wipe at the end of the alpha. Your level, cosmetics and Alpha Pass rewards stay.",
 ] as const;
