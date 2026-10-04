@@ -91,7 +91,7 @@ export async function raidKpis(db: Pick<Db, "execute">, now: Date): Promise<Raid
  * called). Once per UTC day, serialized by an advisory lock and the economy_params daily_ran_on
  * stamp: the veterans' (accounts older than VETERAN_DAYS with a raid exit in the last
  * VETERAN_DAYS) median CR balance steers the junk autosell multiplier with nextAutosellMult
- * (±3 %/day, 0.6..1.3, no change below AUTOSELL.MIN_SAMPLE veterans), and a KPI snapshot (autosell,
+ * (±5 %/day, 0.4..1.0 on the 400–900 CR band, no change below AUTOSELL.MIN_SAMPLE veterans), and a KPI snapshot (autosell,
  * veterans, pool stock incl. top-tier count, raids of the last 24 h (world entries + legacy matches) with humans-only map size,
  * solo share and NPC totals) goes to economy_daily. Meant for a daily cron.
  */

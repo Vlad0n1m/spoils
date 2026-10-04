@@ -5,7 +5,7 @@ import type { Db, Tx } from "../inventory/db";
 
 /** Keys in economy_params. Numbers are stored as plain JSON numbers. */
 export const PARAM = {
-  /** Junk autosell multiplier, steered daily by nextAutosellMult (0.6..1.3). */
+  /** Junk autosell multiplier, steered daily by nextAutosellMult (AUTOSELL.MIN..MAX, 0.4..1.0). */
   AUTOSELL_MULT: "autosell_mult",
   /** Fractional CR accumulator of the 1% treasury tax (takeTreasuryTax). */
   TAX_ACC: "tax_acc",
@@ -16,6 +16,8 @@ export const PARAM = {
    * 0..2). The lever if the pool swells (economy memo §13): 1.25. Never a free floor.
    */
   POOL_RISK_K: "pool_risk_k",
+  /** Per-entry release never takes the pool below this many items (POOL.MIN_RESERVE, design §25; clamped 0..1000). */
+  POOL_MIN_RESERVE: "pool_min_reserve",
   /** Cap of pool items released into one match (v4 default POOL.MAX_PER_MATCH = 8, clamped 0..16). */
   POOL_MAX_PER_MATCH: "pool_max_per_match",
   /** UTC day (YYYY-MM-DD) the daily regulator last ran (runEconomyDaily, once per day). */
@@ -25,7 +27,7 @@ export const PARAM = {
    * answer 503 market_paused); cancelling a lot still works. 0 (default) = open.
    */
   MARKET_PAUSED: "market_paused",
-  /** Stop-crane (ALPHA_PLAN B7): 1 = the paid (tradable) starter kit is not sold; the free kit still is. */
+  /** Stop-crane (ALPHA_PLAN B7): 1 = the paid starter kit is not sold (design §19). */
   KIT_SALE_PAUSED: "kit_sale_paused",
 } as const;
 
@@ -34,6 +36,7 @@ const DEFAULTS: Record<string, number> = {
   [PARAM.TAX_ACC]: 0,
   [PARAM.POOL_RISK_K]: POOL.RISK_K,
   [PARAM.POOL_MAX_PER_MATCH]: POOL.MAX_PER_MATCH,
+  [PARAM.POOL_MIN_RESERVE]: POOL.MIN_RESERVE,
   [PARAM.MARKET_PAUSED]: 0,
   [PARAM.KIT_SALE_PAUSED]: 0,
 };

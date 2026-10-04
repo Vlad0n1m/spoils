@@ -51,6 +51,8 @@ export async function resetDb(db: Db): Promise<void> {
     credit_ledger, dog_tag_payouts, economy_params, economy_daily, listings, trades, money_ledger,
     match_results, deposits, withdrawals, chain_events
     restart identity cascade`);
+  // Tests build pools of a dozen items: the live release floor (POOL.MIN_RESERVE) is off unless a test sets it.
+  await db.execute(sql`insert into economy_params (key, value) values ('pool_min_reserve', '0'::jsonb)`);
 }
 
 export async function makeUser(db: Db, nick = `u${randomUUID().slice(0, 8)}`): Promise<string> {

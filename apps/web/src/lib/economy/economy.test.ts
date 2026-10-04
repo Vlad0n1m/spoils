@@ -51,15 +51,15 @@ test("releasePlan = shared poolReleasePlanV4 at the default knobs; the design's 
   for (const P of [0, 5, 120, 151, 155, 160, 700])
     for (const R of [0, 1, 2, 3, 5, 8, 24])
       for (const B of [0, 1, 4, 5, 6]) assert.deepEqual(releasePlan(P, R, B), poolReleasePlanV4(P, R, B), `P${P} R${R} B${B}`);
-  assert.deepEqual(DEFAULT_RELEASE, { k: 1, max: 8 });
+  assert.deepEqual(DEFAULT_RELEASE, { k: 1, max: 8, minReserve: 150 });
   assert.equal(releasePlan(700, 0, 5).total, 0, "free-kit lobby: nothing, not even for bosses");
   assert.deepEqual(releasePlan(700, 3, 5), { total: 5, risk: 3, boss: 2 });
   assert.equal(releasePlan(700, 24, 5).total, 8);
   assert.deepEqual(releasePlan(120, 3, 5), { total: 3, risk: 3, boss: 0 }, "small pool: no boss top-up");
   assert.equal(releasePlan(5, 24, 5).total, 5);
   // The lever (economy memo §13): k 1.25 / max 10.
-  assert.deepEqual(releasePlan(700, 4, 0, { k: 1.25, max: 10 }), { total: 5, risk: 5, boss: 0 });
-  assert.equal(releasePlan(700, 24, 0, { k: 1.25, max: 10 }).total, 10);
+  assert.deepEqual(releasePlan(700, 4, 0, { ...DEFAULT_RELEASE, k: 1.25, max: 10 }), { total: 5, risk: 5, boss: 0 });
+  assert.equal(releasePlan(700, 24, 0, { ...DEFAULT_RELEASE, k: 1.25, max: 10 }).total, 10);
 });
 
 test("rankBossSlots: top slots first, the tougher boss first among equals", () => {

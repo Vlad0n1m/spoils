@@ -26,14 +26,22 @@ export const CR = { CODE: "CR", START_BALANCE: 1000 } as const;
 
 // ---------------------------------------------------------------- junk autosell
 
-export const AUTOSELL = { BAL_LO: 2_000, BAL_HI: 8_000, STEP: 0.03, MIN: 0.6, MAX: 1.3, MIN_SAMPLE: 50 } as const;
+/**
+ * Junk autosell regulator. Re-tuned 04.10 for the paid starter kit (design §25): the band 400–900 CR on
+ * the geared veterans' median, ±5 %/day, 0.4..1.0. The old band (2 000–8 000, ×0.6..1.3) never bit: the
+ * median veteran sits at ≈ 1 000–1 900 CR while the CR surplus piles up in a rich tail, so the regulator
+ * pushed autosell UP to 1.3 and CR inflow / outflow ran at 1.5. Never above ×1: the regulator only
+ * drains. A stored multiplier outside the range is clamped on the next step.
+ */
+export const AUTOSELL = { BAL_LO: 400, BAL_HI: 900, STEP: 0.05, MIN: 0.4, MAX: 1.0, MIN_SAMPLE: 50 } as const;
 
-/** Daily regulator: veterans' median CR balance steers the autosell multiplier (±3%/day). */
+/** Daily regulator: veterans' median CR balance steers the autosell multiplier (±STEP a day, clamped to MIN..MAX). */
 export function nextAutosellMult(cur: number, veteranMedianCr: number, sample: number): number {
-  if (sample < AUTOSELL.MIN_SAMPLE) return cur;
-  if (veteranMedianCr > AUTOSELL.BAL_HI) return Math.max(AUTOSELL.MIN, cur * (1 - AUTOSELL.STEP));
-  if (veteranMedianCr < AUTOSELL.BAL_LO) return Math.min(AUTOSELL.MAX, cur * (1 + AUTOSELL.STEP));
-  return cur;
+  const c = Math.min(AUTOSELL.MAX, Math.max(AUTOSELL.MIN, cur));
+  if (sample < AUTOSELL.MIN_SAMPLE) return c;
+  if (veteranMedianCr > AUTOSELL.BAL_HI) return Math.max(AUTOSELL.MIN, c * (1 - AUTOSELL.STEP));
+  if (veteranMedianCr < AUTOSELL.BAL_LO) return Math.min(AUTOSELL.MAX, c * (1 + AUTOSELL.STEP));
+  return c;
 }
 
 export interface JunkSellLine {
@@ -508,6 +516,12 @@ export const POOL = {
   PLACE_RETRY_MS: 10_000,
   /** A boss-bag slot may take a top item only while the pool holds more than this many top items. */
   TOP_RESERVE: 20,
+  /**
+   * Per-entry release never takes the pool below this many items (04.10, design §25): with the paid kit
+   * most entries are basic gear, and pool items they capture arrive bound and never come back, so when
+   * raiders wait out the 8-minute XP gate the pool drained to its unreleasable top in ≈ 30 days.
+   */
+  MIN_RESERVE: 150,
   /** The server stows the boss bag only when the boss has not been hit for this long. */
   BOSS_ENGAGED_MS: 60_000,
 } as const;
@@ -580,6 +594,8 @@ export interface EntryReleaseInput {
   targets: number;
   /** economy_params pool_risk_k (default POOL.RISK_K). */
   k?: number;
+  /** economy_params pool_min_reserve (default POOL.MIN_RESERVE). */
+  minReserve?: number;
 }
 
 const nn = (v: number): number => (Number.isFinite(v) ? Math.max(0, v) : 0);
@@ -604,7 +620,7 @@ export function poolReleaseForEntry(i: EntryReleaseInput): { n: number; budget: 
   const targets = Math.floor(nn(i.targets));
   const tgt = targets < POOL.MIN_TARGETS ? 0 : Math.floor(targets / POOL.TARGETS_PER_ITEM);
   const taper = Math.max(0, Math.min(1, (i.entryCloseMs - i.atMs) / POOL.LATE_TAPER_MS)) || 0;
-  const n = Math.floor(nn(Math.min(budget, cap, daily, Math.floor(nn(i.poolSize)), tgt)) * taper);
+  const n = Math.floor(nn(Math.min(budget, cap, daily, Math.floor(nn(i.poolSize)) - nn(i.minReserve ?? POOL.MIN_RESERVE), tgt)) * taper);
   return { n, budget, cap, taper };
 }
 

@@ -35,13 +35,15 @@ test("starting balance is 1000 CR", () => {
   assert.equal(CR.START_BALANCE, 1000);
 });
 
-test("nextAutosellMult: ±3%/day inside [0.6, 1.3], needs a sample of 50", () => {
+test("nextAutosellMult: ±5%/day inside [0.4, 1.0] on the 400–900 CR band, needs a sample of 50", () => {
   assert.equal(nextAutosellMult(1, 50_000, AUTOSELL.MIN_SAMPLE - 1), 1, "small sample: unchanged");
-  assert.ok(Math.abs(nextAutosellMult(1, 9000, 100) - 0.97) < 1e-12);
-  assert.ok(Math.abs(nextAutosellMult(1, 1000, 100) - 1.03) < 1e-12);
-  assert.equal(nextAutosellMult(1, 5000, 100), 1, "inside the band");
-  assert.equal(nextAutosellMult(0.61, 9000, 100), AUTOSELL.MIN);
-  assert.equal(nextAutosellMult(1.29, 10, 100), AUTOSELL.MAX);
+  assert.ok(Math.abs(nextAutosellMult(1, 1000, 100) - 0.95) < 1e-12);
+  assert.ok(Math.abs(nextAutosellMult(0.5, 300, 100) - 0.525) < 1e-12);
+  assert.equal(nextAutosellMult(1, 300, 100), AUTOSELL.MAX, "never above ×1");
+  assert.equal(nextAutosellMult(0.8, 600, 100), 0.8, "inside the band");
+  assert.equal(nextAutosellMult(0.41, 9000, 100), AUTOSELL.MIN);
+  assert.equal(nextAutosellMult(1.3, 600, 100), AUTOSELL.MAX, "an old stored 1.3 is clamped");
+  assert.equal(nextAutosellMult(1.3, 600, 1), AUTOSELL.MAX, "clamped even on a small sample");
   // A long inflationary streak converges to the floor and stays there.
   let m = 1;
   for (let d = 0; d < 100; d++) m = nextAutosellMult(m, 20_000, 500);

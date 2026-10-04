@@ -154,7 +154,7 @@ describe("admin params", () => {
       dto.params.map((p) => [p.key, p.value, p.stored]),
       EDITABLE_PARAMS.map((s) => [s.key, s.def, false]),
     );
-    assert.deepEqual(dto.readOnly.map((r) => r.key).sort(), ["gs_boot:alpha", "pool_max_per_match", "tax_acc"]);
+    assert.deepEqual(dto.readOnly.map((r) => r.key).sort(), ["gs_boot:alpha", "pool_max_per_match", "pool_min_reserve", "tax_acc"]);
     assert.ok(dto.readOnly.every((r) => r.note.length > 0));
     assert.match(dto.readOnly.find((r) => r.key === "pool_max_per_match")!.note, /World v6 не читается/);
     for (const s of EDITABLE_PARAMS) for (const q of s.quick) assert.ok(q.value >= s.min && q.value <= s.max, `${s.key} quick ${q.value}`);
@@ -186,35 +186,35 @@ describe("admin params", () => {
     assert.equal(!high.ok && high.error, "out_of_range");
     const neg = await setAdminParam(db, admin, { key: PARAM.POOL_RISK_K, value: -0.1, expected: 1 });
     assert.equal(!neg.ok && neg.error, "out_of_range");
-    const stale = await setAdminParam(db, admin, { key: PARAM.AUTOSELL_MULT, value: 1.1, expected: 0.9 });
+    const stale = await setAdminParam(db, admin, { key: PARAM.AUTOSELL_MULT, value: 0.9, expected: 0.8 });
     assert.equal(!stale.ok && stale.error, "stale");
     assert.equal(!stale.ok && stale.current, 1);
     assert.equal((await listAudit(db)).length, 0, "refusals write nothing");
 
     const at = new Date("2026-10-04T10:00:00Z");
-    const r = await setAdminParam(db, admin, { key: PARAM.AUTOSELL_MULT, value: 1.123456, expected: 1, note: "too few CR" }, at);
+    const r = await setAdminParam(db, admin, { key: PARAM.AUTOSELL_MULT, value: 0.912345, expected: 1, note: "too many CR" }, at);
     assert.ok(r.ok);
-    assert.equal(r.param.value, 1.1235, "rounded to 4 decimals like the regulator");
+    assert.equal(r.param.value, 0.9123, "rounded to 4 decimals like the regulator");
     assert.equal(r.param.stored, true);
-    assert.equal(await getNumberParam(db, PARAM.AUTOSELL_MULT), 1.1235, "settlement reads the new value");
+    assert.equal(await getNumberParam(db, PARAM.AUTOSELL_MULT), 0.9123, "settlement reads the new value");
     assert.deepEqual(
       { admin: r.audit.admin, action: r.audit.action, target: r.audit.target, old: r.audit.oldValue, new: r.audit.newValue, note: r.audit.note, at: r.audit.at },
-      { admin: "vlad", action: "param_set", target: "autosell_mult", old: 1, new: 1.1235, note: "too few CR", at: at.getTime() },
+      { admin: "vlad", action: "param_set", target: "autosell_mult", old: 1, new: 0.9123, note: "too many CR", at: at.getTime() },
     );
 
     // stop the pool's entry release, then a second change against the new value
     const stop = await setAdminParam(db, admin, { key: PARAM.POOL_RISK_K, value: 0, expected: 1 }, new Date("2026-10-04T11:00:00Z"));
     assert.ok(stop.ok);
     assert.equal(await getNumberParam(db, PARAM.POOL_RISK_K), 0);
-    const again = await setAdminParam(db, admin, { key: PARAM.AUTOSELL_MULT, value: 1, expected: 1.1235 }, new Date("2026-10-04T12:00:00Z"));
+    const again = await setAdminParam(db, admin, { key: PARAM.AUTOSELL_MULT, value: 1, expected: 0.9123 }, new Date("2026-10-04T12:00:00Z"));
     assert.ok(again.ok);
     const audit = await listAudit(db);
     assert.deepEqual(
       audit.map((a) => [a.target, a.oldValue, a.newValue]),
       [
-        ["autosell_mult", 1.1235, 1],
+        ["autosell_mult", 0.9123, 1],
         ["pool_risk_k", 1, 0],
-        ["autosell_mult", 1, 1.1235],
+        ["autosell_mult", 1, 0.9123],
       ],
       "newest first",
     );
@@ -471,7 +471,7 @@ describe("buildKpis", () => {
     regExitCr: 4000,
     players: 10,
     tradable: 5,
-    medianCr: 4000,
+    medianCr: 700,
     autosell: 1,
     prices: [{ n24: 3, m24: 1000, n7: 10, m7: 1000 }],
     exitsAll: 10,
@@ -517,7 +517,8 @@ describe("buildKpis", () => {
     assert.equal(status({ ...base, d1: { cohort: 10, back: 3 } }).retention_d1, "warn");
     assert.equal(status({ ...base, mia: 1 }).mia_share, "warn"); // 10%
     assert.equal(status({ ...base, gearEntries: 2 }).gear_share, "alarm");
-    assert.equal(status({ ...base, autosell: 0.6 }).median_cr, "alarm", "regulator at its edge");
+    assert.equal(status({ ...base, autosell: 0.4 }).median_cr, "alarm", "regulator at its floor");
+    assert.equal(status({ ...base, autosell: 1 }).median_cr, "ok", "×1 is the normal ceiling, not an edge");
     assert.equal(status({ ...base, medianCr: 9000 }).median_cr, "warn");
   });
 

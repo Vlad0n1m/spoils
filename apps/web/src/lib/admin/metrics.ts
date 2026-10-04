@@ -600,7 +600,7 @@ export function buildKpis(i: KpiInputs): AdminKpi[] {
         norm: "≥ 40%",
         alarm: "< 25%",
         status: v < 0.25 ? "alarm" : v < 0.4 ? "warn" : "ok",
-        note: `${int(i.gearEntries)} из ${int(i.regEntries)} входов зарегистрированных за 7 дней — со своим снаряжением, не с бесплатным набором.`,
+        note: `${int(i.gearEntries)} из ${int(i.regEntries)} входов зарегистрированных за 7 дней — со своим снаряжением, не в базовом снаряжении (Basic gear).`,
         source: "§22",
       });
     }
@@ -608,16 +608,18 @@ export function buildKpis(i: KpiInputs): AdminKpi[] {
   {
     const id = "median_cr";
     const label = "Медиана CR активных";
-    const edge = i.autosell <= AUTOSELL.MIN || i.autosell >= AUTOSELL.MAX;
-    if (i.medianCr === null) out.push(noData(id, label, "2 000–8 000", "регулятор на краю", "Активных игроков нет.", "§22"));
+    // The regulator never goes above ×1 (AUTOSELL.MAX is the normal state); its edge is the floor.
+    const edge = i.autosell <= AUTOSELL.MIN;
+    const band = `${int(AUTOSELL.BAL_LO)}–${int(AUTOSELL.BAL_HI)}`;
+    if (i.medianCr === null) out.push(noData(id, label, band, "регулятор на минимуме", "Активных игроков нет.", "§22"));
     else {
       out.push({
         id,
         label,
         value: int(i.medianCr),
-        norm: "2 000–8 000",
-        alarm: "регулятор на краю",
-        status: edge ? "alarm" : bandStatus(i.medianCr, 2_000, 8_000),
+        norm: band,
+        alarm: "регулятор на минимуме",
+        status: edge ? "alarm" : bandStatus(i.medianCr, AUTOSELL.BAL_LO, AUTOSELL.BAL_HI),
         note: `Медиана баланса CR у ${int(i.players)} игроков с выходом за 7 дней. Множитель автопродажи сейчас ${i.autosell} (полоса ${AUTOSELL.MIN}–${AUTOSELL.MAX}).`,
         source: "§22",
       });
