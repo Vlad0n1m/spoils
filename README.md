@@ -66,6 +66,68 @@ apps/game-server/node_modules/.bin/tsx --test apps/game-server/src/sim/world.tes
 Тесты сайта с базой используют `extract_test`. Бенчмарки и soak-тест (`apps/game-server/src/sim/econ`,
 `sim/soak.test.ts`) тяжёлые — запускать на настольной машине, не на ноутбуке.
 
+## On-chain
+
+SPOILS writes its game results to Solana through its own Anchor program, `spoils_events` (`programs/`, Anchor 0.32).
+
+| | |
+|---|---|
+| Program id | `8Jc6sbbLY7PoJ2wms33k9MzYmMBdidH96vX4nLFbqf9B` — [Solana Explorer (devnet)](https://explorer.solana.com/address/8Jc6sbbLY7PoJ2wms33k9MzYmMBdidH96vX4nLFbqf9B?cluster=devnet) |
+| Config PDA (seed `config`) | `4K8fSU19yNccXzNuUBPWyx6EXdnBrJgndnfjt3rfcgjY` |
+| Record signer (server authority) | `AHgxhkN5Qu9T9nuV5yBaSU2oR6Xk7XA1QkrYRcUiPgNN` |
+| Deploy key (payer, upgrade authority) | `CeJN65LnHmCn6wZ9xPcFsLWenLjkjpUKoZ7LTKiE8cah` |
+| Status (2026-10-04) | Built, Rust and web tests pass. The devnet deploy waits for test SOL on the deploy key (the faucet's daily limit was hit); `programs/scripts/deploy-devnet.sh` then deploys, initializes and sends sample transactions, which `/economy` lists with explorer links |
+
+What is recorded. Each record is one instruction that checks the signer, bumps a counter in the Config and emits an
+event into the transaction log. No account is created per event, so there is no rent, only the transaction fee:
+
+| Instruction | When | Data on chain |
+|---|---|---|
+| `record_match` | a world map (one shard of a 45-minute cycle) is settled by `raids/end` | `cycle_id`, `shard`, `match_hash` = sha256 of the canonical end report (keys sorted), `humans`, `mia` |
+| `record_boss_kill` | the event boss dies (`world/event`) | `cycle_id`, `boss_kind` (index in `BOSS_KINDS`), `killer_hash` |
+| `record_rare_extract` | a registered raider brings out an epic or legendary unique they did not bring in, or epic+ junk (one per item type per exit) | `cycle_id`, `item_def_hash` = sha256(def id), `rarity`, `owner_hash` |
+
+Only live world shards are recorded (no demo shards, no guests' finds). Admin instructions: `initialize` (only the
+upgrade authority, so nobody can claim the Config after the deploy) and `set_authority` (the current signer or the
+upgrade authority).
+
+Why players never pay: the server authority is the only signer and the fee payer of every record. Players do not
+need a wallet for it and never see a transaction. Privacy: no account ids, nicknames or emails go on chain.
+`killer_hash` / `owner_hash` = sha256(`CHAIN_HASH_SALT` + `":user:"` + userId), or `":guest:"` + nickname for a guest
+killer. The salt stays on the server, so a hash cannot be tested against a known id.
+
+How it flows: settlement inserts a row into `chain_events` inside its own database transaction, in a savepoint, so a
+failure there never breaks a raid. The `cron` service calls `/api/cron/chain-events` every minute (Bearer `CRON_SECRET`).
+Each call first checks that the program is deployed, the Config names this signer and the signer can pay a batch of
+fees, then sends up to 10 due events signed with `CHAIN_AUTHORITY_SECRET` and waits for confirmation. A dead RPC, a
+missing key or any of those checks failing only leaves events queued; send errors back off from 30 s, doubling up to
+30 min. A program rejection fails the
+event after 5 attempts. The signature is stored before sending, so a retry checks whether the earlier transaction
+landed instead of recording the event twice. Code: `apps/web/src/lib/chain`, table `chain_events` (migration
+`apps/web/migrations/004_chain_events.sql` for an existing database). Env names: `.env.example`, block "On-chain game
+results".
+
+```bash
+cd programs
+nice -n 10 env CARGO_BUILD_JOBS=4 anchor build   # target/deploy/spoils_events.so + target/idl (copy to programs/idl/)
+cargo test -p spoils-events                       # Rust unit tests
+scripts/deploy-devnet.sh                          # deploy + init + fund the signer + 3 sample events + status
+cd .. && apps/game-server/node_modules/.bin/tsx programs/scripts/chain-admin.ts status
+apps/game-server/node_modules/.bin/tsx --test apps/web/src/lib/chain/queue.test.ts   # one file at a time
+```
+
+Keypairs live in `programs/.keys/` (gitignored: `deploy.json`, `authority.json`, `program.json`); the build output
+`programs/target/` is ignored too. Every command passes an explicit devnet URL and keypair, because the machine's
+global Solana CLI config may point at mainnet.
+
+Что сделать Владу:
+
+1. Пополнить `CeJN65LnHmCn6wZ9xPcFsLWenLjkjpUKoZ7LTKiE8cah` на ~3 devnet SOL через https://faucet.solana.com
+   (лимит airdrop по IP 04.10 исчерпан) и запустить `programs/scripts/deploy-devnet.sh`.
+2. В `.env` сервера: `CHAIN_AUTHORITY_SECRET` (содержимое `programs/.keys/authority.json`) и `CHAIN_HASH_SALT`
+   (например, `openssl rand -hex 32`; не менять после запуска). На существующей базе применить `004_chain_events.sql`.
+3. Сохранить `programs/.keys/` в менеджере паролей и офлайн-бэкапе: без `deploy.json` программу не обновить.
+
 ## Deploy
 
 ### Single VPS with docker compose

@@ -38,6 +38,7 @@ import type { Db, Tx } from "./db";
 import { releaseLoadout } from "./loadout";
 import { applyMove, isUuid, lockItem, lockLoadoutItems, lockMatchItems, addStack } from "./transition";
 import { worldDate } from "../world/clock";
+import { enqueueMatchSettled, enqueueRareExtracts } from "../chain/queue";
 
 /**
  * A raid still `running` this long after its `ends_at` (the wipe of a world shard) never reported
@@ -290,6 +291,7 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
         await addStack(tx, user!.id, d.id, s.qty);
       }
     }
+    await enqueueRareExtracts(tx, { entryId, matchId: report.matchId, cycleId: Number(entry.cycle_id), userId: user?.id ?? null, live, extracted: report.extracted }, now);
     for (const s of report.lost) {
       if (!s.uid || !itemDef(s.def)?.unique) continue;
       pool.push({
@@ -712,6 +714,7 @@ export async function applyEnd(db: Db, report: MatchEndReport, now = new Date())
         payload,
       })
       .onConflictDoNothing();
+    await enqueueMatchSettled(tx, report, raid.mode, now);
     return {
       status: "applied",
       pooled: left.pooled.length + botLost.pooled.length + sweep.pooled.length + expPool.pooled.length,
