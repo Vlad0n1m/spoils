@@ -24,8 +24,9 @@ function LevelsInfo() {
   const { stash } = useLobby();
   const sell = stash.data?.market.sellUnlockLevel;
   return (
-    <section aria-labelledby="info-levels" className="mt-6 flex flex-col gap-3">
-      <h3 id="info-levels" className="toon-text-thin text-2xl tracking-wide text-white">
+    // The same card as the Rules blocks above it (play-instructions Block), not a bare heading.
+    <section aria-labelledby="info-levels" className="toon-panel mt-4 flex flex-col gap-3 bg-[#161b28]/95 p-4 md:p-5">
+      <h3 id="info-levels" className="toon-text-thin text-xl tracking-wide text-white">
         Levels and daily tasks
       </h3>
       <ul className="font-body list-disc space-y-1 pl-5 text-sm leading-relaxed text-white/75">

@@ -26,7 +26,9 @@ export function ShopPanel({ tab }: { tab: string }) {
   if (!s) return <StashWait error={stash.error} onRetry={() => void reload()} />;
   return (
     <div className="mx-auto grid max-w-4xl grid-cols-1 gap-6 lg:grid-cols-12">
-      <section className="toon-panel flex flex-col gap-3 bg-[#161b28]/95 p-5 lg:col-span-4">
+      {/* self-start + sticky: the card keeps its height and the balance stays in view while the long
+          trader list scrolls, instead of stretching into an empty column. */}
+      <section className="toon-panel flex flex-col gap-3 bg-[#161b28]/95 p-5 lg:sticky lg:top-0 lg:col-span-4 lg:self-start">
         <p className="text-[0.65rem] uppercase tracking-[0.2em] text-white/55">Credits</p>
         <p className="toon-text-thin text-4xl tabular-nums tracking-wide text-amber-300">{fmtCr(s.credits)}</p>
         <p className="font-body text-sm leading-relaxed text-white/75">

@@ -95,7 +95,8 @@ export function Panel({
         )}
       >
         {/* Landscape phones (≤ 500 px tall): title, tabs, chip and × on one row, so the body keeps
-            most of the height instead of ~170 px. */}
+            most of the height instead of ~170 px; the tabs get narrower so the side sheets' three tabs
+            (Friends) fit beside the chip and × instead of the last one scrolling out of sight. */}
         <header className="flex flex-wrap items-center gap-3 border-b-[3px] border-black bg-[#0d1119]/80 px-3 py-3 md:px-5 [@media(max-height:500px)]:flex-nowrap [@media(max-height:500px)]:py-2">
           <button
             type="button"
@@ -148,7 +149,7 @@ export function Panel({
                     onClick={() => onTab(t)}
                     onKeyDown={(e) => onTabKey(e, i)}
                     className={clsx(
-                      "min-h-11 shrink-0 rounded-2xl border-[3px] border-black px-4 text-sm tracking-wide transition-[transform,box-shadow] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 md:text-base",
+                      "min-h-11 shrink-0 rounded-2xl border-[3px] border-black px-4 text-sm tracking-wide transition-[transform,box-shadow] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 md:text-base [@media(max-height:500px)]:px-3 [@media(max-height:500px)]:text-sm",
                       on
                         ? "bg-zooa-lime text-black shadow-[0_4px_0_#000]"
                         : "bg-[#1d2333]/90 text-white/80 shadow-[0_3px_0_#000] hover:text-white active:translate-y-[2px] active:shadow-[0_1px_0_#000]",

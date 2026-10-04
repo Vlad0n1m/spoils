@@ -17,8 +17,8 @@ const SMALL_BTN =
  * (their ready state), the leader gets "+" (opens Friends to invite), everyone "Leave" (tap
  * twice). One row of 44 px targets: the member chips scroll sideways on their own (a fade marks a
  * cut edge) while the controls stay pinned on the right, so a narrow phone never paints chips under
- * the buttons; on a phone the labels shorten ("Follow"). On a landscape phone the menu puts the strip
- * beside PLAY.
+ * the buttons; on a phone the labels shorten ("Follow") and your own chip goes last (the one chip
+ * that fits is a mate's or the leader's). On a landscape phone the menu puts the strip beside PLAY.
  */
 export function PartyStrip({ onInvite }: { onInvite: () => void }) {
   const { registered, toast } = useLobby();
@@ -85,7 +85,9 @@ export function PartyStrip({ onInvite }: { onInvite: () => void }) {
                   key={m.nickname}
                   className={clsx(
                     "flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border-[3px] border-black bg-[#161b28]/95 py-1 pl-2 pr-1.5 shadow-[0_3px_0_#000]",
-                    m.you && "ring-2 ring-zooa-lime/60",
+                    // Phones fit about one chip beside the controls: your own goes last there, so the
+                    // first one shown is a mate's (their ready state) or the leader's, not yours.
+                    m.you && "ring-2 ring-zooa-lime/60 max-sm:order-last [@media(max-height:500px)]:order-last",
                   )}
                 >
                   <PresenceDot presence={m.presence} />

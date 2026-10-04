@@ -84,7 +84,9 @@ export function ReplayList({ initial, next: next0, now }: { initial: AdminReplay
                   <td className="py-2 text-right">
                     <Link
                       href={`/admin/replays/${r.matchId}`}
-                      className="inline-flex min-h-[36px] items-center rounded-lg bg-white/10 px-3 text-xs font-semibold text-white hover:bg-white/15"
+                      // A block (flex + ml-auto), not inline-flex: inside the text-box-trimmed cell an inline
+                      // button stuck out of its ~20 px line box and the buttons of adjacent rows overlapped.
+                      className="ml-auto flex min-h-[36px] w-max items-center rounded-lg bg-white/10 px-3 text-xs font-semibold text-white hover:bg-white/15"
                     >
                       Смотреть
                     </Link>

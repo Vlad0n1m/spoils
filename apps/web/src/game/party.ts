@@ -24,6 +24,8 @@ import { PARTY, PLAYER } from "@extract/shared";
 import { PX_PER_METER } from "./cinematics";
 import { MINIMAP_MARGIN, minimapSize } from "./minimap";
 import type { GameContext, GameSystem } from "./systems";
+import { hudReservedRects } from "./touch-controls";
+import { shouldUseTouch } from "./touch-mode";
 
 /** One mate as the client draws it (world px, smoothed). */
 export interface PartyMateView {
@@ -197,9 +199,10 @@ export interface ScreenRect {
 
 /**
  * Where the off-screen arrow toward screen point (sx, sy) sits: on the inset screen rect, along the
- * ray from the rect's centre, pointing at `angle`. A point that would land inside `avoid` (the
- * minimap in the top-right corner) slides along its edge to just past it. `onScreen`: the point is
- * on screen (≥ `pad` px inside) and needs no arrow.
+ * ray from the rect's centre, pointing at `angle`. A point that would land inside an `avoid` rect
+ * (the minimap in the top-right corner; on touch also the top stack and the bottom bar) slides along
+ * its edge to just past it, to the nearer side that stays on the edge. `onScreen`: the point is on
+ * screen (≥ `pad` px inside) and needs no arrow.
  */
 export function edgeAnchor(
   w: number,
@@ -207,7 +210,7 @@ export function edgeAnchor(
   sx: number,
   sy: number,
   ins: EdgeInsets,
-  avoid: ScreenRect | null = null,
+  avoid: ScreenRect | readonly ScreenRect[] | null = null,
   pad = 12,
 ): { x: number; y: number; angle: number; onScreen: boolean } {
   const x0 = ins.left, x1 = w - ins.right, y0 = ins.top, y1 = h - ins.bottom;
@@ -225,10 +228,28 @@ export function edgeAnchor(
   if (!Number.isFinite(t)) t = 0;
   let x = cx + dx * t;
   let y = cy + dy * t;
-  if (avoid && x >= avoid.x0 && x <= avoid.x1 && y >= avoid.y0 && y <= avoid.y1) {
-    // On the right edge: drop below the rect; on the top edge: move left of it.
-    if (Math.abs(x - x1) < 1e-6) y = Math.min(y1, avoid.y1);
-    else x = Math.max(x0, avoid.x0);
+  const rects = !avoid ? [] : Array.isArray(avoid) ? (avoid as readonly ScreenRect[]) : [avoid as ScreenRect];
+  // A slide can land in a neighbouring rect: a few passes settle it (rects that leave no room on
+  // the edge keep the arrow where it was).
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    for (const r of rects) {
+      if (x <= r.x0 || x >= r.x1 || y <= r.y0 || y >= r.y1) continue;
+      const side = Math.abs(x - x1) < 1e-6 || Math.abs(x - x0) < 1e-6;
+      const lo = side ? y0 : x0;
+      const hi = side ? y1 : x1;
+      const at = side ? y : x;
+      const a = side ? r.y0 : r.x0;
+      const b = side ? r.y1 : r.x1;
+      // The nearer way out that stays on the edge: the minimap (top-right) sends a right-edge
+      // arrow below it and a top-edge arrow left of it.
+      const ok = [a, b].filter((v) => v >= lo && v <= hi).sort((p, q) => Math.abs(p - at) - Math.abs(q - at));
+      if (ok.length === 0) continue;
+      if (side) y = ok[0]!;
+      else x = ok[0]!;
+      moved = true;
+    }
+    if (!moved) break;
   }
   return { x, y, angle, onScreen: false };
 }
@@ -246,6 +267,28 @@ export function mateLabel(name: string, distPx: number, alive: boolean): string 
 const FONT = "ui-rounded, 'Trebuchet MS', system-ui, sans-serif";
 /** Off-screen arrows keep this far from the screen edges (CSS px). */
 const ARROW_INSETS: EdgeInsets = { left: 26, right: 26, top: 26, bottom: 30 };
+/**
+ * Touch: the top edge runs below the corner chips, the MAP button and the ping badge (one row of
+ * 44–48 px buttons from top-3), so an arrow and its label never sit on them.
+ */
+const ARROW_INSETS_TOUCH: EdgeInsets = { ...ARROW_INSETS, top: 74 };
+/** Touch HUD areas an arrow slides out of are widened by this much (CSS px) for its centred label. */
+const ARROW_LABEL_HALF = 56;
+
+/**
+ * The screen rects the arrows keep out of: the minimap; on touch also the top stack (timer, compass)
+ * and the bottom bar (touch-controls.ts hudReservedRects), widened for the label.
+ */
+export function arrowObstacles(w: number, h: number, touch: boolean): ScreenRect[] {
+  const mm = minimapSize(w, h);
+  const out: ScreenRect[] = [{ x0: w - mm - MINIMAP_MARGIN - 14, y0: 0, x1: w, y1: mm + MINIMAP_MARGIN + 14 }];
+  if (!touch) return out;
+  for (const r of hudReservedRects(w, h)) {
+    if (r.soft || (r.id !== "top" && r.id !== "bar")) continue;
+    out.push({ x0: r.x - ARROW_LABEL_HALF, y0: r.y, x1: r.x + r.w + ARROW_LABEL_HALF, y1: r.y + r.h });
+  }
+  return out;
+}
 /** The arrow's label sits this far inward of its tip. */
 const ARROW_LABEL_PX = 30;
 /** lastSeen(id).at this recent = the mate's entity is drawn this frame (in the client's view). */
@@ -313,6 +356,8 @@ export function createPartySystem(): GameSystem {
   const marks = new Map<string, MateMark>();
   const live = new Set<string>();
   let disposed = false;
+  const touch = shouldUseTouch();
+  let avoidFor: { w: number; h: number; rects: ScreenRect[] } = { w: -1, h: -1, rects: [] };
 
   return {
     id: "party",
@@ -333,8 +378,8 @@ export function createPartySystem(): GameSystem {
         const h = cam.height;
         const now = performance.now();
         const me = ctx.selfPos();
-        const mm = minimapSize(w, h);
-        const avoid: ScreenRect = { x0: w - mm - MINIMAP_MARGIN - 14, y0: 0, x1: w, y1: mm + MINIMAP_MARGIN + 14 };
+        if (avoidFor.w !== w || avoidFor.h !== h) avoidFor = { w, h, rects: arrowObstacles(w, h, touch) };
+        const avoid = avoidFor.rects;
         for (const m of mates) {
           live.add(m.key);
           let mk = marks.get(m.key);
@@ -353,7 +398,7 @@ export function createPartySystem(): GameSystem {
           const wx = inView ? seen!.x : m.x;
           const wy = inView ? seen!.y : m.y;
           const s = ctx.toScreen(wx, wy);
-          const a = edgeAnchor(w, h, s.x, s.y, ARROW_INSETS, avoid);
+          const a = edgeAnchor(w, h, s.x, s.y, touch ? ARROW_INSETS_TOUCH : ARROW_INSETS, avoid);
           mk.root.visible = true;
           if (a.onScreen) {
             const mode: MarkMode = !m.alive ? "down" : inView ? "chevron" : "ghost";

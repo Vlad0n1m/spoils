@@ -122,7 +122,9 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
           <header className="flex items-baseline justify-between">
             <h2 className="toon-text-thin text-2xl tracking-wide text-white">Stash</h2>
             <p className="font-body text-xs text-white/55">
-              {stash.uniques.length} {stash.uniques.length === 1 ? "item" : "items"}
+              {/* Every tile the grid shows: the uniques plus one per ammo/med stack. */}
+              {stash.uniques.length + Object.keys(stash.stacks).length}{" "}
+              {stash.uniques.length + Object.keys(stash.stacks).length === 1 ? "item" : "items"}
             </p>
           </header>
           <div className="mt-4">
