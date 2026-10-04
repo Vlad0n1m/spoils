@@ -9,14 +9,15 @@
 //   $T $B --strategy rat --out $O;  $T $B --strategy poi --out $O;  $T $B --strategy full --out $O; …
 //   # world harness (≤ 4 shard-cycles): late-joiner curve, pool capture with the 8-min delay, corpse fates
 //   $T $B --world --cycles 4 --users 48 --out $O --tag v6
-//   node scripts/econ/econ-sim.mjs --data $O [--world FILE|DIR] [--scenario base|lowdau|highdau|altfarm|afkbot|tagtour|cheaprisk|crash|noexpiry|all]
+//   node scripts/econ/econ-sim.mjs --data $O [--world FILE|DIR] [--scenario base|lowdau|highdau|altfarm|afkbot|tagtour|cheaprisk|crash|noexpiry|kitfarm|all]
 //        [--days 90] [--seed 7] [--json out.json] [--csv DIR] [--pvp-source harness|design]  (default harness)
 //        [--k 1.0] [--set '{"POOL.CYCLE_MAX":32}']   (lever study: dotted paths into the shared exports, §8.6)
 //        [--map-stock CR] [--corpse-loot P] [--place-capture P] [--boss-mult M] [--mia 0.03] [--xp-aware [P]] [--no-expiry]
-//        [--peak-mult M] [--night-mult M] [--no-primary] [--no-giveaway-cap] [--no-regulator] [--no-bound-shop]
-//        [--cr-kit CR] [--free-kit-autosell M] [--pvp-loot L] [--kits N] [--give-days D] [--prim-day D]
-//        [--prim-target T] [--prim-fixed] [--prim-mult M] [--list-p P] [--buy-p P] [--alt-deposit] [--alt-day D]
+//        [--peak-mult M] [--night-mult M] [--no-primary] [--no-kits] [--no-regulator] [--no-bound-shop]
+//        [--cr-kit CR] [--free-kit-autosell M] [--pvp-loot L] [--prim-day D]
+//        [--prim-target T] [--prim-fixed] [--prim-mult M] [--list-p P] [--buy-p P] [--alt-day D]
 //        [--alt-n N] [--dump-players FILE]
+//        [--sim-per-minor U] [--kit-daily-max N] [--kit-buy-p P] [--kit-rebuy-p P]   (paid starter kit, design §19)
 //
 // Every yield-*.json in --data with `records` is read; records are bucketed by strategy:kit (boss hunters also
 // by target). PvE buckets use single-human records only (lobby.humans === 1); multi-human lobby records only
@@ -54,12 +55,17 @@
 //   and account ≥ 72 h, ≤ PVP_DAILY_MAX a day) → levels, entries to L5 / L10, weekly boards;
 // - treasury: 1 % tax (takeTreasuryTax), tax / expiry lots and primary batches sold on the market, 5 % P2P fee.
 //   The game NEVER pays SOL: the only money moves are buyer → seller (−fee) and buyer → house;
-// - CR: faucet = junk autosell (free kit × FREE_KIT.AUTOSELL_MULT) + dog tags; sinks = junker consumables
-//   (CONSUMABLES_CR) + bound gear shop + CR listing fees; daily regulator nextAutosellMult on the veterans' median.
+// - CR: faucet = junk autosell (basic gear × FREE_KIT.AUTOSELL_MULT) + dog tags; sinks = junker consumables
+//   (CONSUMABLES_CR) + bound gear shop (incl. the backpack a kit lacks) + CR listing fees; daily regulator
+//   nextAutosellMult on the veterans' median;
+// - starter kit (04.10): always paid STARTER_KIT.PRICE_MINOR (× --sim-per-minor units) to the treasury, ≤ DAILY_MAX a
+//   day: on day one by KIT_BUY_P of those who can afford it, then on an entry without a weapon by KIT_REBUY_P (before
+//   the bound CR shop). 3 locked tradable pistols + armor, the stacks as consumable stock, no CR. A pistol loadout
+//   samples the bench's "pistol" records (power 0.5 in PvP).
 // Scenarios (§8.3): base, lowdau (150 DAU), highdau (3 000), altfarm (300 free-kit alts churning 4 entries a
 // session from day 10), afkbot (5 % of entries idle to the wipe), tagtour (10 % free-kit late entries that only
 // collect tags), cheaprisk (300 alts with one common 50 % unique), crash (arrivals drop at day 30), noexpiry
-// (base without A6: unlooted bodies stay to the wipe → pool).
+// (base without A6: unlooted bodies stay to the wipe → pool), kitfarm (300 alts buying the daily cap of kits).
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, statSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
@@ -69,7 +75,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const shared = await import(resolve(here, "../../packages/shared/dist/index.js"));
 const {
-  BOSSES, BOSS_KINDS, CONSUMABLES_CR, MARKET, POOL, GIVEAWAY, FREE_KIT, BOUND_OFFERS, WORLD, XP, DOG_TAG,
+  BOSSES, BOSS_KINDS, CONSUMABLES_CR, MARKET, POOL, GIVEAWAY, STARTER_KIT, FREE_KIT, BOUND_OFFERS, WORLD, XP, DOG_TAG,
   xpForExit, nextAutosellMult, levelForXp, takeTreasuryTax, dogTagCr, boundTraderLevel, bossEventOf,
   poolReleaseForEntry, bossFillPlan, generateMap, poolContainerEligible, npcPostsOf, npcCarrierEligible,
 } = shared;
@@ -95,7 +101,7 @@ const RISK_K = Number(arg("k", POOL.RISK_K));
 // --xp-aware [P]: share P (default 1 with the flag, 0 without) of players who never extract before XP.MIN_ONMAP_MS
 // (they wait for the extract XP); the rest leave when their v5 record does (scripted, XP-blind).
 const XP_AWARE = flag("xp-aware") ? (Number.isFinite(Number(arg("xp-aware"))) ? Number(arg("xp-aware")) : 1) : 0;
-const OPTS = { primary: !flag("no-primary"), giveawayCap: !flag("no-giveaway-cap"), regulator: !flag("no-regulator"), boundShop: !flag("no-bound-shop"), expiry: !flag("no-expiry"), xpAware: XP_AWARE };
+const OPTS = { primary: !flag("no-primary"), kits: !flag("no-kits"), regulator: !flag("no-regulator"), boundShop: !flag("no-bound-shop"), expiry: !flag("no-expiry"), xpAware: XP_AWARE };
 // Bound gear shop (web market/trader.ts buyBound over BOUND_OFFERS): a player with no weapon buys a BOUND set
 // (weapon + armor_1 + backpack_1) for CR: shotgun before level 5, rifle from level 5 (boundTraderLevel).
 const CR_KIT_OVERRIDE = arg("cr-kit") !== undefined ? Number(arg("cr-kit")) : null;
@@ -106,6 +112,18 @@ function boundKitCr(level) {
   return offerCr(gun) + offerCr("armor_1") + offerCr("backpack_1");
 }
 const FREE_KIT_AUTOSELL = Number(arg("free-kit-autosell", FREE_KIT.AUTOSELL_MULT ?? 1));
+// ---- Paid starter kit (design §19, Vlad 04.10): always paid, STARTER_KIT.PRICE_MINOR (0.05 SOL), repeatable up
+// to STARTER_KIT.DAILY_MAX a day, tradable after GIVEAWAY.LOCK_RAIDS extracts, no CR. Money anchor: the sim's
+// item prices are NPC_PRICE_MINOR sim units (common weapon 300 = 3 primary-price units); --sim-per-minor (default
+// 200) sim units per balance minor (0.01 SOL) makes the kit 1 000 units ≈ the reference value of its uniques
+// (3 pistols at half a common weapon + armor Lv 1 / Lv 2 at 80 / 20 %). It sets who can afford a kit, never a lever.
+const SIM_PER_MINOR = Number(arg("sim-per-minor", 200));
+const KIT_PRICE = STARTER_KIT.PRICE_MINOR * SIM_PER_MINOR;
+const KIT_DAILY_MAX = Number(arg("kit-daily-max", STARTER_KIT.DAILY_MAX));
+/** Share of new players who can afford a kit and buy one on day one; share of weaponless entries that rebuy. */
+const KIT_BUY_P = Number(arg("kit-buy-p", 0.7));
+const KIT_REBUY_P = Number(arg("kit-rebuy-p", 0.5));
+const KIT_ARMOR2_P = (STARTER_KIT.armor.find((a) => a.def === "armor_2")?.weight ?? 0) / STARTER_KIT.armor.reduce((a, b) => a + b.weight, 0);
 const PVP_LOOT_HAUL = Number(arg("pvp-loot", 0.5));
 const PRIMARY_SHARE = Number(arg("primary-share", 0.08));
 const MARKET_LIST_P = Number(arg("list-p", 0.3));
@@ -118,7 +136,7 @@ const PVP_SOURCE = arg("pvp-source", "harness");
 /** PvP layer (design v5 CONFIG I). λ = encounters per entry with 23 other humans on the map. */
 const PVP = {
   LAMBDA_FULL_LOBBY: { rat: 0.4, poi: 1.2, t34: 2.0, boss: 2.0, full: 1.6, alt: 0.4 },
-  POWER: { free: 0, starter: 1, hunter: 2 },
+  POWER: { free: 0, pistol: 0.5, starter: 1, hunter: 2 },
   SKILL_SD: 0.8, K: 1.2, LOOT_IF_EXTRACT: Number(arg("loot-if-extract", 0.7)), FIGHT_CONS_CR: Number(arg("fight-cons", 80)),
 };
 const MIN = 60_000;
@@ -290,10 +308,13 @@ const entryMinute = () => (chance(0.35) ? OPEN_MIN + rnd() * (5 - OPEN_MIN) : 5 
 const NPC_PRICE_MINOR = { w: [300, 900, 2500, 6000], a: [0, 400, 1100, 2800], b: [0, 300, 900, 2200] };
 const SCRAP_CR = { w: [300, 700, 1600, 3500], a: [0, 200, 500, 1200], b: [0, 150, 450, 1100] };
 const tierScore = (it) => (it.k === "w" ? (it.r >= 2 ? 2 : it.r >= 1 ? 1 : 0) : it.r === 3 ? 2 : it.r === 2 ? 1 : 0);
-const refPrice = (it) => Math.round(NPC_PRICE_MINOR[it.k][it.r] * (0.6 + 0.4 * it.dur / 100));
-const refCr = (it) => SCRAP_CR[it.k][it.r] * it.dur / 100;
+/** A pistol (pi) is worth half a weapon of its rarity (the weakest gun, §22). */
+const PISTOL_MULT = 0.5;
+const refPrice = (it) => Math.round(NPC_PRICE_MINOR[it.k][it.r] * (it.pi ? PISTOL_MULT : 1) * (0.6 + 0.4 * it.dur / 100));
+const refCr = (it) => SCRAP_CR[it.k][it.r] * (it.pi ? PISTOL_MULT : 1) * it.dur / 100;
 let uid = 0;
 const mk = (k, r, dur = 100, lock = 0, bound = false) => ({ id: ++uid, k, r, dur, lock, bound });
+const mkPistol = (lock) => Object.assign(mk("w", 0, 100, lock), { pi: true });
 const riskUnit = (it) => (!it.bound && it.dur >= (POOL.RISK_MIN_DUR_PCT ?? 0) ? 1 : 0);
 function seedPiece(i) {
   const s = i % 3;
@@ -301,9 +322,10 @@ function seedPiece(i) {
   if (s === 1) return rnd() < 0.08 ? mk("a", 3) : mk("a", rnd() < 0.2 ? 2 : 1);
   return mk("b", rnd() < 0.15 ? 2 : 1);
 }
-function giveawayKit(bound = false) {
-  const lock = bound ? 0 : GIVEAWAY.LOCK_RAIDS;
-  return [mk("w", rnd() < 0.25 ? 1 : 0, 100, lock, bound), mk("a", rnd() < 0.2 ? 2 : 1, 100, lock, bound), mk("b", 1, 100, lock, bound)];
+/** The paid starter kit's uniques: STARTER_KIT.weapons pistols + armor Lv 1 (Lv 2 at its weight), all locked. */
+function starterKit() {
+  const lock = GIVEAWAY.LOCK_RAIDS;
+  return [...STARTER_KIT.weapons.map(() => mkPistol(lock)), mk("a", rnd() < KIT_ARMOR2_P ? 2 : 1, 100, lock)];
 }
 const boundKit = () => [mk("w", 0, 100, 0, true), mk("a", 1, 100, 0, true), mk("b", 1, 100, 0, true)];
 function primaryItem() {
@@ -312,7 +334,9 @@ function primaryItem() {
   return s === 0 ? mk("w", rnd() < 0.25 ? 1 : 0) : s === 1 ? mk("a", rnd() < 0.2 ? 2 : 1) : mk("b", rnd() < 0.15 ? 2 : 1);
 }
 const C = CONSUMABLES_CR;
-const KIT_CR = { starter: 3 * C.ammo_light.cr + 3 * C.bandage.cr + C.medkit.cr, hunter: 6 * C.ammo_light.cr + 3 * C.bandage.cr + 2 * C.medkit.cr, free: 0 };
+const KIT_CR = { starter: 3 * C.ammo_light.cr + 3 * C.bandage.cr + C.medkit.cr, hunter: 6 * C.ammo_light.cr + 3 * C.bandage.cr + 2 * C.medkit.cr, pistol: 4 * C.ammo_light.cr + 4 * C.bandage.cr + C.medkit.cr, free: 0 };
+/** CR-equivalent of the kit's ammo and meds (STARTER_KIT.stacks at CONSUMABLES_CR). */
+const KIT_STACK_CR = STARTER_KIT.stacks.reduce((a, s) => a + (C[s.def] ? (s.qty / C[s.def].qty) * C[s.def].cr : 0), 0);
 
 // ---------------------------------------------------------------- scenarios
 const MIX = { rat: 0.3, poi: 0.4, boss: 0.15, full: 0.15 };
@@ -328,6 +352,8 @@ const SCEN = {
   cheaprisk: { scale: 1, alts: { kind: "cheap", day: ALT_DAY, n: ALT_N } },
   crash: { scale: 1, crashDay: 30 },
   noexpiry: { scale: 1, noExpiry: true },
+  // 300 alts that each buy the daily cap of kits on their first day and churn them (repeatable-kit abuse check).
+  kitfarm: { scale: 1, alts: { kind: "kit", day: ALT_DAY, n: ALT_N } },
 };
 const arrivalsOf = (day, scale, crashDay) =>
   crashDay !== undefined && day >= crashDay ? Math.round(8 * scale) : Math.round((day === 0 ? 300 : 120 * Math.exp(-day / 25) + 35) * scale);
@@ -351,10 +377,9 @@ function run(name) {
   const scale = sc.dau ? sc.dau / meanDau(1) : sc.scale;
   const players = [];
   let nextId = 1;
-  let giveawayLeft = Number(arg("kits", GIVEAWAY.KITS));
   let pool = [];
   for (let i = 0; i < 700; i++) { const it = seedPiece(i); it.dur = Math.round(55 + rnd() * 45); pool.push(it); }
-  const treasury = { items: [], revenue: 0, revenueToday: 0, taxAcc: 0, primarySold: 0, taxSold: 0, expSold: 0, feeRev: 0, primRev: 0, taxRev: 0, expRev: 0, kitRev: 0, expIn: 0, expInTop: 0 };
+  const treasury = { items: [], revenue: 0, revenueToday: 0, taxAcc: 0, primarySold: 0, taxSold: 0, expSold: 0, feeRev: 0, primRev: 0, taxRev: 0, expRev: 0, kitRev: 0, kitsSold: 0, expIn: 0, expInTop: 0 };
   let overhang = [];
   let autosellMult = 1;
   let prevActive = new Set();
@@ -362,7 +387,7 @@ function run(name) {
   let startIdx = null;
   const tot = {
     destroyed: 0, boundDestroyed: 0, released: 0, returned: 0, placed: 0, captured: 0, leftPool: 0, bossKills: 0, bossEvents: 0, bossBag: 0, bossBagTop: 0, bossBagOut: 0,
-    deaths: { pvp: 0, npc: 0 }, mia: 0, entries: 0, joins: 0, worldFull: 0, firstFull: 0, gaveUp: 0, tradableKits: 0, boundKits: 0,
+    deaths: { pvp: 0, npc: 0 }, mia: 0, entries: 0, joins: 0, worldFull: 0, firstFull: 0, gaveUp: 0, kitsBought: 0, kitsFirst: 0, kitsAlt: 0, kitCapHits: 0, boundBp: 0,
     releaseViolations: 0, dailyViolations: 0, corpseLooted: 0, corpseExpired: 0, corpseLeft: 0, expiredUniques: 0,
   };
   const rows = [];
@@ -380,18 +405,14 @@ function run(name) {
     const type = kind ? "alt" : r < MIX.rat ? "rat" : r < MIX.rat + MIX.poi ? "poi" : r < MIX.rat + MIX.poi + MIX.boss ? "boss" : "full";
     const p = {
       id: nextId++, joined: day, kind, type, life: kind ? 999 : Math.max(2, -Math.log(Math.max(1e-9, rnd())) * 14),
-      rate: (kind === "farm" || kind === "cheap" ? 6 : kind ? 4 : Math.exp(Math.log(2.2) + 0.6 * (rnd() * 2 - 1))) * (kind ? 1 : SENS.rate),
-      cr: 1000, cons: 0, xp: 0, lvl: 1, items: [], sol: kind ? (flag("alt-deposit") && (kind === "farm" || kind === "cheap") ? 5 : 0) : chance(0.6) ? Math.round(rnd() * 3000) : 0,
+      rate: (kind === "farm" || kind === "cheap" || kind === "kit" ? 6 : kind ? 4 : Math.exp(Math.log(2.2) + 0.6 * (rnd() * 2 - 1))) * (kind ? 1 : SENS.rate),
+      cr: 1000, cons: 0, xp: 0, lvl: 1, items: [], sol: kind === "kit" ? KIT_PRICE * KIT_DAILY_MAX * 3 : kind ? 0 : chance(0.6) ? Math.round(rnd() * 3000) : 0, kitDay: -1, kitsToday: 0,
       raids: 0, lastRaid: -99, entries: 0, xpAware: !kind && chance(XP_AWARE), l5At: 0, l10At: 0, dayKey: -1, dayGrind: 0, dayFirst: false, dayPvp: 0, dayReleased: 0, dayXp: 0, weekXp: 0, weekKills: 0, weekNpc: 0,
     };
     solStart += p.sol; p.sol0 = p.sol;
     if (!kind) {
-      const tradable = !OPTS.giveawayCap || (giveawayLeft > 0 && day < Number(arg("give-days", 9999)) && p.sol >= (GIVEAWAY.MIN_DEPOSIT_MINOR ?? 0) && p.sol > 0);
-      if (tradable) {
-        giveawayLeft--; tot.tradableKits++; p.items.push(...giveawayKit(false));
-        const price = Math.min(p.sol, GIVEAWAY.KIT_PRICE_MINOR ?? 0);
-        p.sol -= price; treasury.revenue += price; treasury.kitRev += price;
-      } else { tot.boundKits++; p.items.push(...giveawayKit(true)); }
+      // Day one: a player who can afford it buys a kit (KIT_BUY_P); the rest drop with the basic gear (or bound CR gear).
+      if (chance(KIT_BUY_P) && buyKit(p, day)) tot.kitsFirst++;
     } else if (kind === "cheap") {
       // cheaprisk: one common unique at 50 % durability (a risk unit, tier 0), bought cheap on the market.
       p.items.push(mk("b", 1, 50));
@@ -399,6 +420,20 @@ function run(name) {
     return p;
   }
 
+  /** Buy one starter kit with SOL (→ treasury); false when unaffordable, paused (--no-kits) or at the daily cap. */
+  function buyKit(p, day) {
+    if (!OPTS.kits || p.sol < KIT_PRICE) return false;
+    if (p.kitDay !== day) { p.kitDay = day; p.kitsToday = 0; }
+    if (p.kitsToday >= KIT_DAILY_MAX) { tot.kitCapHits++; return false; }
+    p.kitsToday++;
+    p.sol -= KIT_PRICE;
+    treasury.revenueToday += KIT_PRICE;
+    treasury.kitRev += KIT_PRICE; treasury.kitsSold++;
+    tot.kitsBought++; if (p.kind) tot.kitsAlt++;
+    p.items.push(...starterKit());
+    p.cons += KIT_STACK_CR;
+    return true;
+  }
   const enterPool = (it, broke, taxable = true) => {
     if (it.bound) { tot.boundDestroyed++; return; }
     if (broke) it.dur -= POOL.BREAK_DUR_LOSS;
@@ -485,33 +520,45 @@ function run(name) {
       // Loadout (v5 rules): bound shop for a player with no weapon, gear with p 0.75 when CR allow.
       const kind = p.kind;
       const best = (k) => p.items.filter((it) => it.k === k).sort((a, b) => b.r - a.r || b.dur - a.dur)[0];
+      // No weapon: rebuy a starter kit with SOL (KIT_REBUY_P), else the bound CR shop, else the basic gear.
+      if (!kind && !best("w") && chance(KIT_REBUY_P) && buyKit(p, day)) d.kits++;
+      if (kind === "kit" && !best("w")) { if (buyKit(p, day)) d.kits++; }
       if (!kind && !best("w") && OPTS.boundShop) {
         const price = boundKitCr(p.lvl);
         if (p.cr >= price + KIT_CR.starter * 0.5 && chance(0.75)) { p.cr -= price; d.crKitBought += price; p.items.push(...boundKit()); }
+      }
+      // A kit has no backpack: the outfitter's bound backpack_1 for CR (a CR sink), when affordable.
+      if (!kind && best("w") && !best("b") && OPTS.boundShop && p.cr >= offerCr("backpack_1") + KIT_CR.pistol * 0.5 && chance(0.75)) {
+        p.cr -= offerCr("backpack_1"); d.crKitBought += offerCr("backpack_1"); tot.boundBp++; p.items.push(mk("b", 1, 100, 0, true));
       }
       const lo = [];
       let kit = "free";
       if (kind === "cheap") {
         const it = p.items[0];
         if (it) { lo.push(it); p.items.splice(0, 1); }
-      } else if (!kind) {
+      } else if (!kind || kind === "kit") {
         const w = best("w"), a = best("a");
-        const hunter = !!w && !!a && w.r >= 1 && a.r >= 2;
-        const kitCr = hunter ? KIT_CR.hunter : KIT_CR.starter;
-        if (!!w && p.cr + p.cons >= kitCr * 0.5 && chance(0.75)) {
+        const hunter = !!w && !w.pi && !!a && w.r >= 1 && a.r >= 2;
+        const pistol = !!w && !!w.pi;
+        const kitCr = hunter ? KIT_CR.hunter : pistol ? KIT_CR.pistol : KIT_CR.starter;
+        if (!!w && p.cr + p.cons >= kitCr * 0.5 && (kind === "kit" || chance(0.75))) {
           for (const k of ["w", "a", "b"]) { const it = best(k); if (it) { lo.push(it); p.items.splice(p.items.indexOf(it), 1); } }
+          // Pistol kit: the second pistol rides in w2 (the bench's "pistol" loadout).
+          if (pistol) { const w2 = best("w"); if (w2?.pi) { lo.push(w2); p.items.splice(p.items.indexOf(w2), 1); } }
           const fromStock = Math.min(p.cons, kitCr); p.cons -= fromStock;
           const buy = Math.min(p.cr, kitCr - fromStock); p.cr -= buy; d.consBought += buy;
           d.geared++; p.lastGeared = day;
-          kit = hunter ? "hunter" : "starter";
+          kit = hunter ? "hunter" : pistol ? "pistol" : "starter";
         }
       }
       if (kit === "free") d.freeKitRaids++;
+      if (kit === "pistol") entryKitCount.pistol++;
       // Record (strategy:kit); boss maps: boss-type entries are attempts.
       let rec, attempt = false, attemptKills = false;
       if (kind === "afk") rec = null;
       else if (kind === "tag") rec = pick(bucket("rat", "free"));
       else if (kind === "farm" || kind === "cheap") rec = pick(bucket("full", "free"));
+      else if (kind === "kit") rec = pick(bucket("full", kit));
       else if (p.type === "boss" && boss.kind && boss.alive) {
         // An attempt: kills with the v5 band × the harness group multiplier; the record is drawn to match.
         attempt = true;
@@ -538,7 +585,7 @@ function run(name) {
         // On-map time: alts churn (out after 8–9 min for the extract XP), taggers search a few minutes, the rest
         // follow their record, cut toward the arm on a stripped map (r), and leave by the last call before the wipe.
         let dur0;
-        const alt = kind === "farm" || kind === "cheap";
+        const alt = kind === "farm" || kind === "cheap" || kind === "kit";
         if (alt) dur0 = Math.min(rec.minutes, 9);
         else if (kind === "tag") dur0 = Math.max(ARM_MIN + 0.2, Math.min(rec.minutes, 6));
         else if (attemptKills) dur0 = Math.max(rec.minutes, (rec.bosses.find((b) => b.kind === boss.kind)?.atMin ?? 0) + 0.5);
@@ -585,7 +632,7 @@ function run(name) {
       if (cs.released > Math.round(RISK_K * cs.maxRisk)) tot.releaseViolations++;
       if (p.dayReleased > POOL.USER_DAILY_MAX) tot.dailyViolations++;
       d.released += e.pool.length; tot.released += e.pool.length;
-      if (kind === "cheap" || kind === "farm") d.altReleased += e.pool.length;
+      if (kind === "cheap" || kind === "farm" || kind === "kit") d.altReleased += e.pool.length;
       e.placeAt = t + APPLY_MIN;
       // Boss bag (step 7): once, while the boss lives, gated by the shard's risk and the pool.
       if (boss.kind && !boss.bagFilled && (boss.alive || boss.killAt > t)) {
@@ -628,7 +675,7 @@ function run(name) {
       onMap.delete(e);
       // Re-entry (D5).
       const p = e.p;
-      const pr = e.kind === "farm" || e.kind === "cheap" ? 1 : e.kind ? 0 : e.exit === "dead" ? 0.4 : e.exit === "extract" ? 0.2 : 0;
+      const pr = e.kind === "farm" || e.kind === "cheap" || e.kind === "kit" ? 1 : e.kind ? 0 : e.exit === "dead" ? 0.4 : e.exit === "extract" ? 0.2 : 0;
       if (chance(pr)) { const t = e.t1 + 1 + rnd(); if (t < CLOSE_MIN) push({ t, type: "arrive", p, first: false, tries: 0 }); }
     }
 
@@ -725,7 +772,7 @@ function run(name) {
         d.extracts++;
         const cr = Math.round((junkPaid + tagCr) * autosellMult);
         p.cr += cr; d.junkCr += cr; d.tagCr += Math.round(tagCr * autosellMult);
-        if (e.kind === "farm" || e.kind === "cheap") { d.altCr += cr; d.altRaids++; }
+        if (e.kind === "farm" || e.kind === "cheap" || e.kind === "kit") { d.altCr += cr; d.altRaids++; }
         if (e.kind === "tag") tagTourAll.push(Math.round(tagCr));
         p.cons += Math.max(0, e.consOut - e.fights * PVP.FIGHT_CONS_CR);
         d.foundExt += e.consFound;
@@ -742,12 +789,15 @@ function run(name) {
         for (const it of [...e.lo, ...e.gain]) enterPool(it, false, true);
         if (e.kind === "afk") d.botXp.push(0);
       }
-      if (e.kind === "farm" || e.kind === "cheap") d.altEntries++;
+      if (e.kind === "farm" || e.kind === "cheap" || e.kind === "kit") d.altEntries++;
     }
     return carryOut;
   }
 
+  const entryKitCount = { pistol: 0 };
   for (let day = 0; day < DAYS; day++) {
+    treasury.revenueToday = 0;
+    const kitSold0 = treasury.kitsSold, kitRev0 = treasury.kitRev;
     const arrivals = arrivalsOf(day, scale, sc.crashDay);
     for (let i = 0; i < arrivals; i++) players.push(newPlayer(day));
     if (sc.alts && day === sc.alts.day) for (let i = 0; i < sc.alts.n; i++) players.push(newPlayer(day, sc.alts.kind));
@@ -781,9 +831,8 @@ function run(name) {
     const d = {
       entries: 0, joins: 0, worldFull: 0, junkCr: 0, tagCr: 0, consBought: 0, listFees: 0, found: 0, used: 0, extracts: 0, released: 0, returned: 0, placed: 0, captured: 0,
       bossKills: 0, bossEvents: 0, attempts: 0, geared: 0, altCr: 0, altRaids: 0, altEntries: 0, altReleased: 0, altUniques: 0, altTradable: 0, pvpDeaths: 0, npcDeaths: 0, mia: 0,
-      fights: 0, npcKills: 0, crKitBought: 0, foundExt: 0, freeKitRaids: 0, p2p: 0, botXp: [],
+      fights: 0, npcKills: 0, crKitBought: 0, foundExt: 0, freeKitRaids: 0, p2p: 0, botXp: [], kits: 0,
     };
-    treasury.revenueToday = 0;
     let carry = [];
     for (let c = 0; c < CYCLES_PER_DAY; c++) {
       const sessions = [...byCycle[c], ...carry.map((x) => ({ p: x.p, t: OPEN_MIN + rnd() * 4, tries: x.tries }))];
@@ -791,7 +840,7 @@ function run(name) {
     }
     tot.gaveUp += carry.length;
     // Daily XP (alts / bots) and week boundaries.
-    const altXp = active.filter((p) => (p.kind === "farm" || p.kind === "cheap") && p.lastRaid === day).map((p) => p.dayXp);
+    const altXp = active.filter((p) => (p.kind === "farm" || p.kind === "cheap" || p.kind === "kit") && p.lastRaid === day).map((p) => p.dayXp);
     const botXp = active.filter((p) => p.kind === "afk" && p.lastRaid === day).map((p) => p.dayXp);
     const humanXp = humansActive.filter((p) => p.lastRaid === day).map((p) => p.dayXp);
     if (day % 7 === 6) {
@@ -889,14 +938,18 @@ function run(name) {
       crKitBought: d.crKitBought, altCr: d.altCr, altEntries: d.altEntries, altCrPerEntry: d.altRaids ? Math.round(d.altCr / d.altRaids) : 0, altReleased: d.altReleased,
       altUniques: d.altUniques, altTradable: d.altTradable, altXpMed: med(altXp), altXpMax: pctl(altXp, 1), botXpMax: pctl(botXp, 1), humanXpMed: med(humanXp),
       treasuryItems: treasury.items.length, expIn: treasury.expIn,
+      kits: treasury.kitsSold - kitSold0, kitRev: treasury.kitRev - kitRev0, pistolShare: +(entryKitCount.pistol / Math.max(1, d.entries)).toFixed(2),
+      altSolSpent: active.filter((p) => p.kind === "kit").reduce((a, p) => a + (p.sol0 - p.sol), 0),
+      altItemValue: active.filter((p) => p.kind === "kit").reduce((a, p) => a + p.items.filter((i) => !i.bound).reduce((b, i) => b + refPrice(i), 0), 0),
     });
+    entryKitCount.pistol = 0;
   }
   const solNow = players.reduce((a, p) => a + p.sol, 0) + treasury.revenue;
   if (arg("dump-players")) writeFileSync(arg("dump-players"), JSON.stringify(players.filter((p) => !p.kind).map((p) => ({ type: p.type, sol0: p.sol0, sol: p.sol, entries: p.entries, lvl: p.lvl, items: p.items.filter((i) => !i.bound).map((i) => refPrice(i)), life: p.life, earned: p.solEarned ?? 0 }))));
   const humansAll = players.filter((p) => !p.kind);
   return {
     name, scale: +scale.toFixed(3), rows, tot, weekly,
-    treasury: { revenue: treasury.revenue, feeRev: treasury.feeRev, primRev: treasury.primRev, taxRev: treasury.taxRev, expRev: treasury.expRev, kitRev: treasury.kitRev, primarySold: treasury.primarySold, taxSold: treasury.taxSold, expSold: treasury.expSold, expIn: treasury.expIn, expInTop: treasury.expInTop },
+    treasury: { revenue: treasury.revenue, feeRev: treasury.feeRev, primRev: treasury.primRev, taxRev: treasury.taxRev, expRev: treasury.expRev, kitRev: treasury.kitRev, kitsSold: treasury.kitsSold, primarySold: treasury.primarySold, taxSold: treasury.taxSold, expSold: treasury.expSold, expIn: treasury.expIn, expInTop: treasury.expInTop },
     solConserved: solNow === solStart, poolEmptyMaxStreak,
     kpi: kpis(rows, entryLog, peakHumans, allHumans, humansAll, players, tot, treasury, tagTourAll),
   };
@@ -949,6 +1002,9 @@ function kpis(rows, log, peakHumans, allHumans, humans, players, tot, treasury, 
     bossKillRate: tot.bossEvents ? +(tot.bossKills / tot.bossEvents).toFixed(3) : 0, attemptsPerEvent: tot.bossEvents ? +(rows.reduce((a, x) => a + x.attempts, 0) / tot.bossEvents).toFixed(2) : 0,
     expiredPerDay: +(treasury.expIn / DAYS).toFixed(2), expiredTopPerDay: +(treasury.expInTop / DAYS).toFixed(2), expRevPerDay: Math.round(treasury.expRev / DAYS),
     releasedPerDay: Math.round(tot.released / DAYS), capturedPerDay: Math.round(tot.captured / DAYS), returnedPerDay: Math.round(tot.returned / DAYS),
+    kitsPerDay14: +m((x) => x.kits).toFixed(1), kitsPerDau14: +m((x) => x.kits / Math.max(1, x.dau)).toFixed(3), kitRevShare: +(treasury.kitRev / Math.max(1, treasury.revenue)).toFixed(3),
+    revenuePerDay14: Math.round(m((x) => x.revenue)), pistolEntryShare14: m((x) => x.pistolShare), freeEntryShare14: m((x) => x.freeKitShare), crPerDauDay14: Math.round(m((x) => (x.faucet + x.tags) / Math.max(1, x.dau))),
+    kitfarmEnd: rows.at(-1)?.altSolSpent ? { solSpent: rows.at(-1).altSolSpent, tradableRefValue: rows.at(-1).altItemValue } : null,
   };
 }
 
@@ -961,7 +1017,7 @@ console.log(`data ${DATA} (${files.length} files; PvE buckets ${[...PVE].map(([k
   `world calibration ${WCAL.src} (${WCAL.shards} shards): map stock ${MAP_STOCK} CR, place capture ${PLACE_CAPTURE}, corpse loot ${CORPSE_LOOT}, human-min ref ${HUMAN_MIN_REF}, ` +
   `boss group mult ${BOSS_MULT} (${WCAL.bossKills ?? "-"} kills / ${WCAL.bossExpected ?? "-"} expected from ${WCAL.bossAttempts ?? "-"} attempts); ` +
   `MIA ${MIA_RATE}; expiry ${OPTS.expiry}; xp-aware ${OPTS.xpAware}; peak ×${PEAK} night ×${NIGHT}; capacity ${WORLD.CAPACITY}; ` +
-  `primary ${OPTS.primary}; giveaway cap ${OPTS.giveawayCap}; bound shop ${OPTS.boundShop ? `on (${boundKitCr(1)} / ${boundKitCr(5)} CR)` : "off"}; free-kit autosell ×${FREE_KIT_AUTOSELL}; ` +
+  `primary ${OPTS.primary}; starter kit ${OPTS.kits ? `${KIT_PRICE} units (${SIM_PER_MINOR}/minor), ≤ ${KIT_DAILY_MAX}/day, buy ${KIT_BUY_P} rebuy ${KIT_REBUY_P}` : "off"}; bound shop ${OPTS.boundShop ? `on (${boundKitCr(1)} / ${boundKitCr(5)} CR)` : "off"}; free-kit autosell ×${FREE_KIT_AUTOSELL}; ` +
   `regulator ${OPTS.regulator}; PvP ${PVP_SOURCE} ${JSON.stringify(PVP.LAMBDA_FULL_LOBBY)}${SET ? `; --set ${JSON.stringify(SET)}` : ""}`);
 const pickDays = [6, 13, 29, 59, DAYS - 1].filter((x, i, a) => x < DAYS && a.indexOf(x) === i);
 for (const r of results) {
@@ -969,7 +1025,7 @@ for (const r of results) {
   console.table(r.rows.filter((x) => pickDays.includes(x.day)).map((x) => ({
     d: x.day + 1, dau: x.dau, ent: x.entries, full: x.worldFull, mia: x.mia, "it/act": x.itemsPerActive, pIdx: x.priceIdx, rev: x.revenue,
     pool: x.pool, top: x.poolTop, rel: x.released, "ret/plc/cap": `${x.returned}/${x.placed}/${x.captured}`, boss: `${x.bossKills}/${x.bossEvents}`, crMed: x.crMed, mult: x.mult,
-    "f/s": x.faucetSink, "cons f/u": x.foundUsed, pvp: x.pvpShare, tre: x.treasuryItems, ...(x.altEntries ? { "alt CR/e": x.altCrPerEntry, "alt XP": x.altXpMed } : {}),
+    "f/s": x.faucetSink, "cons f/u": x.foundUsed, pvp: x.pvpShare, tre: x.treasuryItems, kits: x.kits, ...(x.altEntries ? { "alt CR/e": x.altCrPerEntry, "alt XP": x.altXpMed } : {}),
   })));
   console.log(`kpi ${JSON.stringify(r.kpi)}`);
   console.log(`SOL conserved (no game payout) ${r.solConserved}; pool max empty streak ${r.poolEmptyMaxStreak}; treasury ${JSON.stringify(r.treasury)}; totals ${JSON.stringify(r.tot)}`);

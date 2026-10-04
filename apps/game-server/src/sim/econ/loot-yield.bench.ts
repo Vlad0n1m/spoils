@@ -51,7 +51,10 @@
  *
  * Kits: "starter" = a giveaway kit (rifle r0 + armor_1 + backpack_1, 90 light rounds, 3 bandages,
  * 1 medkit; 3 risk units); "hunter" = rifle r1 + armor_2 + backpack_2, 180 light rounds, 3
- * bandages, 2 medkits (3 risk units); "free" = nothing (the server's FREE kit only, 0 risk units).
+ * bandages, 2 medkits (3 risk units); "free" = nothing (the server's FREE kit only, 0 risk units);
+ * "pistol" = the paid starter kit as carried (design §19, 04.10): two of its three pistols (w1 + w2),
+ * armor_1, a BOUND backpack_1 bought for 700 CR (0 risk), 120 light rounds, 4 bandages, 1 medkit
+ * (3 risk units: two pistols + armor).
  */
 
 import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -112,8 +115,10 @@ import {
   type UniqueOrigin,
 } from "./pool-mirror.js";
 
-export type Kit = "starter" | "free" | "hunter";
-export const KITS: readonly Kit[] = ["starter", "free", "hunter"];
+export type Kit = "starter" | "free" | "hunter" | "pistol";
+export const KITS: readonly Kit[] = ["starter", "free", "hunter", "pistol"];
+/** A uid marked bound (CR-shop gear): carried, but 0 risk units (riskUnitOf). */
+export const isBoundUid = (uid: string): boolean => uid.includes("bound-");
 export type Wiring = "v5" | "v4" | "prod";
 
 /** One scripted human of a raid. */
@@ -383,6 +388,23 @@ export function applySharedOverrides(set: Record<string, unknown>): void {
 export function starterLoadout(userId: string, kit: Kit = "starter"): LoadoutSnapshot {
   const e = (key: SlotKey, def: string, qty: number, uid = "", rarity = 0, durPct = 100) =>
     ({ key, uid, def, qty, rarity, dur: toRaidDur(def, durPct) });
+  if (kit === "pistol") {
+    return {
+      loadoutId: "bench-loadout",
+      userId,
+      level: 1,
+      entries: [
+        e("w1", "pistol", 1, "own-pistol-a", 0, 100),
+        e("w2", "pistol", 1, "own-pistol-b", 0, 100),
+        e("armor", "armor_1", 1, "own-armor", 0, 100),
+        e("bp", "backpack_1", 1, "own-bound-bp", 0, 100),
+        e("p0", "ammo_light", 60),
+        e("p1", "ammo_light", 60),
+        e("p2", "bandage", 4),
+        e("p3", "medkit", 1),
+      ],
+    };
+  }
   if (kit === "hunter") {
     // A boss hunter's bought kit: rifle r1 + armor_2 + backpack_2, 180 light rounds, 3 bandages, 2 medkits.
     return {
@@ -457,7 +479,7 @@ export function runLobbyRaid(o: LobbyOptions): { records: RaidRecord[]; lobby: L
   const ownUids = loadouts.map((lo) => new Set(lo?.entries.filter((e) => e.uid).map((e) => e.uid) ?? []));
   const ownerOf = new Map<string, number>();
   ownUids.forEach((s, i) => s.forEach((u) => ownerOf.set(u, i)));
-  const riskOf = ownUids.map((s) => s.size);
+  const riskOf = ownUids.map((s) => [...s].filter((u) => !isBoundUid(u)).length);
   const lobbyR = o.lobbyR ?? riskOf.reduce((a, b) => a + b, 0);
 
   // Legacy raids/start (pre-v6): a fresh seeded-like pool, the per-match release rule mirrored in-process.

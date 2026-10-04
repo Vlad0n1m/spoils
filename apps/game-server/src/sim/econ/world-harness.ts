@@ -69,6 +69,7 @@ import {
   starterLoadout,
   stat,
   withUidPrefix,
+  isBoundUid,
   type Consumables,
   type Kit,
   type Stat,
@@ -306,7 +307,7 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
   const newUser = (strategy: Strategy, kit: Kit, stance?: PvpStance): User => {
     const u: User = {
       id: `ws${o.seed}-u${users.length}`, strategy, kit, stance: stance ?? DEFAULT_STANCE[strategy],
-      level: kit === "hunter" ? 5 : kit === "starter" ? 3 : 1, entries: 0, maxRisk: 0, maxTier: 0, released: 0,
+      level: kit === "hunter" ? 5 : kit === "starter" ? 3 : 1 /* "pistol": a new kit buyer */, entries: 0, maxRisk: 0, maxTier: 0, released: 0,
     };
     users.push(u);
     return u;
@@ -387,7 +388,7 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
     const entryId = `${u.id}-e${u.entries}`;
     const snapshot: LoadoutSnapshot | null = u.kit === "free" ? null : withUidPrefix(starterLoadout(u.id, u.kit), `${entryId}:`);
     if (snapshot) snapshot.level = u.level;
-    const risky = (snapshot?.entries ?? []).filter((e) => e.uid && riskUnitOf({ bound: false, dur: fromRaidDur(e.def, e.dur) }) === 1);
+    const risky = (snapshot?.entries ?? []).filter((e) => e.uid && !isBoundUid(e.uid) && riskUnitOf({ bound: false, dur: fromRaidDur(e.def, e.dur) }) === 1);
     const risk = risky.length;
     const entryTier = risky.reduce((t, e) => Math.max(t, uniqueTierScore(e.def, e.rarity)), 0);
     if (risk >= 1) riskUsers.add(u.id);
@@ -793,14 +794,24 @@ export function worldCli(arg: (name: string) => string | undefined, out: string,
   const taggers = num("taggers") ?? 3;
   const users = num("users") ?? 36;
   const poolSize = num("pool");
+  // --kit-mix pistol:3,free:2,starter:1,hunter:1 (background users) and --probe-kit (default starter).
+  const kitMix = arg("kit-mix")
+    ?.split(",")
+    .filter(Boolean)
+    .map((x) => {
+      const [key, w] = x.split(":");
+      if (!["starter", "free", "hunter", "pistol"].includes(key!)) throw new Error(`--kit-mix: unknown kit ${key}`);
+      return { key: key as Kit, w: Number(w ?? 1) };
+    });
+  const probeKit = (arg("probe-kit") ?? "starter") as Kit;
   const results: WorldShardResult[] = [];
   const entries: WorldEntryRecord[] = [];
   for (let i = 0; i < cycles; i++) {
     const seed = seed0 + i;
     const b = bossList[i % bossList.length]!;
     const bossEvent = b === "none" || b === "" ? null : (b as BossKind);
-    const probes = enterAt.flatMap((atMin) => probeStrats.map((strategy) => ({ atMin, strategy, kit: "starter" as Kit })));
-    const r = runWorldShard({ seed, bossEvent, users, probes, taggers: { n: taggers, fromMin: 25, toMin: 33 }, poolSize });
+    const probes = enterAt.flatMap((atMin) => probeStrats.map((strategy) => ({ atMin, strategy, kit: probeKit })));
+    const r = runWorldShard({ seed, bossEvent, users, probes, kitMix, taggers: { n: taggers, fromMin: 25, toMin: 33 }, poolSize });
     results.push(r.result);
     entries.push(...r.entries);
     const x = r.result;
@@ -813,7 +824,7 @@ export function worldCli(arg: (name: string) => string | undefined, out: string,
   const s = summarizeWorld(results, entries);
   const note =
     `WORLD v6 harness (spec §8.4): ${cycles} shard-cycles on the real sim (Match world mode, 45 min, wipe), ${users} users per cycle ` +
-    `(35 % arriving in minutes 0–5, re-entry 40 % after death / 20 % after extract), probes ${probeStrats.join("+")} starter at ${enterAt.join("/")} min, ` +
+    `(35 % arriving in minutes 0–5, re-entry 40 % after death / 20 % after extract), probes ${probeStrats.join("+")} ${probeKit} at ${enterAt.join("/")} min, kits ${kitMix ? kitMix.map((k) => `${k.key}:${k.w}`).join(",") : "starter:3,free:1,hunter:1"}, ` +
     `${taggers} free-kit taggers in minutes 25–33, boss events ${bossList.slice(0, cycles).join(", ")} (forced: one per cycle), pool ${poolSize ?? 700}. ` +
     `CR at autosell 1; free-kit junk × 0.5; tags under D22. XP per entry without daily state (no cap, no first-extract bonus).` +
     (stale.length ? ` WARNING: shared sources newer than the dist: ${stale.slice(0, 3).join(", ")}.` : "");
