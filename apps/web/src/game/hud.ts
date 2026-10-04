@@ -51,6 +51,7 @@ import { containerTitle } from "../lib/items-ui";
 import type { ExtractStatus } from "./entities";
 import type { HudBoss, HudExtract, HudSelf, HudSlot, HudSnapshot, KillFeedEntry, WipeWarn } from "./types";
 import { bodyTitle, type KillTally } from "./npc-labels";
+import type { KnownEmpty } from "./known-empty";
 
 export function extractStatus(e: Pick<Extract, "openAt" | "closeAt">, clockMs: number): ExtractStatus {
   if (e.closeAt > 0 && clockMs >= e.closeAt) return "closed";
@@ -140,7 +141,7 @@ export type HudSelfState = Pick<
   SelfState,
   | "active" | "reloadUntil" | "healUntil" | "healKind" | "searching" | "searchReadyAt"
   | "extractStartedAt" | "extractedAt" | "kills" | "extractMask"
-> & { slots: SlotStore<InvItem> };
+> & { slots: SlotStore<InvItem>; raidXp?: number };
 
 /** Locally predicted movement state (Predictor) the HUD shows. */
 export interface HudMovement {
@@ -262,6 +263,7 @@ export function buildHudSelf({ me, self, clockMs, move = null, map = null, state
     storageCap: POCKET_SLOTS + (BACKPACK_SLOTS[bpLevel] ?? 0),
     creditsEstimate: junkCredits(carried),
     extractMask: self.extractMask || 0xff,
+    raidXp: self.raidXp ?? 0,
   };
 }
 
@@ -286,6 +288,8 @@ export interface InteractInput {
   y: number;
   /** Map collision index for the line-of-sight check (null before the map is built). */
   idx?: CollisionIndex | null;
+  /** Targets this client searched and saw empty (known-empty.ts): no prompt for them. */
+  known?: Pick<KnownEmpty, "container" | "corpse"> | null;
 }
 
 /**
@@ -294,7 +298,7 @@ export interface InteractInput {
  * item within PLAYER.INTERACT_RADIUS. Only targets in line of sight (MOVE mask, as the server)
  * count when the collision index is known. Ties go to the later entry, like the server's scan.
  */
-export function interactHint({ state, map, x, y, idx = null }: InteractInput): string | null {
+export function interactHint({ state, map, x, y, idx = null, known = null }: InteractInput): string | null {
   const visible = (tx: number, ty: number) => !idx || hasLineOfSight(idx, x, y, tx, ty, SOLID.MOVE);
   const R = SEARCH.OPEN_RANGE;
   let bestD = R * R;
@@ -305,12 +309,12 @@ export function interactHint({ state, map, x, y, idx = null }: InteractInput): s
     const dx = c.x - x, dy = c.y - y;
     const d = dx * dx + dy * dy;
     if (d > bestD) continue;
-    if ((state.containerState[i] ?? 0) === CONTAINER_STATE.EMPTIED || !visible(c.x, c.y)) continue;
+    if ((state.containerState[i] ?? 0) === CONTAINER_STATE.EMPTIED || known?.container(i) || !visible(c.x, c.y)) continue;
     bestD = d;
     hint = `F — search ${containerTitle(c.kind)}`;
   }
-  state.corpses.forEach((k) => {
-    if (k.empty) return;
+  state.corpses.forEach((k, id) => {
+    if (k.empty || known?.corpse(id)) return;
     const d = (k.x - x) ** 2 + (k.y - y) ** 2;
     if (d > bestD || !visible(k.x, k.y)) return;
     bestD = d;
@@ -370,10 +374,12 @@ export interface HudInput {
   idx?: CollisionIndex | null;
   map?: MapData | null;
   move?: HudMovement | null;
+  /** Targets this client searched and saw empty (known-empty.ts). */
+  known?: Pick<KnownEmpty, "container" | "corpse"> | null;
 }
 
 export function buildHud({
-  state, sessionId, selfKey, selfPos, clockMs, killFeed, killTally, pingMs, idx = null, map = null, move = null,
+  state, sessionId, selfKey, selfPos, clockMs, killFeed, killTally, pingMs, idx = null, map = null, move = null, known = null,
 }: HudInput): HudSnapshot {
   const me = state.players.get(sessionId) ?? null;
   const priv = selfKey ? (state.self.get(selfKey) ?? null) : null;
@@ -419,7 +425,7 @@ export function buildHud({
     totalPlayers,
     nearestExtract: onMap ? nearestExtract : null,
     extracts: onMap ? extracts : [],
-    interactHint: canInteract ? interactHint({ state, map, x: selfPos!.x, y: selfPos!.y, idx }) : null,
+    interactHint: canInteract ? interactHint({ state, map, x: selfPos!.x, y: selfPos!.y, idx, known }) : null,
     killFeed,
     ...(killTally ? { killTally } : {}),
     pingMs,

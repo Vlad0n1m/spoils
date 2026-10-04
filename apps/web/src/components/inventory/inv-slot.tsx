@@ -49,6 +49,11 @@ export interface InvSlotProps {
   active?: boolean;
   /** Small keycap in the corner (e.g. "1", "2"). */
   hotkey?: string;
+  /**
+   * Broken items: "crack" (default, own inventory) or "plate" = a BROKEN plate stamped over the item
+   * with a zoom-out + top-to-bottom wipe on mount (search panel: what broke when its owner died).
+   */
+  brokenLook?: "crack" | "plate";
   /** `data-drop` value so the drag hook can find this tile as a target. */
   dropId?: string;
   /** Extra line under the tile (outcome receipt). */
@@ -151,7 +156,8 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
           dropOk && "scale-105 !border-solid !border-zooa-lime ring-4 ring-zooa-lime/70",
           dropBad && "!border-rose-500 opacity-70",
           dragging && "opacity-35",
-          broken && "grayscale",
+          // The plate look (search panel) keeps its red stamp: only the item icon is desaturated.
+          broken && props.brokenLook !== "plate" && "grayscale",
         )}
         style={frameStyle}
       >
@@ -165,7 +171,7 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
               className={clsx(
                 "pointer-events-none select-none object-contain drop-shadow-[0_2px_0_rgba(0,0,0,0.55)]",
                 sz.img,
-                broken && "opacity-60",
+                broken && (props.brokenLook === "plate" ? "opacity-80 grayscale-[0.6]" : "opacity-60"),
               )}
             />
             {item!.qty > 1 && (
@@ -194,7 +200,7 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
                 FREE
               </span>
             )}
-            {broken && <BrokenCrack />}
+            {broken && (props.brokenLook === "plate" ? <BrokenPlate /> : <BrokenCrack />)}
           </>
         )}
         {(state === "hidden" || state === "revealing") && (
@@ -254,6 +260,40 @@ function Ring({ progress }: { progress: number }) {
         transform="rotate(-90 50 50)"
       />
     </svg>
+  );
+}
+
+/** BROKEN plate landing: zoom-out 2.4× → 1× while it wipes in from top to bottom (clip-path). */
+const STAMP_KEYFRAMES: Keyframe[] = [
+  { opacity: 0, transform: "rotate(-10deg) scale(2.4)", clipPath: "inset(0 0 100% 0)", offset: 0 },
+  { opacity: 1, offset: 0.15 },
+  { transform: "rotate(-10deg) scale(0.92)", clipPath: "inset(0 0 0 0)", offset: 0.7 },
+  { opacity: 1, transform: "rotate(-10deg) scale(1)", clipPath: "inset(0 0 0 0)", offset: 1 },
+];
+export const STAMP_MS = 450;
+
+/** Run the stamp once when the plate mounts (Web Animations: no global CSS needed); none for reduced motion. */
+function stampIn(el: HTMLElement | null): void {
+  if (!el || typeof el.animate !== "function") return;
+  if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  el.animate(STAMP_KEYFRAMES, { duration: STAMP_MS, easing: "cubic-bezier(0.2, 0.8, 0.3, 1.2)", fill: "both" });
+}
+
+/**
+ * The search panel's BROKEN plate: a red-and-black stamp across the tile (with the crack) that lands
+ * with a zoom-out while it wipes in from top to bottom — the item broke when its owner died.
+ */
+function BrokenPlate() {
+  return (
+    <span className="pointer-events-none absolute inset-0 grid place-items-center" aria-hidden>
+      <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full">
+        <path d="M58 0 L48 30 L62 44 L40 64 L52 78 L44 100" fill="none" stroke="#000" strokeWidth="7" strokeLinejoin="round" />
+        <path d="M58 0 L48 30 L62 44 L40 64 L52 78 L44 100" fill="none" stroke="#f43f5e" strokeWidth="3" strokeLinejoin="round" />
+      </svg>
+      <span ref={stampIn} data-broken-stamp className="relative -rotate-[10deg] rounded-md border-[3px] border-black bg-rose-600 px-1.5 py-0.5 text-[0.7rem] leading-none tracking-wider text-white shadow-[0_3px_0_#000] [text-shadow:0_2px_0_#000]">
+        BROKEN
+      </span>
+    </span>
   );
 }
 

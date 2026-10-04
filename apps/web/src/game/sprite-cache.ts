@@ -93,6 +93,23 @@ export const SPRITE_NAMES = [
   "crossbow",
   "grenade",
   "bolt",
+  // Loot containers (art/containers.json): one closed and one opened-empty look per ContainerKind.
+  "box_crate",
+  "box_crate_open",
+  "box_toolbox",
+  "box_toolbox_open",
+  "box_fridge",
+  "box_fridge_open",
+  "box_pc",
+  "box_pc_open",
+  "box_med_case",
+  "box_med_case_open",
+  "box_weapon_box",
+  "box_weapon_box_open",
+  "box_safe",
+  "box_safe_open",
+  "box_stash",
+  "box_stash_open",
 ] as const;
 
 export type SpriteName = (typeof SPRITE_NAMES)[number];

@@ -23,6 +23,20 @@ export function setCanvasCrosshair(canvas: { classList: Pick<DOMTokenList, "togg
   return on;
 }
 
+/**
+ * Keep Pixi's event system from owning the canvas cursor: it sets canvas.style.cursor to
+ * cursorStyles.default ("inherit") on pointer moves, and that inline style beats the
+ * .game-crosshair class. With "" (default and hover) the inline style stays empty.
+ */
+export function releaseCanvasCursor(app: { renderer?: { events?: { cursorStyles?: Record<string, unknown> } }; canvas?: { style: { cursor: string } } }): void {
+  const styles = app.renderer?.events?.cursorStyles;
+  if (styles) {
+    styles.default = "";
+    styles.pointer = "";
+  }
+  if (app.canvas) app.canvas.style.cursor = "";
+}
+
 export const TOUCH_CROSSHAIR = {
   /** Kept this far (px) inside the screen edges. */
   EDGE_INSET: 36,

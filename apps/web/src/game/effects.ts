@@ -358,6 +358,11 @@ export class Effects {
   }
 
   damageNumber(x: number, y: number, amount: number, color: number, now: number) {
+    this.popText(x + (Math.random() - 0.5) * 16, y - 20, String(Math.max(1, Math.round(amount))), color, now, 20);
+  }
+
+  /** A short floating label at (x, y) that rises and fades like a damage number ("+2 XP"). */
+  popText(x: number, y: number, label: string, color: number, now: number, fontSize = 20) {
     const text =
       this.textPool.pop() ??
       new Text({
@@ -371,13 +376,14 @@ export class Effects {
         },
         resolution: 2,
       });
-    text.text = String(Math.max(1, Math.round(amount)));
+    text.text = label;
     text.style.fill = color;
+    if (text.style.fontSize !== fontSize) text.style.fontSize = fontSize;
     text.anchor.set(0.5);
     text.alpha = 1;
     text.visible = true;
     this.floatLayer.addChild(text);
-    this.numbers.push({ text, x: x + (Math.random() - 0.5) * 16, y: y - 20, born: now });
+    this.numbers.push({ text, x, y, born: now });
   }
 
   hurtFlash(amount: number) {

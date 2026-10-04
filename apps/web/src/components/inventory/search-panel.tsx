@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from "react";
 import clsx from "clsx";
-import { ITEM_FLAG } from "@extract/shared";
+import { CONTAINER_KINDS, ITEM_FLAG } from "@extract/shared";
 import type { InvItemView, SearchView } from "@/game/inventory-client";
 import type { DragSource, UseItemDrag } from "@/hooks/use-item-drag";
 import { InvSlot } from "./inv-slot";
@@ -27,14 +27,11 @@ export interface SearchPanelProps {
   touch?: boolean;
 }
 
-/** Sprite for the panel header. */
-export function searchIcon(s: Pick<SearchView, "kind" | "containerKind" | "tier">): string {
+/** Sprite for the panel header: the body, or the container kind's own art (opened-empty once done). */
+export function searchIcon(s: Pick<SearchView, "kind" | "containerKind" | "tier">, empty = false): string {
   if (s.kind === "corpse") return "/sprites/corpse.png";
-  if (s.containerKind === "crate" || s.containerKind === "toolbox" || s.containerKind === "med_case") {
-    return "/sprites/crate.png";
-  }
-  const t = Math.max(0, Math.min(4, s.tier));
-  return `/sprites/chest_${t <= 1 ? "common" : t === 2 ? "rare" : t === 3 ? "epic" : "legendary"}.png`;
+  const kind = s.containerKind && CONTAINER_KINDS.includes(s.containerKind) ? s.containerKind : "crate";
+  return `/sprites/box_${kind}${empty ? "_open" : ""}.png`;
 }
 
 /** Re-render on every animation frame while `on` (open delay / reveal rings). */
@@ -71,6 +68,8 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
   const allPending = !!pending["loot:*"];
   const done = search.loaded && search.revealed >= search.total;
   const empty = done && search.takeable === 0;
+  // Broken on its owner's death (BREAK_CHANCE_ON_DEATH): on show, never takeable.
+  const brokenCount = search.cells.reduce((n, c) => n + (c.kind === "item" && (c.item.flags & ITEM_FLAG.BROKEN) !== 0 ? 1 : 0), 0);
 
   return (
     <section
@@ -81,7 +80,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
       <header className="flex items-center gap-3">
         <div className="relative grid h-14 w-14 shrink-0 place-items-center rounded-xl border-[3px] border-black bg-[#2b3142]">
           {/* eslint-disable-next-line @next/next/no-img-element -- static sprite */}
-          <img src={searchIcon(search)} alt="" className="h-11 w-11 object-contain" draggable={false} />
+          <img src={searchIcon(search, empty)} alt="" className="h-11 w-11 object-contain" draggable={false} />
           {opening && <OpenRing progress={openP} />}
         </div>
         <div className="min-w-0 flex-1">
@@ -93,8 +92,10 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
                 ? "Opening…"
                 : done
                   ? empty
-                    ? "Nothing left"
-                    : `${search.total} item${search.total === 1 ? "" : "s"}`
+                    ? brokenCount > 0
+                      ? `Nothing left · ${brokenCount} broken`
+                      : "Nothing left"
+                    : `${search.total} item${search.total === 1 ? "" : "s"}${brokenCount > 0 ? ` · ${brokenCount} broken` : ""}`
                   : `Searching ${search.revealed}/${search.total}`}
             {search.subtitle && <span className="ml-2 uppercase tracking-wider text-white/40">{search.subtitle}</span>}
           </p>
@@ -133,6 +134,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
                   pending={!!pending[`loot:${i}`] || (allPending && !broken)}
                   dragging={isDragged}
                   onClick={broken ? undefined : () => onTake(i, it)}
+                  brokenLook="plate"
                   {...drag.bind(src)}
                 />
               </div>
