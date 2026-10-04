@@ -1,25 +1,34 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import clsx from "clsx";
+import type { WearableKind } from "@extract/shared";
+import type { RewardItem } from "@/lib/lobby/levels";
 import { playUi } from "@/game/audio/ui-sounds";
 import { LevelBadge } from "./level-badge";
+import { Confetti, RewardCard, WearButton } from "./reward-art";
 
-const CONFETTI = ["#CCFF00", "#fbbf24", "#4cc9ff", "#f43f5e", "#b07bff", "#ffffff"];
+const WEARABLE = new Set<string>(["title", "color", "frame", "skin"]);
 
 /**
- * New level (WORLD v6 spec §6.6): "LEVEL 8" with what it unlocks (`unlocksBetween` from
- * lib/lobby/levels.ts: features, then titles, name colours and badge frames), CSS-only confetti, the
- * coin sound once. Escape or "Nice!" closes it; "Wear rewards" (`onRewards`) closes it and opens the
- * rewards sheet.
+ * New level (WORLD v6 spec §6.6): a burst and turning rays behind the new level shield, "LEVEL 8",
+ * then the level's rewards flip in one by one as drawn cards (`rewardsBetween` from
+ * lib/lobby/levels.ts: features, then titles, name colours and badge frames) with Wear on the
+ * cosmetics when `canWear`. The coin sound once. Escape or "Nice!" closes it; "All rewards"
+ * (`onRewards`) closes it and opens the rewards screen. Reduced motion: no rays, burst or flips.
  */
 export function LevelUpModal({
   level,
-  unlocks,
+  rewards,
+  nick,
+  canWear,
   onClose,
   onRewards,
 }: {
   level: number;
-  unlocks: string[];
+  rewards: RewardItem[];
+  nick: string;
+  canWear?: boolean;
   onClose: () => void;
   onRewards?: () => void;
 }) {
@@ -35,53 +44,66 @@ export function LevelUpModal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-[70] grid place-items-center p-4" role="dialog" aria-modal="true" aria-labelledby="levelup-title">
-      <div className="absolute inset-0 bg-black/70" onClick={onClose} aria-hidden />
-      {/* Landscape phones (≤ 500 px tall): no big badge, smaller heading, and the card scrolls when a
-          level brings many rewards; there the unlocks sit in two columns and the confetti is off, so
-          nothing covers the text. Elsewhere the confetti stays around the badge and the heading. */}
-      <div className="toon-panel relative max-h-[calc(100dvh-2rem)] w-full max-w-sm overflow-y-auto overscroll-contain bg-[#161b28] p-7 text-center animate-pop-in motion-reduce:animate-none [@media(max-height:500px)]:max-w-xl [@media(max-height:500px)]:p-4">
-        <div className="pointer-events-none absolute inset-0 motion-reduce:hidden [@media(max-height:500px)]:hidden" aria-hidden>
-          {Array.from({ length: 12 }, (_, i) => (
-            <span
-              key={i}
-              className="absolute h-3 w-3 rounded-sm border-2 border-black animate-pop-in"
-              style={{
-                left: `${8 + ((i * 37) % 84)}%`,
-                top: `${4 + ((i * 53) % 20)}%`,
-                background: CONFETTI[i % CONFETTI.length],
-                transform: `rotate(${(i * 47) % 90}deg)`,
-                animationDelay: `${120 + i * 60}ms`,
-              }}
-            />
-          ))}
+    <div className="fixed inset-0 z-[70] grid place-items-center p-4 short:p-2" role="dialog" aria-modal="true" aria-labelledby="levelup-title">
+      <div className="absolute inset-0 bg-black/75" onClick={onClose} aria-hidden />
+      <div className="toon-panel relative max-h-[calc(100dvh-2rem)] w-full max-w-[56rem] overflow-y-auto overflow-x-hidden overscroll-contain bg-[radial-gradient(circle_at_50%_18%,#2b3a1a,#161b28_60%)] px-5 pb-5 pt-6 text-center animate-pop-in motion-reduce:animate-none short:max-h-[calc(100dvh-1rem)] short:px-3 short:pb-3 short:pt-3">
+        {/* Rays turning behind the shield, and a one-off burst. */}
+        <div className="pointer-events-none absolute left-1/2 top-[4.5rem] h-0 w-0 short:top-8" aria-hidden>
+          <span
+            className="rw-rays absolute -left-[260px] -top-[260px] h-[520px] w-[520px] rounded-full opacity-60 motion-reduce:hidden"
+            style={{
+              background: "repeating-conic-gradient(rgba(204,255,0,0.22) 0deg 9deg, transparent 9deg 24deg)",
+              WebkitMaskImage: "radial-gradient(circle, #000 15%, transparent 65%)",
+              maskImage: "radial-gradient(circle, #000 15%, transparent 65%)",
+            }}
+          />
+          <span className="rw-burst absolute -left-[110px] -top-[110px] h-[220px] w-[220px] rounded-full bg-[radial-gradient(circle,#f4ffb0,rgba(204,255,0,0.5)_40%,transparent_70%)]" />
+          <Confetti count={22} />
         </div>
-        <LevelBadge level={level} size="lg" className="mx-auto [@media(max-height:500px)]:hidden" />
-        <h2 id="levelup-title" className="toon-text mt-4 text-6xl tracking-wide text-zooa-lime md:text-7xl [@media(max-height:500px)]:mt-0 [@media(max-height:500px)]:!text-4xl">
-          LEVEL {level}
-        </h2>
-        {unlocks.length > 0 ? (
-          <ul className="font-body mt-5 space-y-2 text-left text-sm [@media(max-height:500px)]:mt-3 [@media(max-height:500px)]:grid [@media(max-height:500px)]:grid-cols-2 [@media(max-height:500px)]:gap-1.5 [@media(max-height:500px)]:space-y-0">
-            {unlocks.map((u) => (
-              <li key={u} className="flex items-start gap-2 rounded-xl border-2 border-black bg-white/[0.06] px-3 py-2 text-white/85">
-                <span className="text-zooa-lime" aria-hidden>
-                  ✓
-                </span>
-                {u}
-              </li>
-            ))}
-          </ul>
+        <div className="relative flex flex-col items-center short:flex-row short:justify-center short:gap-3">
+          <LevelBadge level={level} size="lg" className="rw-pop scale-125 short:scale-90" />
+          <div>
+            <p className="font-body mt-4 text-sm font-bold uppercase tracking-[0.3em] text-white/85 short:mt-0 short:text-xs">Level up!</p>
+            <h2 id="levelup-title" className="toon-text text-6xl leading-none tracking-wide text-zooa-lime md:text-7xl short:!text-4xl">
+              <span className="optical-center">LEVEL {level}</span>
+            </h2>
+          </div>
+        </div>
+        {rewards.length > 0 ? (
+          <>
+            <p className="font-body relative mt-3 text-sm font-semibold text-white/85 short:sr-only">
+              {rewards.length === 1 ? "You unlocked" : `You unlocked ${rewards.length} rewards`}
+            </p>
+            <div className="rw-track relative -mx-5 mt-2 overflow-x-auto px-5 pb-2 pt-3 short:-mx-3 short:mt-1 short:px-3">
+              <div className="mx-auto flex w-max gap-3">
+                {rewards.map((it, i) => (
+                  <RewardCard
+                    key={it.label}
+                    item={it}
+                    state="owned"
+                    nick={nick}
+                    level={level}
+                    className="rw-flip-in"
+                    style={{ animationDelay: `${450 + i * 140}ms` }}
+                    footer={canWear && it.id && WEARABLE.has(it.kind) ? <WearButton kind={it.kind as WearableKind} id={it.id} /> : undefined}
+                  />
+                ))}
+              </div>
+            </div>
+          </>
         ) : (
-          <p className="font-body mt-4 text-sm text-white/70">Keep raiding: your rank on the Level board just went up.</p>
+          <p className="font-body relative mt-4 text-sm text-white/80">Keep raiding: your rank on the Level board just went up.</p>
         )}
-        <button ref={ok} type="button" onClick={onClose} className="toon-btn mt-6 min-h-12 w-full text-xl tracking-wide [@media(max-height:500px)]:mt-3">
-          <span className="optical-center">Nice!</span>
-        </button>
-        {onRewards && (
-          <button type="button" onClick={onRewards} className="toon-btn-ghost mt-2 min-h-11 w-full text-base tracking-wide">
-            <span className="optical-center">{unlocks.some((u) => /^(Title|Name colour|Badge frame):/.test(u)) ? "Wear rewards" : "All rewards"}</span>
+        <div className={clsx("relative mt-4 flex flex-col gap-2 short:mt-2 short:flex-row-reverse", "sm:flex-row-reverse sm:justify-center")}>
+          <button ref={ok} type="button" onClick={onClose} className="toon-btn min-h-12 w-full short:min-h-11 text-xl tracking-wide sm:w-56">
+            <span className="optical-center">Nice!</span>
           </button>
-        )}
+          {onRewards && (
+            <button type="button" onClick={onRewards} className="toon-btn-ghost min-h-12 w-full short:min-h-11 text-base tracking-wide sm:w-56">
+              <span className="optical-center">All rewards</span>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

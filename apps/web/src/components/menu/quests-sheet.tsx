@@ -3,25 +3,15 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
-import {
-  QUEST,
-  cosmeticDef,
-  levelProgress,
-  nextMarkReward,
-  unlockedCosmetics,
-  xpToNext,
-  type WearableKind,
-  type QuestSlotDto,
-  type QuestsDto,
-} from "@extract/shared";
+import { QUEST, nextMarkReward, type QuestSlotDto } from "@extract/shared";
 import { useLobby, useNow } from "@/lib/lobby/lobby-context";
-import { cosmeticLabel, markRewardTable, nameColorHex, nextReward, rewardTable, titleName, type RewardItem } from "@/lib/lobby/levels";
+import { cosmeticLabel } from "@/lib/lobby/levels";
 import { playUi } from "@/game/audio/ui-sounds";
-import { LevelBadge } from "./level-badge";
 import { Panel } from "./panel";
 import { usePass } from "./pass-context";
 import { PassTab } from "./pass-tab";
 import { useQuests } from "./quests-context";
+import { RewardsTab } from "./rewards-tab";
 import { fmtInt } from "./xp-bar";
 
 /** "5h 12m", "12m", "<1m" until `at`. */
@@ -39,7 +29,8 @@ const SHEET_TITLE: Readonly<Record<QuestsTab, string>> = { today: "Daily tasks",
 
 /**
  * Daily tasks, level rewards and the Alpha Pass (RETENTION.md §3, §5; GAME_DESIGN §18e): a drawer
- * from the left with three tabs (Pass: pass-tab.tsx).
+ * from the left with three tabs; Rewards (rewards-tab.tsx) and the Alpha Pass (pass-tab.tsx) open as
+ * full game screens.
  * Today: the three tasks with progress, the day's free swap, task XP today, marks. Rewards: the next
  * reward, what to wear (title, name colour, badge frame — unlocked ones only, the server checks
  * again) and every reward by level and by task marks. Not a URL panel: opened by the tasks strip,
@@ -62,7 +53,7 @@ export function QuestsSheet({ tab, onTab, onClose }: { tab: QuestsTab; onTab: (t
   return (
     <Panel
       title={SHEET_TITLE[tab]}
-      variant="drawer-left"
+      variant={tab === "today" ? "drawer-left" : "screen"}
       tabs={TABS}
       tab={tab}
       onTab={(t) => onTab(t as QuestsTab)}
@@ -74,7 +65,7 @@ export function QuestsSheet({ tab, onTab, onClose }: { tab: QuestsTab; onTab: (t
       ) : tab === "pass" ? (
         <PassTab />
       ) : tab === "rewards" ? (
-        <RewardsTab />
+        <RewardsTab loading={<Skeleton />} error={<LoadError />} />
       ) : (
         <TodayTab onRewards={() => onTab("rewards")} />
       )}
@@ -255,208 +246,5 @@ function TaskCard({ slot: s, canSwap }: { slot: QuestSlotDto; canSwap: boolean }
         </div>
       )}
     </li>
-  );
-}
-
-// ---------------------------------------------------------------------------- Rewards
-
-const WEAR: ReadonlyArray<{ kind: WearableKind; label: string }> = [
-  { kind: "title", label: "Title" },
-  { kind: "color", label: "Name colour" },
-  { kind: "frame", label: "Badge frame" },
-  { kind: "skin", label: "Skin" },
-];
-
-function RewardsTab() {
-  const { data, error } = useQuests();
-  const { stash, user } = useLobby();
-  const sell = stash.data?.market.sellUnlockLevel;
-  if (!data) return error ? <LoadError /> : <Skeleton />;
-  const xp = stash.data?.xp ?? null;
-  const p = xp !== null ? levelProgress(xp) : null;
-  const level = p?.level ?? data.level;
-  const next = nextReward(level, sell);
-  // XP from now to the next reward level.
-  let toGo: number | null = null;
-  if (p && next) {
-    toGo = p.need - p.into;
-    for (let l = p.level + 1; l < next.level; l++) toGo += xpToNext(l);
-  }
-  const owned = new Set(unlockedCosmetics(level, data.marks, data.granted ?? []));
-  const nick = user?.nickname ?? "You";
-
-  return (
-    <div className="flex flex-col gap-4">
-      {/* Preview + next reward */}
-      <section className="rounded-2xl border-[3px] border-black bg-[#1d2333]/90 p-3">
-        <div className="flex items-center gap-3">
-          <LevelBadge level={level} size="md" frame={data.equipped.frame} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-lg tracking-wide" style={{ color: nameColorHex(data.equipped.color) ?? "#fff" }}>
-              {nick}
-            </p>
-            <p className="font-body truncate text-xs lg:text-[0.8125rem] font-semibold uppercase tracking-wider text-white/75">
-              {titleName(data.equipped.title) ?? "No title"}
-            </p>
-          </div>
-        </div>
-        {next ? (
-          <div className="mt-3 border-t-2 border-black/40 pt-2.5">
-            <p className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">
-              NEXT · LEVEL {next.level}
-              {toGo !== null && <span className="font-body ml-2 tracking-normal text-white/75">{fmtInt(toGo)} XP to go</span>}
-            </p>
-            <ul className="mt-1 space-y-0.5">
-              {next.items.map((it) => (
-                <RewardLine key={it.label} item={it} reached={false} />
-              ))}
-            </ul>
-          </div>
-        ) : (
-          <p className="font-body mt-3 border-t-2 border-black/40 pt-2.5 text-sm text-zooa-lime">Every level reward unlocked.</p>
-        )}
-      </section>
-
-      {/* What to wear */}
-      <section aria-label="Wear" className="flex flex-col gap-3">
-        {WEAR.map((w) => (
-          <WearRow key={w.kind} kind={w.kind} label={w.label} owned={owned} data={data} />
-        ))}
-        <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">Rewards are earned only by playing — they can&apos;t be bought or traded, and they change nothing in a raid.</p>
-      </section>
-
-      {/* All rewards by level */}
-      <section>
-        <h3 className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">BY LEVEL</h3>
-        <ol className="mt-2 flex flex-col gap-1.5">
-          {rewardTable(sell).map((r) => {
-            const reached = level >= r.level;
-            return (
-              <li
-                key={r.level}
-                className={clsx(
-                  "flex gap-3 rounded-xl border-[3px] px-2.5 py-2",
-                  reached ? "border-black bg-white/[0.06]" : "border-transparent bg-white/[0.025]",
-                )}
-              >
-                <LevelBadge level={r.level} size="sm" className={clsx(!reached && "opacity-50 grayscale")} />
-                <ul className="min-w-0 flex-1 space-y-0.5 self-center">
-                  {r.items.map((it) => (
-                    <RewardLine key={it.label} item={it} reached={reached} />
-                  ))}
-                </ul>
-              </li>
-            );
-          })}
-        </ol>
-      </section>
-
-      <section>
-        <h3 className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">BY TASK MARKS · YOU HAVE {fmtInt(data.marks)}</h3>
-        <ol className="mt-2 flex flex-col gap-1.5">
-          {markRewardTable().map((r) => {
-            const reached = data.marks >= r.marks;
-            return (
-              <li
-                key={r.marks}
-                className={clsx(
-                  "flex items-center gap-3 rounded-xl border-[3px] px-2.5 py-2",
-                  reached ? "border-black bg-white/[0.06]" : "border-transparent bg-white/[0.025]",
-                )}
-              >
-                <span
-                  className={clsx(
-                    "grid h-8 min-w-8 shrink-0 place-items-center rounded-full border-[3px] border-black px-1 text-xs lg:text-[0.8125rem] tabular-nums",
-                    reached ? "bg-sky-300 text-black" : "bg-white/10 text-white/75",
-                  )}
-                >
-                  {r.marks}
-                </span>
-                <ul className="min-w-0 flex-1">
-                  {r.items.map((it) => (
-                    <RewardLine key={it.label} item={it} reached={reached} />
-                  ))}
-                </ul>
-              </li>
-            );
-          })}
-        </ol>
-      </section>
-    </div>
-  );
-}
-
-function RewardLine({ item, reached }: { item: RewardItem; reached: boolean }) {
-  return (
-    <li className={clsx("font-body flex items-center gap-2 text-sm", reached ? "text-white/90" : "text-white/70")}>
-      {item.kind === "color" && item.hex ? (
-        <span className="h-3 w-3 shrink-0 rounded-full border-2 border-black" style={{ background: item.hex }} aria-hidden />
-      ) : item.kind === "frame" && item.hex ? (
-        <span className="h-3 w-3 shrink-0 rounded-sm border-2" style={{ borderColor: item.hex }} aria-hidden />
-      ) : (
-        <span className={clsx("w-3 shrink-0 text-center text-xs lg:text-[0.8125rem]", reached ? "text-zooa-lime" : "text-white/70")} aria-hidden>
-          {reached ? "✓" : "•"}
-        </span>
-      )}
-      <span className="min-w-0">{item.label}</span>
-    </li>
-  );
-}
-
-function WearRow({ kind, label, owned, data }: { kind: WearableKind; label: string; owned: ReadonlySet<string>; data: QuestsDto }) {
-  const { equip } = useQuests();
-  const { toast } = useLobby();
-  const [busy, setBusy] = useState<string | null>(null);
-  const current = data.equipped[kind] ?? null;
-  const ids = [...owned].filter((id) => cosmeticDef(id)?.kind === kind);
-
-  const pick = async (id: string | null) => {
-    if (id === current || busy) return;
-    setBusy(id ?? "none");
-    const r = await equip(kind, id);
-    setBusy(null);
-    playUi(r.ok ? "click" : "error");
-    if (!r.ok) toast(r.message);
-  };
-
-  const chip = (on: boolean) =>
-    clsx(
-      "font-body inline-flex min-h-11 items-center gap-1.5 rounded-xl border-[3px] border-black px-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 disabled:opacity-60",
-      on ? "bg-zooa-lime text-black shadow-[0_3px_0_#000]" : "bg-[#1d2333]/90 text-white/85 hover:text-white",
-    );
-
-  return (
-    <div>
-      <h3 className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">{label.toUpperCase()}</h3>
-      {ids.length === 0 ? (
-        <p className="font-body mt-1 text-sm text-white/70">Nothing unlocked yet — see the list below.</p>
-      ) : (
-        <div role="group" aria-label={label} className="mt-1.5 flex flex-wrap gap-1.5">
-          <button type="button" aria-pressed={current === null} disabled={busy !== null} onClick={() => void pick(null)} className={chip(current === null)}>
-            None
-          </button>
-          {ids.map((id) => {
-            const d = cosmeticDef(id)!;
-            const on = current === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={on}
-                disabled={busy !== null}
-                onClick={() => void pick(id)}
-                className={chip(on)}
-              >
-                {kind === "color" && d.hex && (
-                  <span className="h-3.5 w-3.5 rounded-full border-2 border-black" style={{ background: d.hex }} aria-hidden />
-                )}
-                {kind === "frame" && <LevelBadge level={data.level} size="sm" frame={id} className="!h-6 !w-5" />}
-                {busy === id ? "…" : d.name}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
   );
 }

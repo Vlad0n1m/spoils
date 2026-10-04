@@ -37,6 +37,18 @@ export interface RewardItem {
   id?: string;
   /** Name colour / frame colour, cosmetics only. */
   hex?: string;
+  /** Feature unlocks only: what opens up (drawn as its icon on the reward cards). */
+  feature?: FeatureKind;
+}
+
+/** Market selling, a bound-trader tier, a new level badge colour. */
+export type FeatureKind = "market" | "trader" | "band";
+
+/** Which feature a feature-unlock line is ("Market selling unlocked", "Traders tier 2: …", "Level badge turns lime"). */
+export function featureKindOf(label: string): FeatureKind {
+  if (label.startsWith("Market")) return "market";
+  if (label.startsWith("Traders")) return "trader";
+  return "band";
 }
 
 const KIND_WORD: Readonly<Record<CosmeticKind, string>> = { title: "Title", color: "Name colour", frame: "Badge frame", skin: "Skin", badge: "Badge" };
@@ -47,7 +59,8 @@ export function cosmeticLabel(id: string): string {
   return d ? `${KIND_WORD[d.kind]}: ${d.name}` : "";
 }
 
-function cosmeticItem(id: string): RewardItem | null {
+/** A cosmetic as a reward item, or null for an unknown id. */
+export function cosmeticItem(id: string): RewardItem | null {
   const d = cosmeticDef(id);
   return d ? { kind: d.kind, label: cosmeticLabel(id), id, ...(d.hex ? { hex: d.hex } : {}) } : null;
 }
@@ -78,7 +91,7 @@ function featureUnlocks(l: number, sellUnlockLevel: number): string[] {
 /** Everything reaching `level` gives: feature unlocks first, then cosmetics (LEVEL_REWARDS). */
 export function levelRewards(level: number, sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL): RewardItem[] {
   const l = Math.floor(level);
-  const out: RewardItem[] = featureUnlocks(l, sellUnlockLevel).map((label) => ({ kind: "feature" as const, label }));
+  const out: RewardItem[] = featureUnlocks(l, sellUnlockLevel).map((label) => ({ kind: "feature" as const, label, feature: featureKindOf(label) }));
   for (const id of LEVEL_REWARDS.find((r) => r.level === l)?.ids ?? []) {
     const it = cosmeticItem(id);
     if (it) out.push(it);
@@ -95,6 +108,13 @@ export function levelUnlocks(level: number, sellUnlockLevel: number = MARKET.SEL
 export function unlocksBetween(from: number, to: number, sellUnlockLevel?: number): string[] {
   const out: string[] = [];
   for (let l = Math.floor(from) + 1; l <= Math.floor(to); l++) out.push(...levelUnlocks(l, sellUnlockLevel));
+  return out;
+}
+
+/** Rewards of every level in (from, to], as items (the LEVEL N window's cards). */
+export function rewardsBetween(from: number, to: number, sellUnlockLevel?: number): RewardItem[] {
+  const out: RewardItem[] = [];
+  for (let l = Math.floor(from) + 1; l <= Math.floor(to); l++) out.push(...levelRewards(l, sellUnlockLevel));
   return out;
 }
 

@@ -25,7 +25,7 @@ import {
   writeNewsSeen,
   type NewsSeen,
 } from "@/lib/lobby/news-seen";
-import { unlocksBetween } from "@/lib/lobby/levels";
+import { rewardsBetween } from "@/lib/lobby/levels";
 import { LATEST_POST_ID } from "@/content/news";
 import { socialDotCount } from "@/lib/social/menu";
 import { playUi } from "@/game/audio/ui-sounds";
@@ -588,7 +588,9 @@ function MenuScreen({
         {levelUp && (
           <LevelUpModal
             level={levelUp.level}
-            unlocks={unlocksBetween(levelUp.levelBefore, levelUp.level, s?.market.sellUnlockLevel)}
+            rewards={rewardsBetween(levelUp.levelBefore, levelUp.level, s?.market.sellUnlockLevel)}
+            nick={lobby.user?.nickname ?? "You"}
+            canWear={sessionKind === "user"}
             onClose={() => setLevelUpDone(levelUp.entryId)}
             onRewards={
               sessionKind === "user"
