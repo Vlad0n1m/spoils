@@ -1,0 +1,29 @@
+# SPOILS on-chain events (README "On-chain"). Run every anchor / solana command from programs/ with
+# an explicit devnet URL: the machine's global Solana CLI config may point elsewhere.
+#   nice -n 10 env CARGO_BUILD_JOBS=4 anchor build
+#   anchor deploy --provider.cluster devnet
+# Keypairs live in programs/.keys/ (gitignored): deploy.json (fee payer + upgrade authority),
+# authority.json (the web server's record signer), program.json (the program id).
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.devnet]
+spoils_events = "8Jc6sbbLY7PoJ2wms33k9MzYmMBdidH96vX4nLFbqf9B"
+
+[programs.localnet]
+spoils_events = "8Jc6sbbLY7PoJ2wms33k9MzYmMBdidH96vX4nLFbqf9B"
+
+[workspace]
+members = ["spoils-events"]
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "devnet"
+wallet = ".keys/deploy.json"
+
+[scripts]
+test = "cargo test -p spoils-events"
