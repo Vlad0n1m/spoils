@@ -230,7 +230,10 @@ export const HEAL = {
   medkit: { HP: 75, MS: 6_000, MAX_CARRY: 3 },
 } as const;
 
-/** Free starter kit: fills empty spots only; FREE items never break, drop or extract. */
+/**
+ * FREE fallback loadout, shown to players as "Basic gear" (not the paid STARTER_KIT): fills empty spots
+ * only; FREE items never break, drop or extract. Anyone can always play with it.
+ */
 export const FREE_KIT = {
   WEAPON: "pistol",
   AMMO_LIGHT: 36,

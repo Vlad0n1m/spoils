@@ -221,7 +221,7 @@ const RULES: Array<{ title: string; body: string }> = [
   },
   {
     title: "Risk drives reward",
-    body: "The lost pool releases gear onto the map only up to what the raiders themselves brought in. A lobby of free kits finds junk only.",
+    body: "The lost pool releases gear onto the map only up to what the raiders themselves brought in. A map of raiders in basic gear finds junk only.",
   },
 ];
 

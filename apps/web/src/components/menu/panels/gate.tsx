@@ -15,7 +15,7 @@ export function Gate({ loading, guest, next }: { loading: boolean; guest: boolea
         <h2 className="toon-text mt-4 text-3xl tracking-wide text-zooa-lime">{guest ? "Guests travel light" : "Sign in for your stash"}</h2>
         <p className="font-body mx-auto mt-3 max-w-[44ch] text-base text-white/75">
           {guest
-            ? "Guest raids use the free kit and loot isn't kept. Register to get a stash, a starter kit, a loadout and a rank."
+            ? "Guest raids use the basic gear and loot isn't kept. Register to get a stash, a loadout and a rank."
             : "Your stash, loadout, traders and market listings live on your account."}
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">

@@ -27,6 +27,8 @@ export interface StashResponse extends StashDto {
   market: MarketConfigDto;
   /** Junk autosell multiplier currently paid by the junker. */
   autosellMult: number;
+  /** The paid starter kit (design §19): price (minor units), today's purchases and the daily cap. */
+  kit: { priceMinor: string; dailyMax: number; boughtToday: number; paused: boolean };
 }
 
 export interface ListingItemDto {

@@ -74,8 +74,8 @@ const LOADING = { kind: "loading" } as const;
 
 /** The risk half of the ready line: what the player stands to lose. */
 export function riskLine(kind: SessionKind, atRisk: number): string {
-  if (kind === "guest") return "Free kit · loot isn't kept";
-  if (atRisk <= 0) return "Free kit · nothing at risk";
+  if (kind === "guest") return "Basic gear · loot isn't kept";
+  if (atRisk <= 0) return "Basic gear · nothing at risk";
   return `${atRisk} ${atRisk === 1 ? "item" : "items"} at risk`;
 }
 

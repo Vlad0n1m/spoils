@@ -10,8 +10,7 @@ import {
   ARMOR,
   DOG_TAG,
   FREE_KIT,
-  GIVEAWAY,
-  GIVEAWAY_KIT,
+  STARTER_KIT,
   BOSSES,
   NPC,
   POOL,
@@ -59,7 +58,7 @@ import {
   RAID_VOID_GRACE_MS,
 } from "./raids";
 import { enterRaid, openShard } from "./world";
-import { claimStarter } from "./starter";
+import { buyStarterKit, kitsBoughtToday } from "./starter";
 import { getStash } from "./stash";
 import { seedEconomy } from "../economy/seed";
 import { listings, moneyLedger } from "../../db/schema";
@@ -155,92 +154,89 @@ async function balance(userId: string): Promise<bigint> {
   return u!.b;
 }
 
-describe("starter kit", () => {
-  const PRICE = BigInt(GIVEAWAY.KIT_PRICE_MINOR);
+describe("starter kit (always paid, design §19)", () => {
+  const PRICE = BigInt(STARTER_KIT.PRICE_MINOR);
+  const KIT_UNIQUES = STARTER_KIT.weapons.length + 1;
 
-  test("claims once, even concurrently; the tradable kit is paid once", async () => {
+  test("a purchase charges the price to the house once and grants tradable locked gear, no CR", async () => {
     const u = await makeUser(db);
     await setBalance(u, PRICE * 3n);
-    const results = await Promise.all([
-      claimStarter(db, u, { paid: true, lockRaids: 1 }),
-      claimStarter(db, u, { paid: true, lockRaids: 1 }),
-    ]);
-    assert.deepEqual(results.map((r) => r.status).sort(), ["already", "claimed"]);
-    assert.equal((await claimStarter(db, u)).status, "already");
+    const r = await buyStarterKit(db, u, { lockRaids: 1, rng: mulberry32(7) });
+    assert.ok(r.status === "bought" && r.paidMinor === PRICE.toString() && r.boughtToday === 1);
     const owned = await db.select().from(items).where(eq(items.ownerId, u));
-    assert.equal(owned.length, 3);
+    assert.equal(owned.length, KIT_UNIQUES);
+    assert.equal(owned.filter((i) => i.defId === "pistol").length, STARTER_KIT.weapons.length);
     assert.ok(owned.every((i) => i.origin === "giveaway" && i.lockRaids === 1 && !i.bound && i.state === "in_stash"));
-    assert.equal(await credits(u), 1000 + GIVEAWAY_KIT.cr);
-    assert.ok((await stack(u, "bandage")) > 0);
-    assert.equal(await balance(u), PRICE * 2n, "charged exactly once");
+    assert.equal(await credits(u), 1000, "no CR for SOL");
+    for (const st of STARTER_KIT.stacks) assert.equal(await stack(u, st.def), st.qty, st.def);
+    assert.equal(await balance(u), PRICE * 2n);
     const money = await db.select().from(moneyLedger);
     assert.deepEqual(
-      money.map((m) => [m.account === u ? "user" : m.account, m.reason, m.deltaMinor]).sort(),
-      [["house", "kit_sale", PRICE], ["user", "kit_buy", -PRICE]].sort(),
+      money.map((m) => [m.account === u ? "user" : m.account, m.reason, m.deltaMinor, m.refId === r.purchaseId]).sort(),
+      [["house", "kit_sale", PRICE, true], ["user", "kit_buy", -PRICE, true]].sort(),
     );
-    assert.equal((await claimStarter(db, randomUUID())).status, "no_user");
+    assert.equal((await buyStarterKit(db, randomUUID())).status, "no_user");
     await assertCreditsConserved();
   });
 
-  test("the free kit is BOUND (never listable, 0 risk) and costs nothing", async () => {
+  test("repeatable up to DAILY_MAX a UTC day, even concurrently; the cap resets the next day", async () => {
     const u = await makeUser(db);
     await setBalance(u, PRICE * 10n);
-    const r = await claimStarter(db, u, { lockRaids: 1 });
-    assert.ok(r.status === "claimed" && r.bound && r.paidMinor === "0");
-    const owned = await db.select().from(items).where(eq(items.ownerId, u));
-    assert.equal(owned.length, 3);
-    assert.ok(owned.every((i) => i.bound && i.lockRaids === 0 && i.origin === "giveaway"));
-    assert.equal(await credits(u), 1000 + GIVEAWAY_KIT.cr, "CR and stacks either way");
-    assert.equal(await balance(u), PRICE * 10n);
-    assert.equal((await db.select().from(moneyLedger)).length, 0);
-    await assertCreditsConserved();
+    const now = new Date("2026-10-05T10:00:00Z");
+    const results = await Promise.all(
+      Array.from({ length: STARTER_KIT.DAILY_MAX + 2 }, () => buyStarterKit(db, u, { lockRaids: 1, now })),
+    );
+    assert.equal(results.filter((r) => r.status === "bought").length, STARTER_KIT.DAILY_MAX);
+    assert.equal(results.filter((r) => r.status === "daily_limit").length, 2);
+    assert.equal(await kitsBoughtToday(db, u, now), STARTER_KIT.DAILY_MAX);
+    assert.equal(await balance(u), PRICE * BigInt(10 - STARTER_KIT.DAILY_MAX), "charged once per kit");
+    assert.equal((await db.select().from(items).where(eq(items.ownerId, u))).length, KIT_UNIQUES * STARTER_KIT.DAILY_MAX);
+    const tomorrow = new Date("2026-10-06T00:00:01Z");
+    assert.equal(await kitsBoughtToday(db, u, tomorrow), 0);
+    assert.equal((await buyStarterKit(db, u, { lockRaids: 1, now: tomorrow })).status, "bought");
   });
 
-  test("stop-crane kit_sale_paused (admin): the paid kit is not sold, nothing charged; the free kit still is", async () => {
+  test("stop-crane kit_sale_paused (admin) and short money: nothing charged, nothing granted", async () => {
     const u = await makeUser(db);
     await setBalance(u, PRICE * 2n);
     await setParam(db, PARAM.KIT_SALE_PAUSED, 1);
-    assert.equal((await claimStarter(db, u, { paid: true, lockRaids: 1 })).status, "sale_paused");
+    assert.equal((await buyStarterKit(db, u, { lockRaids: 1 })).status, "sale_paused");
     assert.equal(await balance(u), PRICE * 2n);
     assert.equal((await db.select().from(items).where(eq(items.ownerId, u))).length, 0);
-    const r = await claimStarter(db, u, { lockRaids: 1 });
-    assert.ok(r.status === "claimed" && r.bound, "the free kit is unaffected");
     await setParam(db, PARAM.KIT_SALE_PAUSED, 0);
-    const v = await makeUser(db);
-    await setBalance(v, PRICE);
-    assert.equal((await claimStarter(db, v, { paid: true, lockRaids: 1 })).status, "claimed");
-  });
+    assert.equal((await buyStarterKit(db, u, { lockRaids: 1 })).status, "bought");
 
-  test("short of money or sold out → nothing claimed, the free kit stays available", async () => {
     const poor = await makeUser(db);
     await setBalance(poor, PRICE - 1n);
-    const r1 = await claimStarter(db, poor, { paid: true, lockRaids: 1 });
-    assert.equal(r1.status, "insufficient_funds");
+    const r = await buyStarterKit(db, poor, { lockRaids: 1 });
+    assert.ok(r.status === "insufficient_funds" && r.priceMinor === PRICE.toString());
     assert.equal((await db.select().from(items).where(eq(items.ownerId, poor))).length, 0);
     assert.equal(await balance(poor), PRICE - 1n);
-    assert.equal((await claimStarter(db, poor, { lockRaids: 1 })).status, "claimed", "can still take the free kit");
-
-    const a = await makeUser(db);
-    await setBalance(a, PRICE);
-    const ra = await claimStarter(db, a, { paid: true, lockRaids: 1, kitCap: 1 });
-    assert.ok(ra.status === "claimed" && !ra.bound, "first paid claim is tradable");
-    const b = await makeUser(db);
-    await setBalance(b, PRICE * 10n);
-    assert.equal((await claimStarter(db, b, { paid: true, lockRaids: 1, kitCap: 1 })).status, "sold_out");
-    assert.equal(await balance(b), PRICE * 10n, "not charged");
-    const rb = await claimStarter(db, b, { lockRaids: 1, kitCap: 1 });
-    assert.ok(rb.status === "claimed" && rb.bound);
-    await assertCreditsConserved();
+    assert.equal((await db.select().from(moneyLedger).where(eq(moneyLedger.account, poor))).length, 0);
   });
 
-  test("stash shows the kit", async () => {
+  test("an old free bound kit stays as it is and does not block buying", async () => {
     const u = await makeUser(db);
-    await claimStarter(db, u, { rng: mulberry32(7) });
+    await setBalance(u, PRICE);
+    // Pre-04.10 state: the free kit claimed (stamp set, bound giveaway items, no money moved).
+    await db.update(users).set({ starterClaimedAt: new Date("2026-10-03T00:00:00Z") }).where(eq(users.id, u));
+    const old = await makeItem(db, { ownerId: u, def: "rifle", bound: true });
+    assert.equal((await buyStarterKit(db, u, { lockRaids: 1 })).status, "bought");
+    const kept = await item(old);
+    assert.ok(kept.bound && kept.state === "in_stash" && kept.ownerId === u);
+    const [row] = await db.select({ at: users.starterClaimedAt }).from(users).where(eq(users.id, u));
+    assert.equal(row!.at!.toISOString(), "2026-10-03T00:00:00.000Z", "first-kit stamp kept");
+  });
+
+  test("stash shows the kit and the first-kit stamp", async () => {
+    const u = await makeUser(db);
+    await setBalance(u, PRICE);
+    await buyStarterKit(db, u, { rng: mulberry32(7) });
     const s = await getStash(db, u);
     assert.ok(s);
-    assert.equal(s.uniques.length, 3);
+    assert.equal(s.uniques.length, KIT_UNIQUES);
     assert.equal(s.starterClaimed, true);
-    assert.equal(s.credits, 2000);
+    assert.equal(s.credits, 1000);
     assert.equal(s.active, null);
   });
 });

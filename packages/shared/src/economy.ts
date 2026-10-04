@@ -528,7 +528,7 @@ export function poolReleaseCount(poolSize: number, riskUnits: number): number {
  * Risk units one loadout unique adds to its entry (raids/enter risk_units, v5 review): 1 when losing
  * it would really feed the lost pool — not bound (a bound item is destroyed, never pooled) and at
  * least POOL.RISK_MIN_DUR_PCT durability — else 0. Giveaway items under their trade lock DO count:
- * they enter the pool on death like any other unique (the kit itself is capped and gated, GIVEAWAY).
+ * they enter the pool on death like any other unique (the starter kit is paid, STARTER_KIT).
  */
 export function riskUnitOf(it: Pick<EconItem, "bound" | "dur">): 0 | 1 {
   return !it.bound && it.dur >= POOL.RISK_MIN_DUR_PCT ? 1 : 0;
@@ -1046,28 +1046,49 @@ export interface PricePoint {
 // ---------------------------------------------------------------- giveaway / starter kit
 
 /**
- * Giveaway (economy memo §15.6). The SOL-tradable kit (lock_raids, then listable) is SOLD for
- * KIT_PRICE_MINOR to at most KITS accounts, paid from the market balance to the house. A deposit
- * gate alone cost an alt nothing (the deposit can be withdrawn again), so a real payment is the
- * sybil cost. Every account may instead take the same kit BOUND for free (never listable, never
- * enters the lost pool, 0 risk units): everyone can play geared, nobody can farm sellable kits.
+ * Giveaway-era rules that outlive the giveaway (economy memo §15.6, design §19): the trade lock on
+ * starter-kit items and the world seed. The free bound kit and the 1 000-kit cap are gone (Vlad,
+ * 04.10): the starter kit is always paid (STARTER_KIT).
  */
 export const GIVEAWAY = {
-  KITS: 1000,
-  /** Price of the tradable kit in balance_cents (5 = 0.05 SOL). */
-  KIT_PRICE_MINOR: 5,
-  /** @deprecated the deposit gate was replaced by KIT_PRICE_MINOR; kept for the econ sim. */
-  MIN_DEPOSIT_MINOR: 5,
-  /** Raids the item must be extracted in before it can be listed (demo: 1). */
+  /** Raids a starter-kit item must be extracted in (by anyone) before it can be listed (demo: 1). */
   LOCK_RAIDS: 10,
   LOCK_RAIDS_DEMO: 1,
-  MIN_WALLET_AGE_DAYS: 30,
-  MIN_WALLET_SOL: 0.05,
   LEGENDARY_RAFFLE: 20,
   POOL_SEED_KITS: 250,
 } as const;
 
-export const GIVEAWAY_KIT = {
+/**
+ * The starter kit (Vlad, 04.10: "always paid, 0.05 SOL, several pistols, armor, ammo, bandages and a
+ * medkit"). Bought from the market balance to the house (treasury revenue; the game never pays SOL),
+ * any number of times up to DAILY_MAX per account per UTC day. The uniques are TRADABLE with the
+ * giveaway lock (GIVEAWAY.LOCK_RAIDS extracts before they can be listed), enter the lost pool on
+ * death and count as risk units like any unique. No CR comes with it: CR is never sold for SOL. The
+ * ammo and meds are CR-shop goods (≈ 640 CR at CONSUMABLES_CR) and cannot be sold back.
+ * Value check (§19): 3 common pistols + armor Lv 1 (Lv 2 at 20 %) ≈ 10 primary-price units, the price
+ * of the kit when 1 unit ≈ 0.005 SOL; reselling a kit after the lock and the 5 % fee loses money.
+ */
+export const STARTER_KIT = {
+  /** Price in balance_cents (5 = 0.05 SOL, Vlad). Never a tuning lever. */
+  PRICE_MINOR: 5,
+  /** Kits one account may buy per UTC day (caps market flooding by a single wallet). */
+  DAILY_MAX: 3,
+  /** Weapons: every entry is one unique. */
+  weapons: [
+    { def: "pistol", rarity: 0 },
+    { def: "pistol", rarity: 0 },
+    { def: "pistol", rarity: 0 },
+  ],
+  armor: [{ def: "armor_1", weight: 80 }, { def: "armor_2", weight: 20 }],
+  stacks: [
+    { def: "ammo_light", qty: 120 },
+    { def: "bandage", qty: 4 },
+    { def: "medkit", qty: 1 },
+  ],
+} as const;
+
+/** Weapon / armor / backpack weights of the world-seed kits (economy/seed.ts, the pool mirror). */
+export const SEED_KIT = {
   weapon: [
     { def: "rifle", rarity: 0, weight: 40 },
     { def: "shotgun", rarity: 0, weight: 35 },
@@ -1076,7 +1097,6 @@ export const GIVEAWAY_KIT = {
   ],
   armor: [{ def: "armor_1", weight: 80 }, { def: "armor_2", weight: 20 }],
   backpack: [{ def: "backpack_1", weight: 100 }],
-  cr: 1000,
 } as const;
 
 // ---------------------------------------------------------------- progression

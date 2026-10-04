@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ARMOR,
-  GIVEAWAY_KIT,
+  STARTER_KIT,
   POOL,
   bossGroupNpcCount,
   bossLootKey,
@@ -292,15 +292,23 @@ test("HMAC: accepts the game server's signature, rejects tampering and stale tim
   assert.equal(checkGameServerSignature(secret, null, sig, body, now), "missing_signature");
 });
 
-test("starter kit roll follows GIVEAWAY_KIT and brings matching ammo", () => {
+test("starter kit roll: STARTER_KIT pistols, a rolled armor, ammo and meds, never CR", () => {
   const rng = mulberry32(3);
-  for (let i = 0; i < 50; i++) {
+  const armors = new Set<string>();
+  for (let i = 0; i < 200; i++) {
     const k = rollStarterKit(rng);
-    assert.ok(GIVEAWAY_KIT.weapon.some((w) => w.def === k.weapon.def && w.rarity === k.weapon.rarity));
-    assert.ok(GIVEAWAY_KIT.armor.some((a) => a.def === k.armor.def));
-    const ammo = k.weapon.def === "rifle" ? "ammo_light" : "ammo_shell";
-    assert.ok(k.stacks.some((s) => s.def === ammo && s.qty > 0));
+    assert.deepEqual(k.uniques.slice(0, STARTER_KIT.weapons.length), STARTER_KIT.weapons.map((w) => ({ def: w.def, rarity: w.rarity })));
+    const armor = k.uniques.at(-1)!;
+    assert.ok(STARTER_KIT.armor.some((a) => a.def === armor.def));
+    armors.add(armor.def);
+    assert.equal(k.uniques.length, STARTER_KIT.weapons.length + 1);
+    assert.ok(k.stacks.some((s) => s.def === "ammo_light" && s.qty > 0), "pistol ammo");
+    assert.ok(k.stacks.some((s) => s.def === "bandage") && k.stacks.some((s) => s.def === "medkit"));
+    assert.ok(!("cr" in k));
   }
+  assert.deepEqual([...armors].sort(), ["armor_1", "armor_2"]);
+  assert.equal(STARTER_KIT.PRICE_MINOR, 5, "0.05 SOL (Vlad)");
+  assert.ok(STARTER_KIT.weapons.length >= 2 && STARTER_KIT.weapons.every((w) => w.def === "pistol"));
 });
 
 test("Weapons v2: the new guns have no NPC reference price (Vlad sets it); the old ones keep theirs", () => {

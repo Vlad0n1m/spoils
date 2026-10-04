@@ -1,35 +1,26 @@
-import { z } from "zod";
 import { db } from "@/db/client";
-import { claimStarter } from "@/lib/inventory/starter";
+import { buyStarterKit } from "@/lib/inventory/starter";
 import { formatMinor } from "@/lib/market/config";
-import { apiError, caller, json, readJson, registeredOnly } from "@/lib/lobby/route-helpers";
+import { apiError, caller, json, registeredOnly } from "@/lib/lobby/route-helpers";
 
 export const dynamic = "force-dynamic";
 
-const bodySchema = z
-  .object({
-    /** true = the tradable kit for GIVEAWAY.KIT_PRICE_MINOR; false / missing = the free bound kit. */
-    paid: z.boolean().optional(),
-  })
-  .nullable();
-
 /**
- * One giveaway kit per account (weapon + armor + backpack + ammo/meds + CR): free and bound, or
- * tradable after N raids for a small price from the market balance while the giveaway lasts.
+ * Buy one starter kit (design §19): pistols, armor, ammo and meds for STARTER_KIT.PRICE_MINOR from
+ * the market balance to the treasury, up to STARTER_KIT.DAILY_MAX a day. There is no free kit any
+ * more; players without a kit drop with the basic gear. Any request body is ignored (old clients
+ * sent `{ paid }`).
  */
-export async function POST(req: Request) {
+export async function POST() {
   const c = await caller();
   const deny = registeredOnly(c);
   if (deny || c.kind !== "user") return deny!;
-  const parsed = bodySchema.safeParse(await readJson(req));
-  if (!parsed.success) return apiError(400, "bad_body", "Pick a kit.");
-  const r = await claimStarter(db, c.userId, { paid: parsed.data?.paid ?? false });
+  const r = await buyStarterKit(db, c.userId);
   if (r.status === "no_user") return apiError(401, "no_user", "Sign in again.");
-  if (r.status === "already") return apiError(409, "already_claimed", "You already claimed your starter kit.");
-  if (r.status === "sold_out") return apiError(409, "sold_out", "Tradable kits are sold out. The free kit is still yours to claim.");
-  if (r.status === "sale_paused") return apiError(503, "sale_paused", "The tradable kit is paused for a moment. Try again later, or take the free kit.");
+  if (r.status === "sale_paused") return apiError(503, "sale_paused", "Starter kit sales are paused for a moment. Try again later.");
+  if (r.status === "daily_limit") return apiError(429, "daily_limit", `You can buy up to ${r.dailyMax} starter kits a day. Try again tomorrow.`);
   if (r.status === "insufficient_funds") {
-    return apiError(402, "insufficient_funds", `The tradable kit costs ${formatMinor(BigInt(r.priceMinor))}. Top up your wallet or take the free kit.`);
+    return apiError(402, "insufficient_funds", `The starter kit costs ${formatMinor(BigInt(r.priceMinor))}. Top up your wallet first.`);
   }
-  return json({ status: "claimed", itemIds: r.itemIds, kit: r.kit, credits: r.credits, bound: r.bound, paid: r.paidMinor });
+  return json({ status: "bought", itemIds: r.itemIds, kit: r.kit, paid: r.paidMinor, boughtToday: r.boughtToday });
 }

@@ -101,7 +101,7 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
           item && item.qty > 1 ? `×${item.qty}` : "",
           dur?.text ?? "",
           broken ? "BROKEN" : "",
-          free ? "Free kit — never extracts" : "",
+          free ? "Basic gear — never extracts" : "",
         ]
           .filter(Boolean)
           .join(" · ")

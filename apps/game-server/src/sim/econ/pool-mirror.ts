@@ -5,7 +5,7 @@
  * apps/web/src/lib/economy/pool.ts), plus seed.ts seedEconomy and value.ts. The WORLD v6 per-entry
  * release (releaseForEntry / fillBossBag) is mirrored in world-harness.ts. The game server must not import the
  * web app (drizzle, DB), so the few pure pieces are mirrored here and the shared pure functions
- * (poolReleasePlanV4, uniqueTierScore, poolContainerEligible / Weight, armorPoints, SCRAP_CR, GIVEAWAY_KIT) are reused as-is.
+ * (poolReleasePlanV4, uniqueTierScore, poolContainerEligible / Weight, armorPoints, SCRAP_CR, SEED_KIT) are reused as-is.
  *
  * KEEP IN SYNC with apps/web/src/lib/economy/{pool,seed,value}.ts when those change:
  * - planAllocation / rankBossSlots / normCarriers: verbatim copies of the web functions (v4 boss
@@ -22,7 +22,7 @@
 
 import {
   BOSSES,
-  GIVEAWAY_KIT,
+  SEED_KIT,
   SCRAP_CR,
   armorMaxPoints,
   armorPoints,
@@ -67,11 +67,11 @@ function seedPiece(i: number, rng: Rng): { def: string; rarity: number } {
   const slot = i % 3;
   if (slot === 0) {
     if (rng() < 0.12) return { def: rng() < 0.5 ? "sniper" : "rifle", rarity: rng() < 0.3 ? 3 : 2 };
-    const w = pickWeighted(rng, GIVEAWAY_KIT.weapon);
+    const w = pickWeighted(rng, SEED_KIT.weapon);
     return { def: w.def, rarity: w.rarity };
   }
   if (slot === 1) {
-    const a = rng() < 0.08 ? { def: "armor_3" } : pickWeighted(rng, GIVEAWAY_KIT.armor);
+    const a = rng() < 0.08 ? { def: "armor_3" } : pickWeighted(rng, SEED_KIT.armor);
     return { def: a.def, rarity: itemDef(a.def)?.rarity ?? 0 };
   }
   const lv = rng() < 0.15 ? 2 : 1;
