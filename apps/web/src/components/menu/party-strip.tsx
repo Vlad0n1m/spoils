@@ -18,7 +18,7 @@ const SMALL_BTN =
  * twice). One row of 44 px targets: the member chips scroll sideways on their own (a fade marks a
  * cut edge) while the controls stay pinned on the right, so a narrow phone never paints chips under
  * the buttons; on a phone the labels shorten ("Follow") and your own chip goes last (the one chip
- * that fits is a mate's or the leader's). On a landscape phone the menu puts the strip beside PLAY.
+ * that fits is a mate's or the leader's). The menu puts it right above PLAY in the right column.
  */
 export function PartyStrip({ onInvite }: { onInvite: () => void }) {
   const { registered, toast } = useLobby();
@@ -67,7 +67,7 @@ export function PartyStrip({ onInvite }: { onInvite: () => void }) {
   return (
     <section
       aria-label={`Party, ${rc.ready} of ${rc.total} ready`}
-      className="mx-auto mb-2 w-full md:w-[min(34rem,100%)] [@media(max-height:500px)]:mb-0 [@media(max-height:500px)]:min-w-0 [@media(max-height:500px)]:flex-1"
+      className="w-full min-w-0"
     >
       <div className="flex items-center gap-1.5">
         {/* Members scroll sideways on their own; the controls stay pinned and always visible. */}
@@ -143,7 +143,7 @@ export function PartyStrip({ onInvite }: { onInvite: () => void }) {
           </button>
         </div>
       </div>
-      <p className="font-body mt-0.5 text-center text-xs text-white/60 [@media(max-height:500px)]:hidden">
+      <p className="font-body mt-0.5 text-center text-xs font-semibold text-white/70 [text-shadow:0_1px_0_#000] short:hidden">
         {party.isLeader ? `Your party drops in with you · ${rc.ready}/${rc.total} ready` : `${party.leader} leads · ${rc.ready}/${rc.total} ready`}
       </p>
     </section>

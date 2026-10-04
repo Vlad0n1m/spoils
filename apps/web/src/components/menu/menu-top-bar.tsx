@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import clsx from "clsx";
 import { BRAND } from "@/lib/brand";
 import { useLobby } from "@/lib/lobby/lobby-context";
 import { fmtCr } from "@/lib/items-ui";
@@ -14,11 +15,11 @@ import { useQuests } from "./quests-context";
 import { XpBar } from "./xp-bar";
 
 /**
- * Main-menu top bar (WORLD v6 spec §6.2): SPOILS, level badge, nick + XP bar, CR / SOL pills,
- * audio, account. Guests see "Guest · loot isn't kept" + Register instead of the money; signed-out
- * viewers get Sign in. Phone: badge, nick, CR and ☰, with a 4 px XP bar under the bar.
- * Registered players: the nick in their equipped name colour, the equipped title next to it (md+)
- * and the badge frame; the badge opens the rewards sheet (`onRewards`).
+ * Main-menu top bar (Brawl Stars layout): no strip, just chunky pieces over the art. Left: the
+ * profile plate (level shield bulging out of it, nick in the equipped name colour, the equipped
+ * title on wide screens, a chunky XP bar); it opens the rewards sheet. Right: CR and SOL pills with
+ * "+", audio and the account menu (☰). Guests see "Guest · loot isn't kept" + Register instead of
+ * the money; signed-out viewers get Sign in. The SPOILS logo only shows on wide screens.
  */
 export function MenuTopBar({ onCredits, onRewards }: { onCredits: () => void; onRewards: () => void }) {
   const { user, sessionLoading, sessionKind, stash } = useLobby();
@@ -29,86 +30,79 @@ export function MenuTopBar({ onCredits, onRewards }: { onCredits: () => void; on
   const nickColor = nameColorHex(worn?.color);
   const title = titleName(worn?.title);
 
+  const plate = "menu-chip min-w-0 bg-[#141a29]/95 py-1 pr-4 text-left";
+  const nick = (
+    <span className="flex min-w-0 items-baseline gap-2">
+      <span
+        className="menu-label min-w-0 truncate text-lg leading-none tracking-wide text-white short:text-base"
+        style={nickColor ? { color: nickColor } : undefined}
+      >
+        {user?.nickname}
+      </span>
+      {title && (
+        <span className="font-body hidden max-w-[10rem] truncate text-[0.7rem] font-bold uppercase tracking-wider text-white/65 xl:inline">{title}</span>
+      )}
+    </span>
+  );
+
   return (
-    <header className="relative z-20 border-b-[3px] border-black bg-[#0d1119]/85 backdrop-blur">
-      <div className="flex h-14 items-center gap-2 px-3 md:h-16 md:gap-3 md:px-5 [@media(max-height:500px)]:h-14">
+    <header className="relative z-20 px-3 pt-[max(0.6rem,env(safe-area-inset-top))] md:px-4 short:px-2 short:pt-[max(0.4rem,env(safe-area-inset-top))]">
+      <div className="flex h-14 items-center gap-3 port:gap-2 short:h-12 short:gap-2">
         <Link
           href="/"
-          className="toon-text-thin hidden shrink-0 text-2xl tracking-wide text-zooa-lime focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/60 sm:block md:text-3xl"
+          className="toon-text hidden shrink-0 text-3xl tracking-wide text-zooa-lime focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/60 min-[1360px]:block"
         >
           <span className="optical-center">{BRAND.name}</span>
         </Link>
 
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 sm:ml-2 md:ml-4">
+        <div className="flex min-w-0 flex-1 items-center">
           {sessionLoading ? (
-            <span className="h-10 w-48 animate-pulse rounded-xl bg-white/10 motion-reduce:animate-none" aria-hidden />
+            <span className="h-12 w-56 animate-pulse rounded-2xl bg-white/10 motion-reduce:animate-none" aria-hidden />
+          ) : user && sessionKind === "user" ? (
+            <button
+              type="button"
+              onClick={onRewards}
+              aria-label={level !== null ? `${user.nickname}, level ${level} · rewards` : "Rewards"}
+              aria-haspopup="dialog"
+              className={clsx(plate, "ml-3 w-[clamp(12rem,24vw,18rem)] gap-2 pl-0 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/60 port:w-full short:w-[13.5rem]")}
+            >
+              <LevelBadge level={level} frame={worn?.frame} className="-my-2 -ml-4 !h-[3.4rem] !w-12 shrink-0 short:!h-12 short:!w-11 [&_span]:!text-2xl" />
+              <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+                {nick}
+                {s ? <XpBar xp={s.xp} /> : <span className="block h-4 w-full animate-pulse rounded-full bg-white/10 motion-reduce:animate-none" />}
+              </span>
+            </button>
           ) : user ? (
-            <>
-              {sessionKind === "user" && (
-                <button
-                  type="button"
-                  onClick={onRewards}
-                  aria-label={level !== null ? `Level ${level} · rewards` : "Rewards"}
-                  aria-haspopup="dialog"
-                  className="shrink-0 rounded-xl transition-transform focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/60 active:translate-y-[2px]"
-                >
-                  <LevelBadge level={level} frame={worn?.frame} />
-                </button>
-              )}
-              <div className="min-w-0">
-                <p className="flex min-w-0 items-baseline gap-2">
-                  <span
-                    className="max-w-[9rem] truncate text-base tracking-wide text-white sm:max-w-[12rem] md:text-lg"
-                    style={nickColor ? { color: nickColor } : undefined}
-                  >
-                    {user.nickname}
-                  </span>
-                  {title && (
-                    <span className="font-body hidden max-w-[8rem] truncate text-[0.7rem] font-bold uppercase tracking-wider text-white/60 md:inline lg:max-w-[12rem]">
-                      {title}
-                    </span>
-                  )}
-                </p>
-                {sessionKind === "user" ? (
-                  <div className="mt-1 hidden md:block">
-                    {s ? <XpBar xp={s.xp} /> : <span className="block h-3 w-40 animate-pulse rounded-full bg-white/10 motion-reduce:animate-none" />}
-                  </div>
-                ) : (
-                  <p className="font-body mt-0.5 hidden text-xs text-white/60 sm:block">Guest · loot isn&apos;t kept</p>
-                )}
-              </div>
-            </>
+            <div className={clsx(plate, "max-w-[18rem] flex-col items-start gap-1 pl-4")}>
+              {nick}
+              <span className="font-body text-xs font-semibold text-white/65">Guest · loot isn&apos;t kept</span>
+            </div>
           ) : (
-            <p className="font-body truncate text-sm text-white/70">Sign in to keep your raider, stash and rank</p>
+            <p className={clsx(plate, "font-body min-h-11 max-w-[22rem] pl-4 text-sm font-semibold text-white/80")}>Sign in to keep your raider, stash and rank</p>
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-3 port:gap-2 short:gap-2">
           {sessionKind === "user" && (
             <>
-              <CreditsPill value={s ? fmtCr(s.credits) : null} onClick={onCredits} />
-              <WalletPill value={s ? formatMinor(s.balance) : null} className="hidden sm:inline-flex" />
+              <CreditsPill value={s ? fmtCr(s.credits) : null} onClick={onCredits} className="ml-3 port:ml-1" />
+              <WalletPill value={s ? formatMinor(s.balance) : null} className="ml-3 port:hidden" />
             </>
           )}
           {sessionKind === "guest" && (
-            <Link href="/auth/register?next=/play" className="toon-btn min-h-10 px-4 text-sm">
+            <Link href="/auth/register?next=/play" className="menu-chip h-11 bg-[linear-gradient(180deg,#f0ff7a,#ccff00_55%,#a6d400)] px-5 text-base text-black focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/60 short:h-10">
               <span className="optical-center">Register</span>
             </Link>
           )}
           {sessionKind === "anon" && !sessionLoading && (
-            <Link href="/auth/login?next=/play" className="toon-btn min-h-10 px-4 text-sm">
+            <Link href="/auth/login?next=/play" className="menu-chip h-11 bg-[linear-gradient(180deg,#f0ff7a,#ccff00_55%,#a6d400)] px-5 text-base text-black focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/60 short:h-10">
               <span className="optical-center">Sign in</span>
             </Link>
           )}
-          <AudioSettingsButton direction="down" align="right" className="hidden min-[400px]:block" />
+          <AudioSettingsButton direction="down" align="right" large className="hidden min-[400px]:block" />
           <AccountMenu />
         </div>
       </div>
-      {sessionKind === "user" && s && (
-        <div className="md:hidden">
-          <XpBar xp={s.xp} variant="thin" />
-        </div>
-      )}
     </header>
   );
 }

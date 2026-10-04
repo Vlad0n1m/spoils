@@ -102,6 +102,14 @@
       "kind": "cutout",
       "box": [256, 256],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a plain heraldic shield with a blank lime-green field and crossed wooden spears behind it, no symbols on the shield."
+    },
+    {
+      "id": "menu_quests",
+      "out": "menu_quests.png",
+      "gen": "1024x1024",
+      "kind": "cutout",
+      "box": [256, 256],
+      "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a wooden clipboard with a sheet of paper showing three big green check marks, a red pencil lying across it and a small gold star sticker in the corner."
     }
   ]
 }

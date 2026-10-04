@@ -34,7 +34,7 @@ import { BattleScreen } from "@/components/battle-screen";
 import type { RoomExit } from "@/lib/room-exit";
 import { GuestPlayDialog } from "@/components/guest-play-dialog";
 import { GearStrip, loadoutOf } from "./gear-strip";
-import { HeroStage, armorLevelOf } from "./hero-stage";
+import { HeroStage, armorLevelOf, useUnderHero } from "./hero-stage";
 import { LastRaidCard } from "./last-raid-card";
 import { LevelUpModal } from "./level-up-modal";
 import { LobbyBackdrop } from "./lobby-backdrop";
@@ -49,7 +49,6 @@ import { PlayButton, PlayMiniChip } from "./play-button";
 import { PlayController, type BattleStart, type RetryRequest } from "./play-controller";
 import { QuestsProvider, useQuests } from "./quests-context";
 import { QuestsSheet, type QuestsTab } from "./quests-sheet";
-import { QuestsStrip } from "./quests-strip";
 import { SideButton, MENU_ICONS } from "./side-button";
 import { SignInSheet } from "./sign-in-sheet";
 import { MenuToast } from "./toast";
@@ -167,7 +166,6 @@ function MenuScreen({
   const { state: social } = useParty();
   /** Friends dot: incoming friend requests or party invites. */
   const socialDot = socialDotCount(social) > 0;
-  const inParty = registered && Boolean(social?.party);
   const quests = useQuests();
 
   // ---- panels (URL state through the native history API: Next keeps useSearchParams in sync)
@@ -382,6 +380,9 @@ function MenuScreen({
     toast(`${what} are coming soon`);
   };
 
+  const gearRef = useRef<HTMLDivElement>(null);
+  useUnderHero(gearRef);
+
   const s = stash.data;
   const entries = registered ? loadoutOf(s) : [];
   const armor = armorLevelOf(entries);
@@ -416,101 +417,91 @@ function MenuScreen({
         )}
       >
         <LobbyBackdrop />
+        <HeroStage armor={armor} />
         <div className="relative z-10 flex h-full flex-col" inert={blocked}>
           <MenuTopBar onCredits={() => openPanel("shop", "traders")} onRewards={() => openQuests("rewards")} />
-          {/* Landscape phones (≤ 500 px tall, also below 768 px wide): the side columns instead of the
-              dock, smaller tiles and a compact centre so the gear strip and PLAY both fit. */}
-          <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[6.5rem_1fr_6.5rem] lg:grid-cols-[8.5rem_1fr_8.5rem] min-[1440px]:grid-cols-[9.5rem_1fr_9.5rem] [@media(max-height:500px)]:grid-cols-[5.5rem_1fr_5.5rem]">
-            <nav aria-label="Prepare" className="hidden flex-col items-center gap-3 overflow-y-auto pb-4 pt-5 md:flex [@media(max-height:500px)]:flex [@media(max-height:500px)]:gap-2 [@media(max-height:500px)]:py-2">
-              <SideButton label="Inventory" icon={MENU_ICONS.inventory} hotkey="I" active={panel.panel === "inventory"} onClick={() => openPanel("inventory")} />
+          <h1 className="sr-only">Main menu</h1>
+          {/* Brawl Stars layout (landscape: desktops, tablets and phones held sideways): the tile grid on
+              the left, the hero on its ring in the middle with the gear plate under it, the world card
+              and PLAY in the right column. Portrait phones stack world card, hero, gear, PLAY and the
+              dock instead. Nothing scrolls. */}
+          <div
+            className={clsx(
+              "relative grid min-h-0 flex-1 gap-3 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3",
+              "port:grid-cols-1 port:grid-rows-[auto_minmax(0,1fr)_auto_auto_auto]",
+              "land:grid-cols-[auto_minmax(0,1fr)_minmax(15rem,30%)] land:grid-rows-1 land:gap-4 land:px-4 land:pb-[calc(1rem+env(safe-area-inset-bottom))] land:pt-4",
+              "lg:grid-cols-[auto_minmax(0,1fr)_23rem] short:!gap-2.5 short:!px-2 short:!pb-[calc(0.5rem+env(safe-area-inset-bottom))] short:!pt-2",
+            )}
+          >
+            <nav
+              aria-label="Menu"
+              className="hidden grid-cols-2 content-start gap-x-3 gap-y-4 land:grid short:gap-x-2 short:gap-y-3 [@media(min-width:1024px)_and_(min-height:800px)]:gap-x-4 [@media(min-width:1024px)_and_(min-height:800px)]:gap-y-5"
+            >
               <SideButton label="Shop" icon={MENU_ICONS.shop} hotkey="B" active={panel.panel === "shop"} onClick={() => openPanel("shop")} />
+              <SideButton label="Gear" ariaLabel="Inventory" icon={MENU_ICONS.inventory} hotkey="I" active={panel.panel === "inventory"} onClick={() => openPanel("inventory")} />
+              <SideButton label="Friends" icon={MENU_ICONS.friends} hotkey="F" dot={socialDot} active={panel.panel === "friends"} onClick={() => openPanel("friends")} />
+              <SideButton
+                label="Ranks"
+                ariaLabel="Leaderboards"
+                icon={MENU_ICONS.leaderboards}
+                hotkey="L"
+                active={panel.panel === "leaderboards"}
+                onClick={() => openPanel("leaderboards")}
+              />
+              <SideButton label="News" icon={MENU_ICONS.news} hotkey="N" dot={newsDot} active={panel.panel === "news"} onClick={() => openPanel("news")} />
               <SideButton label="Info" icon={MENU_ICONS.info} hotkey="H" active={panel.panel === "info"} onClick={() => openPanel("info")} />
               <SideButton
-                label="Tasks"
+                label="Quests"
+                ariaLabel="Daily tasks and rewards"
                 icon={MENU_ICONS.tasks}
                 hotkey="T"
                 dot={sessionKind === "user" && quests.unseen}
                 active={questsTab !== null}
                 onClick={() => openQuests("today")}
               />
+              <SideButton label="Guilds" icon={MENU_ICONS.guilds} locked onClick={() => locked("Guilds")} />
             </nav>
 
-            {/* ≤ 640 px tall the hero is hidden: three rows (world, gear in the flexible one, PLAY), and
-                the column scrolls instead of stacking PLAY over the gear strip if it still overflows. */}
-            <main className="relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto_auto_auto] gap-3 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 md:gap-4 md:px-4 md:pb-6 md:pt-5 [@media(max-height:640px)]:grid-rows-[auto_minmax(min-content,1fr)_auto] [@media(max-height:640px)]:overflow-y-auto [@media(max-height:500px)]:gap-2 [@media(max-height:500px)]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] [@media(max-height:500px)]:pt-2">
-              <h1 className="sr-only">Main menu</h1>
-              {/* The world card and the daily tasks strip share one grid row (the row count stays put);
-                  on landscape phones the strip gives way to the Tasks side button. */}
-              <div className="flex min-w-0 flex-col gap-2">
-                <WorldCard />
-                <QuestsStrip onOpen={() => openQuests("today")} className="[@media(max-height:500px)]:hidden" />
-              </div>
-              <HeroStage armor={armor} />
-              <div className="min-w-0 [@media(max-height:640px)]:self-end">
-              <GearStrip
-                stash={s}
-                stashError={stash.error}
-                guest={sessionKind === "guest"}
-                signedIn={sessionKind !== "anon"}
-                onEdit={() => openPanel("inventory", "loadout")}
-                onStarter={() => openPanel("inventory", "stash")}
-                onRetry={() => void stash.reload()}
-              />
-              </div>
-              <MobileDock
-                active={panel.panel}
-                newsDot={newsDot}
-                moreDot={socialDot}
-                moreOpen={more}
-                onMore={() => setMore(true)}
-                onPanel={(p) => openPanel(p)}
-              />
-              {/* The party strip rides on top of PLAY in the same grid row (the row count stays put); on a
-                  landscape phone (≤ 500 px tall) it sits beside a narrower PLAY to save height. */}
-              <div
-                className={clsx(
-                  "min-w-0",
-                  inParty && "[@media(max-height:500px)]:flex [@media(max-height:500px)]:items-center [@media(max-height:500px)]:gap-2",
-                )}
-              >
-                <PartyStrip onInvite={() => openPanel("friends", "friends")} />
-                <div className={clsx(inParty && "[@media(max-height:500px)]:w-[min(19rem,48%)] [@media(max-height:500px)]:shrink-0")}>
-                  <PlayButton onFixInventory={() => openPanel("inventory", "loadout")} />
-                </div>
+            {/* Portrait: the world card heads the stack (in landscape it lives in the right column). */}
+            <WorldCard className="land:hidden" />
+
+            <main className="relative flex min-h-0 flex-col items-center justify-end gap-3 short:gap-2">
+              <div className="min-h-0 w-full flex-1" />
+              <div ref={gearRef} className="relative z-10 flex max-w-full justify-center">
+                <GearStrip
+                  stash={s}
+                  stashError={stash.error}
+                  guest={sessionKind === "guest"}
+                  signedIn={sessionKind !== "anon"}
+                  onEdit={() => openPanel("inventory", "loadout")}
+                  onStarter={() => openPanel("inventory", "stash")}
+                  onRetry={() => void stash.reload()}
+                />
               </div>
               {showCard && (
-                <div className="absolute bottom-44 left-3 z-10 hidden max-h-[calc(100%-16rem)] w-60 overflow-y-auto lg:block">
+                <div className="absolute inset-x-0 top-0 z-20 mx-auto max-h-full w-[min(20rem,100%)] overflow-y-auto pt-1 animate-pop-in motion-reduce:animate-none short:w-[min(18rem,100%)]">
                   <LastRaidCard raid={lastRaid} onDismiss={dismissCard} />
                 </div>
               )}
             </main>
 
-            <nav aria-label="World" className="hidden flex-col items-center gap-3 overflow-y-auto pb-4 pt-5 md:flex [@media(max-height:500px)]:flex [@media(max-height:500px)]:gap-2 [@media(max-height:500px)]:py-2">
-              <SideButton label="News" icon={MENU_ICONS.news} hotkey="N" dot={newsDot} active={panel.panel === "news"} onClick={() => openPanel("news")} />
-              <SideButton
-                label="Leaderboards"
-                icon={MENU_ICONS.leaderboards}
-                hotkey="L"
-                active={panel.panel === "leaderboards"}
-                onClick={() => openPanel("leaderboards")}
-              />
-              <SideButton
-                label="Friends"
-                icon={MENU_ICONS.friends}
-                hotkey="F"
-                dot={socialDot}
-                active={panel.panel === "friends"}
-                onClick={() => openPanel("friends")}
-              />
-              <SideButton label="Guilds" icon={MENU_ICONS.guilds} locked onClick={() => locked("Guilds")} />
-            </nav>
-          </div>
-
-          {showCard && (
-            <div className="fixed inset-x-2 bottom-[calc(10.5rem+env(safe-area-inset-bottom))] z-30 max-h-[55vh] overflow-y-auto md:inset-x-auto md:bottom-36 md:left-[7.5rem] md:w-72 lg:hidden [@media(max-height:500px)]:inset-x-auto [@media(max-height:500px)]:bottom-[4.75rem] [@media(max-height:500px)]:left-[calc(6.5rem+env(safe-area-inset-left,0px))] [@media(max-height:500px)]:max-h-[calc(100dvh-8.75rem)] [@media(max-height:500px)]:w-72">
-              <LastRaidCard raid={lastRaid} onDismiss={dismissCard} />
+            <div className="flex min-h-0 min-w-0 flex-col gap-3 short:gap-2 land:justify-between">
+              <WorldCard className="hidden land:flex" />
+              <div className="flex min-w-0 flex-col gap-2">
+                <PartyStrip onInvite={() => openPanel("friends", "friends")} />
+                <PlayButton onFixInventory={() => openPanel("inventory", "loadout")} />
+              </div>
             </div>
-          )}
+
+            <MobileDock
+              active={panel.panel}
+              newsDot={newsDot}
+              moreDot={socialDot}
+              moreOpen={more}
+              onMore={() => setMore(true)}
+              onPanel={(p) => openPanel(p)}
+            />
+          </div>
         </div>
 
         {panel.panel && (

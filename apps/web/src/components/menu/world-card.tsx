@@ -8,7 +8,7 @@ import { SHORT_RAID_MS } from "@/lib/lobby/play-state";
 import { fmtClockS, fmtLocalHm, mapLabel, secsUntil, worldView } from "@/lib/lobby/world-clock";
 import { BossBanner } from "./boss-banner";
 
-type Chip = { label: string; tone: string };
+type Chip = { label: string; band: string };
 
 /**
  * How long after the map opens an empty map still reads "loot is untouched": nobody can have carried
@@ -17,12 +17,13 @@ type Chip = { label: string; tone: string };
 const UNTOUCHED_MS = WORLD.EXTRACT_ARM_MS;
 
 /**
- * World card (WORLD v6 spec §6.4): map name and number, phase chip (OPEN / ENTRY CLOSED / NEW MAP…
- * / OFFLINE), the countdown with the local wipe time, the cycle bar, raiders on the map and the boss
- * banner. Public: everyone sees it, signed in or not. Without a status the phase and countdown
- * still run from the cycle clock.
+ * World card (Brawl Stars "event" card above PLAY): a band coloured by the phase (OPEN lime /
+ * ENTRY CLOSED amber / NEW MAP… white / OFFLINE grey) with the map number, the map name, the big
+ * countdown, raiders on the map with the local wipe time, the cycle bar (tall screens) and the boss
+ * line. Public: everyone sees it, signed in or not. Without a status the phase and countdown still
+ * run from the cycle clock.
  */
-export function WorldCard() {
+export function WorldCard({ className }: { className?: string }) {
   const { status, statusError, reloadStatus } = useLobby();
   const now = useNow();
   const v = worldView(status, now);
@@ -30,20 +31,16 @@ export function WorldCard() {
   const loading = !status && !statusError;
 
   const chip: Chip = offline
-    ? { label: "OFFLINE", tone: "bg-zinc-400 text-black" }
+    ? { label: "OFFLINE", band: "bg-[linear-gradient(180deg,#d4d4d8,#a1a1aa)] text-black" }
     : v.phase === "open"
-      ? { label: "OPEN", tone: "bg-zooa-lime text-black" }
+      ? { label: "OPEN", band: "bg-[linear-gradient(180deg,#f0ff7a,#ccff00_55%,#a6d400)] text-black" }
       : v.phase === "closing"
-        ? { label: "ENTRY CLOSED", tone: "bg-amber-300 text-black" }
-        : { label: "NEW MAP…", tone: "bg-white text-black" };
+        ? { label: "ENTRY CLOSED", band: "bg-[linear-gradient(180deg,#fde68a,#fbbf24)] text-black" }
+        : { label: "NEW MAP…", band: "bg-[linear-gradient(180deg,#ffffff,#d4d4d8)] text-black" };
 
   const short = v.phase === "open" && v.wipeAt - now < SHORT_RAID_MS;
-  const main =
-    v.phase === "open"
-      ? `Wipe in ${fmtClockS(secsUntil(v.wipeAt, now))}`
-      : v.phase === "closing"
-        ? `Next map in ${fmtClockS(secsUntil(v.entryOpensAt, now))}`
-        : `New map in ${fmtClockS(secsUntil(v.entryOpensAt, now))}`;
+  const what = v.phase === "open" ? "Wipe in" : v.phase === "closing" ? "Next map in" : "New map in";
+  const clock = fmtClockS(secsUntil(v.phase === "open" ? v.wipeAt : v.entryOpensAt, now));
   const side = v.phase === "open" ? `wipes at ${fmtLocalHm(v.wipeAt)}` : `opens at ${fmtLocalHm(v.entryOpensAt)}`;
 
   // "Loot is untouched" only holds early: later an empty map may already have been looted by raiders
@@ -54,91 +51,85 @@ export function WorldCard() {
       ? null
       : v.humans === 0
         ? fresh
-          ? "Map is empty — loot is untouched"
-          : "Nobody on the map right now"
-        : `${v.humans} ${v.humans === 1 ? "raider" : "raiders"} on the map`;
+          ? "Empty · loot untouched"
+          : "Nobody on the map"
+        : `${v.humans} on the map`;
 
   return (
     <section
       aria-label={`${BRAND.mapName}, ${mapLabel(v.mapNumber)}`}
-      // Landscape phones (≤ 500 px tall): tighter, and the raiders line joins the wipe-time line.
-      className="toon-panel mx-auto w-full max-w-xl bg-[#121722]/90 p-3 backdrop-blur-sm md:p-4 [@media(max-height:500px)]:p-2.5"
+      className={clsx("menu-chip w-full flex-col items-stretch overflow-hidden bg-[#141a29]/95", className)}
     >
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="min-w-0 truncate text-base tracking-wide text-white md:text-lg">
-          <span className="optical-center">
-            {BRAND.mapName.toUpperCase()} <span className="text-white/50">·</span> {mapLabel(v.mapNumber)}
-          </span>
-        </h2>
-        <span className={clsx("inline-flex shrink-0 items-center gap-1.5 rounded-full border-[3px] border-black px-2.5 py-1 text-[0.7rem] tracking-[0.12em] shadow-[0_2px_0_#000]", chip.tone)}>
-          <span className={clsx("h-2 w-2 rounded-full bg-black", v.phase === "open" && !offline && "animate-pulse motion-reduce:animate-none")} aria-hidden />
-          {chip.label}
+      <div className={clsx("flex items-center justify-between gap-2 border-b-[3px] border-black px-3 py-1.5 short:py-1", chip.band)}>
+        <span className="flex items-center gap-1.5 text-sm leading-none tracking-wider short:text-xs">
+          <span className={clsx("h-2.5 w-2.5 rounded-full border-2 border-black bg-black/80", v.phase === "open" && !offline && "animate-pulse motion-reduce:animate-none")} aria-hidden />
+          <span className="optical-center">{chip.label}</span>
+        </span>
+        <span className="text-xs leading-none tracking-wider text-black/70">
+          <span className="optical-center">{mapLabel(v.mapNumber).toUpperCase()}</span>
         </span>
       </div>
 
-      <div className="mt-2 flex items-baseline justify-between gap-3 [@media(max-height:500px)]:mt-1">
-        <p
-          role="timer"
-          aria-live="off"
-          className={clsx(
-            "toon-text-thin text-2xl tabular-nums tracking-wide md:text-[2rem] [@media(max-height:500px)]:text-2xl",
-            v.phase === "open" ? (short ? "text-amber-300" : "text-white") : "text-amber-200",
-          )}
-        >
-          {main}
+      <div className="flex flex-col gap-1 px-3 pb-2.5 pt-2 short:gap-0.5 short:pb-1.5 short:pt-1.5">
+        <h2 className="menu-label truncate text-xl leading-none tracking-wide text-white md:text-2xl short:!text-lg">
+          <span className="optical-center">{BRAND.mapName.toUpperCase()}</span>
+        </h2>
+        <p role="timer" aria-live="off" className="flex items-baseline gap-2 whitespace-nowrap">
+          <span className="font-body text-xs font-bold uppercase tracking-wider text-white/60">{what}</span>
+          <span
+            className={clsx(
+              "menu-label text-[1.7rem] leading-none tabular-nums tracking-wide md:text-[2rem] short:!text-[1.45rem]",
+              v.phase === "open" ? (short ? "text-amber-300" : "text-white") : "text-amber-200",
+            )}
+          >
+            <span className="optical-center">{clock}</span>
+          </span>
         </p>
-        <p className="font-body shrink-0 text-right text-xs font-semibold tabular-nums text-white/60">
-          {side}
-          {raiders && v.humans !== null && (
-            <span className="hidden [@media(max-height:500px)]:block">
-              {v.humans} on the map{v.humans >= v.capacity ? " · full" : ""}
+
+        <div className="relative mt-1 h-2.5 overflow-hidden rounded-full border-2 border-black bg-black/55 short:hidden [@media(max-height:620px)]:hidden" aria-hidden>
+          <span
+            className={clsx(
+              "absolute inset-y-0 left-0",
+              offline ? "bg-zinc-500" : v.phase === "closing" ? "bg-amber-300" : short ? "bg-amber-300" : v.phase === "resetting" ? "bg-white/50" : "bg-zooa-lime",
+            )}
+            style={{ width: `${v.elapsed * 100}%` }}
+          />
+          <span
+            className="absolute inset-y-0 right-0 bg-[repeating-linear-gradient(-45deg,rgba(251,191,36,0.45)_0_4px,transparent_4px_8px)]"
+            style={{ left: `${v.closeMark * 100}%` }}
+          />
+          <span className="absolute inset-y-0 w-0.5 bg-black" style={{ left: `${v.closeMark * 100}%` }} />
+        </div>
+
+        <div className="font-body flex min-h-5 items-center justify-between gap-2 text-xs font-bold text-white/75">
+          {offline ? (
+            <span className="flex items-center gap-2">
+              Server unreachable
+              <button
+                type="button"
+                onClick={() => void reloadStatus()}
+                className="min-h-8 rounded-lg px-1 text-zooa-lime underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime"
+              >
+                Retry
+              </button>
             </span>
+          ) : loading ? (
+            <span className="h-3.5 w-28 animate-pulse rounded bg-white/10 motion-reduce:animate-none" aria-hidden />
+          ) : raiders ? (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className={clsx("h-2.5 w-2.5 shrink-0 rounded-full border-2 border-black", v.humans ? "bg-zooa-lime" : "bg-white/40")} aria-hidden />
+              <span className="truncate">{raiders}</span>
+              {v.humans !== null && v.humans >= v.capacity && <span className="text-amber-300">· full</span>}
+            </span>
+          ) : (
+            <span />
           )}
-        </p>
-      </div>
+          <span className="shrink-0 tabular-nums text-white/55">{side}</span>
+        </div>
 
-      <div className="relative mt-2.5 hidden h-3 overflow-hidden rounded-full border-2 border-black bg-black/55 md:block [@media(max-height:640px)]:hidden" aria-hidden>
-        <span
-          className={clsx(
-            "absolute inset-y-0 left-0",
-            offline ? "bg-zinc-500" : v.phase === "closing" ? "bg-amber-300" : short ? "bg-amber-300" : v.phase === "resetting" ? "bg-white/50" : "bg-zooa-lime",
-          )}
-          style={{ width: `${v.elapsed * 100}%` }}
-        />
-        <span
-          className="absolute inset-y-0 right-0 bg-[repeating-linear-gradient(-45deg,rgba(251,191,36,0.45)_0_4px,transparent_4px_8px)]"
-          style={{ left: `${v.closeMark * 100}%` }}
-        />
-        <span className="absolute inset-y-0 w-0.5 bg-black" style={{ left: `${v.closeMark * 100}%` }} />
-      </div>
-
-      <div className={clsx("mt-2 flex min-h-5 items-center justify-between gap-3", raiders && !offline && !loading && "[@media(max-height:500px)]:hidden")}>
-        {offline ? (
-          <p className="font-body flex items-center gap-2 text-sm text-white/75">
-            World server unreachable.
-            <button
-              type="button"
-              onClick={() => void reloadStatus()}
-              className="min-h-8 rounded-lg px-1 text-zooa-lime underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime"
-            >
-              Retry
-            </button>
-          </p>
-        ) : loading ? (
-          <span className="h-4 w-44 animate-pulse rounded bg-white/10 motion-reduce:animate-none" aria-hidden />
-        ) : raiders ? (
-          <p className="font-body flex items-center gap-2 text-sm font-semibold text-white/80">
-            <span className={clsx("h-2.5 w-2.5 rounded-full border-2 border-black", v.humans ? "bg-zooa-lime" : "bg-white/40")} aria-hidden />
-            {raiders}
-            {v.humans !== null && v.humans >= v.capacity && <span className="text-amber-300">· full</span>}
-          </p>
-        ) : (
-          <span />
-        )}
-      </div>
-
-      <div className="mt-2.5 empty:hidden [@media(max-height:500px)]:mt-1.5">
-        <BossBanner status={status} fresh={v.fresh} />
+        <div className="mt-1 empty:hidden">
+          <BossBanner status={status} fresh={v.fresh} />
+        </div>
       </div>
     </section>
   );

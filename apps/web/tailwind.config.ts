@@ -4,6 +4,15 @@ export default {
   content: ["./src/**/*.{js,ts,jsx,tsx,mdx}"],
   theme: {
     extend: {
+      // Main menu (Brawl Stars layout): `land` = the landscape layout (tablets and desktops, and any
+      // phone held sideways), `port` = the stacked portrait-phone fallback, `short` / `tiny` = landscape
+      // phones (≤ 500 / ≤ 380 px tall). Raw screens come after the width ones, so they win.
+      screens: {
+        land: { raw: "(min-width: 768px), (max-height: 500px)" },
+        port: { raw: "(max-width: 767px) and (min-height: 501px)" },
+        short: { raw: "(max-height: 500px)" },
+        tiny: { raw: "(max-height: 380px)" },
+      },
       keyframes: {
         "outcome-enter": {
           "0%": { opacity: "0", transform: "translateY(12px)" },

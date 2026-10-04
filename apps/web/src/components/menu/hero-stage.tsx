@@ -32,29 +32,86 @@ export function armorLevelOf(entries: ReadonlyArray<{ key: string; def: string }
 }
 
 /**
- * Centre hero (WORLD v6 spec §6.6): `public/lobby/hero_{0..3}.png` by armour (step S10), standing on
- * a lime glow and breathing slowly. The background art already has the dashed extract ring painted
- * on its pad, so the CSS dashed ring is drawn only while that art is missing (no second ring).
- * Fallback until the hero art exists: the top-down player sprite turned −12°, as on the landing
- * page. Hidden on short screens (< 640 px tall) so PLAY always fits.
+ * Where the background art's painted extract ring lands on screen. LobbyBackdrop draws bg.webp
+ * (1536×1024) with `background-size: cover` centred, so the image is scaled by
+ * max(100vw / 1536, 100dvh / 1024); the ring's centre sits at (48.6 %, 65.2 %) of the image.
+ */
+export const RING_X = "calc(50vw - 0.014 * max(100vw, 150dvh))";
+export const RING_Y = "calc(50dvh + 0.152 * max(100dvh, 66.667vw))";
+
+/** RING_X in px for a viewport (the same formula in JS). */
+export function ringXPx(vw: number, vh: number): number {
+  return vw / 2 - 0.014 * Math.max(vw, 1.5 * vh);
+}
+
+/**
+ * Slides `el` sideways (translateX) so its centre sits under the hero (RING_X) as far as its parent
+ * column allows; re-measured on resize. The gear plate uses it: the hero stands on the art's ring,
+ * which is not the middle of the centre column.
+ */
+export function useUnderHero(el: React.RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    const node = el.current;
+    const parent = node?.parentElement;
+    if (!node || !parent) return;
+    const place = () => {
+      const p = parent.getBoundingClientRect();
+      const w = node.offsetWidth;
+      const room = Math.max(0, (p.width - w) / 2);
+      const want = ringXPx(window.innerWidth, window.innerHeight) - (p.left + p.width / 2);
+      node.style.transform = `translateX(${Math.round(Math.max(-room, Math.min(room, want)))}px)`;
+    };
+    place();
+    window.addEventListener("resize", place);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    ro?.observe(node);
+    ro?.observe(parent);
+    return () => {
+      window.removeEventListener("resize", place);
+      ro?.disconnect();
+    };
+  }, [el]);
+}
+
+/**
+ * Centre hero (Brawl Stars layout): `public/lobby/hero_{0..3}.png` by armour (step S10), standing in
+ * the middle of the ring painted on the background art (RING_X / RING_Y follow the art's cover
+ * scaling), as tall as the space between the top bar (or, on portrait phones, the world card) and
+ * the ring allows, on a lime glow and breathing slowly. Without the background art a CSS dashed ring
+ * is drawn at the same spot. Fallback until the hero art exists: the top-down player sprite turned
+ * −12°, as on the landing page. Decorative: the menu draws it under its controls.
  */
 export function HeroStage({ armor, className }: { armor: 0 | 1 | 2 | 3; className?: string }) {
   const bgArt = useArtLoaded(BG_ART);
   return (
-    <div className={clsx("relative mx-auto flex h-full min-h-0 w-full max-w-md items-end justify-center [@media(max-height:640px)]:hidden", className)} aria-hidden>
+    <div
+      className={clsx(
+        "pointer-events-none absolute inset-0 [--hero-top:5rem] port:[--hero-top:16rem] short:[--hero-top:3.9rem]",
+        className,
+      )}
+      aria-hidden
+    >
       {/* Glow (and, without the background art, the extract ring) under the feet: squashed for perspective. */}
-      <div className="absolute bottom-[4%] left-1/2 h-40 w-72 [transform:translateX(-50%)_scaleY(0.35)] md:h-56 md:w-96">
-        <div className="absolute -inset-6 rounded-full bg-zooa-lime/30 blur-2xl animate-soft-glow motion-reduce:animate-none" />
+      <div
+        className="absolute h-[min(30vw,22rem)] w-[min(30vw,22rem)] [transform:translate(-50%,-50%)_scaleY(0.38)]"
+        style={{ left: RING_X, top: RING_Y }}
+      >
+        <div className="absolute inset-[12%] rounded-full bg-zooa-lime/35 blur-2xl animate-soft-glow motion-reduce:animate-none" />
         {!bgArt && <div className="relative h-full w-full rounded-full border-[6px] border-dashed border-zooa-lime/80 bg-zooa-lime/10" />}
       </div>
-      <div className="relative flex h-full max-h-[46vh] w-full items-end justify-center pb-[6%] animate-hero-idle motion-reduce:animate-none">
-        <FallbackImg
-          key={armor}
-          src={`/lobby/hero_${armor}.png`}
-          fallback="/sprites/player.png"
-          className="h-full max-h-full w-auto object-contain drop-shadow-[0_10px_0_rgba(0,0,0,0.35)]"
-          fallbackClassName="!h-[60%] -rotate-12 [filter:drop-shadow(0_6px_0_#000)]"
-        />
+      <div
+        className="absolute flex -translate-x-1/2 -translate-y-full items-end justify-center"
+        style={{ left: RING_X, top: `calc(${RING_Y} + 1.5%)`, height: `calc(${RING_Y} + 1.5% - var(--hero-top))` }}
+      >
+        <div className="flex h-full items-end animate-hero-idle motion-reduce:animate-none">
+          <FallbackImg
+            key={armor}
+            src={`/lobby/hero_${armor}.png`}
+            fallback="/sprites/player.png"
+            className="h-full max-h-full w-auto object-contain drop-shadow-[0_8px_0_rgba(0,0,0,0.4)]"
+            fallbackClassName="!h-[60%] -rotate-12 [filter:drop-shadow(0_6px_0_#000)]"
+          />
+        </div>
       </div>
     </div>
   );

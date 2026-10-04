@@ -10,7 +10,7 @@ function BossFace({ down = false, small = false }: { down?: boolean; small?: boo
     <span
       className={clsx(
         "relative grid shrink-0 place-items-center overflow-hidden rounded-full border-[3px] border-black bg-[#2a1216] shadow-[0_3px_0_#000]",
-        small ? "h-9 w-9" : "h-9 w-9 md:h-14 md:w-14",
+        small ? "h-9 w-9" : "h-10 w-10",
       )}
       aria-hidden
     >
@@ -22,7 +22,7 @@ function BossFace({ down = false, small = false }: { down?: boolean; small?: boo
 }
 
 /**
- * Boss line of the world card (WORLD v6 spec §6.4). Alive → rose banner "BOSS EVENT · {name}
+ * Boss line of the world card (WORLD v6 spec §6.4), compact for the event card. Alive → rose banner "BOSS EVENT · {name}
  * holds the {zone}" with tier and guards; killed → grey "{name} is down — killed by {nick}"; no boss →
  * one thin line; plus "Next map: {NAME} at {zone}" once the next boss is revealed. A boss that
  * appears while the menu is open drops in once with a shake. Only a status of the current map
@@ -49,19 +49,20 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
 
   if (!fresh || !status) return null;
 
+  // Next map's boss: tall desktop screens only (the card stays compact elsewhere).
   const nextLine =
     next === undefined ? null : next === null ? (
-      <p className="font-body hidden text-xs font-semibold text-white/65 md:block [@media(max-height:500px)]:hidden">Next map: no boss</p>
+      <p className="font-body hidden text-xs font-semibold text-white/55 [@media(min-width:1024px)_and_(min-height:760px)]:block">Next map: no boss</p>
     ) : (
-      <p className="font-body hidden text-xs font-semibold text-rose-200 md:block [@media(max-height:500px)]:hidden">
+      <p className="font-body hidden text-xs font-semibold text-rose-200 [@media(min-width:1024px)_and_(min-height:760px)]:block">
         Next map: <span className="uppercase tracking-wide">{next.name}</span> at the {next.zoneName}
       </p>
     );
 
   if (!boss) {
     return (
-      <div className="flex flex-col gap-1">
-        <p className="font-body text-xs text-white/60">No boss on this map · bosses show up about 1 map in 3</p>
+      <div className="flex flex-col gap-1 border-t-2 border-black/40 pt-1.5">
+        <p className="font-body text-xs font-semibold text-white/55">No boss this map · about 1 map in 3</p>
         {nextLine}
       </div>
     );
@@ -69,11 +70,11 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
 
   if (boss.status === "killed") {
     return (
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center gap-3 rounded-2xl border-[3px] border-black bg-zinc-600/80 px-3 py-2 shadow-[0_3px_0_#000]">
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2 rounded-xl border-[3px] border-black bg-zinc-600/90 px-2 py-1 shadow-[0_3px_0_#000]">
           <BossFace down small />
-          <p className="font-body min-w-0 text-sm font-bold text-white">
-            {boss.name} is down{boss.killedBy ? <> — killed by <span className="text-zooa-lime">{boss.killedBy}</span></> : null}
+          <p className="font-body min-w-0 text-xs font-bold leading-tight text-white">
+            {boss.name} is down{boss.killedBy ? <> — by <span className="text-zooa-lime">{boss.killedBy}</span></> : null}
           </p>
         </div>
         {nextLine}
@@ -82,23 +83,22 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1">
       <div
         key={drop}
         className={clsx(
-          "flex items-center gap-3 rounded-2xl border-[3px] border-black bg-rose-500 px-3 py-2 text-black shadow-[0_4px_0_#000] [@media(max-height:500px)]:py-1",
+          "flex items-center gap-2 rounded-xl border-[3px] border-black bg-[linear-gradient(180deg,#fb7185,#e11d48)] px-2 py-1 text-black shadow-[inset_0_2px_0_rgba(255,255,255,0.35),0_3px_0_#000]",
           drop > 0 && "animate-banner-drop motion-reduce:animate-none",
         )}
       >
         <span className={clsx("contents", drop > 0 && "[&>*]:animate-shake-once motion-reduce:[&>*]:animate-none")}>
-          <BossFace />
+          <BossFace small />
           <span className="min-w-0">
-            <span className="block text-[0.7rem] tracking-[0.2em] text-black/75">BOSS EVENT</span>
-            <span className="mt-0.5 block text-sm leading-tight tracking-wide md:text-lg [@media(max-height:500px)]:text-sm">
-              {boss.name} holds the {boss.zoneName}
+            <span className="block text-[0.65rem] leading-none tracking-[0.18em] text-black/75">
+              BOSS EVENT · T{boss.tier} · {boss.guards} {boss.guards === 1 ? "GUARD" : "GUARDS"}
             </span>
-            <span className="font-body mt-0.5 hidden text-xs font-bold text-black/75 md:block [@media(max-height:500px)]:hidden">
-              T{boss.tier} · {boss.guards} {boss.guards === 1 ? "guard" : "guards"}
+            <span className="menu-label mt-1 block truncate text-sm leading-none tracking-wide text-white [text-shadow:none]">
+              {boss.name} · {boss.zoneName}
             </span>
           </span>
         </span>
