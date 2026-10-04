@@ -1,0 +1,49 @@
+# SPOILS — iDos Games edition: a second, fully separate stack next to the main one on the same VPS
+# (docs/IDOS_EDITION.md §3.1). Same code and the same services as docker-compose.yml, but:
+#   - its own compose project (spoils-idos): own network, own images, own postgres volume = own DB;
+#   - its own env file .env.idos.local (secrets, URLs, GAME_SERVER_ID); the main .env is never read.
+#     The name matches the `.env.*.local` rule of .gitignore and `.env.*` of .dockerignore, so the
+#     file is never committed and never sent into an image;
+#   - the web image is built with IDOS_BUILD=1 (edition name, iframe headers, cross-site cookie);
+#   - its own host ports (3100 web, 2667 game server) behind deploy/nginx/spoils-idos.conf.
+#
+#   cp .env.example .env.idos.local   # fill it: NEW secrets (never copy the main ones), IDOS_BUILD=1,
+#                                     # NEXT_PUBLIC_GAME_SERVER_URL=wss://game-idos.<domain>, GAME_SERVER_ID=idos-world-1
+#   docker compose -p spoils-idos --env-file .env.idos.local -f docker-compose.yml -f deploy/idos.compose.yml up -d --build
+#
+# All four flags matter: -p keeps the main project (extract) and its volume untouched, --env-file
+# makes ${...} below read .env.idos.local instead of .env. Run from the repository root.
+# Needs Docker Compose 2.24.4+ for the !override tags (they replace the base lists instead of
+# merging them, so the main .env and the main ports never leak into this stack).
+# Without IDOS_BUILD=1 in .env.idos.local the command stops with an error (guard against using the main .env).
+name: spoils-idos
+
+services:
+  migrate:
+    env_file: !override
+      - .env.idos.local
+
+  web:
+    build:
+      dockerfile: deploy/idos/web.Dockerfile
+      args:
+        # Fixed at build: rebuild the image after changing them (README "Deploy", NEXT_PUBLIC_* note).
+        IDOS_BUILD: ${IDOS_BUILD:?IDOS_BUILD=1 must be set in .env.idos.local (run with --env-file .env.idos.local)}
+        # Sites allowed to frame the edition; unset → https://idosgames.com https://www.idosgames.com https://*.idos.games
+        IDOS_FRAME_ANCESTORS: ${IDOS_FRAME_ANCESTORS:-}
+    env_file: !override
+      - .env.idos.local
+    ports: !override
+      - "${WEB_BIND:-127.0.0.1}:${IDOS_WEB_PORT:-3100}:3000"
+
+  game-server:
+    env_file: !override
+      - .env.idos.local
+    environment:
+      # Must differ from the main stack's id: each id voids only the shards of its own previous process.
+      GAME_SERVER_ID: ${GAME_SERVER_ID:-idos-world-1}
+    ports: !override
+      - "${GAME_BIND:-127.0.0.1}:${IDOS_GAME_PORT:-2667}:2567"
+
+  # cron needs no change: it calls http://web:3000 inside this project's own network with the
+  # CRON_SECRET from .env.idos.local.

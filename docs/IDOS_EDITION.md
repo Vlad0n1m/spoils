@@ -115,28 +115,76 @@ idosgames-title-bootstrap; скелет `get_host_scaffold`), docs.idosgames.com
 
 Порядок: сначала то, что не зависит от iDos; потом то, что ждёт ответов.
 
-### 3.1 Флаг сборки и отдельный стек (от iDos не зависит)
+### 3.1 Флаг сборки и отдельный стек (от iDos не зависит) — сделано
 
-1. `IDOS_BUILD=1` (сервер) и `NEXT_PUBLIC_IDOS_BUILD=1` (клиент; значение вшивается при сборке,
-   поэтому iDos-издание собирается отдельным образом).
-2. Подпись издания в `apps/web/src/lib/brand.ts` (`BRAND.edition`), вывод в шапке меню и на
-   экране загрузки.
-3. Работа во фрейме:
-   - заголовок `Content-Security-Policy: frame-ancestors https://idosgames.com https://www.idosgames.com https://*.idos.games`
-     в `apps/web/next.config.mjs` (только при `IDOS_BUILD`);
-   - cookie сессии `SameSite=None; Secure; Partitioned` в `apps/web/src/lib/session.ts`. Сейчас
-     стоит `lax`, и в чужом фрейме cookie не дойдёт. Safari всё равно может резать сторонние cookie,
-     поэтому запасной путь — токен сессии в заголовке **[не проверено на устройствах]**;
+Что уже есть в коде (при выключенном флаге основная сборка ведёт себя как раньше):
+
+1. **Флаг.** `IDOS_BUILD=1` читает `apps/web/next.config.mjs` при сборке и вшивает
+   `NEXT_PUBLIC_IDOS_BUILD=1` в клиент и сервер. Поэтому издание — отдельный образ: флаг
+   переключается только пересборкой. Логика в `apps/web/src/lib/edition.ts` (и
+   `edition-frame.mjs`, его читает next.config), тесты в `edition.test.ts`.
+2. **Название.** `BRAND.edition` = «iDos Games edition», `BRAND.fullName` = «SPOILS — iDos Games
+   edition» (`apps/web/src/lib/brand.ts`). `BRAND.name` везде остаётся «SPOILS» (логотипы, текст
+   подписи кошелька). Полное имя видно в заголовке вкладки и вверху меню аккаунта (☰). В шапку меню
+   подпись ещё не выведена: файл `menu-top-bar.tsx` сейчас правит другая задача.
+3. **Работа во фрейме.**
+   - Заголовок `Content-Security-Policy: frame-ancestors 'self' https://idosgames.com https://www.idosgames.com https://*.idos.games`
+     на всех страницах, только в издании. Список меняется через `IDOS_FRAME_ANCESTORS`
+     (https-адреса через пробел или запятую; `*`, `http://` кроме localhost, пути и прочий мусор
+     отбрасываются, а если ничего не осталось — берутся адреса по умолчанию). `X-Frame-Options` не
+     отправляется ни в одной сборке; в nginx его тоже не добавлять.
+   - Cookie сессии в издании: `SameSite=None; Secure; Partitioned` (`lib/session.ts`
+     → `editionSessionCookie()`). В основной сборке остаётся `lax`. Partitioned-cookie живёт только
+     внутри idosgames.com: если открыть поддомен издания напрямую, вход будет отдельный. Safari может
+     резать сторонние cookie и так **[не проверено на устройствах]**, запасной путь — токен сессии в
+     заголовке (не сделан).
+   - Внутри фрейма (`window.top !== window.self`) пункт «Connect wallet» в меню аккаунта скрыт: во
+     фрейме iDos кошелёк ведёт сайт. Вне фрейма (поддомен издания открыт напрямую) он остаётся.
    - Pointer Lock и полноэкранный режим во фрейме зависят от атрибутов `allow` у фрейма iDos
      (вопрос 3).
-4. Отдельный стек: второй docker compose project (`spoils-idos`) со своим `.env.idos`, своей базой,
-   своими портами и своими `SESSION_SECRET`, `CRON_SECRET`, `GAME_SERVER_HMAC_SECRET`. Игровой
-   сервер издания отправляет итоги шардов в web издания (`WEB_API_BASE_URL`), уникальный
-   `GAME_SERVER_ID`. Nginx: `idos.<домен>` → web издания, `game-idos.<домен>` → WebSocket.
-   Секреты вписывает Влад.
-5. В iDos-издании скрываем свой «Connect wallet» (SIWS) и свой вывод SOL: во фрейме iDos кошелёк
-   ведёт сайт, а два разных кошелька запутают игрока. Включать ли что-то из этого,
-   **[решает Влад]**.
+4. **Отдельный стек.** `deploy/idos.compose.yml` — надстройка над `docker-compose.yml`: свой
+   compose-проект `spoils-idos` (своя сеть, свои образы, свой том Postgres — значит, своя база),
+   свой файл переменных `.env.idos.local`, свои порты (web 3100, игровой сервер 2667),
+   `GAME_SERVER_ID` по умолчанию `idos-world-1`. Образ web собирается по
+   `deploy/idos/web.Dockerfile` (копия `apps/web/Dockerfile` плюс аргументы `IDOS_BUILD` и
+   `IDOS_FRAME_ANCESTORS`). Nginx: `deploy/nginx/spoils-idos.conf`, `idos.<домен>` → web издания,
+   `game-idos.<домен>` → WebSocket.
+5. **Ещё не сделано:** свой вывод SOL и ссылки «Get Phantom» / «View on Explorer» на странице
+   `/wallet` во фрейме пока показываются (это файлы `components/wallet`, другой владелец).
+   Скрывать ли вывод SOL, **[решает Влад]**.
+
+#### Как собрать и запустить издание
+
+На сервере, из корня репозитория:
+
+1. Создать `.env.idos.local` (имя уже в `.gitignore` и `.dockerignore`, в git и в образ не
+   попадёт): `cp .env.example .env.idos.local` и заполнить. Секреты **новые**, не копировать из
+   основного `.env`: `SESSION_SECRET`, `CRON_SECRET`, `GAME_SERVER_HMAC_SECRET`, `POSTGRES_PASSWORD`,
+   `MASTER_SEED_HEX`, `CHAIN_HASH_SALT` и прочие. Обязательно:
+   - `IDOS_BUILD=1` (без него команда ниже остановится с ошибкой — защита от запуска с основным `.env`);
+   - `NEXT_PUBLIC_GAME_SERVER_URL=wss://game-idos.<домен>`;
+   - `GAME_SERVER_ID=idos-world-1` (или любое имя, но не как в основном стеке);
+   - при необходимости `IDOS_FRAME_ANCESTORS` (например, адрес DEV-тайтла `https://<titleid>.idos.games`).
+   Переменную `DATABASE_URL` compose подставит сам (своя база в контейнере `postgres` проекта).
+2. Запуск (нужен Docker Compose 2.24.4+):
+
+   ```bash
+   docker compose -p spoils-idos --env-file .env.idos.local \
+     -f docker-compose.yml -f deploy/idos.compose.yml up -d --build
+   ```
+
+   Все флаги обязательны: `-p` не трогает основной проект `extract` и его том, `--env-file` берёт
+   переменные из `.env.idos.local`, а не из `.env`.
+3. Nginx: положить `deploy/nginx/spoils-idos.conf`, заменить `SPOILS_DOMAIN`, выпустить сертификат
+   (`certbot --nginx -d idos.<домен> -d game-idos.<домен>`). Нужен https: cookie издания `Secure`.
+4. Проверка: `curl -sI https://idos.<домен>/play | grep -i content-security-policy` должен показать
+   `frame-ancestors 'self' https://idosgames.com …`. На основном домене этого заголовка нет.
+5. После смены `IDOS_BUILD`, `IDOS_FRAME_ANCESTORS` или любого `NEXT_PUBLIC_*` — пересобрать образ
+   (тот же `up -d --build`).
+
+Локально без Docker: `IDOS_BUILD=1 pnpm --filter web build` (или `IDOS_BUILD=1` в корневом
+`.env` для `next dev`) и отдельная база в `DATABASE_URL`. Для теста фрейма с локальной страницы
+добавить её адрес, например `IDOS_FRAME_ANCESTORS="https://idosgames.com http://localhost:5173"`.
 
 ### 3.2 Оболочка на хостинге iDos
 
@@ -289,7 +337,7 @@ SOL-рынок и казна (`lib/inventory`, `api/market`), девнет по 
 |---|---|---|---|
 | 04.10 вс | этот документ, вопросы отправлены Ерасылу | агент, Влад | — |
 | 05.10 пн | ответы iDos; Влад авторизует MCP настроек тайтла, создаёт тайтл (web3, Solana) | Влад, Ерасыл | вопросы 1–4 |
-| 05–06.10 | флаг `IDOS_BUILD`, cookie и CSP для фрейма, стек издания (compose, nginx, `.env.idos` без значений) | агент | — |
+| 05–06.10 | флаг `IDOS_BUILD`, cookie и CSP для фрейма, стек издания (compose, nginx, `.env.idos.local` без значений) | агент | — |
 | 06.10 | выпуск токена на Solana через iDos, адрес mint в тайтл | Влад (кошелёк) | вопрос 2 |
 | 06–07.10 | оболочка `apps/idos-shell` + `spoils-frame`, обработчик Cloud Code, `/api/idos/bridge` и `/api/idos/exchange`, миграция `idos_user_id` | агент | вопросы 3–4 |
 | **07.10** | **контрольная точка**: нет ответов по 2–4 — переходим на запасной минимум | Влад | — |
