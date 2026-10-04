@@ -40,13 +40,17 @@ type EventRow = {
 export async function worldEvents(db: Db, limit = WORLD_EVENTS_DEFAULT_LIMIT, now = worldNow()): Promise<WorldEventsDto> {
   const n = Math.max(1, Math.min(WORLD_EVENTS_MAX_LIMIT, Math.floor(limit) || WORLD_EVENTS_DEFAULT_LIMIT));
   const cycle = worldCycleAt(now).cycle;
+  // One pass over each shard's exits (not one per exit type): docs/DB_REVIEW.md.
   const r = await db.execute<EventRow>(sql`
     select r.match_id, r.cycle_id, r.status, r.map_id, r.ends_at, r.boss_kind, r.boss_zone, r.boss_killed_by, r.boss_killed_at,
-      (select count(*)::int from raid_entries e where e.match_id = r.match_id) as entries,
-      (select count(*)::int from raid_exits x where x.match_id = r.match_id and x.exit = 'extract') as extracted,
-      (select count(*)::int from raid_exits x where x.match_id = r.match_id and x.exit = 'dead') as died,
-      (select count(*)::int from raid_exits x where x.match_id = r.match_id and x.exit = 'mia') as mia
+      e.entries, x.extracted, x.died, x.mia
     from raids r
+    cross join lateral (select count(*)::int as entries from raid_entries e where e.match_id = r.match_id) e
+    cross join lateral (
+      select count(*) filter (where x.exit = 'extract')::int as extracted,
+             count(*) filter (where x.exit = 'dead')::int as died,
+             count(*) filter (where x.exit = 'mia')::int as mia
+      from raid_exits x where x.match_id = r.match_id) x
     where r.kind = 'world' and r.cycle_id > ${cycle - WORLD_EVENTS_CYCLES} and r.cycle_id <= ${cycle}
     order by r.started_at desc`);
 
