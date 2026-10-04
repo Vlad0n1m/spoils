@@ -1,0 +1,245 @@
+{
+  "about": "Map v2 art (windows, interior floors, furniture and cover, decor, ground variants). Same schema as art/sprites.json, so scripts/gen-sprites.mjs runs it unchanged from a work dir whose art/sprites.json points here (see 'run'). Raw 1024 px generations live in art/raw/map-v2/, game-ready PNGs in apps/web/public/sprites/. Tiles are not taken from the plain resize: 'post' says how each was made to repeat from the raw (crop = cut an exact period box through the middle of grout/plank/slab lines; seamcut = per axis, the raw is merged with its half-rolled copy along a minimum-error cut path in 25 % edge bands, so pebbles and tufts are never ghosted), then Lanczos to 256. 'derived' sprites are made from a keyed generated one, not generated. Contact sheet: docs/map-v2-art.png.",
+  "run": "work dir W: W/art/sprites.json -> art/map-v2.json, W/art/raw -> art/raw/map-v2, W/art/style-test -> art/style-test, W/scripts -> scripts, W/.env -> .env, W/art/sprites = output; then `node scripts/gen-sprites.mjs <id>` in W, two ids at a time.",
+  "style": "Game sprite in exactly the art style of the reference image (bright stylized cartoon like ZombsRoyale, flat colors, soft shading, thick dark outlines, chunky readable shapes).",
+  "view": "Seen STRICTLY from directly above (bird's-eye, 90 degrees top-down, NOT 3/4 or isometric view).",
+  "isolate": "Centered, single isolated object filling about 70% of the frame, on a perfectly flat solid pure magenta background (#FF00FF), no gradient, no ground texture, no cast shadow, no text, no letters, no logos. Do not use any pink, magenta or purple colors on the object.",
+  "tile": "Seamless tileable square ground texture filling the whole frame edge to edge, top-down, no objects, no text.",
+  "derived": [
+    {
+      "id": "window_v",
+      "size": 256,
+      "from": "window_h",
+      "op": "rotate 90 clockwise"
+    },
+    {
+      "id": "window_v_broken",
+      "size": 256,
+      "from": "window_h_broken",
+      "op": "rotate 90 clockwise"
+    }
+  ],
+  "sprites": [
+    {
+      "id": "window_h",
+      "size": 256,
+      "prompt": "A window set into a wall, drawn like a game floor plan seen from straight above (pure 90-degree top-down, flat, NO front face, NO facade, NO perspective): one long thin horizontal strip (about 5:1) made of a beige plaster wall cap at the left and right ends, and between them a dark wooden window frame whose middle is a narrow light-blue glass strip running along the length of the strip, with a soft white glint and one thin wooden mullion in the center. The glass strip sits in the middle of the strip's thickness, frame visible on both long sides of it."
+    },
+    {
+      "id": "window_h_broken",
+      "size": 256,
+      "prompt": "A BROKEN window set into a wall, drawn like a game floor plan seen from straight above (pure 90-degree top-down, flat, NO front face, NO facade, NO perspective): one long thin horizontal strip (about 5:1) made of a beige plaster wall cap at the left and right ends, and between them a dark wooden window frame whose middle light-blue glass strip is shattered: jagged gaps and cracks, only a few glass pieces left in the frame, a few small glass shards scattered just outside both long sides."
+    },
+    {
+      "id": "floor_wood_tile",
+      "size": 256,
+      "tile": true,
+      "prompt": "Indoor floor of long honey-brown wooden planks running horizontally, staggered joints, visible wood grain, a few darker worn spots. Brighter and more orange than plain old boards.",
+      "post": "crop 0 0 1024 1015"
+    },
+    {
+      "id": "floor_ceramic_tile",
+      "size": 256,
+      "tile": true,
+      "prompt": "Indoor floor of square cream and pale gray-blue ceramic tiles in a checkerboard, thin gray grout lines, a few small chips and faint stains. Exactly 4 by 4 tiles across the image so it repeats cleanly.",
+      "post": "crop 3 3 1021 1021"
+    },
+    {
+      "id": "floor_concrete_tile",
+      "size": 256,
+      "tile": true,
+      "prompt": "Smooth indoor polished concrete floor, medium warm gray, large square slabs with thin straight seams, subtle mottling, faint scuffs and a few small oil stains.",
+      "post": "crop 171 171 854 854"
+    },
+    {
+      "id": "grass_lush_tile",
+      "size": 256,
+      "tile": true,
+      "prompt": "Lush dense green grass, a bit darker and richer than a lawn, with many small grass tufts and clover patches, no flowers, like the ground in the reference image.",
+      "post": "seamcut 0.25"
+    },
+    {
+      "id": "grass_dry_tile",
+      "size": 256,
+      "tile": true,
+      "prompt": "Dry late-summer grass, yellow-green and straw colored, sparse tufts with small patches of bare brown soil showing through.",
+      "post": "seamcut 0.25"
+    },
+    {
+      "id": "dirt_rough_tile",
+      "size": 256,
+      "tile": true,
+      "prompt": "Rough brown dirt ground with small stones, shallow tire ruts and dried cracks, a few tiny dry grass sprigs, like the dirt patches in the reference image but rougher.",
+      "post": "seamcut 0.25"
+    },
+    {
+      "id": "gravel_tile",
+      "size": 256,
+      "tile": true,
+      "prompt": "Gravel ground: many small rounded gray and beige pebbles packed together, a few bigger stones, evenly lit, no grass.",
+      "post": "seamcut 0.25"
+    },
+    {
+      "id": "asphalt_cracked_tile",
+      "size": 256,
+      "tile": true,
+      "prompt": "Old dark gray asphalt road surface with a network of visible cracks, a couple of filled patches and small potholes, tiny weeds in the cracks, no road markings.",
+      "post": "seamcut 0.25"
+    },
+    {
+      "id": "table_wood",
+      "size": 192,
+      "prompt": "A rectangular wooden dining table seen from directly above, plank tabletop, a plate and a mug on it, two simple wooden chairs tucked in at the long sides."
+    },
+    {
+      "id": "table_round",
+      "size": 160,
+      "prompt": "A small round wooden table seen from directly above with a folded newspaper (no text) and a cup on it, no chairs."
+    },
+    {
+      "id": "desk",
+      "size": 192,
+      "prompt": "An office desk seen from directly above: gray metal desk with a computer monitor seen from the top, a keyboard, scattered papers (no text) and a black office chair in front of it."
+    },
+    {
+      "id": "shelf_metal",
+      "size": 256,
+      "prompt": "A long narrow metal warehouse shelving rack seen from directly above (about 3:1, horizontal), gray steel frame, top shelf loaded with cardboard boxes and small tool cases."
+    },
+    {
+      "id": "shelf_wood",
+      "size": 256,
+      "prompt": "A long narrow wooden bookshelf seen from directly above (about 3:1, horizontal), brown wood, the top shows rows of colorful book spines, a small potted plant at one end."
+    },
+    {
+      "id": "sofa",
+      "size": 256,
+      "prompt": "A worn three-seat sofa seen from directly above, olive green fabric, three seat cushions, backrest along the top edge, armrests on both ends, one cushion slightly torn."
+    },
+    {
+      "id": "armchair",
+      "size": 160,
+      "prompt": "A single worn armchair seen from directly above, brown leather, square seat cushion, backrest at the top, two armrests."
+    },
+    {
+      "id": "bed",
+      "size": 224,
+      "prompt": "A single bed seen from directly above, wooden frame, crumpled khaki blanket, white pillow at the top end, long rectangle (vertical)."
+    },
+    {
+      "id": "counter",
+      "size": 320,
+      "prompt": "A long shop counter seen from directly above (about 4:1, horizontal), wooden counter top with a metal edge, an old cash register box at one end (no text), a few small items on top."
+    },
+    {
+      "id": "lockers",
+      "size": 256,
+      "prompt": "A row of four tall metal lockers seen from directly above (about 4:1, horizontal), dull blue-gray steel tops with vent slits, one locker top dented."
+    },
+    {
+      "id": "crate_small",
+      "size": 128,
+      "prompt": "A small square wooden crate with plank lid and nailed corners, lighter wood than a big supply crate."
+    },
+    {
+      "id": "crate_stack",
+      "size": 224,
+      "prompt": "Three wooden supply crates with X braces pushed together in an L-shaped group, one smaller crate stacked on top of another, like the crates in the reference image."
+    },
+    {
+      "id": "crate_military",
+      "size": 192,
+      "prompt": "A dark olive green metal military crate with black latches and carry handles, stenciled shape without letters, rectangular (about 3:2)."
+    },
+    {
+      "id": "crate_open",
+      "size": 192,
+      "prompt": "An open wooden crate with the lid leaning on its side, filled with straw padding, empty inside."
+    },
+    {
+      "id": "sandbags_corner",
+      "size": 224,
+      "prompt": "An L-shaped corner wall of stacked tan sandbags seen from directly above, two rows thick, one arm going right and one arm going down, a right angle, no curve."
+    },
+    {
+      "id": "car_wreck_burnt",
+      "size": 320,
+      "prompt": "A burnt-out sedan car wreck seen from directly above, charred black and rust-brown body, no glass, scorched seats visible, horizontal, facing right."
+    },
+    {
+      "id": "car_wreck_pickup",
+      "size": 320,
+      "prompt": "An abandoned rusty pickup truck seen from directly above, faded green paint, open cargo bed with a spare tire and junk in it, cracked windshield, horizontal, facing right."
+    },
+    {
+      "id": "fence_wood",
+      "size": 256,
+      "prompt": "A straight segment of weathered wooden plank fence seen from directly above, horizontal, long and very narrow (about 6:1), fence post tops visible at both ends and the middle."
+    },
+    {
+      "id": "fence_corrugated",
+      "size": 256,
+      "prompt": "A straight segment of rusty corrugated metal sheet fence seen from directly above, horizontal, long and very narrow (about 6:1), metal posts at both ends."
+    },
+    {
+      "id": "fence_barbed",
+      "size": 256,
+      "prompt": "A straight segment of barbed wire coil (concertina wire) on short wooden posts seen from directly above, horizontal, long and narrow (about 5:1), gray steel wire loops."
+    },
+    {
+      "id": "rug_red",
+      "size": 256,
+      "prompt": "A flat rectangular modern rug lying on the floor seen from directly above, plain deep brick-red with a simple cream double-stripe border inset from the edge, no ornament, no medallion, no pattern in the center, a few worn lighter patches."
+    },
+    {
+      "id": "rug_round",
+      "size": 224,
+      "prompt": "A flat round braided rag rug lying on the floor seen from directly above, concentric rings of muted blue, beige and brown."
+    },
+    {
+      "id": "debris_bricks",
+      "size": 192,
+      "prompt": "A low scattered pile of broken red bricks and chunks of gray plaster rubble seen from directly above, flat on the ground."
+    },
+    {
+      "id": "debris_planks",
+      "size": 192,
+      "prompt": "A few broken wooden planks and splinters lying scattered on the ground seen from directly above, with a couple of bent nails."
+    },
+    {
+      "id": "debris_papers",
+      "size": 160,
+      "prompt": "Scattered sheets of paper, a torn cardboard box flap and an empty can lying flat on the floor seen from directly above, papers blank with no text."
+    },
+    {
+      "id": "barrel_blue",
+      "size": 128,
+      "prompt": "A blue plastic chemical barrel seen from above: circular top with two small bung caps and a raised rim."
+    },
+    {
+      "id": "barrel_stack",
+      "size": 224,
+      "prompt": "A tight group of three rusty metal oil barrels standing together seen from above, circular tops with rims, one red, one rust-brown, one olive."
+    },
+    {
+      "id": "barrel_tipped",
+      "size": 192,
+      "prompt": "A rusty red metal oil barrel lying on its side seen from directly above, horizontal, with a small dark puddle of spilled oil at its open end."
+    },
+    {
+      "id": "lamp_post",
+      "size": 192,
+      "prompt": "A street lamp post seen from directly above: small round concrete base, a long thin metal arm reaching right, and a lamp head with a warm yellow glass at the end of the arm."
+    },
+    {
+      "id": "sign_post",
+      "size": 160,
+      "prompt": "A blank roadside metal sign seen from above at a slight angle: a square plate on a single pole, faded white face with a red border, NO text, NO symbols."
+    },
+    {
+      "id": "sign_board",
+      "size": 192,
+      "prompt": "A blank wooden notice board on two posts seen from above at a slight angle, weathered planks, a couple of torn blank paper notices pinned to it, NO text."
+    }
+  ]
+}
