@@ -1,0 +1,90 @@
+{
+  "about": "Loot container art: one closed and one opened-empty sprite per ContainerKind (packages/shared/src/map/types.ts). Same schema as art/sprites.json; run like art/map-v2.json (work dir whose art/sprites.json points here). Raw 1024 px generations in art/raw/containers/, game-ready PNGs copied to apps/web/public/sprites/. Tier is shown in-engine by the glow ring colour (RARITY_COLORS), not baked into the art.",
+  "run": "work dir W: W/art/sprites.json -> art/containers.json, W/art/raw -> art/raw/containers, W/art/style-test -> art/style-test, W/scripts -> scripts, W/.env -> .env, W/art/sprites = output; then `node scripts/gen-sprites.mjs` in W.",
+  "style": "Game sprite in exactly the art style of the reference image (bright stylized cartoon like ZombsRoyale, flat colors, soft shading, thick dark outlines, chunky readable shapes).",
+  "view": "Seen from high above at a steep angle (mostly top-down, the top fully visible and only a thin strip of the front face showing), so the object is instantly readable in a top-down shooter.",
+  "isolate": "Centered, single isolated object filling about 70% of the frame, on a perfectly flat solid pure magenta background (#FF00FF), no gradient, no ground texture, no cast shadow, no text, no letters, no logos.",
+  "tile": "",
+  "sprites": [
+    {
+      "id": "box_crate",
+      "size": 192,
+      "prompt": "A closed wooden supply crate with an X brace on the lid and metal corner brackets."
+    },
+    {
+      "id": "box_crate_open",
+      "size": 192,
+      "prompt": "The same wooden supply crate with its lid removed and leaning against its side, completely EMPTY inside (bare wooden bottom, a few loose straw bits)."
+    },
+    {
+      "id": "box_toolbox",
+      "size": 192,
+      "prompt": "A closed red metal toolbox with a gray carry handle on top and two silver latches."
+    },
+    {
+      "id": "box_toolbox_open",
+      "size": 192,
+      "prompt": "The same red metal toolbox opened wide, the lid and the cantilever trays folded out, all trays completely EMPTY."
+    },
+    {
+      "id": "box_fridge",
+      "size": 192,
+      "prompt": "A closed old retro refrigerator, pale mint-white with a chrome handle, standing upright, door shut."
+    },
+    {
+      "id": "box_fridge_open",
+      "size": 192,
+      "prompt": "The same old retro mint-white refrigerator with its door swung wide open, the inside shelves completely EMPTY, dim inside."
+    },
+    {
+      "id": "box_pc",
+      "size": 192,
+      "prompt": "A beige desktop computer: a chunky CRT monitor with a glowing blue screen next to a beige PC tower case with a power button, keyboard in front. Clearly a computer."
+    },
+    {
+      "id": "box_pc_open",
+      "size": 192,
+      "prompt": "The same beige desktop computer, but the PC tower side panel is removed and lying next to it, the case is gutted and EMPTY inside (no parts), the CRT screen is dark and off."
+    },
+    {
+      "id": "box_med_case",
+      "size": 192,
+      "prompt": "A closed white hard-shell medical case with a big red cross on the lid, a gray handle and latches."
+    },
+    {
+      "id": "box_med_case_open",
+      "size": 192,
+      "prompt": "The same white medical case with a red cross, lid flipped open, the inside foam compartments completely EMPTY."
+    },
+    {
+      "id": "box_weapon_box",
+      "size": 192,
+      "prompt": "A long closed olive-green military weapon case (rifle crate) with black metal latches and rope handles, horizontal."
+    },
+    {
+      "id": "box_weapon_box_open",
+      "size": 192,
+      "prompt": "The same long olive-green military weapon case with its lid flipped open, the inside is plain light-gray egg-crate foam, completely EMPTY: NO gun, NO rifle, NO weapon shape, no dark silhouettes, just bare foam."
+    },
+    {
+      "id": "box_safe",
+      "size": 192,
+      "prompt": "A heavy closed dark steel safe with a big round combination dial and a chrome lever handle on the door, riveted edges."
+    },
+    {
+      "id": "box_safe_open",
+      "size": 192,
+      "prompt": "The same heavy dark steel safe with its thick door swung open, the inside shelves completely EMPTY."
+    },
+    {
+      "id": "box_stash",
+      "size": 192,
+      "prompt": "A hidden ground stash: a tied olive canvas duffel bag half-covered by a camouflage tarp, a few leaves and twigs on top."
+    },
+    {
+      "id": "box_stash_open",
+      "size": 192,
+      "prompt": "The same hidden ground stash after being looted: the camouflage tarp pulled back and the olive canvas duffel bag lying open, flat and completely EMPTY, a few leaves around."
+    }
+  ]
+}
