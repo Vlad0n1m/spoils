@@ -27,6 +27,7 @@ import {
 } from "@/lib/lobby/news-seen";
 import { unlocksBetween } from "@/lib/lobby/levels";
 import { LATEST_POST_ID } from "@/content/news";
+import { socialDotCount } from "@/lib/social/menu";
 import { playUi } from "@/game/audio/ui-sounds";
 import { BattleScreen } from "@/components/battle-screen";
 import type { RoomExit } from "@/lib/room-exit";
@@ -40,6 +41,9 @@ import { MenuTopBar } from "./menu-top-bar";
 import { MobileDock } from "./mobile-dock";
 import { MoreSheet } from "./more-sheet";
 import { Panel, type PanelVariant } from "./panel";
+import { PartyProvider, useParty } from "./party-context";
+import { PartyPrompts } from "./party-prompts";
+import { PartyStrip } from "./party-strip";
 import { PlayButton, PlayMiniChip } from "./play-button";
 import { PlayController, type BattleStart, type RetryRequest } from "./play-controller";
 import { SideButton, MENU_ICONS } from "./side-button";
@@ -51,6 +55,7 @@ import { ShopPanel } from "./panels/shop-panel";
 import { InfoPanel } from "./panels/info-panel";
 import { NewsPanel } from "./panels/news-panel";
 import { LeaderboardsPanel } from "./panels/leaderboards-panel";
+import { FriendsPanel } from "./panels/friends-panel";
 
 const VARIANT: Record<LobbyPanel, PanelVariant> = {
   inventory: "screen",
@@ -58,6 +63,7 @@ const VARIANT: Record<LobbyPanel, PanelVariant> = {
   info: "drawer-left",
   news: "drawer-right",
   leaderboards: "drawer-right-wide",
+  friends: "drawer-right",
 };
 
 /** "Settling your last raid…" (exit_settling): re-join after this long, at most this many times. */
@@ -115,23 +121,25 @@ export function MainMenu({ initialPanel }: { initialPanel: PanelState }) {
 
   return (
     <LobbyProvider active={!battle}>
-      {mounted ? (
-        <MenuScreen initialPanel={initialPanel} hidden={Boolean(battle)} onBattle={onBattle} retry={retry} />
-      ) : (
-        <div className="relative h-[100dvh] overflow-hidden bg-[#090b08]" aria-busy="true">
-          <LobbyBackdrop />
-        </div>
-      )}
-      {battle && user && (
-        <BattleScreen
-          key={`${battle.roomId}:${battle.ticket.entryId ?? battle.ticket.issuedAt}`}
-          ticket={battle.ticket}
-          battleRoomId={battle.roomId}
-          nickname={user.nickname}
-          onLeave={onLeave}
-          onRetry={onRetry}
-        />
-      )}
+      <PartyProvider active={!battle}>
+        {mounted ? (
+          <MenuScreen initialPanel={initialPanel} hidden={Boolean(battle)} onBattle={onBattle} retry={retry} />
+        ) : (
+          <div className="relative h-[100dvh] overflow-hidden bg-[#090b08]" aria-busy="true">
+            <LobbyBackdrop />
+          </div>
+        )}
+        {battle && user && (
+          <BattleScreen
+            key={`${battle.roomId}:${battle.ticket.entryId ?? battle.ticket.issuedAt}`}
+            ticket={battle.ticket}
+            battleRoomId={battle.roomId}
+            nickname={user.nickname}
+            onLeave={onLeave}
+            onRetry={onRetry}
+          />
+        )}
+      </PartyProvider>
     </LobbyProvider>
   );
 }
@@ -149,6 +157,10 @@ function MenuScreen({
 }) {
   const lobby = useLobby();
   const { sessionKind, registered, stash, status, me, reloadMe, reloadStatus, refreshSession, toast } = lobby;
+  const { state: social } = useParty();
+  /** Friends dot: incoming friend requests or party invites. */
+  const socialDot = socialDotCount(social) > 0;
+  const inParty = registered && Boolean(social?.party);
 
   // ---- panels (URL state through the native history API: Next keeps useSearchParams in sync)
   const sp = useSearchParams();
@@ -272,7 +284,7 @@ function MenuScreen({
       ? lastRaid
       : null;
 
-  // ---- hotkeys: I, B, L, N, H (desktop, not while typing, not over a sheet or modal)
+  // ---- hotkeys: I, B, L, N, H, F (desktop, not while typing, not over a sheet or modal)
   const blocked = panel.panel !== null || signIn || guest || more || levelUp !== null;
   useEffect(() => {
     if (hidden) return;
@@ -305,7 +317,7 @@ function MenuScreen({
     [panel.panel, onBattle],
   );
 
-  const locked = (what: "Friends" | "Guilds") => {
+  const locked = (what: "Guilds") => {
     playUi("error");
     toast(`${what} are coming soon`);
   };
@@ -326,6 +338,8 @@ function MenuScreen({
         return <NewsPanel tab={panel.tab ?? "feed"} />;
       case "leaderboards":
         return <LeaderboardsPanel board={(panel.tab ?? "level") as LeaderboardBoard} period={panel.period ?? "week"} onPeriod={setPeriod} />;
+      case "friends":
+        return <FriendsPanel tab={panel.tab ?? "friends"} onTab={setTab} />;
       default:
         return null;
     }
@@ -373,11 +387,24 @@ function MenuScreen({
               <MobileDock
                 active={panel.panel}
                 newsDot={newsDot}
+                moreDot={socialDot}
                 moreOpen={more}
                 onMore={() => setMore(true)}
                 onPanel={(p) => openPanel(p)}
               />
-              <PlayButton onFixInventory={() => openPanel("inventory", "loadout")} />
+              {/* The party strip rides on top of PLAY in the same grid row (the row count stays put); on a
+                  landscape phone (≤ 500 px tall) it sits beside a narrower PLAY to save height. */}
+              <div
+                className={clsx(
+                  "min-w-0",
+                  inParty && "[@media(max-height:500px)]:flex [@media(max-height:500px)]:items-center [@media(max-height:500px)]:gap-2",
+                )}
+              >
+                <PartyStrip onInvite={() => openPanel("friends", "friends")} />
+                <div className={clsx(inParty && "[@media(max-height:500px)]:w-[min(19rem,48%)] [@media(max-height:500px)]:shrink-0")}>
+                  <PlayButton onFixInventory={() => openPanel("inventory", "loadout")} />
+                </div>
+              </div>
               {showCard && (
                 <div className="absolute bottom-44 left-3 z-10 hidden max-h-[calc(100%-16rem)] w-60 overflow-y-auto lg:block">
                   <LastRaidCard raid={lastRaid} onDismiss={dismissCard} />
@@ -394,7 +421,14 @@ function MenuScreen({
                 active={panel.panel === "leaderboards"}
                 onClick={() => openPanel("leaderboards")}
               />
-              <SideButton label="Friends" icon={MENU_ICONS.friends} locked onClick={() => locked("Friends")} />
+              <SideButton
+                label="Friends"
+                icon={MENU_ICONS.friends}
+                hotkey="F"
+                dot={socialDot}
+                active={panel.panel === "friends"}
+                onClick={() => openPanel("friends")}
+              />
               <SideButton label="Guilds" icon={MENU_ICONS.guilds} locked onClick={() => locked("Guilds")} />
             </nav>
           </div>
@@ -430,6 +464,11 @@ function MenuScreen({
               setMore(false);
               openPanel("info");
             }}
+            friendsDot={socialDot}
+            onFriends={() => {
+              setMore(false);
+              openPanel("friends");
+            }}
             onLocked={(w) => {
               setMore(false);
               locked(w);
@@ -460,6 +499,7 @@ function MenuScreen({
             onClose={() => setLevelUpDone(levelUp.entryId)}
           />
         )}
+        <PartyPrompts hidden={hidden || signIn || guest || more || levelUp !== null} />
         <MenuToast />
       </div>
     </PlayController>

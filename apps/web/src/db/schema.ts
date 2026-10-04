@@ -781,3 +781,120 @@ export type Listing = typeof listings.$inferSelect;
 export type Trade = typeof trades.$inferSelect;
 export type WalletLinkNonce = typeof walletLinkNonces.$inferSelect;
 export type ChainEventRow = typeof chainEvents.$inferSelect;
+
+// ---------------------------------------------------------------------------- friends and parties
+
+/**
+ * Friend pairs (lib/social/friends.ts, migration 005). One row per unordered pair: user_lo < user_hi,
+ * so a pair cannot exist twice in either order. `pending` (requested_by sent it) → `accepted`; a
+ * declined or cancelled request and a removed friend delete the row. Registered users only.
+ */
+export const friendships = pgTable(
+  "friendships",
+  {
+    userLo: uuid("user_lo")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    userHi: uuid("user_hi")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    requestedBy: uuid("requested_by").notNull(),
+    status: text("status").$type<"pending" | "accepted">().notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userLo, t.userHi] }),
+    hi: index("friendships_user_hi_idx").on(t.userHi),
+    ordered: check("friendships_ordered_pair", sql`${t.userLo} < ${t.userHi}`),
+    requester: check("friendships_requester_in_pair", sql`${t.requestedBy} = ${t.userLo} or ${t.requestedBy} = ${t.userHi}`),
+    status: check("friendships_status", sql`${t.status} in ('pending', 'accepted')`),
+  }),
+);
+
+/** Menu presence: the last social poll (GET /api/party, /api/friends), written at most every 20 s. */
+export const userPresence = pgTable("user_presence", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  seenAt: timestamp("seen_at", { withTimezone: true }).notNull(),
+});
+
+/** A party of 2–4 (lib/social/party.ts). The leader is always one of its members. */
+export const parties = pgTable("parties", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  leaderId: uuid("leader_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+/** Party membership; the primary key on user_id is the one-party-per-user rule. */
+export const partyMembers = pgTable(
+  "party_members",
+  {
+    userId: uuid("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    partyId: uuid("party_id")
+      .notNull()
+      .references(() => parties.id, { onDelete: "cascade" }),
+    /** "Follow leader": the menu drops in on its own when the leader does (shown as ready). */
+    follow: boolean("follow").notNull().default(false),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    party: index("party_members_party_idx").on(t.partyId),
+  }),
+);
+
+/** Pending party invites (accept / decline / cancel / kick delete them); dead after expires_at. */
+export const partyInvites = pgTable(
+  "party_invites",
+  {
+    partyId: uuid("party_id")
+      .notNull()
+      .references(() => parties.id, { onDelete: "cascade" }),
+    toId: uuid("to_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    fromId: uuid("from_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.partyId, t.toId] }),
+    to: index("party_invites_to_idx").on(t.toId),
+  }),
+);
+
+/**
+ * Party drops (@extract/shared PartyDropInfo): the leader pressed PLAY; members may follow with this
+ * drop_id (signed into their JoinTicket) until expires_at. members = userIds at drop time.
+ */
+export const partyDrops = pgTable(
+  "party_drops",
+  {
+    dropId: uuid("drop_id").primaryKey(),
+    partyId: uuid("party_id")
+      .notNull()
+      .references(() => parties.id, { onDelete: "cascade" }),
+    cycle: integer("cycle").notNull(),
+    matchId: uuid("match_id").notNull(),
+    leaderId: uuid("leader_id").notNull(),
+    members: jsonb("members").$type<string[]>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    partyAt: index("party_drops_party_created_idx").on(t.partyId, t.createdAt),
+  }),
+);
+
+export type Friendship = typeof friendships.$inferSelect;
+export type Party = typeof parties.$inferSelect;
+export type PartyMember = typeof partyMembers.$inferSelect;
+export type PartyInvite = typeof partyInvites.$inferSelect;
+export type PartyDropRow = typeof partyDrops.$inferSelect;

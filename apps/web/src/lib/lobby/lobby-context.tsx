@@ -143,6 +143,8 @@ export interface PlayValue {
   disarm: () => void;
   /** Join right now (error "Try again"). */
   join: () => void;
+  /** Join right now following the party leader's drop (party prompt "PLAY"). */
+  joinDrop: (dropId: string) => void;
 }
 
 const PlayCtx = createContext<PlayValue | null>(null);

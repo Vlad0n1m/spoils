@@ -34,9 +34,10 @@ export function LockSticker({ className }: { className?: string }) {
 
 /**
  * Main-menu side button (WORLD v6 spec §6.1): a 104 px tile (116 px at ≥ 1440, 84 px on tablets)
- * with a 64 px icon and a Luckiest Guy label; lime while its panel is open. `locked` tiles (Friends,
- * Guilds) stay focusable with aria-disabled, show a grey icon, a padlock and a SOON ribbon, and
- * only toast on click. `dot` = unread marker (News), `hotkey` = desktop key hint.
+ * with a 64 px icon and a Luckiest Guy label; lime while its panel is open. `locked` tiles (Guilds)
+ * stay focusable with aria-disabled, show a grey icon, a padlock and a SOON ribbon, and
+ * only toast on click. `dot` = unread marker (News; Friends: requests or party invites), `hotkey` =
+ * desktop key hint.
  */
 export const SideButton = forwardRef<
   HTMLButtonElement,

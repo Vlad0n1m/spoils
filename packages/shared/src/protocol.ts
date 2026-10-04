@@ -94,6 +94,11 @@ export const S2C = {
   SETTLED: "settled",
   /** { t } echo of PING. */
   PONG: "pong",
+  /**
+   * PartyMsg (party.ts), to one party member at ~PARTY.POS_HZ while a party mate shares the shard:
+   * the mates' positions [{key, x, y, alive}]. Defined for the game server step; not sent yet.
+   */
+  PARTY: "party",
 } as const;
 
 export interface SwitchMsg {

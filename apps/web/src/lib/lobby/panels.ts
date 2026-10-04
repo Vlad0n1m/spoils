@@ -2,9 +2,10 @@
  * Main-menu panels and their URL (WORLD v6 spec §6.3; replaces the old `?tab=` lobby tabs).
  * `/play?panel=…&tab=…&period=…`. Plain module: the server page parses it, the client menu renders
  * it, the tests cover it. Old links keep working: `?tab=raid|loadout|stash|market` map to none /
- * Inventory·Loadout / Inventory·Stash / Shop·Market. Friends and Guilds are locked: no panel.
+ * Inventory·Loadout / Inventory·Stash / Shop·Market. Friends (friends, requests, party) has a panel;
+ * Guilds is still locked: no panel.
  */
-export const LOBBY_PANELS = ["inventory", "shop", "info", "news", "leaderboards"] as const;
+export const LOBBY_PANELS = ["inventory", "shop", "info", "news", "leaderboards", "friends"] as const;
 export type LobbyPanel = (typeof LOBBY_PANELS)[number];
 
 export const PANEL_TABS = {
@@ -13,6 +14,7 @@ export const PANEL_TABS = {
   info: ["howto", "rules", "controls"],
   news: ["feed", "patch"],
   leaderboards: ["level", "kills", "npc"],
+  friends: ["friends", "requests", "party"],
 } as const satisfies Record<LobbyPanel, readonly string[]>;
 export type PanelTab<P extends LobbyPanel = LobbyPanel> = (typeof PANEL_TABS)[P][number];
 
@@ -27,6 +29,7 @@ export const PANEL_LABEL: Readonly<Record<LobbyPanel, string>> = {
   info: "Info",
   news: "News",
   leaderboards: "Leaderboards",
+  friends: "Friends",
 };
 
 export const TAB_LABEL: Readonly<Record<string, string>> = {
@@ -42,15 +45,19 @@ export const TAB_LABEL: Readonly<Record<string, string>> = {
   level: "Level",
   kills: "Raider kills",
   npc: "NPC kills",
+  friends: "Friends",
+  requests: "Requests",
+  party: "Party",
 };
 
-/** Desktop hotkeys (not while typing): I, B, L, N, H. */
+/** Desktop hotkeys (not while typing): I, B, L, N, H, F. */
 export const PANEL_HOTKEYS: Readonly<Record<string, LobbyPanel>> = {
   KeyI: "inventory",
   KeyB: "shop",
   KeyL: "leaderboards",
   KeyN: "news",
   KeyH: "info",
+  KeyF: "friends",
 };
 
 export interface PanelState {
