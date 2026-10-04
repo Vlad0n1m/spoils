@@ -113,6 +113,8 @@ export const CONTAINER = {
   AMMO_QTY_MULT: [0.34, 0.5, 0.5, 0.15, 0.1] as readonly number[],
   /** Medkits only in containers of at least this tier. */
   MEDKIT_MIN_TIER: 3,
+  /** Weapons v2: hand grenades only in containers of at least this tier (WEAPONS_V2 §7). */
+  GRENADE_MIN_TIER: 2,
   /** Demo mode: CHEST_TABLES unique rolls only in containers of at least this tier. */
   DEMO_UNIQUE_MIN_TIER: 3,
 } as const;
@@ -139,8 +141,9 @@ export const CONTAINER_LOOT: Readonly<Record<ContainerKind, readonly ContainerLo
     { def: "junk_canned", weight: 70, qty: 1 }, { def: "junk_bolts", weight: 90, qty: 1 },
     { def: "junk_wires", weight: 60, qty: 1 }, { def: "junk_battery", weight: 40, qty: 1 },
     { def: "junk_fuel", weight: 25, qty: 1 },
-    { def: "ammo_light", weight: 40, qty: 30 }, { def: "ammo_shell", weight: 20, qty: 10 },
-    { def: "bandage", weight: 12, qty: 1 },
+    // Weapons v2: bolts (4) replace part of the light ammo (40 → 36); the table weight stays 537.
+    { def: "ammo_light", weight: 36, qty: 30 }, { def: "ammo_shell", weight: 20, qty: 10 },
+    { def: "bandage", weight: 12, qty: 1 }, { def: "ammo_bolt", weight: 4, qty: 6 },
   ],
   // Industrial.
   toolbox: [
@@ -168,9 +171,12 @@ export const CONTAINER_LOOT: Readonly<Record<ContainerKind, readonly ContainerLo
   // Military.
   weapon_box: [
     // v5 iteration 2: heavy (sniper) ammo 15 → 8: high CR-eq, no use to the rifle / shotgun kits.
-    { def: "ammo_light", weight: 40, qty: 30 }, { def: "ammo_shell", weight: 25, qty: 10 },
+    // Weapons v2: bolts 4 and grenades 4 (T2+ only, GRENADE_MIN_TIER) replace light 40 → 36 and
+    // shells 25 → 21; the table weight stays 148 (value per tier: docs/WEAPONS_V2.md §6).
+    { def: "ammo_light", weight: 36, qty: 30 }, { def: "ammo_shell", weight: 21, qty: 10 },
     { def: "ammo_heavy", weight: 8, qty: 10 }, { def: "junk_bolts", weight: 30, qty: 1 },
     { def: "junk_battery", weight: 40, qty: 1 }, { def: "junk_keycard", weight: 5, qty: 1 },
+    { def: "ammo_bolt", weight: 4, qty: 6 }, { def: "grenade", weight: 4, qty: 1 },
   ],
   // Long search, valuables only (T3/T4 safes keep a little gold chain and GPU).
   safe: [
@@ -204,6 +210,7 @@ export function containerLootFor(spot: { kind: ContainerKind; tier: number }): r
       if (!d) continue;
       if (d.cat === "junk" && (d.value ?? 0) > CONTAINER.JUNK_VALUE_CAP[tier]!) continue;
       if (e.def === "medkit" && tier < CONTAINER.MEDKIT_MIN_TIER) continue;
+      if (d.cat === "throwable" && tier < CONTAINER.GRENADE_MIN_TIER) continue;
       const qty = d.cat === "ammo" ? Math.max(1, Math.round(e.qty * CONTAINER.AMMO_QTY_MULT[tier]!)) : e.qty;
       out.push({ def: e.def, weight: e.weight, qty: Math.min(qty, d.stack) });
     }
@@ -285,17 +292,19 @@ export const FLOOR_LOOT = {
     { def: "bandage", qty: 1, weight: 15 }, { def: "junk_apple", qty: 1, weight: 10 },
     { def: "junk_bolts", qty: 1, weight: 10 },
   ] as readonly FloorLootEntry[],
-  /** Tier 2. */
+  /** Tier 2. Weapons v2: bolts 3 replace light 40 → 37 (weight 92 kept). */
   MID: [
-    { def: "ammo_light", qty: 15, weight: 40 }, { def: "ammo_shell", qty: 5, weight: 20 },
+    { def: "ammo_light", qty: 15, weight: 37 }, { def: "ammo_shell", qty: 5, weight: 20 },
     { def: "ammo_heavy", qty: 5, weight: 5 }, { def: "bandage", qty: 1, weight: 12 },
     { def: "junk_wires", qty: 1, weight: 10 }, { def: "junk_pills", qty: 1, weight: 5 },
+    { def: "ammo_bolt", qty: 3, weight: 3 },
   ] as readonly FloorLootEntry[],
-  /** Tiers 3–4. */
+  /** Tiers 3–4. Weapons v2: bolts 3 + grenade 2 replace light 35 → 32 and shells 18 → 16 (weight 80 kept). */
   HIGH: [
-    { def: "ammo_light", qty: 30, weight: 35 }, { def: "ammo_shell", qty: 10, weight: 18 },
+    { def: "ammo_light", qty: 30, weight: 32 }, { def: "ammo_shell", qty: 10, weight: 16 },
     { def: "ammo_heavy", qty: 10, weight: 6 }, { def: "bandage", qty: 1, weight: 10 },
     { def: "medkit", qty: 1, weight: 4 }, { def: "junk_battery", qty: 1, weight: 7 },
+    { def: "ammo_bolt", qty: 3, weight: 3 }, { def: "grenade", qty: 1, weight: 2 },
   ] as readonly FloorLootEntry[],
   /** Demo mode: chance of a common rifle/shotgun instead, on spots of tier >= DEMO_GUN_MIN_TIER. */
   DEMO_GUN_CHANCE: 0.1,
@@ -333,6 +342,35 @@ export function templateKey(item: { def: string; rarity: number }): TemplateKey 
   return null;
 }
 
+/**
+ * Weapons v2 (docs/WEAPONS_V2.md §9): guns whose market templates have NO reference price in the
+ * market currency yet — Vlad sets them. Until then the demo seed never lists them (apps/web
+ * economy/seed.ts npcPriceMinor → null) and the market shows "no reference price yet"; trades still
+ * work and build the price index like any template. Remove a gun from here once it is priced.
+ */
+export const UNPRICED_WEAPONS: ReadonlySet<WeaponId> = new Set<WeaponId>(["smg", "lmg", "revolver", "crossbow"]);
+
+/** Does this market template have a reference price (false = a Weapons v2 gun not priced yet)? */
+export function templateRefPriced(template: string): boolean {
+  const [cat, w] = template.split(":");
+  return !(cat === "weapon" && w !== undefined && UNPRICED_WEAPONS.has(w as WeaponId));
+}
+
+/**
+ * Every weapon template that exists in live play (WeaponDef.minRarity: no common LMG or crossbow),
+ * in WEAPON_IDS × rarity order, with its reference-price status.
+ */
+export function liveWeaponTemplates(): Array<{ template: TemplateKey; weapon: WeaponId; rarity: Rarity; priced: boolean }> {
+  const out: Array<{ template: TemplateKey; weapon: WeaponId; rarity: Rarity; priced: boolean }> = [];
+  for (const w of Object.keys(WEAPONS) as WeaponId[]) {
+    for (const r of [0, 1, 2, 3] as const) {
+      if (r < (WEAPONS[w].minRarity ?? 0)) continue;
+      out.push({ template: `weapon:${w}:${r}`, weapon: w, rarity: r, priced: !UNPRICED_WEAPONS.has(w) });
+    }
+  }
+  return out;
+}
+
 /** DB % → in-raid armor absorb points. */
 export function armorPoints(maxPoints: number, durPct: number): number {
   return (maxPoints * Math.max(0, Math.min(100, durPct))) / 100;
@@ -359,13 +397,19 @@ export interface EconItem {
 
 // ---------------------------------------------------------------- traders (consumables only in v2)
 
-export type ConsumableId = "bandage" | "medkit" | "ammo_light" | "ammo_shell" | "ammo_heavy";
+export type ConsumableId = "bandage" | "medkit" | "ammo_light" | "ammo_shell" | "ammo_heavy" | "ammo_bolt" | "grenade";
+/**
+ * Junker offers (CR only, never SOL). Weapons v2: bolts and the hand grenade at the CR prices
+ * proposed in docs/WEAPONS_V2.md §7 (Vlad to confirm).
+ */
 export const CONSUMABLES_CR: Readonly<Record<ConsumableId, { qty: number; cr: number }>> = {
   bandage: { qty: 1, cr: 60 },
   medkit: { qty: 1, cr: 220 },
   ammo_light: { qty: 30, cr: 45 },
   ammo_shell: { qty: 10, cr: 60 },
   ammo_heavy: { qty: 10, cr: 110 },
+  ammo_bolt: { qty: 5, cr: 90 },
+  grenade: { qty: 1, cr: 180 },
 };
 
 /**
@@ -384,6 +428,12 @@ export const BOUND_OFFERS: readonly BoundOffer[] = [
   { trader: "outfitter", def: "backpack_2", rarity: 1, cr: 2200, traderLevel: 3 },
   { trader: "outfitter", def: "armor_2", rarity: 1, cr: 2600, traderLevel: 3 },
   { trader: "gunsmith", def: "sniper", rarity: 0, cr: 3200, traderLevel: 3 },
+  // Weapons v2 (docs/WEAPONS_V2.md §7.3): CR prices are a proposal for Vlad. LMG and crossbow exist
+  // only at rare and above (WeaponDef.minRarity); they fill the empty trader tier 4.
+  { trader: "gunsmith", def: "smg", rarity: 0, cr: 1600, traderLevel: 2 },
+  { trader: "gunsmith", def: "revolver", rarity: 0, cr: 2400, traderLevel: 3 },
+  { trader: "gunsmith", def: "crossbow", rarity: 1, cr: 3600, traderLevel: 4 },
+  { trader: "gunsmith", def: "lmg", rarity: 1, cr: 4500, traderLevel: 4 },
 ];
 
 /**
@@ -704,10 +754,11 @@ export const BOSSES: Readonly<Record<BossKind, BossDef>> = {
   commander: {
     kind: "commander", name: "Commander", guardName: "Radar guard", enabled: true,
     spawnChance: BOSS_CHANCE.commander, hp: 250, armor: 1, weapon: "rifle", weaponRarity: 2,
+    // Weapons v2 (WEAPONS_V2 §8): the third guard carries a FREE light machine gun (never drops).
     guards: [
       { weapon: "rifle", rarity: 1, armor: 1, hp: 80 },
       { weapon: "rifle", rarity: 0, armor: 1, hp: 80 },
-      { weapon: "rifle", rarity: 0, armor: 1, hp: 80 },
+      { weapon: "lmg", rarity: 0, armor: 1, hp: 80 },
     ],
     poolSlots: [2, 1, 1],
     junk: [
@@ -720,9 +771,10 @@ export const BOSSES: Readonly<Record<BossKind, BossDef>> = {
   foreman: {
     kind: "foreman", name: "Foreman", guardName: "Elevator thug", enabled: true,
     spawnChance: BOSS_CHANCE.foreman, hp: 240, armor: 2, weapon: "shotgun", weaponRarity: 1,
+    // Weapons v2 (WEAPONS_V2 §8): the second guard's pistol becomes a FREE revolver.
     guards: [
       { weapon: "rifle", rarity: 0, armor: 1, hp: 90 },
-      { weapon: "pistol", rarity: 0, armor: 1, hp: 90 },
+      { weapon: "revolver", rarity: 0, armor: 1, hp: 90 },
     ],
     poolSlots: [2, 1],
     junk: [
@@ -886,7 +938,7 @@ export function rollBossJunk(matchSeed: number, kind: BossKind): RolledFungible[
  * weapon's ammo per kind (was 30 / 10 / 10) and a bandage with BANDAGE_CHANCE (was always 1).
  */
 export const GUARD_DROP = {
-  AMMO: { light: 15, shell: 5, heavy: 5 } as const,
+  AMMO: { light: 15, shell: 5, heavy: 5, bolt: 0 } as const,
   BANDAGE_CHANCE: 0.5,
 } as const;
 

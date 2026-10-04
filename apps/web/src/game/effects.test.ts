@@ -117,3 +117,32 @@ describe("Effects pools", () => {
     fx.destroy();
   });
 });
+
+describe("Weapons v2 shots", () => {
+  it("the crossbow flies a bolt sprite and has no muzzle flash; other guns flash", () => {
+    const fx = new Effects({ textures: TEX, bolt: Texture.WHITE });
+    fx.shot(null, "a", "crossbow", 0, 0, 10, 0, [0], false, 0);
+    let st = fx.stats();
+    assert.equal(st.tracers, 1);
+    assert.equal(st.flashes, 0, "no flash");
+    assert.equal(st.bolts, 1, "one bolt sprite");
+    assert.equal(st.pooledSprites, 0, "no tracer streak");
+    // The bolt is gone once it reached the end of its flight (range / speed), and its sprite is reused.
+    fx.update((WEAPONS.crossbow.range / WEAPONS.crossbow.bulletSpeed) * 1000 + 20, 16, 800, 600);
+    assert.equal(fx.stats().tracers, 0);
+    fx.shot(null, "a", "crossbow", 0, 0, 10, 0, [0], false, 2000);
+    assert.equal(fx.stats().bolts, 1, "the bolt sprite was reused");
+    for (const w of ["smg", "lmg", "revolver"] as const) fx.shot(null, "b", w, 0, 0, 10, 0, [0], false, 3000);
+    st = fx.stats();
+    assert.equal(st.flashes, 3);
+    fx.destroy();
+  });
+
+  it("without the bolt texture a crossbow shot falls back to a streak (still no flash)", () => {
+    const fx = new Effects({ textures: TEX });
+    fx.shot(null, "a", "crossbow", 0, 0, 10, 0, [0], false, 0);
+    const st = fx.stats();
+    assert.deepEqual([st.tracers, st.pooledSprites, st.bolts, st.flashes], [1, 2, 0, 0]);
+    fx.destroy();
+  });
+});

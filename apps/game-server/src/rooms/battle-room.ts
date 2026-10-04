@@ -210,6 +210,14 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
       const kind = (raw as { kind?: unknown } | null)?.kind;
       if (kind === "bandage" || kind === "medkit") this.match.heal(client.sessionId, kind);
     });
+    // Weapons v2: ThrowMsg { a: angle, d: 0..1 } — the sim validates everything else.
+    this.onMessage(C2S.THROW, (client, raw: unknown) => {
+      if (!ok(client)) return;
+      const m = raw as { a?: unknown; d?: unknown } | null;
+      const a = typeof m?.a === "number" && Number.isFinite(m.a) ? m.a : NaN;
+      const d = typeof m?.d === "number" && Number.isFinite(m.d) ? m.d : 1;
+      if (Number.isFinite(a)) this.match.throwGrenade(client.sessionId, a, d);
+    });
     this.onMessage(C2S.PING, (client, raw: unknown) => {
       if (!ok(client)) return;
       const t = (raw as { t?: unknown } | null)?.t;

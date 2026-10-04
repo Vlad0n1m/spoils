@@ -127,6 +127,8 @@ describe("SFX registry", () => {
       "siren", "extract_beep", "extract_success", "heartbeat",
       "ui_click", "ui_hover", "ui_coin", "ui_error", "ui_equip",
       "thunder_near", "thunder_far", "bird", "loop_wind", "loop_rain", "loop_crickets",
+      // Weapons v2.
+      "gun_crossbow", "explosion", "explosion_far", "grenade_pin", "grenade_bounce",
     ];
     for (const id of required) assert.ok(id in SFX, `missing ${id}`);
     assert.ok(SFX_IDS.length >= 40, `${SFX_IDS.length} sounds`);
@@ -160,6 +162,11 @@ describe("SFX registry", () => {
       assert.equal(near.cls, "gun");
     }
     assert.equal(farVariantOf("ui_click"), null);
+    // Weapons v2: the SMG sounds lighter than the rifle, the LMG heavier; the crossbow has no far take.
+    assert.ok(p.smg.tailMs < p.rifle.tailMs && p.lmg.tailMs > p.rifle.tailMs && p.revolver.th1 < p.pistol.th1);
+    assert.equal(farVariantOf("gun_crossbow"), null);
+    assert.equal(farVariantOf("explosion"), "explosion_far");
+    assert.equal(SFX.gun_crossbow.cls, "gun");
   });
 
   it("seeds are deterministic and distinct per id and variant", () => {

@@ -152,7 +152,9 @@ test("Steppe container EV per zone class matches the v4 model (±10 %), value co
   // Map v2: totals per 24-block area (AREA_K); the T3/T4 share was "elevator + radar" (now + Relay Hill).
   assert.ok(near(junk / SEEDS / AREA_K, 21_300, 0.1), `junk per 24-block area ${(junk / SEEDS / AREA_K).toFixed(0)}`);
   assert.ok(junkHot / junk >= 0.75, `T3 + T4 share ${(junkHot / junk).toFixed(2)}`);
-  assert.ok(near(cons / SEEDS / AREA_K, 690, 0.15), `container consumables per 24-block area ${(cons / SEEDS / AREA_K).toFixed(0)}`);
+  // Weapons v2: grenades (180 CR-eq each, weapon_box T2+) and bolts replace light ammo / shell weights:
+  // consumables 690 → ≈ 985 per area while the total value per container tier moves +0.2 … +2.1 %.
+  assert.ok(near(cons / SEEDS / AREA_K, 985, 0.15), `container consumables per 24-block area ${(cons / SEEDS / AREA_K).toFixed(0)}`);
   assert.equal(hvWild, 0, "no 650+ CR junk in the wilds");
   assert.ok(near(hv / SEEDS / AREA_K, 7.1, 0.2), `high-value junk per 24-block area ${(hv / SEEDS / AREA_K).toFixed(1)}`);
 });

@@ -145,6 +145,9 @@ describe("cards", () => {
     assert.equal(killCard({ killer: "Vlad", weapon: "" }, null, "Grain Elevator").sub, "");
     assert.deepEqual(killCard({ killer: "", weapon: "" }, null).kicker, "YOU DIED");
     assert.deepEqual(killCard(null, 100).name, "K.I.A.");
+    // Weapons v2.
+    assert.equal(killCard({ killer: "Vlad", weapon: "grenade" }, 5 * PX_PER_METER).sub, "Grenade · 5 m");
+    assert.equal(killCard({ killer: "Vlad", weapon: "crossbow" }, null).sub, "Crossbow");
   });
   it("kill card names an NPC killer by role and adds the zone", () => {
     const m = killCard({ killer: "Marauder", weapon: "shotgun", killerRole: NPC_ROLE.MARAUDER }, 12 * PX_PER_METER, "Grain Elevator");

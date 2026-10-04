@@ -71,6 +71,11 @@ export interface GameContext {
    * solo. Allies are shown through fog by design. The array is reused every frame: do not keep it.
    */
   partyMates?(): readonly PartyMateView[];
+  /**
+   * Weapons v2: the touch grenade button is being dragged — direction and 0..1 of the throw range
+   * (grenades.ts draws the throw preview); null otherwise.
+   */
+  grenadeAim?(): { angle: number; frac: number } | null;
 }
 
 export interface GameSystem {

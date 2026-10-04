@@ -189,7 +189,7 @@ test("templateKey: weapons by type and rarity, armor/backpacks by level, others 
 test("tables reference real item defs with valid quantities", () => {
   for (const [id, o] of Object.entries(CONSUMABLES_CR)) {
     const d = itemDef(id);
-    assert.ok(d && (d.cat === "ammo" || d.cat === "med"), id);
+    assert.ok(d && (d.cat === "ammo" || d.cat === "med" || d.cat === "throwable"), id);
     assert.ok(o.qty >= 1 && o.cr > 0);
   }
   for (const group of [GIVEAWAY_KIT.weapon, GIVEAWAY_KIT.armor, GIVEAWAY_KIT.backpack]) {

@@ -10,7 +10,8 @@
  * and the strict decoder an admin viewer reads with. It has no Node or DOM dependencies (UTF-8 is
  * done by hand), so the browser can decode after DecompressionStream("deflate-raw").
  *
- * Chunk layout (version 1, little endian), before compression:
+ * Chunk layout (version 2, little endian), before compression. Version 2 (Weapons v2) only adds
+ * weapon codes 4–8 (smg, lmg, revolver, crossbow, grenade); the decoder still reads version 1.
  *   header   "SPRP" u8 version, u32 seq, u32 startMs (cycle clock)
  *   ROSTER   u16 n, n × spawn body: every runtime spawned before startMs (a chunk is self-contained)
  *   records  in time order, each `u8 type, u32 t (cycle clock ms), body`:
@@ -37,12 +38,14 @@
  *   str userId, str entryId, str partyId (NPCs: empty strings). str = u8 byte length + UTF-8.
  */
 
-import type { WeaponId } from "./items.js";
+import type { KillWeapon, WeaponId } from "./items.js";
 import type { ExitType } from "./types.js";
 
 export const REPLAY = {
-  /** Format version (chunk header byte, ReplayChunkUpload.v). */
-  VERSION: 1,
+  /** Format version (chunk header byte, ReplayChunkUpload.v). 2 = Weapons v2 weapon codes. */
+  VERSION: 2,
+  /** Oldest chunk version the decoder still reads (stored replays live 14 days). */
+  MIN_VERSION: 1,
   /** One frame of every runtime this often (cycle clock). */
   FRAME_MS: 200,
   /** A chunk is sealed after this much cycle clock (or earlier at SEAL_RAW_BYTES / the wipe). */
@@ -108,8 +111,8 @@ const ABS = 128;
 /** Runtime kinds, indexed like NPC_ROLE (NONE = human, BOSS, GUARD, MARAUDER). */
 export const REPLAY_KINDS = ["human", "boss", "guard", "marauder"] as const;
 export type ReplayKind = (typeof REPLAY_KINDS)[number];
-/** Weapon codes; NO_CODE = no weapon. */
-export const REPLAY_WEAPONS: readonly WeaponId[] = ["pistol", "rifle", "shotgun", "sniper"];
+/** Weapon codes; NO_CODE = no weapon. Append only (version 2 added codes 4–8). */
+export const REPLAY_WEAPONS: readonly KillWeapon[] = ["pistol", "rifle", "shotgun", "sniper", "smg", "lmg", "revolver", "crossbow", "grenade"];
 export const REPLAY_EXITS: readonly ExitType[] = ["extract", "dead", "timeout", "mia"];
 /** Boss brain states (game server NpcFsmState). */
 export const REPLAY_BOSS_STATES = ["idle", "suspicious", "combat", "search", "return", "cover"] as const;
@@ -173,7 +176,7 @@ export type ReplayEvent =
   | { t: number; type: "shot"; r: number; weapon: WeaponId | ""; x: number; y: number; angles: number[] }
   /** src −1 = no shooter (environment); dmg = HP lost, 0.1 steps. */
   | { t: number; type: "hit"; src: number; target: number; dmg: number; armor: boolean }
-  | { t: number; type: "kill"; victim: number; killer: number; weapon: WeaponId | "" }
+  | { t: number; type: "kill"; victim: number; killer: number; weapon: KillWeapon | "" }
   | { t: number; type: "exit"; r: number; exit: ExitType; extractId: string }
   | { t: number; type: "chest"; r: number; idx: number }
   | { t: number; type: "loot"; r: number; target: "container" | "corpse"; id: number }
@@ -254,7 +257,7 @@ export function replayFlags(kind: number, alive: boolean, extracted: boolean, co
 }
 
 export function weaponCode(w: string): number {
-  const i = REPLAY_WEAPONS.indexOf(w as WeaponId);
+  const i = REPLAY_WEAPONS.indexOf(w as KillWeapon);
   return i < 0 ? NO_CODE : i;
 }
 
@@ -697,7 +700,13 @@ function enumAt<T>(list: readonly T[], code: number, what: string): T {
   return v;
 }
 
-const weaponAt = (code: number): WeaponId | "" => (code === NO_CODE ? "" : enumAt(REPLAY_WEAPONS, code, "weapon"));
+const weaponAt = (code: number): KillWeapon | "" => (code === NO_CODE ? "" : enumAt(REPLAY_WEAPONS, code, "weapon"));
+/** A shot's weapon: a gun (a grenade code here is a malformed chunk). */
+const gunAt = (code: number): WeaponId | "" => {
+  const w = weaponAt(code);
+  if (w === "grenade") throw new ReplayFormatError("grenade code in a shot");
+  return w;
+};
 const refAt = (v: number): number => (v === NO_REF ? -1 : v);
 
 function readSpawn(rd: Reader): ReplaySpawn {
@@ -777,7 +786,7 @@ export function readReplayHeader(bytes: Uint8Array): { v: number; seq: number; s
   rd.need(13);
   for (const b of MAGIC) if (rd.u8() !== b) throw new ReplayFormatError("bad magic");
   const v = rd.u8();
-  if (v !== REPLAY.VERSION) throw new ReplayFormatError(`unsupported version ${v}`);
+  if (!(v >= REPLAY.MIN_VERSION && v <= REPLAY.VERSION)) throw new ReplayFormatError(`unsupported version ${v}`);
   return { v, seq: rd.u32(), startMs: rd.u32() };
 }
 
@@ -823,7 +832,7 @@ export function decodeReplayChunk(bytes: Uint8Array): ReplayChunkData {
         break;
       case REPLAY_REC.SHOT: {
         const r = rd.u16();
-        const weapon = weaponAt(rd.u8());
+        const weapon = gunAt(rd.u8());
         const x = rd.u16() * REPLAY.POS_UNIT_PX;
         const y = rd.u16() * REPLAY.POS_UNIT_PX;
         const angles: number[] = [];

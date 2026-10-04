@@ -4,11 +4,11 @@ import { AudioSettingsButton } from "./audio-settings";
 import { useTouchMode } from "./use-touch-mode";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
-import { BREAK_CHANCE_ON_DEATH, HEAL, WEAPONS, itemDef, type WeaponId } from "@extract/shared";
+import { BREAK_CHANCE_ON_DEATH, GRENADE, HEAL, WEAPONS, itemDef, type WeaponId } from "@extract/shared";
 import { WIPE_URGENT_MS, bossToastText, deepEqual, shallowEqual, wipeWarnText, type HudStore } from "@/game/hud";
 import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry } from "@/game/types";
 import { NPC_TAG_COLOR, cssHex, killFeedNames, npcLabels, type FeedName } from "@/game/npc-labels";
-import { fmtClock, fmtCr, isWeaponId, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
+import { fmtClock, fmtCr, isKillWeapon, killWeaponIcon, killWeaponName, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
 
 /** Kill feed lines stay this long (match clock). */
 const KILL_FEED_TTL_MS = 7_000;
@@ -353,9 +353,15 @@ function KillFeed({ store, selfNickname, touch }: { store: HudStore; selfNicknam
             {n.killer ? (
               <>
                 <Name who={n.killer} self={n.personal || (!n.killer.npc && e.killer === selfNickname)} />
-                {e.weapon && isWeaponId(e.weapon) ? (
+                {e.weapon && isKillWeapon(e.weapon) ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={weaponIcon(e.weapon)} alt={WEAPONS[e.weapon].name} className="h-6 w-10 object-contain" draggable={false} />
+                  <img
+                    src={killWeaponIcon(e.weapon)}
+                    alt={killWeaponName(e.weapon)}
+                    title={killWeaponName(e.weapon)}
+                    className={clsx("object-contain", e.weapon === "grenade" ? "h-6 w-6" : "h-6 w-10")}
+                    draggable={false}
+                  />
                 ) : (
                   <span className="text-white/60">killed</span>
                 )}
@@ -818,12 +824,23 @@ export function medTooltip(kind: "bandage" | "medkit", count: number, freeSlots:
   return `${name}: +${heal.HP} HP after a ${heal.MS / 1000} s channel · ${stack} per slot · room for ${room} more`;
 }
 
+/** Weapons v2: what a hand grenade does, from the shared GRENADE numbers. */
+export function grenadeTooltip(): string {
+  const m = (px: number) => Math.round(px / PX_PER_METER);
+  return (
+    `Hand grenade: throw with G or 5 toward the cursor (${m(GRENADE.MIN_PX)}–${m(GRENADE.MAX_PX)} m). ` +
+    `Goes off ${GRENADE.FUSE_MS / 1000} s after the throw: ${GRENADE.DAMAGE} damage close up, ` +
+    `down to ${GRENADE.EDGE_DAMAGE} at ${m(GRENADE.EDGE_PX)} m. Walls stop the blast; it hurts you too.`
+  );
+}
+
 function MedsPanel({ self }: { self: HudSelf }) {
   const free = self.storageCap - self.storageUsed;
   return (
     <div className="toon-panel flex flex-col gap-1.5 p-2">
       <MedRow icon="/sprites/bandage.png" count={self.bandages} keyHint="3" title={medTooltip("bandage", self.bandages, free)} />
       <MedRow icon="/sprites/medkit.png" count={self.medkits} keyHint="4" title={medTooltip("medkit", self.medkits, free)} />
+      {self.grenades > 0 && <MedRow icon="/sprites/grenade.png" count={self.grenades} keyHint="G" title={grenadeTooltip()} />}
       <div
         className="flex items-center justify-between gap-2 border-t-2 border-black/50 pt-1 text-[0.65rem] tabular-nums text-white/75"
         title="Storage slots used (pockets + backpack) and the junk value you carry if you extract"
@@ -902,6 +919,7 @@ const CONTROLS: Array<[string, string]> = [
   ["1 / 2", "Switch weapon"],
   ["3", "Bandage"],
   ["4", "Medkit"],
+  ["G / 5", "Throw grenade (at the cursor)"],
 ];
 
 /**
@@ -994,6 +1012,7 @@ const TOUCH_CONTROLS: Array<[string, string]> = [
   ["USE", "Search / pick up"],
   ["RELOAD · SWAP", "Reload · switch weapon"],
   ["Bandage · medkit", "Heal"],
+  ["Grenade", "Tap: throw ahead · drag: aim and range"],
   ["Bag · MAP", "Inventory · full map"],
   ["Extract", "Stand in an open extraction circle"],
 ];

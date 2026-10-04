@@ -433,7 +433,7 @@ export class PlayerView {
 
 /* ---------------------------------------------------------------------------- ground items */
 
-const GROUND_ICON_W: Record<string, number> = { armor: 32, backpack: 34, ammo: 26, med: 26, junk: 28 };
+const GROUND_ICON_W: Record<string, number> = { armor: 32, backpack: 34, ammo: 26, med: 26, throwable: 22, junk: 28 };
 
 export class ItemView {
   readonly root = new Container();
@@ -474,7 +474,8 @@ export class ItemView {
     if (!t) return;
     this.loaded = true;
     this.icon.texture = t;
-    this.icon.tint = d?.ammo ? (AMMO_TINT[d.ammo] ?? 0xffffff) : 0xffffff;
+    // Only the old shared "ammo" box is tinted per type; the v2 ammo icons carry their own colours.
+    this.icon.tint = d?.ammo && d.icon === "ammo" ? (AMMO_TINT[d.ammo] ?? 0xffffff) : 0xffffff;
     if (d?.weapon) {
       fitWidth(this.icon, WEAPON_GROUND_LENGTH[d.weapon]);
       this.icon.rotation = -0.35;

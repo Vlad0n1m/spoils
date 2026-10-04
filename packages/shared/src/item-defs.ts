@@ -17,7 +17,8 @@ import {
   type WeaponId,
 } from "./items.js";
 
-export type ItemCat = "weapon" | "armor" | "backpack" | "ammo" | "med" | "junk";
+/** "throwable" = hand grenades (WEAPONS_V2 §4): a stackable consumable thrown with G. */
+export type ItemCat = "weapon" | "armor" | "backpack" | "ammo" | "med" | "throwable" | "junk";
 
 export interface ItemDef {
   id: string;
@@ -36,6 +37,8 @@ export interface ItemDef {
   bpLevel?: 1 | 2 | 3;
   ammo?: AmmoType;
   med?: HealKind;
+  /** Throwables only: what it is (only the hand grenade so far). */
+  throwable?: "grenade";
   /** Junk only: CR per unit paid by the auto-sale at settlement (dogtag: see dogTagCr). */
   value?: number;
 }
@@ -84,6 +87,8 @@ const junk = (name: JunkName, label: string, value: number, stack: number, rarit
   id: `junk_${name}`, cat: "junk", name: label, icon: `junk_${name}`, stack, unique: false, rarity, value,
 });
 
+// The weapon icon stays the side-view sprite <id> (ground items, HUD); the inventory may use the
+// square icon_<id> art (weaponSlotIcon).
 const WEAPON_DEFS: ItemDef[] = WEAPON_IDS.map((w) => ({
   id: w, cat: "weapon", name: WEAPONS[w].name, icon: w, stack: 1, unique: true, rarity: 0, weapon: w,
 }));
@@ -100,9 +105,12 @@ const ALL_DEFS: ItemDef[] = [
   ...WEAPON_DEFS,
   ...ARMOR_DEFS,
   ...BACKPACK_DEFS,
-  { id: "ammo_light", cat: "ammo", name: "Light ammo", icon: "ammo", stack: 60, unique: false, rarity: 0, ammo: "light" },
-  { id: "ammo_shell", cat: "ammo", name: "Shells", icon: "ammo", stack: 20, unique: false, rarity: 0, ammo: "shell" },
-  { id: "ammo_heavy", cat: "ammo", name: "Heavy ammo", icon: "ammo", stack: 20, unique: false, rarity: 0, ammo: "heavy" },
+  // Weapons v2: one icon per ammo type (was the shared tinted "ammo" box).
+  { id: "ammo_light", cat: "ammo", name: "Light ammo", icon: "ammo_light", stack: 60, unique: false, rarity: 0, ammo: "light" },
+  { id: "ammo_shell", cat: "ammo", name: "Shells", icon: "ammo_shell", stack: 20, unique: false, rarity: 0, ammo: "shell" },
+  { id: "ammo_heavy", cat: "ammo", name: "Heavy ammo", icon: "ammo_heavy", stack: 20, unique: false, rarity: 0, ammo: "heavy" },
+  { id: "ammo_bolt", cat: "ammo", name: "Crossbow bolts", icon: "ammo_bolt", stack: 10, unique: false, rarity: 0, ammo: "bolt" },
+  { id: "grenade", cat: "throwable", name: "Hand grenade", icon: "grenade", stack: 2, unique: false, rarity: 1, throwable: "grenade" },
   { id: "bandage", cat: "med", name: "Bandage", icon: "bandage", stack: 5, unique: false, rarity: 0, med: "bandage" },
   { id: "medkit", cat: "med", name: "Medkit", icon: "medkit", stack: 2, unique: false, rarity: 1, med: "medkit" },
   junk("apple", "Apple", 20, 5, 0),
@@ -142,6 +150,14 @@ export function isJunk(id: string): id is JunkId {
 /** Def id of the ammo stack a weapon uses. */
 export function ammoDefOf(weapon: WeaponId): string {
   return `ammo_${WEAPONS[weapon].ammo}`;
+}
+
+/** Item def id of the hand grenade (GRENADE in items.ts). */
+export const GRENADE_DEF = "grenade";
+
+/** Square inventory icon of a weapon (icon_<id>, rotated 30° to fill a slot); other defs: their icon. */
+export function weaponSlotIcon(def: ItemDef): string {
+  return def.cat === "weapon" && def.weapon ? `icon_${def.weapon}` : def.icon;
 }
 
 /** Max armor absorb points of an armor def (InvItem.dur of armor counts these). */

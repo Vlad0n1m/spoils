@@ -8,7 +8,9 @@
  */
 
 import type {
+  BoomMsg,
   BossKind,
+  GrenadeMsg,
   HitMsg,
   InputSample,
   InvErrMsg,
@@ -125,8 +127,13 @@ export interface PlayerRuntime {
   pressPending: boolean;
   pressAt: number;
   nextFireAt: number;
-  /** Match clock of the last shot (vision: muzzle flash / bush reveal). */
+  /**
+   * Match clock of the last shot (vision: muzzle flash / bush reveal). A weapon without a flash
+   * (crossbow) sets it VISION.FLASH_MS in the past: the bush reveal applies, the flash never does.
+   */
   lastShotAt: number;
+  /** Weapons v2: earliest match clock of the next grenade throw (GRENADE.COOLDOWN_MS). */
+  nextThrowAt: number;
   /** Match clock when the player's position last changed (NPCs / vision: "standing still in a bush"). */
   movedAt: number;
   /** Position at the start of the current step (vision lead eye: velocity). */
@@ -225,6 +232,10 @@ export type MatchEvent =
   | { type: "sound"; src: number; kind: SoundKind; x: number; y: number; radius: number; variant: number }
   /** A per-listener sound payload built by deliverSounds (WP3). */
   | { type: "snd"; to: number; msg: SoundMsg }
+  /** Weapons v2: a grenade for one recipient (grenade.ts already applied the visibility rules). */
+  | { type: "nade"; to: number; msg: GrenadeMsg }
+  /** Weapons v2: a grenade blast for one recipient. */
+  | { type: "boom"; to: number; msg: BoomMsg }
   /** Add / remove a `loot` entry to / from one client's StateView (WP-B search sessions). */
   | { type: "view"; to: number; op: "add" | "remove"; key: string }
   | { type: "outcome"; to: number; msg: OutcomeMsg }

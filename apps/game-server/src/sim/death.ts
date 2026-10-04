@@ -16,7 +16,7 @@
  * whose contents go through the searchers' loot entry k<id> (containers.ts).
  */
 
-import { BREAK_CHANCE_ON_DEATH, DOG_TAG, ITEM_FLAG, NPC, NPC_ROLE, SoundKind, partyMates, type ItemLike, type WeaponId } from "@extract/shared";
+import { BREAK_CHANCE_ON_DEATH, DOG_TAG, ITEM_FLAG, NPC, NPC_ROLE, SoundKind, partyMates, type ItemLike, type KillWeapon } from "@extract/shared";
 import { cancelHeal, cancelReload } from "./actions.js";
 import { carriedItems, clearSlots, syncPublic } from "./bag.js";
 import { closeSearch } from "./containers.js";
@@ -25,7 +25,7 @@ import type { Match } from "./match.js";
 import { emitSound } from "./sound.js";
 import type { PlayerRuntime } from "./types.js";
 
-export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | null, weapon: WeaponId | ""): void {
+export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | null, weapon: KillWeapon | ""): void {
   const p = rt.pub;
   if (!p.alive) return;
   const s = rt.self;

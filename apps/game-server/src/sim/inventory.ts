@@ -182,11 +182,12 @@ export function dropSpot(m: Match, x0: number, y0: number, n: number): { x: numb
 
 function autoPicked(def: string): boolean {
   const c = itemDef(def)?.cat;
-  return c === "ammo" || c === "med";
+  // Weapons v2: hand grenades are consumables like meds (stack 2, no uid).
+  return c === "ammo" || c === "med" || c === "throwable";
 }
 
 /**
- * Ammo and meds are picked up by walking over them, through the slot engine (merge into stacks,
+ * Ammo, meds and (Weapons v2) hand grenades are picked up by walking over them, through the slot engine (merge into stacks,
  * then empty slots); whatever does not fit stays on the ground with the reduced quantity.
  */
 export function autoPickup(m: Match, rt: PlayerRuntime): void {

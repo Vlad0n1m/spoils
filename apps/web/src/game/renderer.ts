@@ -32,6 +32,8 @@ import {
   ACT,
   ARMOR,
   C2S,
+  GRENADE,
+  GRENADE_DEF,
   HEAL,
   INPUT_DT_MS,
   MATCH,
@@ -40,6 +42,7 @@ import {
   WEAPONS,
   buildBushIndex,
   bushIndexAt,
+  countOf,
   envConfigOf,
   extractOpenAtFor,
   generateMap,
@@ -72,7 +75,8 @@ import { ContainerLayer, CorpseView, ExtractView, IconCache, ItemView, PlayerVie
 import { FogOfWar, PLAYER_PAD, entityVisibility, fadeToward, fogLook, fogRange, type FogEye, type FogLook } from "./fog";
 import { buildHud, extractAllowed, personalExtractStatus, stickyCounts, type PlayerCounts } from "./hud";
 import { EXPIRE_FADE_TAU_MS, expiryBlink, expiryFading } from "./expiry";
-import { InputController, sampleAim } from "./input";
+import { InputController, sampleAim, type GrenadeAim } from "./input";
+import { GRENADE_TAP_FRAC, grenadeFracFor } from "./grenades";
 import { PerfOverlay, TouchControls, shouldUseTouch } from "./touch-controls";
 import { TouchCrosshair, setCanvasCrosshair, touchCrosshairDistance } from "./crosshair";
 import { Minimap, type MinimapExtract } from "./minimap";
@@ -221,6 +225,8 @@ export class GameRenderer implements GameRendererApi {
   private systemErrors = new Map<GameSystem, number>();
   private systemsReady = false;
   private ctx: GameContext | null = null;
+  /** Weapons v2: earliest performance.now() of the next grenade throw (GRENADE.COOLDOWN_MS, client side). */
+  private nextThrowAt = 0;
   private screenW = 0;
   private screenH = 0;
 
@@ -353,7 +359,8 @@ export class GameRenderer implements GameRendererApi {
     app.canvas.style.display = "block";
     app.canvas.style.touchAction = "none";
 
-    this.effects = new Effects();
+    // Weapons v2: crossbow bolts fly as the bolt sprite.
+    this.effects = new Effects({ bolt: tex.bolt });
     this.effectsSlot.addChild(this.effects.layer);
     this.floatSlot.addChild(this.effects.floatLayer);
     this.world.addChild(
@@ -395,6 +402,7 @@ export class GameRenderer implements GameRendererApi {
       closePanel: () => this.opts.panelActions?.closePanel?.(),
       toggleMap: this.opts.panelActions?.toggleMap ? () => this.opts.panelActions?.toggleMap?.() : undefined,
       toggleFullMap: () => this.systemCommand("toggleMap"),
+      throwGrenade: (aim) => this.throwGrenade(aim),
     });
     this.input.attach();
 
@@ -546,6 +554,36 @@ export class GameRenderer implements GameRendererApi {
 
   private sendIntent(type: string, payload: object): boolean {
     return this.canAct() && this.send(type, payload);
+  }
+
+  /**
+   * Weapons v2, C2S.THROW: G / 5 throws toward the cursor (its distance sets the range), a tap on
+   * the touch button throws ahead along the facing at GRENADE_TAP_FRAC, a drag passes its own aim.
+   * The server checks everything (grenade carried, not rolling / reloading, cooldown); the pin
+   * sound plays here at once, like an own shot.
+   */
+  private throwGrenade(aim?: GrenadeAim) {
+    const self = this.selfState();
+    if (!self || countOf(self.slots, GRENADE_DEF) <= 0) return;
+    // The server's rules, checked here too so a refused throw plays no pin sound.
+    const now = performance.now();
+    if (this.predictor?.rolling || self.reloadUntil > this.clockNow(now) || now < this.nextThrowAt) return;
+    let angle = this.aim;
+    let frac = GRENADE_TAP_FRAC;
+    if (aim) {
+      angle = aim.angle;
+      frac = aim.frac;
+    } else if (!this.touch && this.input?.hasPointer && this.selfRender) {
+      const wx = this.camX + (this.input.mouseX - this.screenW / 2) / this.zoom;
+      const wy = this.camY + (this.input.mouseY - this.screenH / 2) / this.zoom;
+      const dx = wx - this.selfRender.x;
+      const dy = wy - this.selfRender.y;
+      if (dx * dx + dy * dy > 1) angle = Math.atan2(dy, dx);
+      frac = grenadeFracFor(Math.hypot(dx, dy));
+    }
+    if (!Number.isFinite(angle) || !this.sendIntent(C2S.THROW, { a: angle, d: frac })) return;
+    this.nextThrowAt = now + GRENADE.COOLDOWN_MS;
+    getGameAudio()?.localThrow();
   }
 
   /** SWITCH intent; a real switch cancels a running heal on the server, so predict that too. */
@@ -958,6 +996,7 @@ export class GameRenderer implements GameRendererApi {
         return this.goneAt.get(id) ?? null;
       },
       partyMates: () => this.partyNow,
+      grenadeAim: () => this.input?.grenadeAim ?? null,
     };
   }
 
@@ -1443,6 +1482,7 @@ export class GameRenderer implements GameRendererApi {
         canUse: !!snapshot.interactHint,
         bandages: s?.bandages ?? 0,
         medkits: s?.medkits ?? 0,
+        grenades: s?.grenades ?? 0,
       });
     }
     try {

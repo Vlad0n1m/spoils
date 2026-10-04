@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { SOUND, SOUND_KIND_COUNT, SoundKind, STEP_MATERIALS, WEAPONS, WEAPON_IDS, weaponVariant } from "@extract/shared";
+import { GRENADE_SOUND, SOUND, SOUND_KIND_COUNT, SoundKind, STEP_MATERIALS, WEAPONS, WEAPON_IDS, weaponVariant } from "@extract/shared";
 import {
   LOW_HP,
   RANGE_SLACK,
@@ -38,6 +38,15 @@ describe("layersForSound", () => {
   it("shots use the weapon index from the shared contract", () => {
     for (const w of WEAPON_IDS) assert.equal(layersForSound(SoundKind.shot, weaponVariant(w))[0]!.id, gunSfx(w));
     assert.equal(gunSfx("nonsense"), "gun_pistol");
+    // Weapons v2: every gun has its own take (the crossbow its twang).
+    assert.equal(new Set(WEAPON_IDS.map(gunSfx)).size, WEAPON_IDS.length);
+    assert.equal(gunSfx("crossbow"), "gun_crossbow");
+  });
+
+  it("Weapons v2: the blast and the grenade's pin / bounce", () => {
+    assert.equal(layersForSound(SoundKind.explosion, 0)[0]!.id, "explosion");
+    assert.equal(layersForSound(SoundKind.grenade, GRENADE_SOUND.THROW)[0]!.id, "grenade_pin");
+    assert.equal(layersForSound(SoundKind.grenade, GRENADE_SOUND.BOUNCE)[0]!.id, "grenade_bounce");
   });
 
   it("steps decode the shared material index, with wet and bush layers", () => {

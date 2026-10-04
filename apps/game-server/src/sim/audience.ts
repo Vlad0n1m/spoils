@@ -22,6 +22,8 @@
  * - CHEST (a static container opened) → the opener and recipients that see the opener (with `by`).
  *   Everyone else learns it from the lid sound and, later, the deferred containerState flip.
  * - snd → the listener it was built for (sound.ts deliverSounds already applied every rule).
+ * - nade / boom (Weapons v2 grenades) → the recipient they were built for (grenade.ts applied the
+ *   rules: the full flight only to those who see the thrower, a resting copy to those who see it).
  * Raw `sound` events are the sim's input to deliverSounds and are never forwarded.
  */
 
@@ -206,6 +208,12 @@ export function buildBatches(
       }
       case "snd":
         if (recipients.includes(ev.to)) mergeSnd(batchOf(out, ev.to), ev.msg);
+        break;
+      case "nade":
+        if (recipients.includes(ev.to)) (batchOf(out, ev.to).nades ??= []).push(ev.msg);
+        break;
+      case "boom":
+        if (recipients.includes(ev.to)) (batchOf(out, ev.to).booms ??= []).push(ev.msg);
         break;
       default:
         break;

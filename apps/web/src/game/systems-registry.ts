@@ -11,6 +11,7 @@ import { createCinematicSystem, createHitmarkerSystem, createLowHpSystem } from 
 import { createAmbientSystem, createWorldFxSystem } from "./effects";
 import { createWeatherSystem } from "./env/weather-fx";
 import { DamageArcSystem } from "./entities";
+import { createGrenadeSystem } from "./grenades";
 import { createMapOverlaySystem } from "./fullmap";
 import { createIntroSystem } from "./intro";
 import { createPartySystem } from "./party";
@@ -22,6 +23,9 @@ export const SYSTEM_FACTORIES: readonly SystemFactory[] = [
   () => createWeatherSystem(),
   // Blood decals (ground), shell casings + footstep / roll / body-fall dust (worldFx).
   () => createWorldFxSystem(),
+  // Weapons v2: hand grenades in flight, warning rings, the touch throw preview (worldFx) and the
+  // explosions (worldTop).
+  () => createGrenadeSystem(),
   // Pollen / motes by day, fireflies at night, leaves near forest (worldTop).
   () => createAmbientSystem(),
   // Look-ahead, recoil kick, close-shot shake; the renderer reads its CameraRig. Draws nothing.

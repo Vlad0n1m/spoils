@@ -83,6 +83,15 @@ export const SPRITE_NAMES = [
   "lamp_post",
   "sign_post",
   "sign_board",
+  // Weapons v2 (art/guns-v2.json, docs/WEAPONS_V2.md): guns in the hands, the hand grenade (ground
+  // item icon), the crossbow bolt in flight. The explosion sheet and the ammo / icon_<gun> art load
+  // lazily (grenades.ts, the icon cache).
+  "smg",
+  "lmg",
+  "revolver",
+  "crossbow",
+  "grenade",
+  "bolt",
 ] as const;
 
 export type SpriteName = (typeof SPRITE_NAMES)[number];
@@ -226,6 +235,10 @@ export const WEAPON_HELD_LENGTH: Record<WeaponId, number> = {
   rifle: 54,
   shotgun: 52,
   sniper: 66,
+  smg: 40,
+  lmg: 70,
+  revolver: 30,
+  crossbow: 52,
 };
 
 /** Weapon icon length when lying on the ground. */
@@ -234,16 +247,33 @@ export const WEAPON_GROUND_LENGTH: Record<WeaponId, number> = {
   rifle: 50,
   shotgun: 50,
   sniper: 58,
+  smg: 42,
+  lmg: 62,
+  revolver: 32,
+  crossbow: 50,
 };
+
+/** Weapons v2: drawn size of a grenade in flight (px; the 128 px icon is scaled to it). */
+export const GRENADE_DRAW_PX = 16;
+export const EXPLOSION_FRAMES = 8;
+export const EXPLOSION_FRAME_MS = 50;
+/** Explosion sprite size on screen (the blast radius is GRENADE.EDGE_PX; the fireball is smaller). */
+export const EXPLOSION_DRAW_PX = 220;
+/** The crossbow bolt sprite (128 px, tip to the right) is drawn this long. */
+export const BOLT_DRAW_PX = 34;
 
 export const CHEST_SPRITES = ["chest_common", "chest_rare", "chest_epic", "chest_legendary"] as const;
 export const CHEST_SIZE = [52, 56, 58, 66] as const;
 
-/** Tints for the single ammo sprite so the three ammo types read differently. */
+/**
+ * Tints for the old shared "ammo" sprite. Weapons v2 gives every ammo type its own icon
+ * (ammo_light / shell / heavy / bolt), drawn untinted; the tint applies only to the old box.
+ */
 export const AMMO_TINT: Record<string, number> = {
   light: 0xffffff,
   shell: 0xff9f8f,
   heavy: 0x9fd0ff,
+  bolt: 0xd8ffb0,
 };
 
 export const COLORS = {

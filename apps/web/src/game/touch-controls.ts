@@ -1,7 +1,8 @@
 /**
  * Phone touch controls (TWA build): a floating move stick on the left half (part deflection =
  * quiet walk), a floating aim stick on the right half that fires past FIRE_AT, and round buttons
- * for roll, use (search / pick up), reload, weapon swap, bandage, medkit, inventory and full map.
+ * for roll, use (search / pick up), reload, weapon swap, bandage, medkit, grenade (Weapons v2: tap
+ * throws ahead, a drag off the button aims the throw and sets its range), inventory and full map.
  *
  * Plain DOM inside the game mount, right above the canvas and BELOW the React HUD in paint order
  * (no z-index), so the HUD's own buttons (controls / leave raid, audio) stay tappable and the
@@ -24,6 +25,21 @@ export const FIRE_AT = 0.55;
 
 /** Phones and tablets (coarse primary pointer); ?touch=1 forces it on a desktop, ?touch=0 off. */
 export { shouldUseTouch } from "./touch-mode";
+
+/**
+ * Weapons v2, grenade button: a finger dragged at least GRENADE_DRAG_FROM px off the button aims
+ * the throw; the range grows over the next GRENADE_DRAG_SPAN px (0 = GRENADE.MIN_PX, 1 = MAX_PX).
+ * A shorter drag is a tap: the renderer throws ahead along the facing (GRENADE_TAP_FRAC).
+ */
+export const GRENADE_DRAG_FROM = 16;
+export const GRENADE_DRAG_SPAN = 110;
+
+/** Finger offset from where the grenade button was pressed → throw aim, null while still a tap. */
+export function grenadeDragAim(dx: number, dy: number): { angle: number; frac: number } | null {
+  const len = Math.hypot(dx, dy);
+  if (!(len >= GRENADE_DRAG_FROM)) return null;
+  return { angle: Math.atan2(dy, dx), frac: Math.max(0, Math.min(1, (len - GRENADE_DRAG_FROM) / GRENADE_DRAG_SPAN)) };
+}
 
 /** Aim stick deflection (stick units, 0..1 past the centre) → aim angle and trigger. */
 export function aimFromStick(x: number, y: number): { angle: number | null; fire: boolean } {
@@ -82,6 +98,7 @@ export const TOUCH_BUTTONS: readonly TouchButtonSpec[] = [
   { id: "swap", side: "right", size: 50, label: "SWAP", aria: "Switch weapon" },
   { id: "bandage", side: "left", size: 52, label: "+", icon: "/sprites/bandage.png", aria: "Bandage" },
   { id: "medkit", side: "left", size: 52, label: "+", icon: "/sprites/medkit.png", aria: "Medkit" },
+  { id: "grenade", side: "left", size: 50, label: "G", icon: "/sprites/grenade.png", aria: "Throw grenade (drag to aim)" },
   { id: "inventory", side: "left", size: 48, label: "BAG", icon: "/sprites/backpack.png", aria: "Inventory" },
   { id: "map", side: "left", size: 48, label: "MAP", aria: "Full map" },
 ];
@@ -234,6 +251,8 @@ export interface TouchHudState {
   canUse: boolean;
   bandages: number;
   medkits: number;
+  /** Weapons v2: hand grenades carried (the grenade button's badge; dimmed at 0). */
+  grenades: number;
 }
 
 interface Stick {
@@ -255,7 +274,7 @@ export class TouchControls {
   private readonly buttons = new Map<TouchButtonId, { el: HTMLDivElement; badge: HTMLSpanElement | null }>();
   private resizeObs: ResizeObserver | null = null;
   private laidOut = "";
-  private shown: TouchHudState = { active: true, canUse: false, bandages: -1, medkits: -1 };
+  private shown: TouchHudState = { active: true, canUse: false, bandages: -1, medkits: -1, grenades: -1 };
   /** Called with the event timestamp of every stick or button press (perf overlay). */
   onPress: ((t: number) => void) | null = null;
 
@@ -342,6 +361,7 @@ export class TouchControls {
     }
     if (s.bandages !== prev.bandages) this.setCount("bandage", s.bandages);
     if (s.medkits !== prev.medkits) this.setCount("medkit", s.medkits);
+    if (s.grenades !== prev.grenades) this.setCount("grenade", s.grenades);
     this.shown = { ...s };
   }
 
@@ -353,6 +373,7 @@ export class TouchControls {
   private releaseSticks = () => {
     this.releaseStick(this.move, () => this.input.setTouchMove(null));
     this.releaseStick(this.aim, () => this.input.setTouchAim(null, false));
+    this.input.setGrenadeAim(null);
   };
 
   private setCount(id: TouchButtonId, n: number) {
@@ -511,7 +532,7 @@ export class TouchControls {
       img.draggable = false;
       Object.assign(img.style, { width: "62%", height: "62%", objectFit: "contain", pointerEvents: "none" });
       b.appendChild(img);
-      if (spec.id === "bandage" || spec.id === "medkit") {
+      if (spec.id === "bandage" || spec.id === "medkit" || spec.id === "grenade") {
         badge = document.createElement("span");
         Object.assign(badge.style, {
           position: "absolute",
@@ -535,6 +556,10 @@ export class TouchControls {
     } else {
       b.textContent = spec.label;
     }
+    if (spec.id === "grenade") {
+      this.bindGrenadeButton(b);
+      return { el: b, badge };
+    }
     b.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -551,6 +576,57 @@ export class TouchControls {
     b.addEventListener("pointercancel", up);
     b.addEventListener("pointerleave", up);
     return { el: b, badge };
+  }
+
+  /**
+   * Weapons v2 grenade button: press, then either lift (a tap: throw ahead) or drag off the button
+   * to aim (the renderer draws the throw line) and lift to throw there. A cancelled pointer (the
+   * app lost focus) throws nothing.
+   */
+  private bindGrenadeButton(b: HTMLDivElement): void {
+    let pid: number | null = null;
+    let ox = 0;
+    let oy = 0;
+    let aim: { angle: number; frac: number } | null = null;
+    const lit = (on: boolean) => {
+      b.style.background = on ? BTN_BG_LIT : BTN_BG;
+      b.style.color = on ? "#000" : "#fff";
+    };
+    b.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (pid !== null) return;
+      pid = e.pointerId;
+      try {
+        b.setPointerCapture(e.pointerId);
+      } catch {
+        /* synthetic pointer: moves still arrive while the finger stays on the button */
+      }
+      ox = e.clientX;
+      oy = e.clientY;
+      aim = null;
+      lit(true);
+      this.onPress?.(e.timeStamp);
+    });
+    b.addEventListener("pointermove", (e) => {
+      if (e.pointerId !== pid) return;
+      aim = grenadeDragAim(e.clientX - ox, e.clientY - oy);
+      this.input.setGrenadeAim(aim);
+    });
+    const finish = (e: PointerEvent, cancel: boolean) => {
+      if (e.pointerId !== pid) return;
+      pid = null;
+      lit(false);
+      const a = aim;
+      aim = null;
+      this.input.setGrenadeAim(null);
+      if (cancel) return;
+      if (a) this.input.throwGrenadeAt(a.angle, a.frac);
+      else this.input.press("grenade");
+    };
+    b.addEventListener("pointerup", (e) => finish(e, false));
+    b.addEventListener("pointercancel", (e) => finish(e, true));
+    b.addEventListener("lostpointercapture", (e) => finish(e, true));
   }
 }
 

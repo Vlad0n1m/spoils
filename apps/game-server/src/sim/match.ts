@@ -16,8 +16,8 @@
  * (pool-place.ts) and player drops / corpses expire (A6). Legacy roster matches are unchanged.
  *
  * Tick order inside step() (later WPs fill the hooks, never the structure):
- *   NPCs (npc.ts) → reload/heal timers → inputs (stepMovement, fire) → stepSearches → bullets → pickups →
- *   extraction → velocities → disclosure → vision.update → aoi.update → deliverSounds → counters →
+ *   NPCs (npc.ts) → reload/heal timers → inputs (stepMovement, fire) → stepSearches → bullets →
+ *   grenades (bounces, blasts) → pickups → extraction → velocities → disclosure → vision.update → aoi.update → deliverSounds → counters →
  *   syncPublic → held exit reports
  * The room then runs syncViews → broadcastPatch → per-client `ev` batches (battle-room.ts).
  */
@@ -99,6 +99,7 @@ import { AoiSystem } from "./aoi.js";
 import { Disclosure } from "./disclosure.js";
 import { fixActive, giveFreeKit, moveOwn, removeForDrop, syncPublic, takeOpToken } from "./bag.js";
 import { stepBullets, tryFire } from "./combat.js";
+import { hasLiveGrenade, stepGrenades, throwGrenade, type LiveGrenade, type ThrowRefusal } from "./grenade.js";
 import { ContainerSystem, closeSearch, invTakeAllOp, invTakeOp, stepSearches } from "./containers.js";
 import { envNow, initEnvironment, type EnvRuntime } from "./environment.js";
 import { stepExtraction, timeoutPlayer } from "./extraction.js";
@@ -280,6 +281,10 @@ export class Match {
   /** Extract id → bit index in SelfState.extractMask (MapData.extracts order). */
   readonly extractBit = new Map<string, number>();
   bullets: Bullet[] = [];
+  /** Weapons v2: hand grenades thrown and not exploded yet (grenade.ts). */
+  grenades: LiveGrenade[] = [];
+  /** Last grenade id handed out (GrenadeMsg.id). */
+  grenadeSeq = 0;
   /** MatchOptions.lootSeed (server-only: never in BattleState). */
   readonly lootSeed: number;
   /** Bosses, guards and marauder squads (NPC runtimes after the roster). */
@@ -812,6 +817,12 @@ export class Match {
     return rt ? startHeal(this, rt, kind) : false;
   }
 
+  /** C2S.THROW (Weapons v2): throw a hand grenade toward `angle`, `frac` 0..1 of the throw range. */
+  throwGrenade(id: string, angle: number, frac: number): LiveGrenade | ThrowRefusal {
+    const rt = this.actor(id);
+    return rt ? throwGrenade(this, rt, angle, frac) : "dead";
+  }
+
   searchClose(id: string): void {
     const rt = this.actor(id);
     if (rt) closeSearch(this, rt, "close");
@@ -897,6 +908,7 @@ export class Match {
 
     stepSearches(this);
     stepBullets(this, dt);
+    stepGrenades(this);
 
     for (const rt of this.ordered) if (rt.pub.alive) autoPickup(this, rt);
 
@@ -1098,7 +1110,7 @@ export class Match {
       this.emit({ type: "outcome", to: rt.rosterIndex, msg });
       // A bullet of theirs still in flight may yet kill (death.ts updates report.kills): the web
       // report goes out once the last one is gone, so the posted kills (XP) are final.
-      if (this.bullets.some((b) => b.owner === rt)) rt.exitHeld = true;
+      if (this.bullets.some((b) => b.owner === rt) || hasLiveGrenade(this, rt)) rt.exitHeld = true;
       else this.emit({ type: "exit", report });
     }
   }
@@ -1106,7 +1118,7 @@ export class Match {
   /** Emit the exit reports held for bullets in flight once those bullets are gone. */
   private releaseHeldExits(): void {
     for (const rt of this.ordered) {
-      if (!rt.exitHeld || !rt.exitReport || this.bullets.some((b) => b.owner === rt)) continue;
+      if (!rt.exitHeld || !rt.exitReport || this.bullets.some((b) => b.owner === rt) || hasLiveGrenade(this, rt)) continue;
       rt.exitHeld = false;
       this.emit({ type: "exit", report: rt.exitReport });
     }
@@ -1148,6 +1160,7 @@ export class Match {
     }
     for (const rt of this.ordered) if (rt.pub.alive) timeoutPlayer(this, rt, exit);
     this.bullets = [];
+    this.grenades = [];
     // Every exit report goes out before the end report (the web's end sweep relies on it).
     this.releaseHeldExits();
     this.state.phase = "ended";
@@ -1234,6 +1247,7 @@ function newRuntime(
     pressAt: 0,
     nextFireAt: 0,
     lastShotAt: -Infinity,
+    nextThrowAt: 0,
     movedAt: 0,
     prevX: p.x,
     prevY: p.y,

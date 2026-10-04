@@ -8,7 +8,7 @@
  */
 
 import type { Room } from "colyseus.js";
-import type { BossKind, HealKind, MapData, WeaponId } from "@extract/shared";
+import type { BossKind, HealKind, KillWeapon, MapData, WeaponId } from "@extract/shared";
 import type { KillTally } from "./npc-labels";
 
 export interface HudSlot {
@@ -34,10 +34,12 @@ export interface HudSelf {
   /** Weapon slots w1, w2. */
   slots: [HudSlot, HudSlot];
   active: 0 | 1;
-  /** Ammo counts carried (all stacks in pockets and backpack). */
-  ammo: { light: number; shell: number; heavy: number };
+  /** Ammo counts carried (all stacks in pockets and backpack). Weapons v2: crossbow bolts. */
+  ammo: { light: number; shell: number; heavy: number; bolt: number };
   bandages: number;
   medkits: number;
+  /** Weapons v2: hand grenades carried (G / 5, the touch grenade button). */
+  grenades: number;
   /** Progress bars: match-clock ms when started / finishes. */
   reloading: { startMs: number; untilMs: number } | null;
   healing: { kind: HealKind; startMs: number; untilMs: number } | null;
@@ -70,7 +72,8 @@ export interface KillFeedEntry {
   id: number;
   killer: string;
   victim: string;
-  weapon: WeaponId | "";
+  /** Gun or (Weapons v2) "grenade"; "" = no weapon. */
+  weapon: KillWeapon | "";
   /**
    * NPC_ROLE of the killer / victim (0 = a human; KillMsg.killerRole / victimRole, NPC MODEL v5).
    * NPC names render in their role colour with the NPC badge.

@@ -8,7 +8,7 @@ import {
   type ReplayEvent,
   type ReplayKind,
   type ReplaySpawn,
-  type WeaponId,
+  type KillWeapon,
 } from "@extract/shared";
 
 /**
@@ -549,7 +549,7 @@ export const BOSS_STATE_LABEL: Record<ReplayBossState, string> = {
   cover: "в укрытии",
 };
 
-const weaponName = (w: WeaponId | ""): string => (w ? (WEAPONS[w]?.name ?? w) : "");
+const weaponName = (w: KillWeapon | ""): string => (w === "grenade" ? "граната" : w ? (WEAPONS[w]?.name ?? w) : "");
 
 /** One line of the events list. `names(r)` = ReplayModel.name; `extractName(id)` = the map's extract name. */
 export function describeEvent(e: NotableEvent, names: (r: number) => string, extractName: (id: string) => string = (id) => id): string {
