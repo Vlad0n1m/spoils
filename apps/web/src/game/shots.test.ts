@@ -26,8 +26,11 @@ describe("tracerLengths", () => {
     const lens = tracerLengths(idx, cx, 500, cx + def.muzzle, 500, [0], def.range);
     assert.equal(lens, null);
     const far = 1000;
-    const l2 = tracerLengths(idx, far, 500, far + def.muzzle, 500, [0], def.range)!;
+    const walls: boolean[] = [];
+    const l2 = tracerLengths(idx, far, 500, far + def.muzzle, 500, [0, Math.PI], def.range, walls)!;
     assert.ok(close(l2[0]!, 1500 - far - def.muzzle), `len=${l2[0]}`);
+    // The pellet toward the wall stops at a solid (impact puff); the one away from it does not.
+    assert.deepEqual(walls, [true, false]);
   });
 
   it("is the weapon range minus the muzzle offset in the open", () => {
