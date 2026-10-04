@@ -66,12 +66,76 @@ apps/game-server/node_modules/.bin/tsx --test apps/game-server/src/sim/world.tes
 Тесты сайта с базой используют `extract_test`. Бенчмарки и soak-тест (`apps/game-server/src/sim/econ`,
 `sim/soak.test.ts`) тяжёлые — запускать на настольной машине, не на ноутбуке.
 
-## Деплой
+## Deploy
 
-1. Применить `apps/web/migrations/002_world_v6.sql` (идемпотентна), затем `pnpm db:push`.
-2. Сначала выложить сайт, потом игровой сервер.
-3. На игровом сервере задать `GAME_SERVER_ID` и при желании `WORLD_SEED_SECRET`.
-4. Игровой сервер выкладывать сразу после вайпа (минута после 00:00, 00:45, 01:30… UTC): перезапуск посреди карты
-   отменяет её, вещи возвращаются владельцам, и сервер открывает новую копию текущей карты.
+### Single VPS with docker compose
+
+`docker-compose.yml` runs everything on one host:
+
+| Service | What it does |
+|---|---|
+| `postgres` | Postgres 16, data in the `extract_postgres_data` volume, not published to the host |
+| `migrate` | One-shot `drizzle-kit push` of the schema, then exits |
+| `web` | Next.js standalone server on `127.0.0.1:3000`. Before `server.js` it runs `deploy/web-preflight.mjs`: in production it refuses to start without `CRON_SECRET` (16+ chars), `DATABASE_URL`, `SESSION_SECRET` or `GAME_SERVER_HMAC_SECRET` |
+| `game-server` | Colyseus on `127.0.0.1:2567`, one always-live world. Refuses to boot in production without `GAME_SERVER_ID`, `WEB_API_BASE_URL` or `GAME_SERVER_HMAC_SECRET` |
+| `cron` | `deploy/cron/scheduler.mjs` (plain Node, no deps) calls the web cron routes with `Authorization: Bearer $CRON_SECRET`, like Vercel Cron does: `void-raids` every 5 min (and once at start), `watch-deposits` every 10 min (a no-op while deposits are disabled), `economy-daily` at 00:05 UTC. Schedule: `deploy/cron/schedule.json` |
+
+```bash
+cp .env.example .env        # fill it: see the list below; never commit it
+docker compose config -q    # validate
+docker compose up -d --build
+docker compose logs -f web game-server cron
+```
+
+- TLS and the public entry: `deploy/nginx/spoils.conf` (`SPOILS_DOMAIN` → web, `game.SPOILS_DOMAIN` → game server
+  WebSocket). Build the web with `NEXT_PUBLIC_GAME_SERVER_URL=wss://game.SPOILS_DOMAIN`: `NEXT_PUBLIC_*` values are baked
+  in at build time, so rebuild the `web` image after changing them.
+- An existing database from before World v6: apply `apps/web/migrations/002_world_v6.sql` (idempotent) first, then the
+  `migrate` service pushes the rest.
+- Order: the web first, then the game server. Restart the game server right after a wipe (a minute past 00:00,
+  00:45, 01:30… UTC): a restart in the middle of a map voids it, gear goes back to its owners, and the server opens
+  a fresh copy of the current map.
+- Without docker: `pnpm build`, export the `.env` values, run the web with `NODE_ENV=production node deploy/web-preflight.mjs && pnpm --filter web start`,
+  the game server with `pnpm --filter game-server start`, and call the cron routes from the host crontab with the same
+  Bearer header (see `deploy/cron/schedule.json`). On Vercel the crons come from `apps/web/vercel.json` and Vercel sets
+  `CRON_SECRET` itself.
+
+### Android app (Trusted Web Activity)
+
+The mobile app is the web game wrapped by [Bubblewrap](https://github.com/GoogleChromeLabs/bubblewrap) into an APK/AAB
+(tested on a Solana Seeker). Config: `twa/twa-manifest.json` (package `app.spoils.twa`, landscape, fullscreen, start
+URL `/play`). Everything Bubblewrap generates in `twa/` is git-ignored; only the manifest is versioned.
+
+```bash
+npm i -g @bubblewrap/cli
+cd twa
+# 1. Replace SPOILS_DOMAIN in twa-manifest.json and SPOILS_KEYSTORE_PATH with the keystore path.
+# 2. First time only: create the upload key OUTSIDE the repo, e.g.
+#    keytool -genkeypair -v -keystore ~/keys/spoils-upload.jks -alias spoils -keyalg RSA -keysize 2048 -validity 10000
+bubblewrap update            # generates the Android project from twa-manifest.json
+bubblewrap build             # asks for the keystore passwords → app-release-signed.apk + app-release-bundle.aab
+bubblewrap fingerprint add <SHA-256>   # optional: keeps the fingerprint in twa-manifest.json
+```
+
+The keystore and its passwords never go into the repo (keep them in a password manager plus an offline backup;
+losing the key means a new package on the store). Digital Asset Links: put the SHA-256 fingerprint of the signing key
+(`keytool -list -v -keystore ~/keys/spoils-upload.jks -alias spoils`, or the Play App Signing key from the Play
+Console) into `apps/web/public/.well-known/assetlinks.json` and deploy the web; without it the app shows a browser
+address bar. The icons `/icon-512.png` and `/icon-512-maskable.png` must be served by the web.
+
+### Что вписывает Влад
+
+Только имена — значения в `.env` на сервере и в менеджере паролей, в репозиторий не попадают.
+
+- Домен: `SPOILS_DOMAIN` в `deploy/nginx/spoils.conf` и `twa/twa-manifest.json`, `NEXT_PUBLIC_GAME_SERVER_URL` (`wss://game.<домен>`)
+- `CRON_SECRET`
+- `MASTER_SEED_HEX`
+- `WORLD_SEED_SECRET`
+- `GAME_SERVER_ID`
+- `GAME_SERVER_HMAC_SECRET`
+- `SESSION_SECRET`
+- `DATABASE_URL` (вне docker; в docker — `POSTGRES_PASSWORD`)
+- Ключи Solana: `HOT_WALLET_SECRET_B58`, `SOLANA_RPC_URL`, `SOLANA_CLUSTER`, `NEXT_PUBLIC_SOLANA_RPC_URL`, `NEXT_PUBLIC_SOLANA_CLUSTER`
+- Отпечаток SHA-256 ключа подписи в `apps/web/public/.well-known/assetlinks.json` (и `package_name`, если меняется `packageId`), путь к keystore в `twa/twa-manifest.json`
 
 Секреты в репозиторий не кладутся: `.env` заполняется вручную.

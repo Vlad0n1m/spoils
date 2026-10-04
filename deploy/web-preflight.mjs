@@ -1,0 +1,40 @@
+// Boot check of the web container (apps/web/Dockerfile runs it before `node apps/web/server.js`).
+// Mirrors productionEnvProblems + the core schema of apps/web/src/lib/env.ts: keep them in sync.
+// Prints variable names only, never values. Exit 1 makes the container refuse to start.
+const env = process.env;
+const production = env.NODE_ENV === "production";
+const set = (k) => typeof env[k] === "string" && env[k].trim() !== "";
+const problems = [];
+const warnings = [];
+
+if (!set("DATABASE_URL")) problems.push("DATABASE_URL is required");
+if (!set("SESSION_SECRET")) problems.push("SESSION_SECRET is required");
+else if (env.SESSION_SECRET.trim().length < 32) warnings.push("SESSION_SECRET is shorter than 32 characters");
+if ((env.GAME_SERVER_HMAC_SECRET ?? "").length < 16) {
+  problems.push("GAME_SERVER_HMAC_SECRET (16+ characters, same as the game server) is required");
+}
+if (set("SOLANA_RPC_URL")) {
+  try {
+    new URL(env.SOLANA_RPC_URL);
+  } catch {
+    problems.push("SOLANA_RPC_URL is not a URL");
+  }
+}
+
+if (production) {
+  const cron = (env.CRON_SECRET ?? "").trim();
+  if (!cron) problems.push("CRON_SECRET is required in production (Bearer token of /api/cron/**)");
+  else if (cron.length < 16) problems.push("CRON_SECRET must be at least 16 characters in production");
+  // keypair.ts throws on the first registration without it; say so at boot already.
+  if (!/^[0-9a-fA-F]{64,}$/.test((env.MASTER_SEED_HEX ?? "").trim())) {
+    warnings.push("MASTER_SEED_HEX (64+ hex chars) is missing or malformed: wallet registration will fail");
+  }
+}
+
+for (const w of warnings) console.warn(`[preflight] warning: ${w}`);
+if (problems.length > 0) {
+  for (const p of problems) console.error(`[preflight] ${p}`);
+  console.error("[preflight] the web refuses to start; fix .env and restart the container");
+  process.exit(1);
+}
+console.log("[preflight] env ok");

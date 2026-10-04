@@ -1,0 +1,7 @@
+# Bubblewrap generates the Android project here from twa-manifest.json; only the manifest is versioned.
+*
+!.gitignore
+!twa-manifest.json
+# Never commit signing keys (they live outside the repo anyway).
+*.keystore
+*.jks
