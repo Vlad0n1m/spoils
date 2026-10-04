@@ -84,6 +84,12 @@ export function passTierOfReward(id: string): PassTier | null {
 
 /** The skin a pass-tier-8 player wears (also drawn in the raid as a tint). */
 export const ALPHA_SKIN = "s-alpha-veteran";
+/** Player.skin codes of the wearable skins (0 = the default look). */
+export const SKIN_CODES: Readonly<Record<string, number>> = { "s-alpha-veteran": 1 };
+/** Player.skin of a skin id (0 for none / unknown). */
+export function skinCode(id: string | null | undefined): number {
+  return id && Object.prototype.hasOwnProperty.call(SKIN_CODES, id) ? SKIN_CODES[id]! : 0;
+}
 /** The permanent leaderboard badge (tier 10). */
 export const FOUNDER_BADGE = "b-founder";
 

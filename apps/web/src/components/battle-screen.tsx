@@ -24,9 +24,12 @@ import type { GameRendererApi, HudSnapshot, PanelActions, RendererOptions } from
 import { createRoomInventoryClient } from "@/game/inventory-client";
 import { cineExitOf, outcomeHoldMs } from "@/game/outcome-hold";
 import { warmSpritesFor } from "@/game/sprite-cache";
+import { shouldUseTouch } from "@/game/touch-mode";
 import { Hud, useHud } from "./hud";
 import { InventoryOverlay } from "./inventory/inventory-overlay";
 import { MatchOutcomeOverlay } from "./match-outcome-overlay";
+import { TutorialOverlay } from "./tutorial-overlay";
+import { useTouchMode } from "./use-touch-mode";
 
 interface Props {
   ticket: JoinTicket;
@@ -164,7 +167,8 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
       await warmSpritesFor();
       if (disposed) return;
       const client = await getColyseusClient();
-      const options: BattleJoinOptions = { ticket, mapHash: clientMapHash() };
+      // touch: the Alpha Pass "phone" tester task (the server only echoes it into the exit report).
+      const options: BattleJoinOptions = { ticket, mapHash: clientMapHash(), ...(shouldUseTouch() ? { touch: true } : {}) };
       const joined = await client.joinById(battleRoomId, options, BattleState);
       if (disposed) {
         void joined.leave().catch(() => {});
@@ -335,6 +339,7 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
   const { hasSelf, selfOut, selfExit, phase, enteredAtMs } = useHud(hudStore, screenSlice, shallowEqual);
   // The renderer keeps the same tally object until a kill lands, so identity is enough here.
   const killTally = useHud(hudStore, killTallySlice);
+  const touch = useTouchMode();
   // The extraction / death cinematic plays on the canvas first; the overlay's dim and card would
   // hide it. Once the hold ran out it stays (one battle per mount).
   const cineExit = selfExit ?? cineExitOf(null, outcome?.exit);
@@ -389,6 +394,8 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
       ) : (
         <>
           <Hud store={hudStore} selfNickname={nickname} onLeave={onLeave} earnsXp={earnsXp} />
+          {/* Alpha first raid (JoinTicket.tutorial): step-by-step hints until the extract. */}
+          {ticket.tutorial && hasSelf && !overlayVisible && <TutorialOverlay store={hudStore} touch={touch} />}
           {overlayNodes.map((o) => (
             <Fragment key={o.id}>{o.node}</Fragment>
           ))}

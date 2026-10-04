@@ -168,3 +168,24 @@ test("party: dropId / partyId are signed after the world fields; solo tickets si
     assert.equal(verifyJoinTicket(t, NOW)?.dropSize, undefined);
   });
 });
+
+test("alpha extras: tutorial and skin are signed when present; tickets without them sign the old payload", () => {
+  withSecret(SECRET, () => {
+    const matchId = "0b9d2c1e-7f43-4a51-9c3e-2f1d8a6b5c40";
+    const entryId = "6f1c7e2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+    const t = signJoinTicket({ userId: "user-1", nickname: "Neo", issuedAt: NOW, matchId, entryId, tutorial: true, skin: "s-alpha-veteran" }, SECRET);
+    const v = verifyJoinTicket(t, NOW)!;
+    assert.equal(v.tutorial, true);
+    assert.equal(v.skin, "s-alpha-veteran");
+    assert.equal(verifyJoinTicket({ ...t, skin: "s-other" }, NOW), null, "a swapped skin fails the signature");
+    const { tutorial: _t, ...noTut } = t;
+    assert.equal(verifyJoinTicket(noTut, NOW), null, "dropping the tutorial flag fails the signature");
+    assert.equal(verifyJoinTicket({ ...t, tutorial: "yes" }, NOW), null);
+    assert.equal(verifyJoinTicket({ ...t, skin: "Bad Skin!" }, NOW), null);
+    const plain = signJoinTicket({ userId: "user-1", nickname: "Neo", issuedAt: NOW, matchId, entryId }, SECRET);
+    assert.equal(verifyJoinTicket({ ...plain, tutorial: true }, NOW), null, "a client cannot add the flag");
+    const p = verifyJoinTicket(plain, NOW)!;
+    assert.equal(p.tutorial, undefined);
+    assert.equal(p.skin, undefined);
+  });
+});

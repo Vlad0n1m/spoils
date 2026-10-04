@@ -136,6 +136,9 @@ function statusContexts() {
   return statusCtx;
 }
 
+/** Alpha Veteran skin (Alpha Pass tier 8): mint tint, light enough to keep the sprite's shading. */
+export const ALPHA_VETERAN_TINT = 0x9ff2da;
+
 export class PlayerView {
   readonly root = new Container();
   /** Rotates with aim: backpack, weapon and body. */
@@ -162,6 +165,8 @@ export class PlayerView {
   private roleSet = false;
   private roleNick = "";
   private bossTexReady = false;
+  /** Player.skin applied (-1 = re-apply). */
+  private skinCode = -1;
   /** Sprite size multiplier for the role (boss 1.4, guard 1.08). */
   private scaleK = 1;
   private statusY = -PLAYER.RADIUS - 44;
@@ -249,6 +254,18 @@ export class PlayerView {
     this.name.style.fill = this.isSelf ? 0xffffff : this.role ? NPC_TAG_COLOR[this.role] : c;
   }
 
+  /**
+   * Player.skin (Alpha Pass, pass.ts SKIN_CODES): 1 = Alpha Veteran, a mint tint over the raider
+   * sprite. Humans only; NPC tints (setRole) win. Cheap when unchanged.
+   */
+  setSkin(code: number) {
+    if (this.role) return;
+    const c = code === 1 ? 1 : 0;
+    if (c === this.skinCode) return;
+    this.skinCode = c;
+    this.sprite.tint = c === 1 ? ALPHA_VETERAN_TINT : 0xffffff;
+  }
+
   setNickname(nick: string) {
     // NPCs show their role tag (setRole) instead of the raw nickname.
     if (this.role) return;
@@ -301,6 +318,7 @@ export class PlayerView {
     }
     this.colorKey = "";
     this.barsKey = "";
+    this.skinCode = -1;
     this.statusY = head - 44;
     this.status.position.set(0, this.statusY);
   }

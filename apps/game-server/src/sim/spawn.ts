@@ -255,3 +255,79 @@ export function partySpawnNear(
   }
   return best ?? { x: anchor.x, y: anchor.y };
 }
+
+// ---------------------------------------------------------------- alpha tutorial (first raid)
+
+/** Tutorial spawn (JoinTicket.tutorial): how far the marauder post may be from the container… */
+export const TUTORIAL_POST_MIN_PX = 450;
+/** …and at most (one weak marauder "nearby": a short walk, not in sight at the drop). */
+export const TUTORIAL_POST_MAX_PX = 1_100;
+/** The raider lands this far from the container, on the side away from the post. */
+export const TUTORIAL_BACK_PX = 220;
+
+/**
+ * The first raid of a player (no settled exit yet, signed by the web): land next to a quiet T1 spot
+ * that has a container and a living T1 marauder squad TUTORIAL_POST_MIN_PX–TUTORIAL_POST_MAX_PX
+ * away, so the hint overlay's steps (move, aim, search, kill, heal, extract) all happen within a
+ * minute's walk. Candidates (container of tier ≤ 1 in a zone of tier ≤ 1 or the wilds × such a
+ * squad) are ranked by: the fewest living members of the squad (one is ideal), then the distance
+ * to the nearest living human (farther first). The spot is TUTORIAL_BACK_PX behind the container
+ * (away from the post), snapped to a walk cell centre of the container's walk component and clear
+ * of solids, and must pass the party-drop safety rule (dropSpawnSafe: no stranger within view, no
+ * own corpse nearby). No player-like bots: the marauder is a normal map NPC. Deterministic (no rng).
+ * Returns null when nothing fits (then the normal entry spawn applies); the side is the nearest
+ * map spawn's (its extracts).
+ */
+export function pickTutorialSpawn(m: Match, userId: string): SpawnSpot | null {
+  const squads = m.npcs.squads.filter((s) => s.type === "marauder" && !s.retired && s.post && s.post.tier <= 1 && s.members.some((r) => r.pub.alive));
+  if (squads.length === 0) return null;
+  const zoneTier = new Map(m.map.zones.map((z) => [z.id, z.tier]));
+  const humans: Array<{ x: number; y: number }> = [];
+  for (const rt of m.allRuntimes()) if (!rt.isNpc && rt.pub.alive && rt.userId !== userId) humans.push(rt.pub);
+  const g = m.mapRt.walk;
+  const compOf = (cell: number) => {
+    const r = m.mapRt.regions.region[cell] ?? -1;
+    return r < 0 ? -1 : (m.mapRt.regions.comp[r] ?? -1);
+  };
+  const centre = (cell: number) => ({ x: ((cell % g.cols) + 0.5) * g.cell, y: (Math.floor(cell / g.cols) + 0.5) * g.cell });
+  type Cand = { x: number; y: number; alive: number; far: number; key: number };
+  const cands: Cand[] = [];
+  m.map.containers.forEach((c, ci) => {
+    if (c.tier > 1) return;
+    if (c.zone !== null && (zoneTier.get(c.zone) ?? 9) > 1) return;
+    const home = nearestWalkCell(g, c.x, c.y, 160);
+    if (home < 0) return;
+    const comp = compOf(home);
+    for (const s of squads) {
+      const post = s.post!;
+      const d = Math.hypot(post.x - c.x, post.y - c.y);
+      if (d < TUTORIAL_POST_MIN_PX || d > TUTORIAL_POST_MAX_PX) continue;
+      const ux = (c.x - post.x) / d;
+      const uy = (c.y - post.y) / d;
+      const cell = nearestWalkCell(g, c.x + ux * TUTORIAL_BACK_PX, c.y + uy * TUTORIAL_BACK_PX, 128);
+      if (cell < 0 || (comp >= 0 && compOf(cell) !== comp)) continue;
+      const p = centre(cell);
+      const r = resolveCircle(m.idx, p.x, p.y, PLAYER.RADIUS);
+      if (Math.abs(r.x - p.x) > 1e-6 || Math.abs(r.y - p.y) > 1e-6) continue;
+      if (Math.hypot(p.x - post.x, p.y - post.y) < TUTORIAL_POST_MIN_PX) continue;
+      if (!dropSpawnSafe(m, p, userId, "")) continue;
+      let far = Infinity;
+      for (const h of humans) far = Math.min(far, Math.hypot(h.x - p.x, h.y - p.y));
+      cands.push({ x: p.x, y: p.y, alive: s.members.filter((x) => x.pub.alive).length, far, key: ci * 1000 + s.id });
+    }
+  });
+  if (cands.length === 0) return null;
+  cands.sort((a, b) => a.alive - b.alive || b.far - a.far || a.key - b.key);
+  const best = cands[0]!;
+  let side: MapSide = 0;
+  let sd = Infinity;
+  for (const s of m.map.spawns) {
+    const d = Math.hypot(s.x - best.x, s.y - best.y);
+    if (d < sd) {
+      sd = d;
+      side = s.side;
+    }
+  }
+  m.recentSpawns.push({ x: best.x, y: best.y, at: m.clock });
+  return { x: best.x, y: best.y, side };
+}
