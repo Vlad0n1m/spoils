@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { minimapMatePoint } from "./minimap";
-import { MATE_COLORS, MAX_MATES, PARTY_LERP_MS, PARTY_STALE_MS, PartyTracker, edgeAnchor, mateLabel, parsePartyMsg } from "./party";
+import { MATE_COLORS, MAX_MATES, PARTY_LERP_MS, PARTY_STALE_MS, PartyTracker, arrowObstacles, edgeAnchor, mateLabel, parsePartyMsg } from "./party";
 
 const near = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
 const mate = (key: string, x: number, y: number, o: Record<string, unknown> = {}) => ({ key, id: `s-${key}`, name: key.toUpperCase(), x, y, alive: true, ...o });
@@ -99,6 +99,25 @@ describe("party (client)", () => {
     assert.ok(near(re.x, 980) && near(re.y, 240), `right edge → below the minimap (${re.x}, ${re.y})`);
     const te = edgeAnchor(1000, 600, 1700, -710, ins, avoid);
     assert.ok(near(te.y, 20) && near(te.x, 760), `top edge → left of the minimap (${te.x}, ${te.y})`);
+  });
+
+  it("arrowObstacles: on a landscape phone the arrows slide off the top stack and the bottom bar", () => {
+    const w = 844, h = 390;
+    const ins = { left: 26, right: 26, top: 74, bottom: 30 };
+    assert.equal(arrowObstacles(w, h, false).length, 1, "desktop: the minimap only");
+    const avoid = arrowObstacles(w, h, true);
+    const top = avoid.find((r) => r.y0 === 0 && r.x0 > 0 && r.x1 < w)!;
+    const bar = avoid.find((r) => r.y1 === h)!;
+    // Straight up: off the timer / compass stack, still on the top edge.
+    const up = edgeAnchor(w, h, w / 2, -3000, ins, avoid);
+    assert.ok(near(up.y, 74) && (near(up.x, top.x0) || near(up.x, top.x1)), `up (${up.x}, ${up.y})`);
+    // Straight down: beside the bottom bar, still on the bottom edge.
+    const down = edgeAnchor(w, h, w / 2 + 10, 3000, ins, avoid);
+    assert.ok(near(down.y, h - 30) && (near(down.x, bar.x0) || near(down.x, bar.x1)), `down (${down.x}, ${down.y})`);
+    for (const p of [up, down]) for (const r of avoid) assert.ok(!(p.x > r.x0 && p.x < r.x1 && p.y > r.y0 && p.y < r.y1));
+    // The side edges are free below the top row.
+    const left = edgeAnchor(w, h, -3000, h / 2 + 26, ins, avoid);
+    assert.ok(near(left.x, 26), `left (${left.x}, ${left.y})`);
   });
 
   it("mateLabel and minimapMatePoint", () => {

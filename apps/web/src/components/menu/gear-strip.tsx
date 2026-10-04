@@ -120,7 +120,9 @@ export function GearStrip({
               {e ? (
                 <ItemCard def={e.def} rarity={u?.rarity} dur={u?.dur} size="md" onClick={onEdit} title={`${itemDef(e.def)?.name ?? e.def} — edit loadout`} />
               ) : (
-                <button type="button" onClick={onEdit} className="rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70" aria-label={`${SLOT_LABEL[k]}: empty — edit loadout`}>
+                // block: as an inline-block the button sat on a text-box-trimmed line box only ~11 px tall,
+                // so items-end pushed the empty slot ~50 px down, behind PLAY on landscape phones.
+                <button type="button" onClick={onEdit} className="block rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70" aria-label={`${SLOT_LABEL[k]}: empty — edit loadout`}>
                   <EmptySlot label={SLOT_LABEL[k] ?? k} size="md" />
                 </button>
               )}

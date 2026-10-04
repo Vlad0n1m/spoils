@@ -131,6 +131,17 @@ button {
   @apply inline-flex h-6 min-w-6 items-center justify-center rounded-md border-2 border-black bg-white px-1 text-xs leading-none text-black shadow-[0_2px_0_#000];
 }
 
+/*
+ * text-box-trim (above) ends a line box at the baseline, so the overflow clip of Tailwind's
+ * `truncate` cut off everything below it: the underscore of a nickname ("Vqa1_452010" read as
+ * "VQA1 452010") and the descenders of g, p, y or р, у, д ("1 шард" in /admin). The padding moves the
+ * clip edge below the descenders; the negative margin keeps every box where it was.
+ */
+.truncate {
+  padding-bottom: 0.25em;
+  margin-bottom: -0.25em;
+}
+
 /* Outlined display text (stroke drawn under the fill so glyphs stay fat). */
 .toon-text {
   -webkit-text-stroke: 0.14em #000;
