@@ -16,6 +16,7 @@ import { createMapOverlaySystem } from "./fullmap";
 import { createIntroSystem } from "./intro";
 import { createPartySystem } from "./party";
 import { SoundVizSystem } from "./sound-viz";
+import { createWorldEventsSystem } from "./world-events";
 import type { SystemFactory } from "./systems";
 
 export const SYSTEM_FACTORIES: readonly SystemFactory[] = [
@@ -47,6 +48,8 @@ export const SYSTEM_FACTORIES: readonly SystemFactory[] = [
   () => createCinematicSystem(),
   // Boss bar (screen layer), boss alert sting and boss-turf tension swell (loot economy v4).
   () => createBossHudSystem(),
+  // WORLD v6 supply drops / hot zones / fight signals: ground circles, crate flare, event toasts.
+  () => createWorldEventsSystem(),
   // Full map (M) and the zone toast; drawn last so the opened map covers the indicators.
   () => createMapOverlaySystem(),
   // Positional audio, ambience, own-action cues. Draws nothing.
