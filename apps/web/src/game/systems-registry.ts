@@ -13,6 +13,7 @@ import { createWeatherSystem } from "./env/weather-fx";
 import { DamageArcSystem } from "./entities";
 import { createMapOverlaySystem } from "./fullmap";
 import { createIntroSystem } from "./intro";
+import { createPartySystem } from "./party";
 import { SoundVizSystem } from "./sound-viz";
 import type { SystemFactory } from "./systems";
 
@@ -33,6 +34,9 @@ export const SYSTEM_FACTORIES: readonly SystemFactory[] = [
   () => new SoundVizSystem(),
   // Crosshair hitmarker on dealt hits / kills, screen layer.
   () => createHitmarkerSystem(),
+  // Party mates: chevron / ghost ring / × in view, arrows with name + distance at the screen edge
+  // (under the intro card, the cinematics, the boss bar and the full map).
+  () => createPartySystem(),
   // Drop-in title card (zone, time, weather, extract countdown) + intro zoom, screen layer.
   () => createIntroSystem(),
   // Extraction letterbox / stamp / auto-sell total and the death cam, screen layer.

@@ -9,7 +9,8 @@
  *
  * Shows a 4096 px window around the local player, extraction points by state (allowed ones
  * brighter; off-window allowed extracts as edge pips), boss POI skulls (an edge skull when a boss
- * spot is near but off-window) and the local player only — never other players.
+ * spot is near but off-window), the local player and their party mates (S2C.PARTY, party.ts: a
+ * coloured dot, an edge pip when outside the window, an × when down) — never any other player.
  */
 
 import { CanvasSource, Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
@@ -173,6 +174,32 @@ export interface MinimapExtract {
   allowed?: boolean;
 }
 
+/** A party mate on the minimap (party.ts PartyMateView). */
+export interface MinimapMate {
+  x: number;
+  y: number;
+  alive: boolean;
+  color: number;
+}
+
+/**
+ * Where a mate sits on a minimap of side `base` showing window `win`: inside → its point; outside
+ * → clamped `inset` px inside the frame (an edge pip). Pure (minimap tests).
+ */
+export function minimapMatePoint(
+  win: { x: number; y: number; w: number; h: number },
+  x: number,
+  y: number,
+  base: number,
+  inset = 5,
+): { x: number; y: number; edge: boolean } {
+  const px = ((x - win.x) / win.w) * base;
+  const py = ((y - win.y) / win.h) * base;
+  const inside = px >= 0 && px <= base && py >= 0 && py <= base;
+  if (inside) return { x: px, y: py, edge: false };
+  return { x: Math.max(inset, Math.min(base - inset, px)), y: Math.max(inset, Math.min(base - inset, py)), edge: true };
+}
+
 const statusColor = (s: ExtractStatus) =>
   s === "open" ? COLORS.extractOpen : s === "waiting" ? COLORS.extractWaiting : COLORS.extractClosed;
 
@@ -190,6 +217,9 @@ export class Minimap {
   private readonly marks: Marker[] = [];
   /** One skull per map.bosses spot (inside the window, or an edge hint when near). */
   private readonly skulls: Graphics[] = [];
+  /** Party mate dots (redrawn only when colour / alive / edge changes). */
+  private readonly mateLayer = new Container();
+  private readonly mateMarks: Marker[] = [];
   private readonly me = new Graphics();
   private readonly north: Text;
   private readonly k: number;
@@ -222,7 +252,7 @@ export class Minimap {
       this.markers.addChild(g);
     }
 
-    this.root.addChild(this.frame, this.view, this.markers, this.me, this.north);
+    this.root.addChild(this.frame, this.view, this.markers, this.mateLayer, this.me, this.north);
     this.root.eventMode = "none";
     this.root.interactiveChildren = false;
   }
@@ -243,6 +273,8 @@ export class Minimap {
     nowMs: number,
     /** WORLD v6: BattleState boss fields — only the live event boss gets a skull (null = every spot). */
     boss: EventBossState | null = null,
+    /** Party mates (S2C.PARTY, party.ts), drawn under the local player's arrow. */
+    mates: readonly MinimapMate[] = [],
   ) {
     const map = this.map;
     const cx = self ? self.x : map.width / 2;
@@ -308,6 +340,35 @@ export class Minimap {
       g.position.set(hint.x, hint.y);
       g.scale.set(hint.edge ? 0.8 + 0.1 * Math.sin(nowMs / 300) : 1);
       g.alpha = hint.edge ? 0.95 : 0.85;
+    }
+
+    while (this.mateMarks.length < mates.length) {
+      const g = new Graphics();
+      this.mateLayer.addChild(g);
+      this.mateMarks.push({ g, key: "" });
+    }
+    for (let i = 0; i < this.mateMarks.length; i++) {
+      const mk = this.mateMarks[i]!;
+      const mate = mates[i];
+      mk.g.visible = !!mate;
+      if (!mate) continue;
+      const p = minimapMatePoint(win, mate.x, mate.y, BASE);
+      const key = `${mate.color}|${mate.alive}|${p.edge}`;
+      if (key !== mk.key) {
+        mk.key = key;
+        mk.g.clear();
+        if (!mate.alive) {
+          mk.g.moveTo(-4, -4).lineTo(4, 4).moveTo(4, -4).lineTo(-4, 4).stroke({ width: 4, color: 0x111111, alpha: 0.8 });
+          mk.g.moveTo(-4, -4).lineTo(4, 4).moveTo(4, -4).lineTo(-4, 4).stroke({ width: 2, color: mate.color });
+        } else if (p.edge) {
+          mk.g.circle(0, 0, 4).fill({ color: mate.color }).stroke({ width: 1.5, color: 0x111111 });
+        } else {
+          mk.g.circle(0, 0, 8).fill({ color: mate.color, alpha: 0.22 });
+          mk.g.circle(0, 0, 5).fill({ color: mate.color }).stroke({ width: 2, color: 0x111111 });
+        }
+      }
+      mk.g.position.set(p.x, p.y);
+      mk.g.alpha = mate.alive ? 1 : 0.8;
     }
 
     this.me.visible = !!self;

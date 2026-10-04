@@ -20,6 +20,8 @@
  *   InputController; the move stick steers the facing while the aim stick is idle.
  * - Crosshair (crosshair.ts): a CSS cursor over the canvas on desktop; on phones a reticle on the
  *   aim-stick line at the effective aim distance (screen layer, above the fog).
+ * - Party (party.ts): S2C.PARTY feeds a PartyTracker; its smoothed mates go to the minimap, and to
+ *   the systems through GameContext.partyMates (world markers, the full map).
  *
  * Used by battle-screen.tsx: `new GameRenderer({ mountEl, room, onHud, selfKey }); await r.start(); … r.stop()`.
  */
@@ -74,6 +76,7 @@ import { InputController, sampleAim } from "./input";
 import { PerfOverlay, TouchControls, shouldUseTouch } from "./touch-controls";
 import { TouchCrosshair, setCanvasCrosshair, touchCrosshairDistance } from "./crosshair";
 import { Minimap, type MinimapExtract } from "./minimap";
+import { PartyTracker, type PartyMateView } from "./party";
 import { canStartHeal, decayFactor, inputCancelsHeal, moveFnFor, Predictor, readServerMove } from "./prediction";
 import { DelayQueue, shotCentre } from "./shots";
 import type { CameraView, GameContext, GameLayers, GameSystem, SystemCommand } from "./systems";
@@ -225,6 +228,10 @@ export class GameRenderer implements GameRendererApi {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   /** S2C.JOINED seen by the renderer itself (the screen usually captures it first). */
   private joinedSelfKey: string | null = null;
+  /** S2C.PARTY: the local player's party mates (party.ts). */
+  private readonly party = new PartyTracker();
+  /** This frame's smoothed mates (GameContext.partyMates, minimap). */
+  private partyNow: readonly PartyMateView[] = [];
 
   // Netcode
   private predictor: Predictor | null = null;
@@ -468,6 +475,8 @@ export class GameRenderer implements GameRendererApi {
     this.effects?.destroy();
     this.effects = null;
     this.remoteFx.clear();
+    this.party.clear();
+    this.partyNow = [];
 
     // Textures first, while the GL renderer still exists: destroying them after app.destroy() threw
     // "Cannot read properties of null (reading 'gc')" from GlTextureSystem on every raid exit.
@@ -581,6 +590,9 @@ export class GameRenderer implements GameRendererApi {
     });
     on<{ t: number }>(S2C.PONG, (m) => {
       if (typeof m?.t === "number") this.pingMs = Math.max(0, Math.round(performance.now() - m.t));
+    });
+    on<unknown>(S2C.PARTY, (m) => {
+      this.party.ingest(m, performance.now());
     });
   }
 
@@ -945,6 +957,7 @@ export class GameRenderer implements GameRendererApi {
         if (e && !e.removing) return { x: e.view.x, y: e.view.y, at: performance.now() };
         return this.goneAt.get(id) ?? null;
       },
+      partyMates: () => this.partyNow,
     };
   }
 
@@ -1200,6 +1213,7 @@ export class GameRenderer implements GameRendererApi {
       this.fog.sprite.visible = false;
     }
 
+    this.partyNow = this.party.mates(now);
     if (this.minimap) {
       this.minimap.layout(w, h);
       this.minimap.update(
@@ -1209,6 +1223,7 @@ export class GameRenderer implements GameRendererApi {
           : null,
         now,
         state,
+        this.partyNow,
       );
     }
 

@@ -5,6 +5,7 @@ import {
   C2S,
   CLOSE_CODES,
   MATCH,
+  PARTY,
   S2C,
   SERVER_TICK_MS,
   WORLD,
@@ -23,6 +24,7 @@ import { offExitSettled, reportEnd, reportExit, reportWorldEvent } from "../net/
 import { buildBatches } from "../sim/audience.js";
 import { withNpcSettlement } from "../sim/items.js";
 import { Match, expectedMapHash, warmMatchMap } from "../sim/match.js";
+import { partyPositions } from "../sim/party.js";
 import type { MatchEvent } from "../sim/types.js";
 import { ViewSync } from "../sim/views.js";
 import { worldNow } from "../world/clock.js";
@@ -92,6 +94,8 @@ export function sanitizeWorld(raw: unknown): WorldCreateOptions | null {
 const MAX_INPUT_BATCH = 15;
 /** Clients get their SETTLED even if the web API is slow; the post keeps retrying in the background. */
 const SETTLE_WAIT_MS = 5_000;
+/** S2C.PARTY period (PARTY.POS_HZ). */
+const PARTY_PERIOD_MS = 1000 / PARTY.POS_HZ;
 
 /**
  * One world shard (WORLD v6, spec §3.3): a thin network wrapper around sim/Match. Messages become
@@ -101,7 +105,8 @@ const SETTLE_WAIT_MS = 5_000;
  *
  * Tick order (fog memo §2.4): match.step → syncViews → broadcastPatch → dispatch. Patches are sent
  * by the tick itself (patchRate = null), so a newly visible shooter's Player entry reaches the
- * client in the same tick, before the ShotMsg that references it.
+ * client in the same tick, before the ShotMsg that references it. Every 1 / PARTY.POS_HZ s the tick
+ * also sends S2C.PARTY (sim/party.ts) to each connected party member: their mates' positions only.
  */
 export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> implements ShardRoom {
   override autoDispose = false;
@@ -121,6 +126,10 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
   private finishing = false;
   private summary: MatchSummaryMsg | null = null;
   private disposedFlag = false;
+  /** Time since the last S2C.PARTY round. */
+  private partyAccMs = 0;
+  /** Roster indexes whose client got mates in the last S2C.PARTY round (they get one empty list when that ends). */
+  private readonly partyShown = new Set<number>();
 
   get disposed(): boolean {
     return this.disposedFlag;
@@ -303,6 +312,11 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     this.syncViews(events);
     this.broadcastPatch();
     this.dispatch(events);
+    this.partyAccMs += dtMs;
+    if (this.partyAccMs >= PARTY_PERIOD_MS) {
+      this.partyAccMs %= PARTY_PERIOD_MS;
+      this.sendParty();
+    }
     if (this.perf) {
       this.perf.add(t1 - t0, performance.now() - t0);
       // One line per ~30 s of ticks.
@@ -358,6 +372,24 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
         default:
           break;
       }
+    }
+  }
+
+  /**
+   * S2C.PARTY (sim/party.ts): each connected party member gets their mates' positions, and nobody
+   * else gets anything. A member whose mates are all gone gets one empty list, then nothing.
+   */
+  private sendParty() {
+    const out = partyPositions(this.match);
+    for (const r of this.partyShown) {
+      if (!out.has(r)) this.byRoster.get(r)?.send(S2C.PARTY, { mates: [] });
+    }
+    this.partyShown.clear();
+    for (const [r, msg] of out) {
+      const client = this.byRoster.get(r);
+      if (!client) continue;
+      client.send(S2C.PARTY, msg);
+      this.partyShown.add(r);
     }
   }
 

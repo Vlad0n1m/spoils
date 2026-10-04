@@ -15,11 +15,19 @@
  * checks of §3.2 and the web's raids/enter, then puts the raider on the map (Match.addHuman), so
  * the seat reservation that follows finds a living runtime. Errors are ServerErrors whose message
  * is a WORLD_JOIN_ERR code ("<code>" or "<code>:<detail>").
+ *
+ * Party drops (shared party.ts, JoinTicket.dropId): the first admission of a dropId on a shard needs
+ * room for a whole party (PARTY.MAX_SIZE: the ticket does not say how many follow) and holds those
+ * seats for PARTY.DROP_TTL_MS; it is refused with "world_full:party" (PARTY_FULL_DETAIL) when the
+ * shard cannot take them all. Later members of that drop take a held seat (no capacity refusal),
+ * and every other admission counts the held seats as taken. Spawning together is the Match's
+ * (spawn.ts pickDropSpawn).
  */
 
 import { randomInt, randomUUID } from "node:crypto";
 import { ServerError, matchMaker } from "@colyseus/core";
 import {
+  PARTY,
   ROOMS,
   WORLD,
   WORLD_JOIN_ERR,
@@ -90,7 +98,21 @@ export interface Shard {
   registered: boolean;
   /** userId → running admission (a second PLAY of the same user waits for it). */
   inflight: Map<string, Promise<void>>;
+  /** Party drops admitted on this shard, by dropId (seats held for their members, see the module comment). */
+  drops: Map<string, DropSeats>;
 }
+
+/** One party drop's seats on a shard. */
+export interface DropSeats {
+  partyId: string;
+  /** World time of the drop's first admission: seats are held until firstAt + PARTY.DROP_TTL_MS. */
+  firstAt: number;
+  /** Members that took a seat of this drop (first member included). */
+  users: Set<string>;
+}
+
+/** WORLD_JOIN_ERR.WORLD_FULL detail when the shard cannot take a whole party drop ("world_full:party"). */
+export const PARTY_FULL_DETAIL = "party";
 
 export interface DirectoryDeps {
   /** World wall clock (worldNow). */
@@ -313,6 +335,7 @@ export class WorldDirectory {
       matchSeed: world.matchSeed,
       registered: false,
       inflight: new Map(),
+      drops: new Map(),
     };
     this.byCycle.set(cycle, shard);
     this.byMatch.set(shard.matchId, shard);
@@ -386,19 +409,59 @@ export class WorldDirectory {
       await running;
       return;
     }
-    if (
-      m.humansOnMap() + shard.inflight.size >= WORLD.CAPACITY ||
-      m.allRuntimes().length >= WORLD.MAX_RUNTIMES_PER_SHARD - WORLD.RUNTIME_HEADROOM
-    ) {
-      throw joinErr(503, WORLD_JOIN_ERR.WORLD_FULL);
-    }
+    const seat = this.takeSeat(shard, t);
     const p = this.runAdmission(shard, t, t.entryId);
     shard.inflight.set(t.userId, p);
     try {
       await p;
+    } catch (e) {
+      // A refused member gives the drop's seat back (a refused first member: the whole drop).
+      if (seat) {
+        seat.users.delete(t.userId);
+        if (seat.users.size === 0) shard.drops.delete(t.dropId!);
+      }
+      throw e;
     } finally {
       if (shard.inflight.get(t.userId) === p) shard.inflight.delete(t.userId);
     }
+  }
+
+  /**
+   * Capacity of one admission (module comment): throws world_full / world_full:party, or returns the
+   * drop whose seat this admission took (null: a solo seat or a member already counted in the drop).
+   */
+  private takeSeat(shard: Shard, t: JoinTicket): DropSeats | null {
+    const m = shard.room.match;
+    const now = this.deps.now();
+    let held = 0;
+    for (const [id, d] of shard.drops) {
+      if (now - d.firstAt > PARTY.DROP_TTL_MS) shard.drops.delete(id);
+      else held += Math.max(0, PARTY.MAX_SIZE - d.users.size);
+    }
+    const humans = m.humansOnMap() + shard.inflight.size;
+    const runtimes = m.allRuntimes().length;
+    const runtimeCap = WORLD.MAX_RUNTIMES_PER_SHARD - WORLD.RUNTIME_HEADROOM;
+    const dropId = t.partyId ? t.dropId : undefined;
+    const drop = dropId ? shard.drops.get(dropId) : undefined;
+    if (dropId && drop && drop.partyId === t.partyId && !drop.users.has(t.userId) && drop.users.size < PARTY.MAX_SIZE) {
+      // A seat held for this drop since its first member: only the hard runtime cap still applies.
+      if (runtimes >= runtimeCap) throw joinErr(503, WORLD_JOIN_ERR.WORLD_FULL);
+      drop.users.add(t.userId);
+      return drop;
+    }
+    if (dropId && !drop) {
+      // The drop's first member: the whole party has to fit, or nobody of it is admitted here.
+      if (humans + held + PARTY.MAX_SIZE > WORLD.CAPACITY || runtimes + held + PARTY.MAX_SIZE > runtimeCap) {
+        throw joinErr(503, WORLD_JOIN_ERR.WORLD_FULL, PARTY_FULL_DETAIL);
+      }
+      const seats: DropSeats = { partyId: t.partyId!, firstAt: now, users: new Set([t.userId]) };
+      shard.drops.set(dropId, seats);
+      return seats;
+    }
+    if (humans + held >= WORLD.CAPACITY || runtimes + held >= runtimeCap) {
+      throw joinErr(503, WORLD_JOIN_ERR.WORLD_FULL);
+    }
+    return null;
   }
 
   private async runAdmission(shard: Shard, t: JoinTicket, entryId: string): Promise<void> {
@@ -440,6 +503,7 @@ export class WorldDirectory {
         snapshot: res.snapshot,
         pool: res.pool,
         bossFill: res.bossFill,
+        ...(t.partyId ? { partyId: t.partyId, ...(t.dropId ? { dropId: t.dropId } : {}) } : {}),
       });
     } catch (e) {
       console.error(`[world] admission ${shard.matchId}/${entryId}: addHuman failed:`, e);

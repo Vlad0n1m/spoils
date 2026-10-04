@@ -4,7 +4,8 @@
  *
  *  - FullMapOverlay: the shared overview texture (minimap.ts) fitted to the screen, POI names in
  *    tier colours, YOUR allowed extracts (SelfState.extractMask) bright with names and closing
- *    times, the others greyed, your spawn side, a compass and your own arrow — never other players.
+ *    times, the others greyed, your spawn side, a compass, your own arrow and your party mates
+ *    (S2C.PARTY, party.ts: coloured dot + name, × when down) — never any other player.
  *  - ZoneTracker (pure) + ZoneToast: "Grain Elevator · T3" when you enter a POI, with a short dwell
  *    so walking along a zone edge does not spam, and no repeat for the same zone within 45 s. A boss
  *    POI adds a red skull line ("Foreman's turf"); the full map marks boss spots with named skulls.
@@ -96,6 +97,8 @@ export interface FullMapLive {
   armAt: number;
   /** BattleState boss fields: only the live event boss gets a skull. */
   boss: EventBossState | null;
+  /** Party mates (party.ts PartyMateView), absent / empty when solo. */
+  mates?: ReadonlyArray<{ key: string; name: string; x: number; y: number; alive: boolean; color: number }>;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -283,6 +286,11 @@ export class FullMapOverlay {
   private readonly extracts: ExtractMark[] = [];
   /** Boss spots: skull + name ("FOREMAN"); the boss may not have spawned this match. */
   private readonly bossMarks: Array<{ b: BossSpot; g: Graphics; label: Text }> = [];
+  /** Party mates: dot (or ×) + name, pooled; redrawn only when colour / alive change. */
+  private readonly mateLayer = new Container();
+  private readonly mateMarks: Array<{ g: Graphics; label: Text; key: string }> = [];
+  private readonly labelStyle: (fill: number, size: number) => TextStyleOptions;
+  private fontScale = 1;
   private readonly me = new Graphics();
   private readonly compass = new Container();
   private readonly title: Text;
@@ -302,6 +310,7 @@ export class FullMapOverlay {
       fill,
       stroke: { color: 0x0b0b0b, width: 4 },
     });
+    this.labelStyle = labelStyle;
     for (const z of map.zones) {
       const t = new Text({ text: `${z.name}\nT${z.tier}`, style: { ...labelStyle(TIER_COLORS[z.tier], 15), align: "center", lineHeight: 17 } });
       t.anchor.set(0.5);
@@ -337,7 +346,7 @@ export class FullMapOverlay {
     this.hint = new Text({ text: shouldUseTouch() ? "Tap MAP to close" : "M — close", style: { ...labelStyle(0xc9ced6, 13), fontWeight: "700" } });
     this.hint.anchor.set(0.5, 0);
 
-    this.panel.addChild(this.mapSprite, this.zones, this.sideBand, this.labels, this.me, this.compass);
+    this.panel.addChild(this.mapSprite, this.zones, this.sideBand, this.labels, this.mateLayer, this.me, this.compass);
     this.root.addChild(this.backdrop, this.panel, this.title, this.hint);
     this.root.visible = false;
     this.root.eventMode = "none";
@@ -376,6 +385,7 @@ export class FullMapOverlay {
     }
     this.zones.rect(0, 0, this.map.width * k, this.map.height * k).stroke({ width: 3, color: 0xffffff, alpha: 0.6 });
     const fontScale = Math.max(0.7, Math.min(1.2, size / 800));
+    this.fontScale = fontScale;
     for (const { z, t } of this.zoneLabels) {
       // A boss POI's skull sits near its centre: its name goes to the bottom edge instead.
       if (z.boss) {
@@ -465,10 +475,46 @@ export class FullMapOverlay {
       m.g.visible = shown;
       m.label.visible = shown;
     }
+    this.updateMates(live?.mates ?? [], k);
     this.me.visible = !!self;
     if (self) {
       this.me.position.set(self.x * k, self.y * k);
       this.me.rotation = self.aim;
+    }
+  }
+
+  private updateMates(mates: NonNullable<FullMapLive["mates"]>, k: number) {
+    while (this.mateMarks.length < mates.length) {
+      const g = new Graphics();
+      const label = new Text({ text: "", style: this.labelStyle(0xffffff, 13) });
+      label.anchor.set(0, 0.5);
+      this.mateLayer.addChild(g, label);
+      this.mateMarks.push({ g, label, key: "" });
+    }
+    for (let i = 0; i < this.mateMarks.length; i++) {
+      const mk = this.mateMarks[i]!;
+      const m = mates[i];
+      mk.g.visible = mk.label.visible = !!m;
+      if (!m) continue;
+      const key = `${m.color}|${m.alive}`;
+      if (mk.key !== key) {
+        mk.key = key;
+        mk.g.clear();
+        if (m.alive) {
+          mk.g.circle(0, 0, 12).fill({ color: m.color, alpha: 0.25 });
+          mk.g.circle(0, 0, 7).fill({ color: m.color }).stroke({ width: 2.5, color: 0x111111 });
+        } else {
+          mk.g.moveTo(-7, -7).lineTo(7, 7).moveTo(7, -7).lineTo(-7, 7).stroke({ width: 6, color: 0x111111, alpha: 0.8 });
+          mk.g.moveTo(-7, -7).lineTo(7, 7).moveTo(7, -7).lineTo(-7, 7).stroke({ width: 3, color: m.color });
+        }
+        mk.label.style.fill = m.color;
+      }
+      const text = m.alive ? m.name : `${m.name} · down`;
+      if (mk.label.text !== text) mk.label.text = text;
+      mk.g.position.set(m.x * k, m.y * k);
+      mk.label.scale.set(this.fontScale);
+      mk.label.position.set(m.x * k + 13 * this.fontScale, m.y * k);
+      mk.g.alpha = mk.label.alpha = m.alive ? 1 : 0.8;
     }
   }
 
@@ -574,6 +620,7 @@ export function createMapOverlaySystem(opts: MapOverlaySystemOptions = {}): Game
             extract: (id) => state?.extracts.get(id),
             armAt: self?.extractArmAt ?? 0,
             boss: state,
+            mates: ctx.partyMates?.() ?? [],
           },
         );
       }

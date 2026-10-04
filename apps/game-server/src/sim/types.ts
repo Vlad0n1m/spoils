@@ -71,6 +71,13 @@ export interface EntryInit {
   pool: SettledItem[];
   /** Boss bag items (D19), stowed on the event boss once it is not engaged. */
   bossFill: SettledItem[];
+  /**
+   * Party (shared party.ts, JoinTicket.partyId): no damage between runtimes of the same party,
+   * S2C.PARTY positions. Absent / "" = solo.
+   */
+  partyId?: string;
+  /** Party drop this entry follows (JoinTicket.dropId): spawn next to the drop's first member (spawn.ts). */
+  dropId?: string;
 }
 
 /**
@@ -180,6 +187,13 @@ export interface PlayerRuntime {
   poolApplyAt: number;
   /** The web applied this entry's exit (the room merges the receipt into the outcome). */
   exitSettled: boolean;
+  /**
+   * Party of this entry from its admission ticket ("" = solo, NPCs, roster humans). Runtimes with the
+   * same non-empty partyId never damage each other (partyMates) and get S2C.PARTY. A rejoin keeps it.
+   */
+  partyId: string;
+  /** Party drop this entry was admitted with ("" = none). */
+  dropId: string;
 }
 
 export interface Bullet {
