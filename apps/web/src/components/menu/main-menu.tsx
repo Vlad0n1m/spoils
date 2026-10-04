@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import clsx from "clsx";
 import { worldCycleOf, type LeaderboardBoard } from "@extract/shared";
@@ -496,9 +497,19 @@ function MenuScreen({
                 />
               </div>
               {showCard && (
-                <div className="absolute inset-x-0 top-0 z-20 mx-auto max-h-full w-[min(20rem,100%)] overflow-y-auto pt-1 animate-pop-in motion-reduce:animate-none short:w-[min(18rem,100%)]">
-                  <LastRaidCard raid={lastRaid} onDismiss={dismissCard} />
-                </div>
+                createPortal(
+                <div
+                  className="fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 short:p-2"
+                  onClick={(e) => {
+                    if (e.target === e.currentTarget) dismissCard();
+                  }}
+                >
+                  <div className="max-h-[calc(100dvh-2rem)] w-[min(26rem,100%)] overflow-y-auto animate-pop-in motion-reduce:animate-none">
+                    <LastRaidCard raid={lastRaid} onDismiss={dismissCard} />
+                  </div>
+                </div>,
+                  document.body,
+                )
               )}
             </main>
 

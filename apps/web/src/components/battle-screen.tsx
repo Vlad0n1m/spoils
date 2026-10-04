@@ -28,6 +28,7 @@ import { shouldUseTouch } from "@/game/touch-mode";
 import { Hud, useHud } from "./hud";
 import { InventoryOverlay } from "./inventory/inventory-overlay";
 import { MatchOutcomeOverlay } from "./match-outcome-overlay";
+import { writeLastRaidSeen } from "@/lib/lobby/news-seen";
 import { TutorialOverlay } from "./tutorial-overlay";
 import { useTouchMode } from "./use-touch-mode";
 
@@ -316,7 +317,11 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
         hud: hudStore,
         onHud: hudStore.push,
         onOverlays: setOverlayNodes,
-        onOutcome: setOutcome,
+        onOutcome: (o) => {
+          setOutcome(o);
+          // The outcome screen already shows this raid's result: the menu must not repeat it as a card.
+          if (ticket.entryId) writeLastRaidSeen(ticket.entryId);
+        },
         onSettled: setSettlement,
         onDisconnect: (exit) => {
           setKick(exit);
