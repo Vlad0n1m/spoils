@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import clsx from "clsx";
 import { XP_LINE_LABEL, type ExitType, type LastRaidDto, type XpLine } from "@extract/shared";
 import { fmtCr } from "@/lib/items-ui";
@@ -44,47 +45,60 @@ export function killsText(k: LastRaidDto["kills"]): string {
  */
 export function LastRaidCard({ raid, onDismiss }: { raid: LastRaidDto; onDismiss: () => void }) {
   const exit = EXIT[raid.exit] ?? EXIT.dead;
+  const levelUp = raid.level > raid.levelBefore;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onDismiss();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onDismiss]);
   return (
-    <section
-      aria-label="Last raid"
-      className="toon-panel overflow-hidden bg-[#161b28]/95 animate-panel-in motion-reduce:animate-none"
-    >
-      <div className={clsx("h-2.5 border-b-[3px] border-black", exit.bar)} aria-hidden />
-      <div className="p-4 [@media(max-height:500px)]:p-3">
-        <p className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">LAST RAID · {mapLabel(raid.mapNumber).toUpperCase()}</p>
-        <h2 className="toon-text-thin mt-1.5 text-2xl tracking-wide text-white">{exit.title}</h2>
-
-        <details className="group mt-3 [@media(max-height:500px)]:mt-1">
-          <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime [&::-webkit-details-marker]:hidden">
-            <span className="toon-text-thin text-3xl tabular-nums tracking-wide text-zooa-lime">+{fmtInt(raid.xp)} XP</span>
-            {raid.xpLines.length > 0 && (
-              <span className="font-body text-xs lg:text-[0.8125rem] font-semibold text-white/75 group-open:hidden">Details</span>
-            )}
-          </summary>
-          {raid.xpLines.length > 0 && (
-            <ul className="font-body mt-2 space-y-1.5 border-t-2 border-black/40 pt-2 text-sm">
-              {raid.xpLines.map((l, i) => (
-                <li key={`${l.key}-${i}`} className="flex justify-between gap-3 leading-snug text-white/80">
-                  <span className="min-w-0 truncate">{xpLineText(l)}</span>
-                  <span className={clsx("shrink-0 tabular-nums font-semibold", l.xp < 0 ? "text-amber-300" : "text-white")}>
-                    {l.xp < 0 ? "−" : "+"}
-                    {fmtInt(Math.abs(l.xp))}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </details>
-
-        {raid.credits > 0 && <p className="toon-text-thin mt-2 text-xl tabular-nums tracking-wide text-amber-300">+{fmtCr(raid.credits)}</p>}
-        <p className="font-body mt-2 text-sm text-white/75">Kills: {killsText(raid.kills)}</p>
-        {raid.level > raid.levelBefore && (
-          <p className="font-body mt-1 text-sm font-semibold text-zooa-lime">Level {raid.level} reached</p>
+    <section aria-label="Last raid" role="dialog" aria-modal="true" className="toon-panel overflow-hidden bg-[#161b28] p-0 shadow-[0_10px_0_#000]">
+      <div className={clsx("flex items-center justify-between gap-3 border-b-[3px] border-black px-5 py-3", exit.bar)}>
+        <h2 className="toon-text text-3xl tracking-wide text-white short:text-2xl">{exit.title}</h2>
+        <span className="font-body shrink-0 rounded-full bg-black/80 px-2.5 py-1 text-xs font-bold tracking-wide text-white">
+          {mapLabel(raid.mapNumber).toUpperCase()}
+        </span>
+      </div>
+      <div className="p-5 short:p-3">
+        <div className="grid grid-cols-3 gap-2">
+          <Stat label="XP" value={`+${fmtInt(raid.xp)}`} tone="text-zooa-lime" />
+          <Stat label="Credits" value={raid.credits > 0 ? `+${fmtCr(raid.credits)}` : "—"} tone="text-amber-300" />
+          <Stat label="Kills" value={String(raid.kills.players + raid.kills.npcs)} tone="text-white" />
+        </div>
+        <p className="font-body mt-3 text-sm text-white/80 short:mt-2">{killsText(raid.kills)}</p>
+        {levelUp && (
+          <p className="toon-text-thin mt-3 rounded-xl border-[3px] border-black bg-zooa-lime px-3 py-2 text-center text-lg tracking-wide text-black">
+            Level {raid.level} reached!
+          </p>
         )}
-        <button type="button" onClick={onDismiss} className="toon-btn-ghost mt-4 min-h-11 w-full text-sm [@media(max-height:500px)]:mt-2">
-          <span className="optical-center">Dismiss</span>
+        {raid.xpLines.length > 0 && (
+          <ul className="font-body mt-3 max-h-40 short:hidden space-y-1.5 overflow-y-auto rounded-xl border-2 border-black/50 bg-black/25 p-3 text-sm">
+            {raid.xpLines.map((l, i) => (
+              <li key={`${l.key}-${i}`} className="flex justify-between gap-3 leading-snug text-white/85">
+                <span className="min-w-0 truncate">{xpLineText(l)}</span>
+                <span className={clsx("shrink-0 tabular-nums font-semibold", l.xp < 0 ? "text-amber-300" : "text-white")}>
+                  {l.xp < 0 ? "−" : "+"}
+                  {fmtInt(Math.abs(l.xp))} XP
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button type="button" onClick={onDismiss} autoFocus className="toon-btn mt-4 min-h-12 w-full text-lg tracking-wide short:mt-3">
+          <span className="optical-center">Continue</span>
         </button>
       </div>
     </section>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: string; tone: string }) {
+  return (
+    <div className="flex flex-col items-center rounded-xl border-[3px] border-black bg-[#1d2333] px-2 py-2">
+      <span className={clsx("toon-text-thin text-2xl tabular-nums leading-none tracking-wide", tone)}>{value}</span>
+      <span className="font-body mt-1 text-xs font-semibold uppercase tracking-wide text-white/75">{label}</span>
+    </div>
   );
 }
