@@ -116,11 +116,11 @@ DappRadar объявил о закрытии 17.11.2025: «financially unsustain
 |---|---|
 | Аккаунт | Publisher Portal, профиль издателя и **KYC/KYB** (https://docs.solanamobile.com/dapp-store/submit-new-app). Сколько идёт KYC — **не проверено** |
 | Кошелёк | Кошелёк издателя через расширение браузера (Phantom, Solflare, Backpack). Нужен для всех будущих обновлений, терять нельзя |
-| SOL | ≈ 0.2 SOL на комиссии и загрузку в Arweave (ArDrive) |
+| SOL | ≈ 0.2 SOL на комиссии и загрузку файлов (рекомендуют ArDrive, можно AWS S3) |
 | APK | Только подписанная release-сборка, debug не принимают (https://docs.solanamobile.com/dapp-store/checklist) |
 | Доступ для проверки | Если вход закрыт (бета, гейт), нужен тестовый аккаунт с полным доступом для проверяющих |
 | Ассеты | Иконка, скриншоты или видео, тексты. По выдаче поиска с docs.solanamobile.com: иконка до 512×512, квадрат; превью 1920×1080, все горизонтальные или все вертикальные. На самой странице при проверке размеров не нашёл — **уточнить в портале** |
-| Проверка | 3–5 рабочих дней, по очереди подачи; после одобрения сразу в магазине. Вопросы — Discord Solana Mobile, роль Developer в `#developer`, тикет в `#dev-answers` (https://docs.solanamobile.com/dapp-store/support) |
+| Проверка | 3–5 рабочих дней, ответ приходит на почту разработчика с publishersupport@dappstore.solanamobile.com; после одобрения сразу в магазине. Вопросы — Discord Solana Mobile, роль Developer в `#developer`, тикет в `#dev-answers` (https://docs.solanamobile.com/dapp-store/support) |
 | Комиссия | «Solana Mobile Inc. does not currently collect any fees on in-app purchases, app purchases, or subscriptions» (https://docs.solanamobile.com/get-started/faq) |
 | Правила | Publisher Policy от 21.07.2026 (https://legal.solanamobile.com/publisher-policy-web): нельзя вводить в заблуждение о назначении приложения и выдумывать связи с чужими брендами. Отдельных правил про игры с рынком не нашёл |
 
@@ -316,7 +316,7 @@ Telegram-канал. А — черновики всех текстов неде�
 | Презентация | PDF | CLOCK IN, Colosseum, side track | Нет |
 | APK | подписанный release; проверить вход и кошелёк (TWA или webshell) | CLOCK IN, dApp Store | В работе |
 | Тестовый аккаунт для проверяющих | логин без секретов в чате, хранить в настройках проекта | dApp Store | Нет |
-| Тексты | тизер до 50 знаков, описание до 160 и до 2 000 знаков, EN и RU | все | Черновики в этом документе |
+| Тексты | тизер до 50 знаков и описание до 2 000 знаков (PlayToEarn); короткое и полное описание для dApp Store (лимиты **не проверены**, смотреть в портале); EN и RU | все | Черновики в этом документе |
 | Шапка X | **не проверено** | X | Нет. Взять фон лобби |
 | Обложка itch.io | 630×500 (**не проверено**) | itch.io, позже | Нет |
 | Схема цикла 45 минут | PNG 1600×900 | X, презентация | Нет |
@@ -356,16 +356,16 @@ Telegram-канал. А — черновики всех текстов неде�
 | PlayToEarn | https://playtoearn.com/methodology | Критерии листинга, бесплатность подачи |
 | PlayToEarn | https://studio.playtoearn.com/pricing | Платные планы |
 | DappRadar | https://cointelegraph.com/news/dappradar-shut-down-financial-unsustainability | Закрытие 17.11.2025 |
-| Solana Mobile | https://docs.solanamobile.com/dapp-store/submit-new-app | KYC/KYB, 0.2 SOL, 3–5 дней |
+| Solana Mobile | https://docs.solanamobile.com/dapp-store/submit-new-app | KYC/KYB, 0.2 SOL, 3–5 дней (перепроверено 04.10.2026) |
 | Solana Mobile | https://docs.solanamobile.com/dapp-store/checklist | Release APK, тестовый аккаунт |
 | Solana Mobile | https://docs.solanamobile.com/dapp-store/support | Discord, `#developer`, `#dev-answers` |
 | Solana Mobile | https://docs.solanamobile.com/get-started/faq | Нет комиссии магазина |
-| Solana Mobile | https://docs.solanamobile.com/recipes/general/publishing-a-web-app.md | TWA и Local Network Access, webshell |
+| Solana Mobile | https://docs.solanamobile.com/recipes/general/publishing-a-web-app.md | TWA и Local Network Access, webshell (перепроверено 04.10.2026) |
 | Solana Mobile | https://legal.solanamobile.com/publisher-policy-web (обновлено 21.07.2026) | Правила издателя |
 | Solana Mobile | https://solanamobile.com/blog/clock-in-the-solana-mobile-hackathon | Что сдавать в CLOCK IN к 08.10 |
 | Epic | https://www.pcgamer.com/epic-games-store-self-publishing/ | $100, требования самопубликации |
 | Epic | https://gamedeveloper.com/business/epic-games-store-allows-adults-only-games-if-they-re-blockchain | Правила для блокчейн-игр |
-| itch.io | https://itch.io/docs/creators/html5 | Лимиты HTML5 |
+| itch.io | https://itch.io/docs/creators/html5 | Лимиты HTML5, флаг Mobile Friendly (перепроверено 04.10.2026) |
 | itch.io | https://itch.io/docs/creators/getting-indexed | Индексация, проверка |
 | itch.io | https://itch.io/docs/creators/quality-guidelines | Запрет похожего на азарт |
 | itch.io | https://shacknews.com/article/128708/itchio-lays-out-scathing-anti-nft-stance | Позиция по NFT (2022) |
