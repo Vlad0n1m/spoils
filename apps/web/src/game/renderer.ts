@@ -67,6 +67,7 @@ import {
   type Player,
   type SelfState,
   type ShotMsg,
+  type ThrowMsg,
   type WeaponId,
 } from "@extract/shared";
 import { COLORS, destroyTextures, loadTextures, type Textures } from "./assets";
@@ -581,7 +582,10 @@ export class GameRenderer implements GameRendererApi {
       if (dx * dx + dy * dy > 1) angle = Math.atan2(dy, dx);
       frac = grenadeFracFor(Math.hypot(dx, dy));
     }
-    if (!Number.isFinite(angle) || !this.sendIntent(C2S.THROW, { a: angle, d: frac })) return;
+    // q: the server throws right after applying our newest input, where the prediction stands now.
+    const q = this.predictor?.lastSeq;
+    const msg: ThrowMsg = q !== undefined && q > 0 ? { a: angle, d: frac, q } : { a: angle, d: frac };
+    if (!Number.isFinite(angle) || !this.sendIntent(C2S.THROW, msg)) return;
     this.nextThrowAt = now + GRENADE.COOLDOWN_MS;
     getGameAudio()?.localThrow();
   }
@@ -895,6 +899,9 @@ export class GameRenderer implements GameRendererApi {
       else fn(now);
     };
     at(m.s !== this.selfId, () => this.effects?.stopTracer(m.s, m.x, m.y));
+    // A target we do not see (in a bush, behind a fence, or the position-less "hit confirmed" of a
+    // grenade, t = ""): no burst and no damage number on the map, only the hitmarker and the sound.
+    if (m.t !== this.selfId && (!m.t || !this.state?.players.has(m.t))) return;
     at(m.t !== this.selfId, (t) => {
       const fx = this.effects;
       if (!fx) return;

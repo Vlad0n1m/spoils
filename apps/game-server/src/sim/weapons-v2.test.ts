@@ -24,9 +24,11 @@ import {
   grenadeDamageAt,
   grenadePath,
   grenadeThrowPx,
+  type HitMsg,
   type WeaponId,
 } from "@extract/shared";
-import { damagePlayer } from "./combat.js";
+import { buildBatches } from "./audience.js";
+import { SELF_KILL_CREDIT_MS, damagePlayer } from "./combat.js";
 import { spawnGroundItem } from "./inventory.js";
 import { makeItem } from "./items.js";
 import type { Match } from "./match.js";
@@ -316,6 +318,117 @@ test("grenade: hurts the thrower (no credit, no self hit marker), never a party 
   assert.equal(selfHit.src, -1);
   assert.equal(selfHit.msg.s, "");
   assert.equal(rtOf(m, a).lastHitBy, null);
+});
+
+test("grenade: the thrower learns nothing about a victim they do not see (no id, no spot, no HP loss)", () => {
+  // b sits still in a bush 40 px from the blast centre (1400, 1500); c, out in the open, sees b.
+  const map = testMap({ bushes: [{ x: 1440, y: 1500, r: 70 }] });
+  const m = testMatch(3, { map });
+  const [a, b, c] = ids(m) as [string, string, string];
+  for (const id of [a, b, c]) rtOf(m, id).connected = true;
+  place(m, a, 1000, 1500);
+  place(m, b, 1440, 1500);
+  place(m, c, 1440, 1620);
+  pl(m, a).aim = 0;
+  pl(m, b).aim = Math.PI;
+  pl(m, c).aim = -Math.PI / 2;
+  run(m, 3000); // b settles in the bush (concealment)
+  const ra = rtOf(m, a).rosterIndex, rb = rtOf(m, b).rosterIndex, rc = rtOf(m, c).rosterIndex;
+  assert.equal(m.vision.sees(ra, rb), false, "a does not see b in the bush");
+  assert.equal(m.vision.sees(rc, rb), true, "c, 120 px away, does");
+  giveStack(m, a, "grenade", 1);
+  throwAt(m, a, 400);
+  m.drainEvents();
+  const toA: HitMsg[] = [];
+  const toC: HitMsg[] = [];
+  for (let i = 0; i < 70; i++) {
+    m.step(50);
+    const batches = buildBatches(m, m.drainEvents(), [ra, rb, rc], null);
+    toA.push(...(batches.get(ra)?.hits ?? []));
+    toC.push(...(batches.get(rc)?.hits ?? []));
+  }
+  assert.ok(pl(m, b).hp < 100, "b was hurt");
+  const bId = rtOf(m, b).id;
+  assert.equal(toA.some((h) => h.t === bId), false, "the thrower never gets b's id");
+  const confirmed = toA.filter((h) => h.t === "");
+  assert.equal(confirmed.length, 1, "one 'hit confirmed'");
+  assert.deepEqual(confirmed[0], { t: "", s: a, x: 1400, y: 1500, d: 0, ar: false }, "blast centre only, no HP loss");
+  const seen = toC.find((h) => h.t === bId);
+  assert.ok(seen && Math.abs(seen.x - 1440) < 1e-6 && seen.d > 0, "a viewer who sees b gets the full hit");
+});
+
+test("grenade: blowing yourself up never denies the attacker who hurt you the kill", () => {
+  const m = testMatch(2);
+  const [a, b] = ids(m) as [string, string];
+  place(m, a, 1000, 1500);
+  place(m, b, 1300, 1500);
+  // b shot a down to 10 HP; a throws a grenade at their own feet.
+  damagePlayer(m, rtOf(m, a), 90, rtOf(m, b), "rifle", 1000, 1500);
+  giveStack(m, a, "grenade", 1);
+  assert.ok(typeof m.throwGrenade(a, Math.PI, 0) === "object");
+  const ev = run(m, GRENADE.FUSE_MS + 100);
+  assert.equal(pl(m, a).alive, false);
+  const kill = ev.find((e) => e.type === "kill");
+  assert.ok(kill && kill.type === "kill");
+  assert.equal(kill.msg.killerId, b, "credited to the last attacker");
+  assert.equal(selfOf(m, b).kills, 1);
+  assert.deepEqual(rtOf(m, b).victims, [rtOf(m, a).userId]);
+  assert.equal(rtOf(m, a).killerUserId, rtOf(m, b).userId, "full dog tag price for b");
+  // Long after the last enemy hit (SELF_KILL_CREDIT_MS) a suicide credits nobody.
+  const m2 = testMatch(2);
+  const [a2, b2] = ids(m2) as [string, string];
+  place(m2, a2, 1000, 1500);
+  place(m2, b2, 1300, 1500);
+  damagePlayer(m2, rtOf(m2, a2), 90, rtOf(m2, b2), "rifle", 1000, 1500);
+  run(m2, SELF_KILL_CREDIT_MS + 500);
+  giveStack(m2, a2, "grenade", 1);
+  assert.ok(typeof m2.throwGrenade(a2, Math.PI, 0) === "object");
+  const ev2 = run(m2, GRENADE.FUSE_MS + 100);
+  const k2 = ev2.find((e) => e.type === "kill");
+  assert.ok(k2 && k2.type === "kill" && k2.msg.killerId === "");
+  assert.equal(selfOf(m2, b2).kills, 0);
+});
+
+test("C2S.THROW joins the input stream: a throw right after the predicted roll end is never refused as 'rolling'", () => {
+  // Client: one input every 33.3 ms (the roll on the first), THROW 1 ms after the 10th (last roll) input.
+  // Server: 50 ms ticks at an offset. Before the fix three of the four offsets refused the throw.
+  for (const offset of [0, 10, 25, 40]) {
+    const m = testMatch(1);
+    const [a] = ids(m) as [string];
+    place(m, a, 1000, 1500);
+    giveStack(m, a, "grenade", 1);
+    const evs: Array<{ t: number; kind: "in" | "tick" | "throw"; k?: number }> = [];
+    for (let k = 0; k < 14; k++) evs.push({ t: k * (1000 / 30), kind: "in", k });
+    evs.push({ t: 9 * (1000 / 30) + 1, kind: "throw" });
+    for (let j = 0; j < 16; j++) evs.push({ t: offset + j * 50, kind: "tick" });
+    evs.sort((x, y) => x.t - y.t || (x.kind === "tick" ? 1 : -1));
+    let result: unknown = null;
+    let xAtThrow = NaN;
+    for (const e of evs) {
+      if (e.kind === "in") m.enqueueInput(a, { seq: e.k! + 1, mx: 1, my: 0, aim: 0, roll: e.k === 0, walk: false, fire: false });
+      else if (e.kind === "tick") {
+        m.step(50);
+        if (Number.isNaN(xAtThrow) && m.grenades.length > 0) xAtThrow = m.grenades[0]!.path[0]!.x;
+      } else result = m.requestThrow(a, 0, 0.5, 10);
+    }
+    assert.ok(result === "queued" || typeof result === "object", `offset ${offset}: ${String(result)}`);
+    assert.equal(m.grenades.length, 1, `offset ${offset}: thrown`);
+    assert.equal(countOf(selfOf(m, a).slots, "grenade"), 0);
+    // Thrown from where input 10 left the player (the client's predicted spot), not a lagged one.
+    assert.ok(Number.isFinite(xAtThrow));
+  }
+  // Nothing queued: thrown at once; a seq the client never sent is clamped to what arrived.
+  const m = testMatch(1);
+  const [a] = ids(m) as [string];
+  place(m, a, 1000, 1500);
+  giveStack(m, a, "grenade", 2);
+  assert.equal(typeof m.requestThrow(a, 0, 0.5, 999), "object");
+  run(m, GRENADE.COOLDOWN_MS + 50);
+  send(m, a, { mx: 1 });
+  assert.equal(m.requestThrow(a, 0, 0.5, 999), "queued");
+  m.step(50);
+  assert.equal(rtOf(m, a).pendingThrow, null);
+  assert.equal(countOf(selfOf(m, a).slots, "grenade"), 0, "the queued throw went once its input was applied");
 });
 
 test("grenade throw rules: needs a grenade, not while rolling or reloading, 1 s between throws, the gun waits 0.6 s", () => {

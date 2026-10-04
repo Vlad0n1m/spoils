@@ -2,99 +2,16 @@
  * Sprite loading and shared visual constants.
  * Textures are created per renderer instance (not through the global Assets cache) so that
  * stop() can destroy them without breaking a second renderer that React StrictMode / a quick
- * rematch may have started in parallel.
+ * rematch may have started in parallel. The decoded images behind them are shared and kept for the
+ * page's lifetime (sprite-cache.ts), so a texture only costs a GPU upload.
  */
 
 import { ImageSource, Texture } from "pixi.js";
 import type { WeaponId } from "@extract/shared";
+import { SPRITE_NAMES, spriteImage, type SpriteName } from "./sprite-cache";
 
-export const SPRITE_NAMES = [
-  "player",
-  "pistol",
-  "rifle",
-  "shotgun",
-  "sniper",
-  "chest_common",
-  "chest_rare",
-  "chest_epic",
-  "chest_legendary",
-  "armor_1",
-  "armor_2",
-  "armor_3",
-  "bandage",
-  "medkit",
-  "ammo",
-  "bush",
-  "tree",
-  "crate",
-  "rock",
-  "grass_tile",
-  "dirt_plain",
-  // v2 map (WP-M3): ground tiles and props baked into the chunked world.
-  "forest_tile",
-  "asphalt_tile",
-  "concrete_tile",
-  "wood_floor_tile",
-  "car_wreck",
-  "shipping_container",
-  "barrel",
-  "sandbags",
-  "sandbags_straight",
-  "fence",
-  "watchtower",
-  "log_pile",
-  "puddle",
-  // Map v2 (MAP_GEN_VERSION 4, art/map-v2.json): windows, floor / ground tile variety, furniture,
-  // prop variants (MapRect.v) and decor decals. A missing file draws nothing (or the old art).
-  "window_h",
-  "window_h_broken",
-  "floor_wood_tile",
-  "floor_ceramic_tile",
-  "floor_concrete_tile",
-  "grass_lush_tile",
-  "grass_dry_tile",
-  "dirt_rough_tile",
-  "gravel_tile",
-  "asphalt_cracked_tile",
-  "table_wood",
-  "table_round",
-  "desk",
-  "shelf_metal",
-  "shelf_wood",
-  "sofa",
-  "armchair",
-  "bed",
-  "counter",
-  "lockers",
-  "crate_small",
-  "crate_open",
-  "crate_military",
-  "car_wreck_burnt",
-  "car_wreck_pickup",
-  "fence_wood",
-  "fence_corrugated",
-  "fence_barbed",
-  "barrel_blue",
-  "rug_red",
-  "rug_round",
-  "debris_bricks",
-  "debris_planks",
-  "debris_papers",
-  "lamp_post",
-  "sign_post",
-  "sign_board",
-  // Weapons v2 (art/guns-v2.json, docs/WEAPONS_V2.md): guns in the hands, the hand grenade (ground
-  // item icon), the crossbow bolt in flight. The explosion sheet and the ammo / icon_<gun> art load
-  // lazily (grenades.ts, the icon cache).
-  "smg",
-  "lmg",
-  "revolver",
-  "crossbow",
-  "grenade",
-  "bolt",
-] as const;
-
-export type SpriteName = (typeof SPRITE_NAMES)[number];
+// The sprite list and the decoded-image cache live in sprite-cache.ts (no Pixi: the menu warms it).
+export { SPRITE_NAMES, type SpriteName } from "./sprite-cache";
 
 /** Seamless ground tiles: sampled with repeat (TilingSprite, canvas patterns). */
 const TILE_SPRITES: ReadonlySet<SpriteName> = new Set<SpriteName>([
@@ -163,11 +80,9 @@ export const SPRITE_CONTENT: Partial<Record<SpriteName, { x: number; y: number; 
 export type Textures = Record<SpriteName, Texture>;
 
 async function loadOne(name: SpriteName): Promise<Texture> {
-  const img = new Image();
-  img.src = `/sprites/${name}.png`;
-  try {
-    await img.decode();
-  } catch {
+  // Decoded once per page (sprite-cache.ts: the menu and the battle screen warm it before the join).
+  const img = await spriteImage(name);
+  if (!img) {
     // A missing sprite should not take the whole match down: draw nothing for it.
     console.warn(`[game] sprite ${name} failed to load`);
     return Texture.EMPTY;

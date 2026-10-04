@@ -47,9 +47,14 @@ export function PartyPrompts({ hidden }: { hidden: boolean }) {
           aria-label="Party drop"
           className="toon-panel pointer-events-auto flex w-full max-w-md items-center gap-3 bg-[#121722] p-2.5 pl-4 animate-pop-in motion-reduce:animate-none"
         >
-          <p className="font-body min-w-0 flex-1 text-sm text-white" role="status">
-            <b className="font-display text-base tracking-wide text-zooa-lime">{drop.leader}</b> is dropping in
-            <span className="block text-xs tabular-nums text-white/65">Drop in next to them · {fmtClockS(drop.secondsLeft)}</span>
+          <p className="font-body min-w-0 flex-1 text-sm text-white">
+            {/* Only the static line is live: a countdown inside a live region is re-read every second. */}
+            <span role="status">
+              <b className="font-display text-base tracking-wide text-zooa-lime">{drop.leader}</b> is dropping in
+            </span>
+            <span className="block text-xs tabular-nums text-white/65">
+              Drop in next to them · <span role="timer">{fmtClockS(drop.secondsLeft)}</span>
+            </span>
           </p>
           <button
             type="button"

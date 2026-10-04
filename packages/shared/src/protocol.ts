@@ -97,8 +97,9 @@ export const S2C = {
   /** { t } echo of PING. */
   PONG: "pong",
   /**
-   * PartyMsg (party.ts), to one party member at ~PARTY.POS_HZ while a party mate shares the shard:
-   * the mates' positions [{key, x, y, alive}]. Defined for the game server step; not sent yet.
+   * PartyMsg (party.ts), sent at PARTY.POS_HZ to each party member while a party mate shares the
+   * shard: {mates: [{key, id, name, x, y, alive}]}, the mates only (never the member, never anyone
+   * outside the party). A member whose mates are all gone gets one empty list.
    */
   PARTY: "party",
 } as const;
@@ -121,6 +122,11 @@ export interface ThrowMsg {
   a: number;
   /** 0..1: distance between GRENADE.MIN_PX and MAX_PX (grenadeThrowPx). */
   d: number;
+  /**
+   * Seq of the client's newest input sent before the throw: the server throws right after applying
+   * that input (input order, post-input position). Absent: after the newest input received so far.
+   */
+  q?: number;
 }
 
 export interface JoinedMsg {
@@ -171,7 +177,10 @@ export interface ShotMsg {
 }
 
 export interface HitMsg {
-  /** Target sessionId. */
+  /**
+   * Target sessionId. "" on the thrower's copy of a grenade hit on someone they do not see: then
+   * x/y is the blast centre and d is 0, a "hit confirmed" without the target's spot or HP loss.
+   */
   t: string;
   /** Shooter sessionId ("" if the target cannot see the shooter). */
   s: string;

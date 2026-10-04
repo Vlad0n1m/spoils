@@ -15,7 +15,7 @@ import type { SealedReplayChunk } from "../sim/replay-recorder.js";
 import { testMatch, worldMatch } from "../sim/test-utils.js";
 import { ReplayUploader, startShardReplay, type ReplayShardMeta } from "./replay-upload.js";
 
-const meta: ReplayShardMeta = { matchId: "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", cycleId: 1234, shard: 0, mapId: "steppe", cycleStartsAt: 1_700_000_000_000 };
+const meta: ReplayShardMeta = { matchId: "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", cycleId: 1234, shard: 0, mapId: "steppe", cycleStartsAt: 1_700_000_000_000, genVersion: 4 };
 
 function chunk(seq: number, final = false): SealedReplayChunk {
   const raw = encodeReplayChunk({ v: REPLAY.VERSION, seq, startMs: seq * 60_000, endMs: (seq + 1) * 60_000, final, roster: [], frames: [], events: [{ t: seq * 60_000, type: "wipe" }] });

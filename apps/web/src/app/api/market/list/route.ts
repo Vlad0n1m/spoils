@@ -24,6 +24,7 @@ const MESSAGES: Record<string, string> = {
   not_tradable: "That item can't be traded.",
   bad_price: "Enter a price above zero.",
   insufficient_credits: "Not enough CR for the listing fee.",
+  market_paused: "The market is paused for a moment. Your item stays in your stash; try again later.",
 };
 
 /** Puts a stash unique on the market at a fixed price; charges the CR listing fee. */
@@ -46,7 +47,8 @@ export async function POST(req: Request) {
         : r.code === "price_out_of_band" && r.band
           ? `Price must be between ${formatMinor(r.band.min)} and ${r.band.max ? formatMinor(r.band.max) : "∞"} right now.`
           : (MESSAGES[r.code] ?? r.code);
-    return apiError(r.code === "no_user" ? 401 : r.code === "price_out_of_band" || r.code === "bad_price" ? 400 : 409, r.code, message);
+    const status = r.code === "no_user" ? 401 : r.code === "market_paused" ? 503 : r.code === "price_out_of_band" || r.code === "bad_price" ? 400 : 409;
+    return apiError(status, r.code, message);
   }
   return json(r);
 }

@@ -27,6 +27,7 @@ describe("describeRoomExit", () => {
     const cases: Array<[number, string, RegExp, "retry" | "back"]> = [
       [409, WORLD_JOIN_ERR.ENTRY_CLOSED, /Entry is closed — the next map opens soon/, "back"],
       [503, WORLD_JOIN_ERR.WORLD_FULL, /The map is full/, "retry"],
+      [503, `${WORLD_JOIN_ERR.WORLD_FULL}:party`, /can't fit your whole party/, "retry"],
       [410, WORLD_JOIN_ERR.MAP_GONE, /This map just wiped/, "back"],
       [409, WORLD_JOIN_ERR.EXIT_SETTLING, /Settling your last raid…/, "retry"],
       [409, WORLD_JOIN_ERR.IN_RAID, /still on another map/, "back"],

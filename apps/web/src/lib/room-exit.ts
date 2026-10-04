@@ -46,6 +46,15 @@ function worldJoinExit(code: string, detail: string): RoomExit | null {
     case WORLD_JOIN_ERR.ENTRY_CLOSED:
       return { code, title: "Entry is closed", message: "Entry is closed — the next map opens soon.", action: "back" };
     case WORLD_JOIN_ERR.WORLD_FULL:
+      // "world_full:party": the game server keeps room for a whole party drop (directory.ts).
+      if (detail === "party") {
+        return {
+          code,
+          title: "No room for your party",
+          message: "This map can't fit your whole party right now. Try again in a moment, leave the party to drop in solo, or wait for the next map.",
+          action: "retry",
+        };
+      }
       return { code, title: "The map is full", message: "The map is full right now. Try again in a moment.", action: "retry" };
     case WORLD_JOIN_ERR.MAP_GONE:
       return { code, title: "This map just wiped", message: "This map just wiped. The next one opens in a few seconds.", action: "back" };

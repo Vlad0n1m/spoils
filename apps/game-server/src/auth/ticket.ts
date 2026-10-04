@@ -4,7 +4,7 @@
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { JOIN_TICKET_TTL_MS, joinTicketPayload, type JoinTicket } from "@extract/shared";
+import { JOIN_TICKET_TTL_MS, PARTY, joinTicketPayload, type JoinTicket } from "@extract/shared";
 
 /** Clocks of the web API and the game server may disagree a little. */
 const MAX_FUTURE_SKEW_MS = 30_000;
@@ -54,6 +54,9 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
   const partyId = t.partyId === undefined ? "" : t.partyId;
   if (typeof dropId !== "string" || !OPT_UUID_RE.test(dropId)) return null;
   if (typeof partyId !== "string" || !OPT_UUID_RE.test(partyId)) return null;
+  // The drop's member count (signed after the party fields): the seats the shard holds for the drop.
+  const dropSize = t.dropSize;
+  if (dropSize !== undefined && (typeof dropSize !== "number" || !Number.isSafeInteger(dropSize) || dropSize < 1 || dropSize > PARTY.MAX_SIZE)) return null;
   if (typeof userId !== "string" || userId.length < 1 || userId.length > MAX_USER_ID_LEN) return null;
   if (typeof nickname !== "string") return null;
   const nickLen = [...nickname].length;
@@ -65,7 +68,7 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
   if (now - issuedAt > JOIN_TICKET_TTL_MS) return null;
 
   const expected = createHmac("sha256", secret)
-    .update(joinTicketPayload({ userId, nickname, issuedAt, loadoutId, matchId, entryId, dropId, partyId }))
+    .update(joinTicketPayload({ userId, nickname, issuedAt, loadoutId, matchId, entryId, dropId, partyId, ...(dropSize !== undefined ? { dropSize } : {}) }))
     .digest();
   const given = Buffer.from(sig, "hex");
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
@@ -77,7 +80,10 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
   // that still has one alone verified, but drops solo.
   if (partyId) {
     out.partyId = partyId.toLowerCase();
-    if (dropId) out.dropId = dropId.toLowerCase();
+    if (dropId) {
+      out.dropId = dropId.toLowerCase();
+      if (dropSize !== undefined) out.dropSize = dropSize;
+    }
   }
   return out;
 }
@@ -93,6 +99,7 @@ export function signJoinTicket(
     entryId?: string;
     dropId?: string;
     partyId?: string;
+    dropSize?: number;
   },
   secret: string,
 ): JoinTicket {
@@ -101,6 +108,7 @@ export function signJoinTicket(
   if (!t.entryId) delete t.entryId;
   if (!t.dropId) delete t.dropId;
   if (!t.partyId) delete t.partyId;
+  if (t.dropSize === undefined || !t.dropId) delete t.dropSize;
   const sig = createHmac("sha256", secret).update(joinTicketPayload(t)).digest("hex");
   return { ...t, sig };
 }

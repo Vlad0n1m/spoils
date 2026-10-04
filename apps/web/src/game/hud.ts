@@ -26,6 +26,7 @@ import {
   SEARCH,
   SOLID,
   WEAPONS,
+  XP,
   bpLevelOf,
   containerOpenMs,
   extractOpenAtFor,
@@ -529,4 +530,19 @@ export function deepEqual(a: unknown, b: unknown): boolean {
     if (!deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])) return false;
   }
   return true;
+}
+
+/**
+ * Whole seconds until an extract earns XP (shared XP.MIN_ONMAP_MS on the map), 0 once it does or
+ * when the entry time is unknown (RETENTION.md: the 8-minute rule must show in the raid itself; the
+ * HUD's extract compass counts it down for registered players).
+ */
+export function extractXpLeftS(enteredAtMs: number, clockMs: number): number {
+  if (!(enteredAtMs > 0)) return 0;
+  return Math.max(0, Math.ceil((enteredAtMs + XP.MIN_ONMAP_MS - clockMs) / 1000));
+}
+
+/** An extract before XP.MIN_ONMAP_MS on the map: no extract / haul XP (shared xpForExit). */
+export function earlyExtract(o: { exit: string; atMs: number }, enteredAtMs: number): boolean {
+  return o.exit === "extract" && enteredAtMs > 0 && o.atMs - enteredAtMs < XP.MIN_ONMAP_MS;
 }

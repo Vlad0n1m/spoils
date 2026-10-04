@@ -444,4 +444,7 @@ test("exit receipts are routed by entryId: two entries of one user in one match 
   assert.equal(got.has(userId), false, "never keyed by userId when the report has an entryId");
   // Legacy receipts (no XP fields) still parse.
   assert.deepEqual(parseExitSettled({ credits: 1, sold: [], guest: true }), { credits: 1, sold: [], guest: true });
+  // The daily task line (C14b) is kept, so the outcome's lines add up to its xp total.
+  const quest = parseExitSettled({ credits: 0, sold: [], guest: false, xp: 160, xpLines: [{ key: "extract", qty: 9, xp: 60 }, { key: "quest", qty: 1, xp: 100 }], level: 2, levelUp: false });
+  assert.deepEqual(quest?.xpLines?.map((l) => l.key), ["extract", "quest"]);
 });

@@ -107,9 +107,8 @@ export function ParamsEditor({ initial }: { initial: AdminParamsDto }) {
       <section className="rounded-xl border border-white/10 bg-[#141925] p-4 md:p-5">
         <h2 className="text-base font-bold">Чего здесь нет</h2>
         <p className="mt-2 max-w-[75ch] text-sm leading-relaxed text-white/60">
-          Пауза рынка и пауза продажи наборов (ALPHA_PLAN B7) — в <code>economy_params</code> таких ключей нет, и рынок с
-          продажей наборов их не читают. Их добавят владельцы рынка и наборов; тогда они появятся здесь. Новые денежные
-          числа (цены, комиссии, размер раздачи) из админки не меняются.
+          Денежные числа (цены, комиссии, размер раздачи, цена набора) из админки не меняются. Паузы рынка и продажи
+          торгуемого набора — выше, как переключатели 0/1.
         </p>
       </section>
 

@@ -180,7 +180,8 @@ export function dropSpot(m: Match, x0: number, y0: number, n: number): { x: numb
   return { x, y };
 }
 
-function autoPicked(def: string): boolean {
+/** Picked up by walking over it (no F): ammo, meds and hand grenades. The harness bots read it too. */
+export function autoPicked(def: string): boolean {
   const c = itemDef(def)?.cat;
   // Weapons v2: hand grenades are consumables like meds (stack 2, no uid).
   return c === "ammo" || c === "med" || c === "throwable";

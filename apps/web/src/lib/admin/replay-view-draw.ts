@@ -1,4 +1,4 @@
-import { PLAYER, type MapData, type ReplaySpawn } from "@extract/shared";
+import { PLAYER, WEAPONS, type MapData, type ReplaySpawn } from "@extract/shared";
 import { drawMapBase, drawMapOverlay, label } from "./replay-view-map";
 import { KIND_LABEL, playerCss, type Death, type EntView, type HitEvent, type ShotEvent, type Subject, type View } from "./replay-view";
 
@@ -36,7 +36,10 @@ const NPC = "#a3a9b0";
 const NPC_ASLEEP = "#5d636b";
 const GUARD = "#c4c9cf";
 const BOSS = "#ff3b3b";
-const SHOT_RANGE: Record<string, number> = { pistol: 650, rifle: 950, shotgun: 450, sniper: 1600, "": 650 };
+/** Tracer length by weapon: the gun's real range (shared WEAPONS), 650 px for anything unknown. */
+function shotRange(weapon: string): number {
+  return (WEAPONS as Record<string, { range: number } | undefined>)[weapon]?.range ?? 650;
+}
 
 /** On-screen radius of a runtime: its world radius, never smaller than a readable dot. */
 export function markerRadius(kind: EntView["kind"], scale: number): number {
@@ -101,7 +104,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: SceneInput): void {
     const age = s.t - sh.t;
     if (age < 0 || age > TRACER_MS) continue;
     const shooter = s.spawns.get(sh.r);
-    const len = (SHOT_RANGE[sh.weapon] ?? 650) * v.scale;
+    const len = shotRange(sh.weapon) * v.scale;
     const a = 1 - age / TRACER_MS;
     ctx.globalAlpha = (focus(sh.r) ? 0.9 : 0.3) * a;
     ctx.strokeStyle = shooter?.kind === "human" ? "#fff2a8" : shooter?.kind === "boss" ? "#ff7b7b" : "#ffb36b";

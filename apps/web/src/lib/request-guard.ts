@@ -45,10 +45,11 @@ export function checkSameOriginRequest(req: Request, opts: { json: boolean }): G
 
 /**
  * Routes called server to server, authenticated by their own secret instead of the session cookie:
- * the game server (HMAC: raids/*, world/event) and the cron service (Bearer CRON_SECRET). A Node
+ * the game server (HMAC: raids/*, world/event, admin/replays/ingest) and the cron service (Bearer
+ * CRON_SECRET). Only the ingest path itself: every other /api/admin route is a browser route. A Node
  * fetch may send no fetch metadata or an opaque Origin, so the browser CSRF check skips them.
  */
-const SERVER_TO_SERVER_API = ["/api/raids/", "/api/world/event", "/api/cron/"] as const;
+const SERVER_TO_SERVER_API = ["/api/raids/", "/api/world/event", "/api/cron/", "/api/admin/replays/ingest"] as const;
 const STATE_CHANGING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /** The body types an HTML form (or no-cors fetch) can send cross-site; the app's own API never uses them. */
 const FORM_TYPES = new Set(["application/x-www-form-urlencoded", "multipart/form-data", "text/plain"]);

@@ -156,5 +156,15 @@ test("party: dropId / partyId are signed after the world fields; solo tickets si
     // Solo tickets are unchanged: no party fields, the pre-party payload.
     const solo = signJoinTicket({ userId: "user-1", nickname: "Neo", issuedAt: NOW, matchId, entryId }, SECRET);
     assert.deepEqual(verifyJoinTicket(solo, NOW), solo);
+    // dropSize (seats the shard holds for the drop) is signed after the party fields.
+    const sized = signJoinTicket({ userId: "user-4", nickname: "Pair", issuedAt: NOW, matchId, entryId, dropId, partyId, dropSize: 2 }, SECRET);
+    assert.equal(verifyJoinTicket(sized, NOW)?.dropSize, 2);
+    assert.equal(verifyJoinTicket({ ...sized, dropSize: 4 }, NOW), null, "a re-sized drop fails the signature");
+    const { dropSize: _s, ...unsized } = sized;
+    assert.equal(verifyJoinTicket(unsized, NOW), null);
+    assert.equal(verifyJoinTicket({ ...sized, dropSize: 9 }, NOW), null, "out of range");
+    assert.equal(verifyJoinTicket({ ...sized, dropSize: "2" }, NOW), null);
+    // A party ticket from before dropSize still verifies (and the shard holds a full party for it).
+    assert.equal(verifyJoinTicket(t, NOW)?.dropSize, undefined);
   });
 });

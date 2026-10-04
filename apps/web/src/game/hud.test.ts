@@ -17,6 +17,7 @@ import {
   ROLL,
   SEARCH,
   WORLD,
+  XP,
   SelfState,
   buildCollisionIndex,
   junkCredits,
@@ -28,7 +29,9 @@ import {
   bossToastText,
   buildHud,
   buildHudSelf,
+  earlyExtract,
   extractAllowed,
+  extractXpLeftS,
   hudBoss,
   hudPhase,
   interactHint,
@@ -394,5 +397,21 @@ describe("WORLD v6 HUD", () => {
     assert.equal(bossToastText({ kind: "warden", zone: "The Depot", state: 1 }).sub, "Warden holds The Depot");
     assert.equal(hudBoss({ bossKind: "nobody", bossZone: "", bossState: 1 }), null);
     assert.equal(hudBoss({ bossKind: "foreman", bossZone: "", bossState: 0 }), null);
+  });
+});
+
+describe("extract XP timer (the 8-minute rule in the raid)", () => {
+  it("counts whole seconds down to XP.MIN_ONMAP_MS on the map, then 0", () => {
+    assert.equal(extractXpLeftS(10_000, 10_000), XP.MIN_ONMAP_MS / 1000);
+    assert.equal(extractXpLeftS(10_000, 10_000 + XP.MIN_ONMAP_MS - 1_500), 2);
+    assert.equal(extractXpLeftS(10_000, 10_000 + XP.MIN_ONMAP_MS), 0);
+    assert.equal(extractXpLeftS(0, 50_000), 0, "unknown entry time: no timer");
+  });
+
+  it("flags an extract that came before the rule (outcome hint), never a death or a late extract", () => {
+    assert.equal(earlyExtract({ exit: "extract", atMs: 10_000 + 5 * 60_000 }, 10_000), true);
+    assert.equal(earlyExtract({ exit: "extract", atMs: 10_000 + XP.MIN_ONMAP_MS }, 10_000), false);
+    assert.equal(earlyExtract({ exit: "dead", atMs: 10_000 + 60_000 }, 10_000), false);
+    assert.equal(earlyExtract({ exit: "extract", atMs: 60_000 }, 0), false);
   });
 });

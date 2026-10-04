@@ -15,6 +15,7 @@ import { listings, moneyLedger, trades } from "../../db/schema";
 import type { Db, Tx } from "../inventory/db";
 import { applyMove, isUuid, lockItem } from "../inventory/transition";
 import { credit } from "../economy/ledger";
+import { PARAM, pausedParam } from "../economy/params";
 import type { ListingRowDto, TradeRowDto } from "../lobby/api-types";
 import { MAX_PRICE_MINOR, listingFeeCr } from "./config";
 import { defOfTemplate } from "./templates";
@@ -42,7 +43,8 @@ export type ListErr =
   | "not_tradable"
   | "bad_price"
   | "price_out_of_band"
-  | "insufficient_credits";
+  | "insufficient_credits"
+  | "market_paused";
 
 export type BuyErr =
   | "not_found"
@@ -52,7 +54,8 @@ export type BuyErr =
   | "own_listing"
   | "rate_limited"
   | "insufficient_funds"
-  | "no_user";
+  | "no_user"
+  | "market_paused";
 
 export type CancelErr = "not_found" | "not_yours" | "gone";
 
@@ -89,6 +92,8 @@ export async function createListing(
   const now = opts.now ?? new Date();
   if (price <= 0n || price > MAX_PRICE_MINOR) return { ok: false, code: "bad_price" };
   if (!isUuid(sellerId)) return { ok: false, code: "no_user" };
+  // Admin stop-crane (economy_params market_paused, /admin/params).
+  if (await pausedParam(db, PARAM.MARKET_PAUSED)) return { ok: false, code: "market_paused" };
   try {
     return await db.transaction(async (tx) => {
       const u = await tx.execute<{ level: number }>(sql`select level from users where id = ${sellerId} for update`);
@@ -177,6 +182,8 @@ export async function buyListing(
   const now = opts.now ?? new Date();
   if (!isUuid(listingId)) return { ok: false, code: "not_found" };
   if (!isUuid(buyerId)) return { ok: false, code: "no_user" };
+  // Admin stop-crane (economy_params market_paused, /admin/params).
+  if (await pausedParam(db, PARAM.MARKET_PAUSED)) return { ok: false, code: "market_paused" };
   try {
     return await db.transaction(async (tx) => {
       const lr = await tx.execute<ListingLockRow>(

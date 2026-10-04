@@ -96,11 +96,13 @@ describe("checkApiMutation (middleware.ts, every /api route)", () => {
   });
 
   it("leaves the game server (HMAC) and cron (Bearer) routes to their own checks", () => {
-    for (const path of ["/api/raids/end", "/api/raids/exit", "/api/world/event", "/api/cron/chain-events"]) {
+    for (const path of ["/api/raids/end", "/api/raids/exit", "/api/world/event", "/api/cron/chain-events", "/api/admin/replays/ingest"]) {
       assert.equal(checkApiMutation(api(path, "POST", { origin: "null", "content-type": "application/json" })), null, path);
       assert.equal(isServerToServerApi(path), true, path);
     }
-    for (const path of ["/api/world/events", "/api/world/join", "/api/raidsx", "/api/market/buy"]) assert.equal(isServerToServerApi(path), false, path);
+    for (const path of ["/api/world/events", "/api/world/join", "/api/raidsx", "/api/market/buy", "/api/admin/params", "/api/admin/replays"]) {
+      assert.equal(isServerToServerApi(path), false, path);
+    }
   });
 
   it("the middleware answers 403 with the guard's error and passes the app's own calls", async () => {

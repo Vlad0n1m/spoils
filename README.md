@@ -149,7 +149,7 @@ global Solana CLI config may point at mainnet.
 | `migrate` | One-shot `drizzle-kit push` of the schema, then exits |
 | `web` | Next.js standalone server on `127.0.0.1:3000`. Before `server.js` it runs `deploy/web-preflight.mjs`: in production it refuses to start without `CRON_SECRET` (16+ chars), `DATABASE_URL`, `SESSION_SECRET` or `GAME_SERVER_HMAC_SECRET` |
 | `game-server` | Colyseus on `127.0.0.1:2567`, one always-live world. Refuses to boot in production without `GAME_SERVER_ID`, `WEB_API_BASE_URL` or `GAME_SERVER_HMAC_SECRET` |
-| `cron` | `deploy/cron/scheduler.mjs` (plain Node, no deps) calls the web cron routes with `Authorization: Bearer $CRON_SECRET`, like Vercel Cron does: `void-raids` every 5 min (and once at start), `watch-deposits` every 10 min (a no-op while deposits are disabled), `economy-daily` at 00:05 UTC. Schedule: `deploy/cron/schedule.json` |
+| `cron` | `deploy/cron/scheduler.mjs` (plain Node, no deps) calls the web cron routes with `Authorization: Bearer $CRON_SECRET`, like Vercel Cron does: `void-raids` every 5 min (and once at start), `watch-deposits` every 10 min (a no-op while deposits are disabled), `economy-daily` at 00:05 UTC, `chain-events` every minute, `replays-retention` at 03:30 UTC (admin replays older than 14 days). Schedule: `deploy/cron/schedule.json` |
 
 ```bash
 cp .env.example .env        # fill it: see the list below; never commit it
@@ -165,6 +165,36 @@ docker compose logs -f web game-server cron
   domain only; unset, it works on localhost only).
 - An existing database from before World v6: apply `apps/web/migrations/002_world_v6.sql` (idempotent) first, then the
   `migrate` service pushes the rest.
+- An existing database outside docker (staging, production): apply every migration newer than the database, in order,
+  BEFORE the new web build goes live. All are idempotent (safe to re-run):
+
+  ```bash
+  for f in 005_friends_party 006_admin_role 007_replays 008_quests 009_replay_gen_version; do
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "apps/web/migrations/$f.sql"
+  done
+  ```
+
+  006 and 008 add `users` columns (`role`; `title`, `name_color`, `badge_frame`) that every query reading whole `users`
+  rows selects (login, `/api/me`, stash): without them those routes answer 500. Without 007 every replay chunk from the
+  game server is refused with a 500 (the game server keeps 10 minutes of chunks, then drops them); 009 adds
+  `replays.gen_version`.
+- Ship the web and the game server together. The map generator is at `MAP_GEN_VERSION` 4 (map v2, mapHash `dda13fd8`):
+  while only one side is updated every join is refused with `map_mismatch`. The web goes live first or at the same
+  time: the game server records replays in format 2 (Weapons v2 weapon codes), which an older web refuses, and the new
+  client needs the new server for grenades (`C2S.THROW`, sound kinds 14 and 15).
+- Game server env: `REPLAY_RECORD=0` turns the admin replay recording off (on by default whenever `WEB_API_BASE_URL` is
+  set).
+- Routes added since World v6 (all JSON):
+
+  | Route | Who |
+  |---|---|
+  | `GET /api/friends`, `POST /api/friends/{request,accept,decline,cancel,remove}` | registered players |
+  | `GET /api/party` (menu poll + presence), `POST /api/party/{invite,uninvite,accept,decline,leave,kick,disband,lead,follow}` | registered players |
+  | `GET /api/quests`, `POST /api/quests/reroll`, `POST /api/quests/equip` | registered players |
+  | `GET /api/quests/badges?n=…` | public, cached 30 s |
+  | `POST /api/admin/replays/ingest` | the game server (HMAC) |
+  | `GET /api/admin/replays`, `GET /api/admin/replays/:matchId`, `GET /api/admin/replays/:matchId/chunks?from&to`, `/api/admin/**` | admins only (404 otherwise) |
+  | `GET /api/cron/replays-retention` | cron (Bearer `CRON_SECRET`), daily 03:30 UTC |
 - Order: the web first, then the game server. Restart the game server right after a wipe (a minute past 00:00,
   00:45, 01:30… UTC): a restart in the middle of a map voids it, gear goes back to its owners, and the server opens
   a fresh copy of the current map.
@@ -250,7 +280,13 @@ The web manifest, the page theme colour, the TWA and the webshell all use `#0807
 4. Журнал изменений стоп-кранов (он же на странице `/admin/params`):
    `select at, admin_nickname, target, old_value, new_value, note from admin_audit order by at desc limit 20;`
 
-Стоп-краны сейчас — только существующие ключи `economy_params`, которые читает World v6: `autosell_mult` (в полосе
-регулятора 0.6–1.3; крон `economy-daily` продолжает двигать его от нового значения) и `pool_risk_k` (0–2; 0 —
-стоп выдачи пула входам, сумка босса заполняется отдельно). `pool_max_per_match` показан только для чтения: World v6
-его не читает. Паузы рынка и продажи наборов в `economy_params` ещё нет.
+Стоп-краны — ключи `economy_params`, которые читает World v6: `autosell_mult` (в полосе регулятора 0.6–1.3; крон
+`economy-daily` продолжает двигать его от нового значения), `pool_risk_k` (0–2; 0 — стоп выдачи пула входам, сумка
+босса заполняется отдельно), `market_paused` (1 — рынок игроков не принимает лоты и не продаёт, ответ 503, снять свой
+лот можно) и `kit_sale_paused` (1 — торгуемый стартовый набор не продаётся, бесплатный выдаётся). `pool_max_per_match`
+показан только для чтения: World v6 его не читает. Денежные числа из админки не меняются.
+
+Повторы: `/admin/replays` — список шард-циклов, открыть карту. Пробел — пуск/пауза, ←/→ — 5 с (Shift — 30 с), 1/2/3 —
+скорость, F — следовать, 0 — вся карта, +/− — масштаб, Esc — снова все. Клик по точке — следовать за ней, клик по
+событию — прыжок за 2 с до него. Если повтор записан на другом генераторе карты, сверху предупреждение (карта рисуется
+текущим генератором). Повторы хранят userId и ник игроков с их перемещениями 14 дней и видны только админам.

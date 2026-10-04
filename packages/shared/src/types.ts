@@ -212,18 +212,26 @@ export interface JoinTicket {
   dropId?: string;
   /** The caller's party (≥ PARTY.MIN_SIZE members): no friendly fire, S2C.PARTY. Signed. */
   partyId?: string;
+  /**
+   * Members of the drop (PARTY.MIN_SIZE..PARTY.MAX_SIZE), only with dropId: the game server holds
+   * exactly this many seats for the drop instead of PARTY.MAX_SIZE. Signed.
+   */
+  dropSize?: number;
   sig: string;
 }
 
 /**
  * Payload string that a JoinTicket signature covers:
  * `${userId}.${nickname}.${issuedAt}.${loadoutId}.${matchId ?? ""}.${entryId ?? ""}`, and only when the
- * ticket has party fields, `.${dropId ?? ""}.${partyId ?? ""}` appended after them. A ticket without
- * party fields signs exactly the old string, so tickets issued before parties stay valid.
+ * ticket has party fields, `.${dropId ?? ""}.${partyId ?? ""}` appended after them, and only when it
+ * has a drop size, `.${dropSize}` after those. A ticket without party fields signs exactly the old
+ * string, so tickets issued before parties stay valid (and party tickets from before dropSize too).
  */
 export function joinTicketPayload(t: Omit<JoinTicket, "sig">): string {
   const base = `${t.userId}.${t.nickname}.${t.issuedAt}.${t.loadoutId}.${t.matchId ?? ""}.${t.entryId ?? ""}`;
-  return t.dropId || t.partyId ? `${base}.${t.dropId ?? ""}.${t.partyId ?? ""}` : base;
+  if (!t.dropId && !t.partyId) return base;
+  const party = `${base}.${t.dropId ?? ""}.${t.partyId ?? ""}`;
+  return t.dropSize !== undefined ? `${party}.${t.dropSize}` : party;
 }
 
 // ---------------------------------------------------------------- WORLD v6: game server → web (HMAC-signed)

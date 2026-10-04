@@ -14,9 +14,10 @@ import type {
 } from "./types";
 
 /**
- * Stop-cranes (docs/ALPHA_PLAN.md B7) over the economy_params rows that already exist and that the
- * live World v6 code reads. No new keys and no new money numbers: the ranges are the ones the code
- * already enforces (AUTOSELL.MIN..MAX of the daily regulator, readReleaseParams' 0..2 clamp of k).
+ * Stop-cranes (docs/ALPHA_PLAN.md B7) over the economy_params rows that the live World v6 code
+ * reads. No new money numbers: the ranges are the ones the code already enforces (AUTOSELL.MIN..MAX
+ * of the daily regulator, readReleaseParams' 0..2 clamp of k), and the two pauses are 0/1 switches
+ * (market_paused: market list / buy; kit_sale_paused: the paid starter kit).
  * Every change runs in one transaction with an admin_audit row (who, when, old → new, note) and
  * is refused when the value moved since the admin looked at it (`expected`).
  */
@@ -68,6 +69,38 @@ export const EDITABLE_PARAMS: readonly ParamSpec[] = [
     quick: [
       { label: "Стоп выдачи входам (0)", value: 0 },
       { label: `По умолчанию (${POOL.RISK_K})`, value: POOL.RISK_K },
+    ],
+  },
+  {
+    key: PARAM.MARKET_PAUSED,
+    label: "Пауза рынка (0 — работает, 1 — пауза)",
+    help:
+      "1: рынок игроков не принимает новые лоты и ничего не продаёт — выставление и покупка отвечают 503 market_paused " +
+      "с сообщением игроку, деньги не списываются. Снять свой лот можно и во время паузы. Торговцы за CR работают как обычно.",
+    kind: "int",
+    min: 0,
+    max: 1,
+    step: 1,
+    def: 0,
+    quick: [
+      { label: "Пауза (1)", value: 1 },
+      { label: "Рынок работает (0)", value: 0 },
+    ],
+  },
+  {
+    key: PARAM.KIT_SALE_PAUSED,
+    label: "Пауза продажи торгуемого набора (0 — продаётся, 1 — пауза)",
+    help:
+      "1: платный (торгуемый) стартовый набор не продаётся — ответ 503 sale_paused, ничего не списывается и не выдаётся. " +
+      "Бесплатный привязанный набор выдаётся как обычно. Цена набора и размер раздачи отсюда не меняются.",
+    kind: "int",
+    min: 0,
+    max: 1,
+    step: 1,
+    def: 0,
+    quick: [
+      { label: "Пауза (1)", value: 1 },
+      { label: "Продаётся (0)", value: 0 },
     ],
   },
 ];

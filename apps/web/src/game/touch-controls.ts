@@ -30,15 +30,37 @@ export { shouldUseTouch } from "./touch-mode";
  * Weapons v2, grenade button: a finger dragged at least GRENADE_DRAG_FROM px off the button aims
  * the throw; the range grows over the next GRENADE_DRAG_SPAN px (0 = GRENADE.MIN_PX, 1 = MAX_PX).
  * A shorter drag is a tap: the renderer throws ahead along the facing (GRENADE_TAP_FRAC).
+ * Toward a near screen edge (the button sits ~45 px from the left edge on a small landscape phone)
+ * the span shrinks to the room the finger has, down to GRENADE_DRAG_MIN_SPAN, so the full range is
+ * reachable in every direction.
  */
 export const GRENADE_DRAG_FROM = 16;
 export const GRENADE_DRAG_SPAN = 110;
+export const GRENADE_DRAG_MIN_SPAN = 20;
+/** The finger stops this short of the screen edge (bezel, rounded corners). */
+export const GRENADE_DRAG_EDGE_PX = 6;
 
-/** Finger offset from where the grenade button was pressed → throw aim, null while still a tap. */
-export function grenadeDragAim(dx: number, dy: number): { angle: number; frac: number } | null {
+/**
+ * Finger offset from where the grenade button was pressed → throw aim, null while still a tap.
+ * `room` = px from the press point to the screen edge along the drag (dragRoom); omitted = no limit.
+ */
+export function grenadeDragAim(dx: number, dy: number, room = Infinity): { angle: number; frac: number } | null {
   const len = Math.hypot(dx, dy);
   if (!(len >= GRENADE_DRAG_FROM)) return null;
-  return { angle: Math.atan2(dy, dx), frac: Math.max(0, Math.min(1, (len - GRENADE_DRAG_FROM) / GRENADE_DRAG_SPAN)) };
+  const span = Math.max(GRENADE_DRAG_MIN_SPAN, Math.min(GRENADE_DRAG_SPAN, room - GRENADE_DRAG_EDGE_PX - GRENADE_DRAG_FROM));
+  return { angle: Math.atan2(dy, dx), frac: Math.max(0, Math.min(1, (len - GRENADE_DRAG_FROM) / span)) };
+}
+
+/** Distance from (x, y) to the edge of a w × h screen along `angle` (0 outside the screen). */
+export function dragRoom(x: number, y: number, angle: number, w: number, h: number): number {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  let t = Infinity;
+  if (c > 1e-9) t = Math.min(t, (w - x) / c);
+  else if (c < -1e-9) t = Math.min(t, -x / c);
+  if (s > 1e-9) t = Math.min(t, (h - y) / s);
+  else if (s < -1e-9) t = Math.min(t, -y / s);
+  return Number.isFinite(t) ? Math.max(0, t) : 0;
 }
 
 /** Aim stick deflection (stick units, 0..1 past the centre) → aim angle and trigger. */
@@ -610,7 +632,10 @@ export class TouchControls {
     });
     b.addEventListener("pointermove", (e) => {
       if (e.pointerId !== pid) return;
-      aim = grenadeDragAim(e.clientX - ox, e.clientY - oy);
+      const dx = e.clientX - ox;
+      const dy = e.clientY - oy;
+      const room = dragRoom(ox, oy, Math.atan2(dy, dx), window.innerWidth, window.innerHeight);
+      aim = grenadeDragAim(dx, dy, room);
       this.input.setGrenadeAim(aim);
     });
     const finish = (e: PointerEvent, cancel: boolean) => {

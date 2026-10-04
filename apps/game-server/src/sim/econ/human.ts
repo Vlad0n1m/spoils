@@ -89,6 +89,7 @@ import {
 import { activeWeapon, ammoCount, medCount, weaponDefOf } from "../bag.js";
 import { currentTarget, lootItems, type SearchTarget } from "../containers.js";
 import { extractIsOpen } from "../extraction.js";
+import { autoPicked } from "../inventory.js";
 import { toPlain } from "../items.js";
 import type { Match } from "../match.js";
 import type { Pt } from "../nav.js";
@@ -954,9 +955,9 @@ export class HumanAgent {
       const sc = score(g.schema.x, g.schema.y, 1) * 0.9;
       if (sc < bestScore) {
         bestScore = sc;
-        const cat = itemDef(it.def)?.cat;
         best = {
-          kind: "item", id, x: g.schema.x, y: g.schema.y, needsInteract: cat !== "ammo" && cat !== "med",
+          // Ammo, meds and grenades are picked up by walking over them (inventory.ts autoPicked).
+          kind: "item", id, x: g.schema.x, y: g.schema.y, needsInteract: !autoPicked(it.def),
           src: this.sourceOf(g.schema.x, g.schema.y, 0, null, "ground"),
         };
       }

@@ -18,15 +18,8 @@ import type { PlayerRuntime } from "./types.js";
 /** A dead mate stays in S2C.PARTY (alive: false) this long after their death. */
 export const MATE_DOWN_MS = 10_000;
 
-/**
- * One mate as sent: the shared PartyMatePos plus the mate's nickname (name tag) and their current
- * BattleState.players key `id` (the client links the marker to the mate's entity while it is in view).
- * Cross-owner: both fields belong in packages/shared PartyMatePos.
- */
-export interface PartyMateWire extends PartyMatePos {
-  name: string;
-  id: string;
-}
+/** One mate as sent (shared PartyMatePos: key, id, name, x, y, alive). */
+export type PartyMateWire = PartyMatePos;
 
 export interface PartyWireMsg {
   mates: PartyMateWire[];

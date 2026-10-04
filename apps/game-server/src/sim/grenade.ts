@@ -11,8 +11,10 @@
  * - explode: every living runtime within GRENADE.EDGE_PX whose centre the blast centre sees through
  *   SHOT walls (a window lets the blast through, like a bullet) takes grenadeDamageAt(distance)
  *   through damagePlayer: armor absorbs as usual, party mates are never hurt, the kill is credited
- *   to the thrower with weapon "grenade". The thrower is hurt too (attacker null: no credit, no hit
- *   marker on oneself).
+ *   to the thrower with weapon "grenade". The thrower is hurt too (attacker null: no hit marker on
+ *   oneself; dying to one's own grenade credits the last enemy who hit them within
+ *   SELF_KILL_CREDIT_MS, combat.ts, so a suicide never denies the attacker the kill). A thrower
+ *   who does not see a victim gets a position-less "hit confirmed" only (audience.ts).
  *
  * Visibility (audience rules, protocol GrenadeMsg / BoomMsg): the full flight goes to the thrower
  * and to every human who sees the thrower at the throw; a human who sees only the resting grenade

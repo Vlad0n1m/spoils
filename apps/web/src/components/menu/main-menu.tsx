@@ -29,6 +29,7 @@ import { unlocksBetween } from "@/lib/lobby/levels";
 import { LATEST_POST_ID } from "@/content/news";
 import { socialDotCount } from "@/lib/social/menu";
 import { playUi } from "@/game/audio/ui-sounds";
+import { warmSpritesWhenIdle } from "@/game/sprite-cache";
 import { BattleScreen } from "@/components/battle-screen";
 import type { RoomExit } from "@/lib/room-exit";
 import { GuestPlayDialog } from "@/components/guest-play-dialog";
@@ -139,6 +140,7 @@ export function MainMenu({ initialPanel }: { initialPanel: PanelState }) {
               ticket={battle.ticket}
               battleRoomId={battle.roomId}
               nickname={user.nickname}
+              earnsXp={!user.isGuest}
               onLeave={onLeave}
               onRetry={onRetry}
             />
@@ -248,21 +250,51 @@ function MenuScreen({
   const [signIn, setSignIn] = useState(false);
   const [guest, setGuest] = useState(false);
   const [more, setMore] = useState(false);
-  /** Daily tasks / rewards sheet (not a URL panel); focus goes back to its opener on close. */
+  /**
+   * Daily tasks / rewards sheet (not a URL panel); focus goes back to its opener on close. Opening it
+   * pushes a history entry (same URL) like a panel does, so the system Back gesture closes the sheet
+   * instead of leaving /play (in the Android TWA it would exit the app).
+   */
   const [questsTab, setQuestsTab] = useState<QuestsTab | null>(null);
   const questsOpener = useRef<HTMLElement | null>(null);
-  const openQuests = useCallback((tab: QuestsTab) => {
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && active !== document.body && !active.closest('[role="dialog"]')) questsOpener.current = active;
-    setQuestsTab(tab);
-    playUi("click");
-  }, []);
-  const closeQuests = useCallback(() => {
+  const questsPushed = useRef(false);
+  const finishQuests = useCallback(() => {
     setQuestsTab(null);
     const el = questsOpener.current;
     questsOpener.current = null;
     if (el && el.isConnected) window.requestAnimationFrame(() => el.focus({ preventScroll: true }));
   }, []);
+  const openQuests = useCallback((tab: QuestsTab) => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body && !active.closest('[role="dialog"]')) questsOpener.current = active;
+    setQuestsTab(tab);
+    if (!questsPushed.current) {
+      window.history.pushState(null, "", window.location.href);
+      questsPushed.current = true;
+    }
+    playUi("click");
+  }, []);
+  const closeQuests = useCallback(() => {
+    if (questsPushed.current) {
+      questsPushed.current = false;
+      window.history.back();
+    }
+    finishQuests();
+  }, [finishQuests]);
+  useEffect(() => {
+    // Back (gesture, button, Alt+←) while the sheet is open pops our entry: close it.
+    const onPop = () => {
+      if (!questsPushed.current) return;
+      questsPushed.current = false;
+      finishQuests();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [finishQuests]);
+
+  // ---- battle sprites: download and decode them while the menu idles (sprite-cache.ts), so the
+  // raid's canvas appears right after the join instead of after a 4 MiB download on a phone.
+  useEffect(() => (hidden ? undefined : warmSpritesWhenIdle()), [hidden]);
 
   // ---- news dot
   const [newsSeen, setNewsSeen] = useState<NewsSeen | null>(null);

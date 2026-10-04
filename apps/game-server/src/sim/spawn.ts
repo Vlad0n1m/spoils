@@ -12,17 +12,24 @@
  * Pure apart from the rng draw; Match owns the recent-spawn list.
  *
  * Party drop (shared party.ts, JoinTicket.dropId): the first admitted member of a drop picks a spot
- * with the rules above and becomes the drop's anchor; members of the same drop (same partyId)
- * admitted within PARTY.DROP_TTL_MS of it land PARTY_SPAWN_MIN_PX–PARTY_SPAWN_MAX_PX from the anchor
- * (partySpawnNear: a fixed spread per member slot, walk-grid cell centres only, the anchor's
- * connected walk component, re-checked against the solids, apart from each other) on the anchor's
- * side, so the whole drop shares its extracts. No rng: the same drop always spreads the same way.
+ * with the rules above and opens the drop; members of the same drop (same partyId) admitted within
+ * PARTY.DROP_TTL_MS of it land PARTY_SPAWN_MIN_PX–PARTY_SPAWN_MAX_PX from a LIVING member of the drop
+ * (the one nearest the drop's first spot: the group may have walked on; the stored first spot only
+ * when nobody of the drop is alive) — partySpawnNear: a fixed spread per member slot, walk-grid cell
+ * centres only, the anchor's connected walk component, re-checked against the solids, apart from
+ * each other — on that member's side, so the whole drop shares its extracts. No rng: the same drop
+ * always spreads the same way.
+ * The late-spawn safety rules still hold for a drop spot (dropSpawnSafe): no living human outside the
+ * party within PARTY_SPAWN_SAFE_PX (1200) and none of the user's own corpses of this cycle within
+ * PARTY_SPAWN_CORPSE_PX (2000). A member who died at the drop and re-enters, or follows into a fight,
+ * takes a normal entry spot instead.
  * After the window a member of the drop spawns as above (a new anchor for anyone after them).
  */
 
 import {
   PARTY,
   PLAYER,
+  VISION,
   WORLD,
   nearestWalkCell,
   resolveCircle,
@@ -84,12 +91,21 @@ export function chooseSpawn<T extends { x: number; y: number }>(rng: Rng, spots:
 
 // ---------------------------------------------------------------- party drop
 
-/** Later members of a party drop land at least this far from the drop's first member… */
-export const PARTY_SPAWN_MIN_PX = 150;
+/** Later members of a party drop land at least this far from the living member they join… */
+export const PARTY_SPAWN_MIN_PX = PARTY.SPAWN_MIN_PX;
 /** …and at most this far. */
-export const PARTY_SPAWN_MAX_PX = 300;
+export const PARTY_SPAWN_MAX_PX = PARTY.SPAWN_NEAR_PX;
 /** Members of one drop never land closer than this to each other (two bodies plus a step). */
 export const PARTY_SPAWN_GAP_PX = 2 * PLAYER.RADIUS + 16;
+/**
+ * A drop spot needs this much room from every living human outside the party: beyond a stranger's
+ * view (VISION.RANGE plus a margin), so nobody pops in next to them and no member lands in their
+ * sights. Wider would cost the drop most of the time on a full shard (24 raiders on the map: a 2000 px
+ * radius has someone in it about two times in three, this one about one time in nine).
+ */
+export const PARTY_SPAWN_SAFE_PX = VISION.RANGE + 200;
+/** …and this much from the user's own corpses of this cycle (D10 "no respawn on my body", tier 2). */
+export const PARTY_SPAWN_CORPSE_PX = WORLD.LATE_SPAWN_FALLBACK_PX;
 /** Ring radii tried in order (each candidate is snapped to its walk cell centre, then range-checked). */
 const PARTY_RING_PX = [210, 250, 175, 285, 160] as const;
 /** Directions tried per radius: the slot's own bearing, then ± k · 22.5° around it. */
@@ -125,10 +141,40 @@ export function pickDropSpawn(m: Match, rng: Rng, userId: string, dropId: string
   }
   // A ticket can only carry a dropId of its own party (both signed by the web); anything else drops solo.
   if (d.partyId !== partyId) return pickEntrySpawn(m, rng, userId);
-  const p = partySpawnNear({ walk: m.mapRt.walk, regions: m.mapRt.regions, idx: m.idx, width: m.map.width, height: m.map.height }, d, d.spots.length, d.spots);
+  // Land next to a living member of the drop: the one nearest the drop's first spot.
+  let anchor: { x: number; y: number; side: MapSide } = d;
+  let best = Infinity;
+  const taken: Array<{ x: number; y: number }> = [...d.spots];
+  for (const rt of m.allRuntimes()) {
+    if (rt.isNpc || !rt.pub.alive || rt.dropId !== dropId || rt.partyId !== partyId || rt.userId === userId) continue;
+    taken.push(rt.pub);
+    const dist = Math.hypot(rt.pub.x - d.x, rt.pub.y - d.y);
+    if (dist < best) {
+      best = dist;
+      anchor = { x: rt.pub.x, y: rt.pub.y, side: rt.self.side as MapSide };
+    }
+  }
+  const p = partySpawnNear({ walk: m.mapRt.walk, regions: m.mapRt.regions, idx: m.idx, width: m.map.width, height: m.map.height }, anchor, d.spots.length, taken);
+  if (!dropSpawnSafe(m, p, userId, partyId)) return pickEntrySpawn(m, rng, userId);
   d.spots.push(p);
   m.recentSpawns.push({ x: p.x, y: p.y, at: clock });
-  return { x: p.x, y: p.y, side: d.side };
+  return { x: p.x, y: p.y, side: anchor.side };
+}
+
+/**
+ * The late-spawn threat rules for a party drop spot: no living human outside `partyId` within
+ * PARTY_SPAWN_SAFE_PX and none of `userId`'s own corpses within PARTY_SPAWN_CORPSE_PX.
+ */
+export function dropSpawnSafe(m: Match, p: { x: number; y: number }, userId: string, partyId: string): boolean {
+  const within = (q: { x: number; y: number }, r: number) => (q.x - p.x) ** 2 + (q.y - p.y) ** 2 < r * r;
+  for (const rt of m.allRuntimes()) {
+    if (rt.isNpc || !rt.pub.alive || rt.userId === userId || (partyId !== "" && rt.partyId === partyId)) continue;
+    if (within(rt.pub, PARTY_SPAWN_SAFE_PX)) return false;
+  }
+  for (const c of m.containers.corpses()) {
+    if (c.ownerUser !== null && c.ownerUser === userId && within(c, PARTY_SPAWN_CORPSE_PX)) return false;
+  }
+  return true;
 }
 
 /** What partySpawnNear needs of a map runtime. */

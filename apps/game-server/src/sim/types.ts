@@ -134,6 +134,12 @@ export interface PlayerRuntime {
   lastShotAt: number;
   /** Weapons v2: earliest match clock of the next grenade throw (GRENADE.COOLDOWN_MS). */
   nextThrowAt: number;
+  /**
+   * Weapons v2: a C2S.THROW waiting for its place in the input stream (Match.requestThrow): it runs
+   * right after the input `seq` is applied (or once the queue drains), from the post-input position,
+   * exactly where the client's prediction threw it.
+   */
+  pendingThrow: { a: number; d: number; seq: number } | null;
   /** Match clock when the player's position last changed (NPCs / vision: "standing still in a bush"). */
   movedAt: number;
   /** Position at the start of the current step (vision lead eye: velocity). */
@@ -222,8 +228,12 @@ export interface Bullet {
 export type MatchEvent =
   /** `src` = shooter rosterIndex. */
   | { type: "shot"; src: number; msg: ShotMsg }
-  /** `src` = shooter rosterIndex or -1; `fa` = angle target → shooter (target's copy only). */
-  | { type: "hit"; src: number; target: number; msg: HitMsg; fa: number | undefined }
+  /**
+   * `src` = shooter rosterIndex or -1; `fa` = angle target → shooter (target's copy only); `area` =
+   * the blast centre of an area hit (grenade): an attacker who does not see the target gets only a
+   * position-less "hit confirmed" copy (audience.ts), never the target's id or spot.
+   */
+  | { type: "hit"; src: number; target: number; msg: HitMsg; fa: number | undefined; area?: { x: number; y: number } }
   /** `src` = killer rosterIndex or -1 (audience: NPC deaths below boss go to the killer only). */
   | { type: "kill"; src: number; msg: KillMsg }
   /** A static container (MapData.containers index) was opened by roster `src`. */

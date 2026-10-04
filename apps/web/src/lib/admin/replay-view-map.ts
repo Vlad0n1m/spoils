@@ -46,6 +46,14 @@ const PROP_COLOR: Partial<Record<PropKind, string>> = {
   logpile: "#7a5a36",
   watchtower: "#9a8a6a",
   silo: "#c9cbc4",
+  // Map v2 furniture (MAP_GEN_VERSION 4): low cover in warm wood tones, the tall lockers darker.
+  table: "#9b7650",
+  desk: "#87664a",
+  sofa: "#7d5a5a",
+  armchair: "#7d5a5a",
+  bed: "#8a8fa6",
+  counter: "#a08566",
+  lockers: "#5d6873",
 };
 
 const CIRCLE_COLOR = { rock: "#8d8d86", barrel: "#b4503c", silo: "#c9cbc4" } as const;

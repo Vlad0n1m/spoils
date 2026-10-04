@@ -86,6 +86,67 @@ test("party drop: after PARTY.DROP_TTL_MS a member spawns normally (new anchor);
   assert.ok(lead.pub.alive);
 });
 
+test("party drop: a late member lands next to the living member, not at the drop's stale first spot", () => {
+  const { m, wall } = worldMatch();
+  jump(m, wall, 1_000);
+  const lead = enter(m, "lead", { partyId: P, dropId: D });
+  const first = { x: lead.pub.x, y: lead.pub.y };
+  // The leader walked 2500 px off along the long axis before the member followed.
+  const nx = first.x < m.map.width / 2 ? first.x + 2500 : first.x - 2500;
+  place(m, lead.id, nx, first.y);
+  jump(m, wall, 50_000);
+  const late = enter(m, "m1", { partyId: P, dropId: D });
+  const d = dist(late.pub, lead.pub);
+  assert.ok(d >= PARTY_SPAWN_MIN_PX && d <= PARTY_SPAWN_MAX_PX, `${d.toFixed(0)} px from the living leader`);
+  assertClear(m, late.pub.x, late.pub.y, "late member");
+  assert.equal(late.self.side, lead.self.side);
+  // Nobody of the drop alive: the stored first spot is the anchor.
+  killPlayer(m, lead, null, "");
+  killPlayer(m, late, null, "");
+  const third = enter(m, "m2", { partyId: P, dropId: D });
+  const d2 = dist(third.pub, first);
+  assert.ok(d2 >= PARTY_SPAWN_MIN_PX && d2 <= PARTY_SPAWN_MAX_PX, `${d2.toFixed(0)} px from the first spot`);
+});
+
+test("party drop: the late-spawn safety rules hold (no spawn next to a stranger, none on the own body)", () => {
+  // A stranger next to the living leader: the member takes a normal entry spot instead.
+  {
+    const { m, wall } = worldMatch();
+    jump(m, wall, 1_000);
+    const lead = enter(m, "lead", { partyId: P, dropId: D });
+    jump(m, wall, 5_000);
+    const killer = enter(m, "killer");
+    place(m, killer.id, lead.pub.x + 120, lead.pub.y);
+    const spots = m.partyDrops.get(D)!.spots.length;
+    const mate = enter(m, "m1", { partyId: P, dropId: D });
+    assert.ok(m.entrySpots().some((s) => s.x === mate.pub.x && s.y === mate.pub.y), "a normal entry spot");
+    assert.equal(m.partyDrops.get(D)!.spots.length, spots, "the drop hands out no spot");
+    assert.ok(dist(mate.pub, killer.pub) > PARTY_SPAWN_MAX_PX);
+    // A mate of the same party standing there is no threat.
+    const { m: m2, wall: w2 } = worldMatch();
+    jump(m2, w2, 1_000);
+    const l2 = enter(m2, "lead", { partyId: P, dropId: D });
+    const other = enter(m2, "o", { partyId: P });
+    place(m2, other.id, l2.pub.x + 120, l2.pub.y);
+    const m1 = enter(m2, "m1", { partyId: P, dropId: D });
+    assert.ok(dist(m1.pub, l2.pub) <= PARTY_SPAWN_MAX_PX, "a party mate does not block the drop");
+  }
+  // The leader died at the drop and re-enters within the window: never next to their own body.
+  {
+    const { m, wall } = worldMatch();
+    jump(m, wall, 1_000);
+    const lead = enter(m, "lead", { partyId: P, dropId: D });
+    const mate = enter(m, "m1", { partyId: P, dropId: D });
+    killPlayer(m, lead, null, "");
+    const body = { x: lead.pub.x, y: lead.pub.y };
+    jump(m, wall, 10_000);
+    const again = enter(m, "lead", { partyId: P, dropId: D });
+    assert.ok(m.entrySpots().some((s) => s.x === again.pub.x && s.y === again.pub.y), "a normal entry spot");
+    assert.ok(dist(again.pub, body) > PARTY_SPAWN_MAX_PX, `${dist(again.pub, body).toFixed(0)} px from the own body`);
+    assert.ok(mate.pub.alive);
+  }
+});
+
 /** The open test arena plus a closed 500 × 500 room (32 px walls) at (2000, 2000). */
 function roomMap(size = 500): { map: MapData; inner: { x0: number; y0: number; x1: number; y1: number } } {
   const x = 2000, y = 2000, t = 32;
