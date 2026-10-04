@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ITEM_FLAG, NPC_ROLE, SEARCH, dogTagCr, mulberry32 } from "@extract/shared";
-import { takeAll } from "./containers.js";
+import { corpseRot, takeAll } from "./containers.js";
 import { deathSplit, killPlayer } from "./death.js";
 import { DISCLOSE } from "./disclosure.js";
 import { extractPlayer } from "./extraction.js";
@@ -40,7 +40,10 @@ test("a human dies: a searchable corpse (no ground items), broken uniques report
   const c = m.state.corpses.get(String(victim.rosterIndex))!;
   assert.ok(c);
   assert.deepEqual([c.x, c.y, c.label, c.color, c.opened, c.empty], [1560, 1500, "P1", pl(m, b!).color, false, false]);
-  assert.ok(Math.abs(c.rot - 1.25) < 1e-6);
+  // Security audit: the body's orientation is a fixed spread per roster index, never the death aim
+  // (which usually pointed at the killer).
+  assert.equal(c.rot, corpseRot(victim.rosterIndex));
+  assert.ok(Math.abs(c.rot - 1.25) > 1e-3);
   const t = m.containers.corpseOf(victim.rosterIndex)!;
   assert.equal(t.key, `k${c.id}`);
   const inside = m.containers.remaining(t);

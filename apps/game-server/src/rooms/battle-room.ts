@@ -1,4 +1,4 @@
-import { Room, ServerError, type Client } from "@colyseus/core";
+import { Room, ServerError, type Client, type ClientPrivate } from "@colyseus/core";
 import { StateView } from "@colyseus/schema";
 import {
   BOSS_KINDS,
@@ -19,6 +19,7 @@ import {
 } from "@extract/shared";
 import { registerInventoryHandlers } from "./inventory-handlers.js";
 import { IntentLimiter } from "./intent-limit.js";
+import { isolateViewPatches } from "./view-patches.js";
 import { authenticate, isLaunchKey, releasePendingSeatsOf } from "./room-auth.js";
 import { offExitSettled, reportEnd, reportExit, reportWorldEvent } from "../net/web-api.js";
 import { buildBatches } from "../sim/audience.js";
@@ -94,6 +95,15 @@ export function sanitizeWorld(raw: unknown): WorldCreateOptions | null {
 
 /** Most samples accepted in one INPUT message (clients may batch after a hitch). */
 const MAX_INPUT_BATCH = 15;
+/**
+ * Every frame a client sends (INPUT, intents, INV_*, unknown types, protocol frames) spends one token
+ * of a per-client bucket before Colyseus even decodes it (security audit "message flooding"): an
+ * honest client sends about 35 frames/s (INPUT_HZ 30 + intents and inventory drags). Frames past the
+ * bucket are dropped; a client that drops FLOOD_KICK_AFTER frames within one second is disconnected.
+ */
+export const FRAMES_PER_SEC = 120;
+export const FRAME_BURST = 240;
+export const FLOOD_KICK_AFTER = 240;
 /** Clients get their SETTLED even if the web API is slow; the post keeps retrying in the background. */
 const SETTLE_WAIT_MS = 5_000;
 /** S2C.PARTY period (PARTY.POS_HZ). */
@@ -127,6 +137,9 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
   /** rosterIndex → connected client: all sim routing is by runtime index. */
   private readonly byRoster = new Map<number, Client>();
   private readonly intents = new IntentLimiter();
+  /** All frames of a client (see FRAMES_PER_SEC); dropped frames per client for the flood kick. */
+  private readonly frames = new IntentLimiter(FRAMES_PER_SEC, FRAME_BURST);
+  private readonly dropped = new WeakMap<object, { n: number; since: number }>();
   private finishing = false;
   private summary: MatchSummaryMsg | null = null;
   private disposedFlag = false;
@@ -184,6 +197,11 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     this.views = new ViewSync(this.match);
     this.replay = startShardReplay(this.match);
     this.setState(this.match.state);
+    // One client's oversized view must never truncate the other clients' patches (view-patches.ts).
+    const encoder = (this as unknown as { _serializer?: { encoder?: unknown } })._serializer?.encoder;
+    if (!isolateViewPatches(encoder, (view, bytes) => this.onViewOverflow(view, bytes))) {
+      console.warn(`[battle ${world.matchId}] view patch isolation unavailable (unexpected @colyseus/schema encoder)`);
+    }
     this.setMetadata({ matchId: world.matchId, cycleId: world.cycleId });
 
     this.onMessage(C2S.INPUT, (client, raw: unknown) => {
@@ -251,6 +269,31 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
       await releasePendingSeatsOf(this, userId);
     }
     return super._reserveSeat(sessionId, joinOptions, authData, seconds, allowReconnection, devModeReconnection);
+  }
+
+  /** The frame budget (FRAMES_PER_SEC) runs before Colyseus decodes anything. */
+  protected override _onMessage(client: Client & ClientPrivate, buffer: Buffer): void {
+    if (this.frames.take(client)) {
+      super._onMessage(client, buffer);
+      return;
+    }
+    const now = performance.now();
+    let d = this.dropped.get(client);
+    if (!d || now - d.since > 1000) {
+      d = { n: 0, since: now };
+      this.dropped.set(client, d);
+    }
+    if (++d.n === FLOOD_KICK_AFTER) {
+      console.warn(`[battle ${this.match?.state.matchId}] ${client.sessionId}: frame flood, disconnecting`);
+      client.leave(CLOSE_CODES.FLOODED, "flooded");
+    }
+  }
+
+  /** A view patch outgrew the encoder buffer: that client's decoder is out of sync, so it rejoins. */
+  private onViewOverflow(view: unknown, bytes: number): void {
+    const client = this.clients.find((c) => c.view === view);
+    console.error(`[battle ${this.match?.state.matchId}] view patch of ${client?.sessionId ?? "?"} overflowed (${bytes} B): resync`);
+    if (client) this.clock.setTimeout(() => client.leave(CLOSE_CODES.RESYNC, "resync"), 0);
   }
 
   override onJoin(client: Client, _options: unknown, ticket: JoinTicket) {

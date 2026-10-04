@@ -274,3 +274,37 @@ test("audience: dead and extracted players get no shots, hits or chest events af
   assert.ok(!added.includes(D!.rosterIndex) && !added.includes(X!.rosterIndex), `AOI adds went to ${added}`);
   assert.ok(added.includes(A!.rosterIndex), "the living nearby viewer gets the corpse");
 });
+
+test("audience: a bullet hit on a target the shooter does not see is a position-only 'hit confirmed' (no id, HP loss or armor)", () => {
+  const { m, R, S, all } = scene();
+  // D sees neither A nor B (scene comment): D's bullet hits B in the dark.
+  const hit: MatchEvent = {
+    type: "hit", src: R.D!, target: R.B!,
+    msg: { t: S.B!, s: S.D!, x: 1590, y: 2510, d: 27, ar: true }, fa: 0,
+  };
+  const b = buildBatches(m, [hit], all);
+  assert.deepEqual(b.get(R.D!)!.hits, [{ t: "", s: S.D!, x: 1590, y: 2510, d: 0, ar: false }], "shooter: where the tracer stops, nothing else");
+  assert.equal(b.get(R.B!)!.hits![0]!.t, S.B!, "the target still gets its full copy");
+  assert.equal(b.get(R.B!)!.hits![0]!.d, 27);
+  assert.equal(b.get(R.C!)!.hits![0]!.d, 27, "viewers of the target see the damage");
+});
+
+test("audience: a new corpse reaches only those who saw the victim or see the killer; others once the killer left; rot is not the death aim", () => {
+  const { m, R } = scene();
+  const A = m.rosterRuntime(R.A!)!, B = m.rosterRuntime(R.B!)!;
+  B.pub.aim = 2.5;
+  killPlayer(m, B, A, "rifle");
+  const corpse = m.state.corpses.get(String(R.B!))!;
+  assert.ok(corpse, "the corpse exists in the server state");
+  assert.notEqual(corpse.rot, 2.5, "the body does not point where the victim aimed");
+  m.step(SERVER_TICK_MS);
+  m.drainEvents();
+  for (const n of ["A", "C", "H"]) assert.ok(m.aoi.allowed(corpse, R[n]!), `${n} saw the victim or sees the killer`);
+  for (const n of ["D", "F", "G"]) assert.ok(!m.aoi.allowed(corpse, R[n]!), `${n} (hidden from both) does not get the body yet`);
+  // The killer leaves the spot: after DISCLOSE.QUIET_MS everyone in the ring gets it.
+  A.pub.x = 4500;
+  A.pub.y = 4500;
+  for (let t = 0; t < 4_000; t += SERVER_TICK_MS) m.step(SERVER_TICK_MS);
+  m.drainEvents();
+  for (const n of ["D", "F", "G"]) assert.ok(m.aoi.allowed(corpse, R[n]!), `${n} gets the body once the killer is gone`);
+});

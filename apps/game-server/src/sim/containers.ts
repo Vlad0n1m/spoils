@@ -123,6 +123,12 @@ export interface SearchTarget {
   emptied: boolean;
 }
 
+/** Body orientation of roster index i: a fixed golden-angle spread in [-π, π), never the death aim. */
+export function corpseRot(i: number): number {
+  const a = (i * 2.399963 + 0.7) % (2 * Math.PI);
+  return Math.round((a - Math.PI) * 1000) / 1000;
+}
+
 export class ContainerSystem {
   /** Live-mode pool uniques allocated to a container, by index (registered at match start / placed, v6). */
   private readonly pool = new Map<number, ItemLike[]>();
@@ -334,7 +340,7 @@ export class ContainerSystem {
    * The body of a player who just died, holding `items` in slot order. Synced to clients through
    * state.corpses (AOI-filtered); the contents only through the searchers' loot entry k<id>.
    */
-  addCorpse(rt: PlayerRuntime, items: ItemLike[]): SearchTarget {
+  addCorpse(rt: PlayerRuntime, items: ItemLike[], killer: PlayerRuntime | null = null): SearchTarget {
     // A body killed mid-vault lies on the nearer side of the window, never inside it: interaction
     // line of sight (MOVE) cannot reach a point inside a window, so it would be unlootable.
     const p = rt.pub;
@@ -345,7 +351,8 @@ export class ContainerSystem {
     c.y = at.y;
     c.label = rt.nickname;
     c.color = p.color;
-    c.rot = p.aim;
+    // Not the aim at death: that usually points at the (maybe hidden) killer. A fixed spread per body.
+    c.rot = corpseRot(rt.rosterIndex);
     // WORLD v6 (A6): the body and what is left in it vanish CORPSE_EXPIRE_MS after the death.
     if (this.m.world) c.expiresAt = this.m.clock + WORLD.CORPSE_EXPIRE_MS;
     const t = this.createTarget({
@@ -355,6 +362,17 @@ export class ContainerSystem {
     this.corpseList.push(t);
     if (this.m.world) this.expQueue.push(t);
     this.m.state.corpses.set(c.id, c);
+    // Fog (security audit): a new body is shown at once only to the victim, to those who saw the
+    // victim alive (last tick's vision rows) and to those who see the killer; every other AOI viewer
+    // gets it once a human killer has left the spot (disclosure.ts, as with a dropped item), or
+    // QUIET_MS after an NPC kill (NPCs keep to their posts, so waiting for them could take forever).
+    // Otherwise a far client behind walls learned, in the death tick, that a hidden fight happened there.
+    const seen: number[] = [];
+    for (const v of this.m.allRuntimes()) if (!v.isNpc && v !== rt && this.m.vision.sees(v.rosterIndex, rt.rosterIndex)) seen.push(v.rosterIndex);
+    this.m.aoi.restrict(c, "spawn", rt, seen);
+    const by = killer && killer !== rt ? killer : null;
+    if (by) this.m.aoi.restrict(c, "spawn", by);
+    this.m.disclosure.defer(`s${t.key}`, at.x, at.y, by && !by.isNpc ? [rt, by] : [rt], () => this.m.aoi.unrestrict(c));
     return t;
   }
 
@@ -769,6 +787,11 @@ function actor(m: Match, sessionId: string): PlayerRuntime | undefined {
 }
 
 function invErr(m: Match, rt: PlayerRuntime, code: InvErrCode, key?: string, taken?: number): InvErrCode {
+  // As Match.invErr: one "rate" reply per second, however many ops a flood sends past the bucket.
+  if (code === "rate") {
+    if (m.clock - rt.rateErrAt < 1000) return code;
+    rt.rateErrAt = m.clock;
+  }
   if (!rt.isNpc) {
     const msg: { code: InvErrCode; key?: string; taken?: number } = { code };
     if (key !== undefined) msg.key = key;

@@ -229,6 +229,7 @@ export const INV_ERR_TEXT: Readonly<Record<InvErrCode, string>> = {
   rate: "Slow down",
   dead: "You're out of the raid",
   own_body: "That's your own body — you can't search it",
+  ground_full: "Too many of your items on the ground — pick some up first",
 };
 
 /** Read-only view of a player's slots (a plain record works as a SlotStore for the engine). */

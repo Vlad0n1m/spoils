@@ -13,7 +13,7 @@ import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { pathToFileURL } from "node:url";
 import { Encoder } from "@colyseus/schema";
-import { CLOSE_CODES, NET, S2C, WORLD, worldCycleAt, type JoinTicket, type JoinedMsg, type OutcomeMsg } from "@extract/shared";
+import { C2S, CLOSE_CODES, NET, S2C, WORLD, worldCycleAt, type JoinTicket, type JoinedMsg, type OutcomeMsg } from "@extract/shared";
 
 // As in index.ts: before anything can create a room or a serializer.
 Encoder.BUFFER_SIZE = NET.ENCODER_BUFFER_BYTES;
@@ -21,7 +21,7 @@ Encoder.BUFFER_SIZE = NET.ENCODER_BUFFER_BYTES;
 const { Server, matchMaker } = await import("@colyseus/core");
 const { WebSocketTransport } = await import("@colyseus/ws-transport");
 const { defineRooms, EXPOSED_METHODS } = await import("./define.js");
-const { sanitizeWorld } = await import("./battle-room.js");
+const { FLOOD_KICK_AFTER, FRAME_BURST, sanitizeWorld } = await import("./battle-room.js");
 const { parseInvDrop, parseInvMove } = await import("./inventory-handlers.js");
 const { LAUNCH_KEY, isLaunchKey } = await import("./room-auth.js");
 const { signJoinTicket } = await import("../auth/ticket.js");
@@ -38,6 +38,7 @@ interface SdkRoom {
   onMessage(type: string, cb: (msg: unknown) => void): void;
   onLeave(cb: (code: number) => void): void;
   leave(consented?: boolean): Promise<number>;
+  send(type: string, message?: unknown): void;
 }
 interface SdkClient {
   joinById(roomId: string, options?: unknown): Promise<SdkRoom>;
@@ -246,6 +247,15 @@ test("rejoin of an alive runtime skips the web and replaces the first connection
   assert.equal(second.hello.selfKey, first.hello.selfKey, "the same runtime");
   assert.equal(await closed, CLOSE_CODES.JOINED_ELSEWHERE);
   assert.equal(match.currentOf(userId)!.id, second.room.sessionId);
+});
+
+test("frame flood: a client far past the per-connection frame budget is disconnected (FLOODED); its body stays", async () => {
+  const userId = randomUUID();
+  const { room } = await joinAndHello(ticket(userId));
+  const closed = new Promise<number>((resolve) => room.onLeave(resolve));
+  for (let i = 0; i < FRAME_BURST + FLOOD_KICK_AFTER + 100; i++) room.send(C2S.PING, { t: i });
+  assert.equal(await closed, CLOSE_CODES.FLOODED);
+  assert.ok(match.currentOf(userId)?.pub.alive, "the runtime stays on the map (the owner may rejoin)");
 });
 
 test("exit_settling for a known entry that left; a new entry re-enters; the receipt is routed by entryId", async () => {

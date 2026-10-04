@@ -110,6 +110,13 @@ export interface PlayerRuntime {
    */
   viewCap: number;
   connected: boolean;
+  /**
+   * Humans: wall ms (Match.now) since the runtime has been without a client — its admission until the
+   * first attach, or its last detach; -1 while connected. Bounds how long it holds a seat (WORLD.IDLE_SEAT_MS).
+   */
+  idleSince: number;
+  /** Match clock of the last INV_ERR "rate" sent to this client (at most one per second, security audit). */
+  rateErrAt: number;
   loadoutId: string;
   /** Player level at raid start (LoadoutSnapshot.level; 0 for free kit / NPCs): dog tag value, XP. */
   level: number;

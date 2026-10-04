@@ -14,7 +14,9 @@
  * Admission (`admit`, called by BattleRoom's static onAuth before any seat is reserved) runs the
  * checks of §3.2 and the web's raids/enter, then puts the raider on the map (Match.addHuman), so
  * the seat reservation that follows finds a living runtime. Errors are ServerErrors whose message
- * is a WORLD_JOIN_ERR code ("<code>" or "<code>:<detail>").
+ * is a WORLD_JOIN_ERR code ("<code>" or "<code>:<detail>"). Capacity counts seat holders
+ * (Match.seatHolders): connected humans and bodies without a client for less than WORLD.IDLE_SEAT_MS,
+ * plus admissions in flight; a longer idle body stays on the map (rejoin always works) but frees its seat.
  *
  * Party drops (shared party.ts, JoinTicket.dropId): the first admission of a dropId on a shard needs
  * room for the whole drop (its signed JoinTicket.dropSize; PARTY.MAX_SIZE for an older ticket without
@@ -72,7 +74,7 @@ export interface WorldCreateOptions {
 /** What the directory needs of a shard's Match. */
 export type ShardMatch = Pick<
   Match,
-  "ended" | "clock" | "map" | "eventBossSpot" | "currentOf" | "entryById" | "humansOnMap" | "allRuntimes" | "poolTargetCount" | "bossAlive" | "addHuman"
+  "ended" | "clock" | "map" | "eventBossSpot" | "currentOf" | "entryById" | "humansOnMap" | "seatHolders" | "allRuntimes" | "poolTargetCount" | "bossAlive" | "addHuman"
 >;
 
 /** What the directory needs of a shard's room (BattleRoom implements it). */
@@ -446,7 +448,8 @@ export class WorldDirectory {
       if (now - d.firstAt > PARTY.DROP_TTL_MS) shard.drops.delete(id);
       else held += Math.max(0, d.size - d.users.size);
     }
-    const humans = m.humansOnMap() + shard.inflight.size;
+    // Seat holders, not every living body: a body idle past WORLD.IDLE_SEAT_MS no longer blocks entry.
+    const humans = m.seatHolders() + shard.inflight.size;
     const runtimes = m.allRuntimes().length;
     const runtimeCap = WORLD.MAX_RUNTIMES_PER_SHARD - WORLD.RUNTIME_HEADROOM;
     const dropId = t.partyId ? t.dropId : undefined;
