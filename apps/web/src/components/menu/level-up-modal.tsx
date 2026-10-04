@@ -38,16 +38,17 @@ export function LevelUpModal({
     <div className="fixed inset-0 z-[70] grid place-items-center p-4" role="dialog" aria-modal="true" aria-labelledby="levelup-title">
       <div className="absolute inset-0 bg-black/70" onClick={onClose} aria-hidden />
       {/* Landscape phones (≤ 500 px tall): no big badge, smaller heading, and the card scrolls when a
-          level brings many rewards. */}
-      <div className="toon-panel relative max-h-[calc(100dvh-2rem)] w-full max-w-sm overflow-y-auto overscroll-contain bg-[#161b28] p-7 text-center animate-pop-in motion-reduce:animate-none [@media(max-height:500px)]:max-w-md [@media(max-height:500px)]:p-4">
-        <div className="pointer-events-none absolute inset-0 motion-reduce:hidden" aria-hidden>
+          level brings many rewards; there the unlocks sit in two columns and the confetti is off, so
+          nothing covers the text. Elsewhere the confetti stays around the badge and the heading. */}
+      <div className="toon-panel relative max-h-[calc(100dvh-2rem)] w-full max-w-sm overflow-y-auto overscroll-contain bg-[#161b28] p-7 text-center animate-pop-in motion-reduce:animate-none [@media(max-height:500px)]:max-w-xl [@media(max-height:500px)]:p-4">
+        <div className="pointer-events-none absolute inset-0 motion-reduce:hidden [@media(max-height:500px)]:hidden" aria-hidden>
           {Array.from({ length: 12 }, (_, i) => (
             <span
               key={i}
               className="absolute h-3 w-3 rounded-sm border-2 border-black animate-pop-in"
               style={{
                 left: `${8 + ((i * 37) % 84)}%`,
-                top: `${6 + ((i * 53) % 30)}%`,
+                top: `${4 + ((i * 53) % 20)}%`,
                 background: CONFETTI[i % CONFETTI.length],
                 transform: `rotate(${(i * 47) % 90}deg)`,
                 animationDelay: `${120 + i * 60}ms`,
@@ -60,7 +61,7 @@ export function LevelUpModal({
           LEVEL {level}
         </h2>
         {unlocks.length > 0 ? (
-          <ul className="font-body mt-5 space-y-2 text-left text-sm [@media(max-height:500px)]:mt-3 [@media(max-height:500px)]:space-y-1.5">
+          <ul className="font-body mt-5 space-y-2 text-left text-sm [@media(max-height:500px)]:mt-3 [@media(max-height:500px)]:grid [@media(max-height:500px)]:grid-cols-2 [@media(max-height:500px)]:gap-1.5 [@media(max-height:500px)]:space-y-0">
             {unlocks.map((u) => (
               <li key={u} className="flex items-start gap-2 rounded-xl border-2 border-black bg-white/[0.06] px-3 py-2 text-white/85">
                 <span className="text-zooa-lime" aria-hidden>

@@ -41,13 +41,15 @@ export function PartyPrompts({ hidden }: { hidden: boolean }) {
   };
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(12.5rem+env(safe-area-inset-bottom))] z-[45] flex flex-col items-center gap-2 px-3 md:bottom-[12rem] [@media(max-height:500px)]:bottom-[calc(5rem+env(safe-area-inset-bottom))]">
+    // Landscape phones: between the tile grid and the right column, so the prompt never covers the
+    // party strip or PLAY, and above the gear plate.
+    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(12.5rem+env(safe-area-inset-bottom))] z-[45] flex flex-col items-center gap-2 px-3 md:bottom-[12rem] [@media(max-height:500px)]:bottom-[calc(6.5rem+env(safe-area-inset-bottom))] [@media(max-height:500px)]:pl-[calc(9.5rem+env(safe-area-inset-left,0px))] [@media(max-height:500px)]:pr-[calc(max(15rem,30vw)+1.5rem+env(safe-area-inset-right,0px))]">
       {drop && (
         <section
           aria-label="Party drop"
-          className="toon-panel pointer-events-auto flex w-full max-w-md items-center gap-3 bg-[#121722] p-2.5 pl-4 animate-pop-in motion-reduce:animate-none"
+          className="toon-panel pointer-events-auto flex w-full max-w-md items-center gap-3 lg:max-w-lg bg-[#121722] p-2.5 pl-4 animate-pop-in motion-reduce:animate-none"
         >
-          <p className="font-body min-w-0 flex-1 text-sm text-white">
+          <p className="font-body min-w-0 flex-1 text-sm leading-snug text-white">
             {/* Only the static line is live: a countdown inside a live region is re-read every second. */}
             <span role="status">
               <b className="font-display text-base tracking-wide text-zooa-lime">{drop.leader}</b> is dropping in
@@ -74,9 +76,9 @@ export function PartyPrompts({ hidden }: { hidden: boolean }) {
       {invite && !drop && (
         <section
           aria-label="Party invite"
-          className="toon-panel pointer-events-auto flex w-full max-w-md flex-wrap items-center gap-2 bg-[#121722] p-2.5 pl-4 animate-pop-in motion-reduce:animate-none"
+          className="toon-panel pointer-events-auto flex w-full max-w-md flex-wrap items-center gap-2 lg:max-w-lg bg-[#121722] p-2.5 pl-4 animate-pop-in motion-reduce:animate-none"
         >
-          <p className="font-body min-w-0 flex-1 text-sm text-white">
+          <p className="font-body min-w-0 flex-1 text-sm leading-snug text-white">
             <b className="font-display text-base tracking-wide text-zooa-lime">{invite.from}</b> invited you to a party
             <span className="block text-xs lg:text-[0.8125rem] tabular-nums text-white/75">
               {invite.size}/{PARTY.MAX_SIZE} · expires in {fmtClockS(secondsLeft(invite.expiresAt, now))}
