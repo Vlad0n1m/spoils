@@ -8,18 +8,26 @@ import { formatMinor } from "@/lib/market/config";
 import { AudioSettingsButton } from "@/components/audio-settings";
 import { AccountMenu } from "./account-menu";
 import { CreditsPill, WalletPill } from "./currency-pill";
+import { nameColorHex, titleName } from "@/lib/lobby/levels";
 import { LevelBadge } from "./level-badge";
+import { useQuests } from "./quests-context";
 import { XpBar } from "./xp-bar";
 
 /**
  * Main-menu top bar (WORLD v6 spec §6.2): SPOILS, level badge, nick + XP bar, CR / SOL pills,
  * audio, account. Guests see "Guest · loot isn't kept" + Register instead of the money; signed-out
  * viewers get Sign in. Phone: badge, nick, CR and ☰, with a 4 px XP bar under the bar.
+ * Registered players: the nick in their equipped name colour, the equipped title next to it (md+)
+ * and the badge frame; the badge opens the rewards sheet (`onRewards`).
  */
-export function MenuTopBar({ onCredits }: { onCredits: () => void }) {
+export function MenuTopBar({ onCredits, onRewards }: { onCredits: () => void; onRewards: () => void }) {
   const { user, sessionLoading, sessionKind, stash } = useLobby();
+  const { data: quests } = useQuests();
   const s = stash.data;
   const level = sessionKind === "user" ? (s ? s.level : null) : null;
+  const worn = sessionKind === "user" ? (quests?.equipped ?? null) : null;
+  const nickColor = nameColorHex(worn?.color);
+  const title = titleName(worn?.title);
 
   return (
     <header className="relative z-20 border-b-[3px] border-black bg-[#0d1119]/85 backdrop-blur">
@@ -36,9 +44,31 @@ export function MenuTopBar({ onCredits }: { onCredits: () => void }) {
             <span className="h-10 w-48 animate-pulse rounded-xl bg-white/10 motion-reduce:animate-none" aria-hidden />
           ) : user ? (
             <>
-              {sessionKind === "user" && <LevelBadge level={level} />}
+              {sessionKind === "user" && (
+                <button
+                  type="button"
+                  onClick={onRewards}
+                  aria-label={level !== null ? `Level ${level} · rewards` : "Rewards"}
+                  aria-haspopup="dialog"
+                  className="shrink-0 rounded-xl transition-transform focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/60 active:translate-y-[2px]"
+                >
+                  <LevelBadge level={level} frame={worn?.frame} />
+                </button>
+              )}
               <div className="min-w-0">
-                <p className="max-w-[9rem] truncate text-base tracking-wide text-white sm:max-w-[12rem] md:text-lg">{user.nickname}</p>
+                <p className="flex min-w-0 items-baseline gap-2">
+                  <span
+                    className="max-w-[9rem] truncate text-base tracking-wide text-white sm:max-w-[12rem] md:text-lg"
+                    style={nickColor ? { color: nickColor } : undefined}
+                  >
+                    {user.nickname}
+                  </span>
+                  {title && (
+                    <span className="font-body hidden max-w-[8rem] truncate text-[0.7rem] font-bold uppercase tracking-wider text-white/60 md:inline lg:max-w-[12rem]">
+                      {title}
+                    </span>
+                  )}
+                </p>
                 {sessionKind === "user" ? (
                   <div className="mt-1 hidden md:block">
                     {s ? <XpBar xp={s.xp} /> : <span className="block h-3 w-40 animate-pulse rounded-full bg-white/10 motion-reduce:animate-none" />}

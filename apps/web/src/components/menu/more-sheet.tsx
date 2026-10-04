@@ -10,18 +10,23 @@ const row =
   "font-body flex min-h-14 w-full items-center gap-3 rounded-2xl border-[3px] border-black bg-[#1d2333] px-4 text-left text-base font-semibold text-white shadow-[0_3px_0_#000] active:translate-y-[2px] active:shadow-[0_1px_0_#000] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70";
 
 /**
- * Phone "More" sheet (WORLD v6 spec §6.1): Info, Friends (red dot = requests or invites waiting),
- * Guilds 🔒, Wallet, Account. A bottom sheet over the dock; Escape or the backdrop closes it.
+ * Phone "More" sheet (WORLD v6 spec §6.1): Info, Daily tasks and rewards (red dot = new tasks),
+ * Friends (red dot = requests or invites waiting), Guilds 🔒, Wallet, Account. A bottom sheet over
+ * the dock; Escape or the backdrop closes it.
  */
 export function MoreSheet({
   onClose,
   onInfo,
+  onTasks,
+  tasksDot = false,
   onFriends,
   friendsDot = false,
   onLocked,
 }: {
   onClose: () => void;
   onInfo: () => void;
+  onTasks: () => void;
+  tasksDot?: boolean;
   onFriends: () => void;
   friendsDot?: boolean;
   onLocked: (what: "Guilds") => void;
@@ -44,6 +49,13 @@ export function MoreSheet({
         <button ref={first} type="button" className={row} onClick={onInfo}>
           <FallbackImg src={MENU_ICONS.info.src} fallback={MENU_ICONS.info.fallback} className="h-8 w-8 object-contain" />
           Info · how to play
+        </button>
+        <button type="button" className={row} onClick={onTasks} aria-label={tasksDot ? "Daily tasks and rewards, new" : "Daily tasks and rewards"}>
+          <span className="relative">
+            <FallbackImg src={MENU_ICONS.tasks.src} fallback={MENU_ICONS.tasks.fallback} className="h-8 w-8 object-contain" />
+            {tasksDot && <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-black bg-rose-500" aria-hidden />}
+          </span>
+          Daily tasks · rewards
         </button>
         <button type="button" className={row} onClick={onFriends} aria-label={friendsDot ? "Friends and party, new" : "Friends and party"}>
           <span className="relative">

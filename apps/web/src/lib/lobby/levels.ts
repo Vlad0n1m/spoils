@@ -1,8 +1,19 @@
 /**
- * Level presentation for the menu (WORLD v6 spec §6.2, §6.6): badge colours and what a new level
- * unlocks. Pure; the numbers come from the shared economy (MARKET, BOUND_OFFERS, boundTraderLevel).
+ * Level presentation for the menu (WORLD v6 spec §6.2, §6.6; docs/RETENTION.md §3): badge colours,
+ * what a new level unlocks and the rewards table. Pure; the numbers come from the shared economy
+ * (MARKET, BOUND_OFFERS, boundTraderLevel, LEVEL_REWARDS, MARK_REWARDS, COSMETICS).
  */
-import { BOUND_OFFERS, MARKET, RARITY_NAMES, boundTraderLevel, itemDef } from "@extract/shared";
+import {
+  BOUND_OFFERS,
+  LEVEL_REWARDS,
+  MARK_REWARDS,
+  MARKET,
+  RARITY_NAMES,
+  boundTraderLevel,
+  cosmeticDef,
+  itemDef,
+  type CosmeticKind,
+} from "@extract/shared";
 
 /** Level badge colour (spec §6.2): 1–4 grey, 5–9 lime, 10–14 blue, 15–19 violet, 20+ gold. */
 export function levelColor(level: number): string {
@@ -14,9 +25,35 @@ export function levelColor(level: number): string {
   return "#cbd5e1";
 }
 
-/** What reaching `level` unlocks (empty for most levels). */
-export function levelUnlocks(level: number, sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL): string[] {
-  const l = Math.floor(level);
+const BADGE_BAND: Readonly<Record<number, string>> = { 5: "lime", 10: "blue", 15: "violet", 20: "gold" };
+
+/** "feature" = something the game opens up (market, traders, badge colour); the rest are cosmetics. */
+export type RewardKind = "feature" | CosmeticKind;
+export interface RewardItem {
+  kind: RewardKind;
+  /** "Title: Raider", "Market selling unlocked". */
+  label: string;
+  /** Cosmetic id (COSMETICS), cosmetics only. */
+  id?: string;
+  /** Name colour / frame colour, cosmetics only. */
+  hex?: string;
+}
+
+const KIND_WORD: Readonly<Record<CosmeticKind, string>> = { title: "Title", color: "Name colour", frame: "Badge frame" };
+
+/** "Title: Raider", "Name colour: Lime", "Badge frame: Rope" ("" for an unknown id). */
+export function cosmeticLabel(id: string): string {
+  const d = cosmeticDef(id);
+  return d ? `${KIND_WORD[d.kind]}: ${d.name}` : "";
+}
+
+function cosmeticItem(id: string): RewardItem | null {
+  const d = cosmeticDef(id);
+  return d ? { kind: d.kind, label: cosmeticLabel(id), id, ...(d.hex ? { hex: d.hex } : {}) } : null;
+}
+
+/** Feature unlocks of exactly `level`: market selling, a new bound-trader tier with offers, badge colour. */
+function featureUnlocks(l: number, sellUnlockLevel: number): string[] {
   const out: string[] = [];
   if (l === sellUnlockLevel) out.push("Market selling unlocked");
   if (l > 1) {
@@ -33,7 +70,25 @@ export function levelUnlocks(level: number, sellUnlockLevel: number = MARKET.SEL
       }
     }
   }
+  const band = BADGE_BAND[l];
+  if (band) out.push(`Level badge turns ${band}`);
   return out;
+}
+
+/** Everything reaching `level` gives: feature unlocks first, then cosmetics (LEVEL_REWARDS). */
+export function levelRewards(level: number, sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL): RewardItem[] {
+  const l = Math.floor(level);
+  const out: RewardItem[] = featureUnlocks(l, sellUnlockLevel).map((label) => ({ kind: "feature" as const, label }));
+  for (const id of LEVEL_REWARDS.find((r) => r.level === l)?.ids ?? []) {
+    const it = cosmeticItem(id);
+    if (it) out.push(it);
+  }
+  return out;
+}
+
+/** What reaching `level` unlocks, as lines for the LEVEL N window (empty for most levels). */
+export function levelUnlocks(level: number, sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL): string[] {
+  return levelRewards(level, sellUnlockLevel).map((r) => r.label);
 }
 
 /** Unlocks of every level in (from, to]. */
@@ -41,4 +96,39 @@ export function unlocksBetween(from: number, to: number, sellUnlockLevel?: numbe
   const out: string[] = [];
   for (let l = Math.floor(from) + 1; l <= Math.floor(to); l++) out.push(...levelUnlocks(l, sellUnlockLevel));
   return out;
+}
+
+/** Highest level the rewards table lists (the last cosmetic reward). */
+export const REWARD_TABLE_TOP = Math.max(...LEVEL_REWARDS.map((r) => r.level));
+
+/** Every level from 2 to REWARD_TABLE_TOP that gives something, in order (the Rewards view). */
+export function rewardTable(sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL): Array<{ level: number; items: RewardItem[] }> {
+  const out: Array<{ level: number; items: RewardItem[] }> = [];
+  for (let l = 2; l <= REWARD_TABLE_TOP; l++) {
+    const items = levelRewards(l, sellUnlockLevel);
+    if (items.length > 0) out.push({ level: l, items });
+  }
+  return out;
+}
+
+/** The next level above `level` that gives something, or null past the table. */
+export function nextReward(level: number, sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL): { level: number; items: RewardItem[] } | null {
+  return rewardTable(sellUnlockLevel).find((r) => r.level > Math.floor(level)) ?? null;
+}
+
+/** Task-mark rewards (MARK_REWARDS) as reward items. */
+export function markRewardTable(): Array<{ marks: number; items: RewardItem[] }> {
+  return MARK_REWARDS.map((r) => ({ marks: r.marks, items: r.ids.map(cosmeticItem).filter((x): x is RewardItem => x !== null) }));
+}
+
+/** The equipped name colour as CSS, or undefined (default text colour). */
+export function nameColorHex(id: string | null | undefined): string | undefined {
+  const d = id ? cosmeticDef(id) : null;
+  return d?.kind === "color" ? d.hex : undefined;
+}
+
+/** The equipped title's text, or null. */
+export function titleName(id: string | null | undefined): string | null {
+  const d = id ? cosmeticDef(id) : null;
+  return d?.kind === "title" ? d.name : null;
 }
