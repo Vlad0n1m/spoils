@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Luckiest_Guy, Nunito, Press_Start_2P } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
@@ -31,6 +31,18 @@ const pixel = Press_Start_2P({
 export const metadata: Metadata = {
   title: BRAND.name,
   description: "Top-down extraction shooter — drop in, loot up, get out alive",
+  // Installable fullscreen landscape app (the Android TWA build packs this manifest).
+  manifest: "/manifest.webmanifest",
+};
+
+/** Phones: no pinch / double-tap zoom (no tap delay on the touch controls), content under the notch. */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: "#0b0f14",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

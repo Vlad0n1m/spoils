@@ -78,10 +78,15 @@ export interface GameSystem {
   onEvents?(ev: EventsMsg, ctx: GameContext): void;
   /** True while this system's own canvas overlay owns the mouse (e.g. the full map). */
   isInputBlocked?(): boolean;
+  /** A UI command that has no key of its own here (the touch MAP button). True when handled. */
+  command?(name: SystemCommand): boolean;
   /** Screen resize. */
   resize?(width: number, height: number, ctx: GameContext): void;
   /** Release textures, audio nodes, listeners. Must be safe to call twice. */
   dispose(): void;
 }
+
+/** Commands the renderer forwards to systems (GameSystem.command). */
+export type SystemCommand = "toggleMap";
 
 export type SystemFactory = () => GameSystem;

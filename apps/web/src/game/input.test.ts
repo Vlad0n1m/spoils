@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ROLL } from "@extract/shared";
-import { InputController, isTypingTarget, type InputActions, type InputEnv } from "./input";
+import { InputController, TOUCH_WALK_BELOW, isTypingTarget, type InputActions, type InputEnv, type TouchAction } from "./input";
 
 type Listener = (e: unknown) => void;
 class FakeTarget {
@@ -58,12 +58,12 @@ function key(code: string, extra: Record<string, unknown> = {}) {
 }
 
 function pointer(extra: Record<string, unknown> = {}) {
-  return { clientX: 110, clientY: 220, button: 0, shiftKey: false, type: "pointerdown", defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra };
+  return { clientX: 110, clientY: 220, button: 0, shiftKey: false, type: "pointerdown", pointerType: "mouse", defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra };
 }
 
-function setup() {
+function setup(opts: { noToggleMap?: boolean } = {}) {
   const calls: string[] = [];
-  const actions: Required<InputActions> = {
+  const actions: InputActions = {
     interact: () => calls.push("interact"),
     reload: () => calls.push("reload"),
     selectSlot: (s) => calls.push(`slot${s}`),
@@ -72,7 +72,8 @@ function setup() {
     toggleInventory: () => calls.push("inventory"),
     takeAll: () => calls.push("takeAll"),
     closePanel: () => calls.push("close"),
-    toggleMap: () => calls.push("map"),
+    toggleMap: opts.noToggleMap ? undefined : () => calls.push("map"),
+    toggleFullMap: () => calls.push("fullMap"),
   };
   const win = new FakeTarget();
   const body = { tagName: "BODY" };
@@ -227,5 +228,126 @@ describe("InputController", () => {
     assert.deepEqual(ctl.movement(), { mx: 0, my: 0 });
     assert.equal(ctl.walkHeld(), false);
     assert.equal(ctl.sampleRoll(), false);
+  });
+
+  describe("touch", () => {
+    it("the move stick is analog, clamped to the unit circle, and part deflection is quiet walk", () => {
+      const { ctl, down } = setup();
+      ctl.setTouchMove({ x: 0.3, y: -0.2 });
+      assert.deepEqual(ctl.movement(), { mx: 0.3, my: -0.2 });
+      assert.equal(ctl.walkHeld(), true, "below TOUCH_WALK_BELOW = quiet walk");
+      ctl.setTouchMove({ x: 0, y: TOUCH_WALK_BELOW + 0.05 });
+      assert.equal(ctl.walkHeld(), false);
+      ctl.setTouchMove({ x: 3, y: 4 });
+      const m = ctl.movement();
+      assert.ok(Math.abs(m.mx - 0.6) < 1e-9 && Math.abs(m.my - 0.8) < 1e-9, "longer than 1 is normalized");
+      ctl.setTouchMove({ x: 0, y: 0 });
+      assert.equal(ctl.walkHeld(), false, "a centred stick is not walking");
+      assert.equal(ctl.touchMoveAngle, null, "inside the facing dead zone");
+      ctl.setTouchMove({ x: NaN, y: 1 });
+      assert.deepEqual(ctl.movement(), { mx: 0, my: 0 }, "garbage = released");
+      // Released: the keys move again; Shift still walks.
+      ctl.setTouchMove(null);
+      down("KeyD");
+      down("ShiftLeft");
+      assert.deepEqual(ctl.movement(), { mx: 1, my: 0 });
+      assert.equal(ctl.walkHeld(), true);
+    });
+
+    it("touchMoveAngle is the move direction past the dead zone", () => {
+      const { ctl } = setup();
+      assert.equal(ctl.touchMoveAngle, null);
+      ctl.setTouchMove({ x: 0, y: 0.5 });
+      assert.ok(Math.abs((ctl.touchMoveAngle ?? 0) - Math.PI / 2) < 1e-9);
+    });
+
+    it("the aim stick aims, fires only while aiming, and is blocked by an open panel", () => {
+      const { ctl } = setup();
+      assert.equal(ctl.touchAimAngle, null);
+      ctl.setTouchAim(1.25, false);
+      assert.equal(ctl.touchAimAngle, 1.25);
+      assert.equal(ctl.sampleFire(), false, "aiming without the trigger");
+      ctl.setTouchAim(1.25, true);
+      assert.equal(ctl.sampleFire(), true);
+      assert.equal(ctl.sampleFire(), true, "automatic weapon: the trigger stays held");
+      ctl.setTouchAim(null, true);
+      assert.equal(ctl.touchAimAngle, null);
+      assert.equal(ctl.sampleFire(), false, "no fire without an aim");
+      ctl.setTouchAim(0, true);
+      ctl.setFireBlocked(true);
+      assert.equal(ctl.sampleFire(), false, "panel open: no fire");
+      ctl.setFireBlocked(false);
+      assert.equal(ctl.sampleFire(), true);
+    });
+
+    it("a held fire stick re-presses a semi-auto weapon at its fire interval, with a release in between", () => {
+      const { ctl, setNow } = setup();
+      ctl.setTouchRepeatMs(280);
+      ctl.setTouchAim(0, true);
+      const got: boolean[] = [];
+      for (let t = 1000; t <= 1600; t += 33) {
+        setNow(t);
+        got.push(ctl.sampleFire());
+      }
+      // Presses at 1000, then the first sample ≥ 1280 (1297), then ≥ 1577 (1594).
+      const pressedAt = got.flatMap((v, i) => (v ? [1000 + i * 33] : []));
+      assert.deepEqual(pressedAt, [1000, 1297, 1594]);
+      // Releasing and pressing again fires at once.
+      ctl.setTouchAim(0, false);
+      setNow(1610);
+      assert.equal(ctl.sampleFire(), false);
+      ctl.setTouchAim(0, true);
+      setNow(1643);
+      assert.equal(ctl.sampleFire(), true);
+      // Never two pressed samples in a row, even with an interval shorter than a sample.
+      ctl.setTouchRepeatMs(1);
+      setNow(1676);
+      assert.equal(ctl.sampleFire(), false);
+      setNow(1709);
+      assert.equal(ctl.sampleFire(), true);
+    });
+
+    it("buttons take the same paths as the keys", () => {
+      const { ctl, calls } = setup();
+      const all: TouchAction[] = ["interact", "reload", "swap", "bandage", "medkit", "inventory", "map"];
+      for (const a of all) ctl.press(a);
+      assert.deepEqual(calls, ["interact", "reload", "toggleSlot", "heal:bandage", "heal:medkit", "inventory", "map"]);
+      ctl.press("roll");
+      const got = Array.from({ length: ROLL.BUFFER_SAMPLES + 1 }, () => ctl.sampleRoll());
+      assert.deepEqual(got, [...Array(ROLL.BUFFER_SAMPLES).fill(true), false], "roll is buffered like Space");
+    });
+
+    it("MAP falls back to the full map system when no panel handles M", () => {
+      const { ctl, calls } = setup({ noToggleMap: true });
+      ctl.press("map");
+      assert.deepEqual(calls, ["fullMap"]);
+    });
+
+    it("finger pointer events on the canvas neither aim nor fire", () => {
+      const { ctl, canvas, win } = setup();
+      canvas.fire("pointerdown", pointer({ pointerType: "touch" }));
+      win.fire("pointermove", pointer({ pointerType: "touch", type: "pointermove", clientX: 500 }));
+      assert.equal(ctl.sampleFire(), false);
+      assert.equal(ctl.hasPointer, false);
+      assert.equal(canvas.focused, 0);
+      // A mouse still works, and a finger lifting does not release the mouse trigger.
+      canvas.fire("pointerdown", pointer());
+      win.fire("pointerup", pointer({ pointerType: "touch", type: "pointerup" }));
+      assert.equal(ctl.sampleFire(), true);
+      assert.equal(ctl.sampleFire(), true, "still held");
+    });
+
+    it("blur and detach release the sticks", () => {
+      const { ctl, win } = setup();
+      ctl.setTouchMove({ x: 1, y: 0 });
+      ctl.setTouchAim(0, true);
+      win.fire("blur", {});
+      assert.deepEqual(ctl.movement(), { mx: 0, my: 0 });
+      assert.equal(ctl.touchAimAngle, null);
+      assert.equal(ctl.sampleFire(), false);
+      ctl.setTouchMove({ x: 1, y: 0 });
+      ctl.detach();
+      assert.deepEqual(ctl.movement(), { mx: 0, my: 0 });
+    });
   });
 });
