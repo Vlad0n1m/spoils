@@ -42,8 +42,8 @@ describe("level rewards", () => {
     const ids = table.flatMap((r) => r.items.filter((i) => i.id).map((i) => i.id));
     assert.deepEqual(ids, LEVEL_REWARDS.flatMap((r) => r.ids));
     assert.deepEqual(table.map((r) => r.level), [...new Set(table.map((r) => r.level))].sort((a, b) => a - b));
-    // Traders tier 4 (level 15) sells nothing yet, so it is not promised.
-    assert.ok(!levelRewards(15).some((i) => i.label.startsWith("Traders tier 4")));
+    // Traders tier 4 (level 15) sells the rare crossbow and LMG since Weapons v2, so it is promised.
+    assert.ok(levelRewards(15).some((i) => i.label.startsWith("Traders tier 4")));
     assert.deepEqual(markRewardTable().map((r) => [r.marks, r.items.map((i) => i.label)]), [
       [10, ["Name colour: Contract Blue"]],
       [25, ["Badge frame: Contract"]],
