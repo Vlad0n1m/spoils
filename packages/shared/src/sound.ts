@@ -5,10 +5,14 @@
  * - visible sources → [kind, sessionId, variant]  (the client places it on the entity it renders)
  * Sounds travel as the `snd` field of the per-client batched `ev` message (protocol.ts EventsMsg).
  * Every radius is multiplied by sampleEnv().hear; footsteps also by surfaceOf(terrain).stepRangeMult.
- * Occlusion: one server ray against the walls-only index; an occluded source counts as
- * OCCLUSION_MULT× farther. Audio (immersion) and the sound ring (mobility) both consume decodeSoundMsg.
+ * Occlusion (soundOcclusion): one server ray against the walls-only index. A solid wall on the
+ * way muffles: the source counts as OCCLUSION_MULT× farther and the entry is flagged occluded
+ * (lowpass, dashed ring). Windows are openings in a wall: a path through windows only counts
+ * WINDOW_MULT× farther and is not flagged. Audio (immersion) and the sound ring (mobility) both
+ * consume decodeSoundMsg.
  */
 
+import { SOLID, raycastSolidsDDA, type CollisionIndex } from "./geometry.js";
 import { WEAPONS, WEAPON_IDS, type WeaponId } from "./items.js";
 
 export const SoundKind = {
@@ -55,8 +59,14 @@ export const SOUND = {
   /** Repeat intervals for channelled sounds, ms. */
   SEARCH_REPEAT_MS: 1500,
   EXTRACT_REPEAT_MS: 2500,
-  /** A wall between source and listener multiplies the effective distance. */
+  /** A solid wall between source and listener multiplies the effective distance. */
   OCCLUSION_MULT: 1.6,
+  /**
+   * Only windows between source and listener (an opening in the wall, no glass): the effective
+   * distance × 1.25 and no muffle flag. A footstep (800 px) behind a window carries 640 px instead
+   * of 800 (open) or 500 (wall); a shot keeps 80 % of its reach instead of 62 %.
+   */
+  WINDOW_MULT: 1.25,
   SECTORS: 16,
   /** Band upper bounds as a fraction of the radius. */
   BANDS: [0.33, 0.66, 1] as const,
@@ -139,16 +149,38 @@ export interface Heard {
   occluded: boolean;
 }
 
+/** What lies between a sound and a listener: open air, windows only, or a solid wall. */
+export const OCCLUSION = { OPEN: 0, WINDOW: 1, WALL: 2 } as const;
+export type Occlusion = (typeof OCCLUSION)[keyof typeof OCCLUSION];
+
+/** Effective-distance multiplier of an occlusion level (1, WINDOW_MULT, OCCLUSION_MULT). */
+export function occlusionMult(o: Occlusion): number {
+  return o === OCCLUSION.WALL ? SOUND.OCCLUSION_MULT : o === OCCLUSION.WINDOW ? SOUND.WINDOW_MULT : 1;
+}
+
+/**
+ * Occlusion of the listener→source segment against the walls-only index (getWallIndex): any wall
+ * kind with SIGHT (wall, concrete wall, border) → WALL; only windows (MOVE without SIGHT) → WINDOW;
+ * nothing → OPEN. One MOVE ray for an open path, a second SIGHT ray only when something is hit.
+ */
+export function soundOcclusion(walls: CollisionIndex, lx: number, ly: number, sx: number, sy: number): Occlusion {
+  if (raycastSolidsDDA(walls, lx, ly, sx, sy, SOLID.MOVE) === Infinity) return OCCLUSION.OPEN;
+  return raycastSolidsDDA(walls, lx, ly, sx, sy, SOLID.SIGHT) === Infinity ? OCCLUSION.WINDOW : OCCLUSION.WALL;
+}
+
 /**
  * Direction sector + distance band of a sound as heard from (lx,ly); null = inaudible.
  * Moving the source anywhere inside one (sector, band) bucket yields identical output.
+ * `distMult` scales the distance (default: OCCLUSION_MULT when occluded, else 1); the server passes
+ * occlusionMult(soundOcclusion(...)) so a window-only path counts WINDOW_MULT× without the flag.
  */
 export function quantizeSound(
   lx: number, ly: number, sx: number, sy: number, radius: number, occluded: boolean,
+  distMult: number = occluded ? SOUND.OCCLUSION_MULT : 1,
 ): Heard | null {
   const dx = sx - lx;
   const dy = sy - ly;
-  const d = Math.hypot(dx, dy) * (occluded ? SOUND.OCCLUSION_MULT : 1);
+  const d = Math.hypot(dx, dy) * distMult;
   if (!(radius > 0) || d > radius) return null;
   const q = d / radius;
   const b: Band = q < SOUND.BANDS[0] ? 0 : q < SOUND.BANDS[1] ? 1 : 2;

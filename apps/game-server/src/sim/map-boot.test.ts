@@ -21,7 +21,8 @@ import { mapRuntime } from "./nav.js";
 import { counterUid, testMap } from "./test-utils.js";
 import type { RosterEntry } from "./types.js";
 
-const STEPPE_HASH = "d066dcca";
+/** MAP_GEN_VERSION 3: v2 geometry ("d066dcca") with SOLID.WINDOW flags on the windows (generate.test.ts). */
+const STEPPE_HASH = "eba1a43b";
 
 function roster(humans: number): RosterEntry[] {
   return Array.from({ length: humans }, (_, i) => ({ userId: `u${i}`, nickname: `H${i}` }));

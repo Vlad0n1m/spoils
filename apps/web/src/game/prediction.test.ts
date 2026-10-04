@@ -16,6 +16,7 @@ import {
   ROLL_PROFILE,
   SOLID,
   TERRAIN,
+  circleIsFree,
   getCollisionIndex,
   healSpeedMult,
   mulberry32,
@@ -85,7 +86,7 @@ class Server {
   clockMs = 1000;
   healUntil = 0;
   private queue: unknown[] = [];
-  constructor(x: number, y: number) {
+  constructor(x: number, y: number, readonly map: MapData = MAP, readonly idx = IDX) {
     this.x = x;
     this.y = y;
   }
@@ -106,7 +107,7 @@ class Server {
       if (!s || s.seq <= this.lastSeq) continue;
       this.clockMs += INPUT_DT_MS;
       if (this.healUntil > 0 && this.clockMs >= this.healUntil) this.healUntil = 0;
-      const r = stepMovement(IDX, this.x, this.y, this.roll, s, healSpeedMult(this.healUntil, this.clockMs), terrainSpeedMult(terrainAt(MAP, this.x, this.y)));
+      const r = stepMovement(this.idx, this.x, this.y, this.roll, s, healSpeedMult(this.healUntil, this.clockMs), terrainSpeedMult(terrainAt(this.map, this.x, this.y)));
       if (r.started) this.healUntil = 0;
       this.x = r.x;
       this.y = r.y;
@@ -281,6 +282,92 @@ describe("Predictor: exact replay against the shared stepMovement", () => {
     const y0 = pred.y;
     pred.apply(client.sample(0, 1, 0));
     assert.ok(Math.abs(pred.y - y0 - ROLL_PROFILE[0]! * 0.6) < 1e-9);
+  });
+});
+
+// --- windows: the roll vaults them on both sides of the wire ---------------------------------------
+
+/**
+ * A building front at x 1000..1024: wall, then windows at y 600..712, 1000..1112 and 1400..1512
+ * (SOLID.WINDOW, k "window"), walls between, borders around. Players walk into it and roll at it.
+ */
+function windowMap(): MapData {
+  const base = testMap();
+  const r = (x: number, y: number, w: number, h: number, f: number, k: string) => ({ x, y, w, h, f, k });
+  const front = [
+    r(1000, 20, 24, 580, SOLID.ALL, "wall"), r(1000, 600, 24, 112, SOLID.WINDOW, "window"),
+    r(1000, 712, 24, 288, SOLID.ALL, "wall"), r(1000, 1000, 24, 112, SOLID.WINDOW, "window"),
+    r(1000, 1112, 24, 288, SOLID.ALL, "wall"), r(1000, 1400, 24, 112, SOLID.WINDOW, "window"),
+    r(1000, 1512, 24, 468, SOLID.ALL, "wall"),
+  ];
+  return { ...base, rects: [...base.rects.slice(0, 4), ...front], circles: [] } as MapData;
+}
+
+describe("Predictor: windows (the roll vaults, walking never passes)", () => {
+  const WMAP = windowMap();
+  const WIDX = getCollisionIndex(WMAP);
+  const wmove = moveFnFor(WMAP, WIDX);
+  const inWindow = (x: number, y: number) => !circleIsFree(WIDX, x, y, PLAYER.RADIUS - 1e-6, SOLID.VAULT);
+
+  it("random streams at a wall with windows: rolls vault, every correction is exactly zero", () => {
+    let vaults = 0;
+    let walkedFlush = 0;
+    for (let seed = 1; seed <= 24; seed++) {
+      const rng = mulberry32(seed * 31);
+      const server = new Server(700 + rng() * 250, 500 + rng() * 1100, WMAP, WIDX);
+      const pred = new Predictor(wmove);
+      pred.reconcile(server.state());
+      const client = new Client(pred);
+      const inFlight: Array<{ at: number; s: ServerMoveState }> = [];
+      let mx = 1, my = 0;
+      for (let t = 0; t < 900; t++) {
+        // Mostly toward the wall (crossing it both ways), with some sliding along it.
+        if (rng() < 0.05) mx = pred.x < 1012 ? (rng() < 0.85 ? 1 : -1) : (rng() < 0.85 ? -1 : 1);
+        if (rng() < 0.05) my = Math.floor(rng() * 3) - 1;
+        if (rng() < 0.04) client.press();
+        const side = pred.x < 1012;
+        const sample = client.sample(mx, my * 0.5, (rng() * 2 - 1) * 4, rng() < 0.05);
+        const r = pred.apply(sample);
+        if (side !== pred.x < 1012) {
+          assert.ok(r.rolling, `seed ${seed} t ${t}: only a roll crosses the wall`);
+          vaults++;
+        }
+        if (!r.rolling && Math.abs(pred.x - (1000 - PLAYER.RADIUS)) < 1e-6) walkedFlush++;
+        if (pred.roll.left === 0) assert.ok(!inWindow(pred.x, pred.y), `seed ${seed} t ${t}: a finished input stands in a window`);
+        server.receive(sample);
+        if (rng() < 0.6) server.tick(Math.floor(rng() * 3) + (server.queued > 6 ? 2 : 0));
+        if (rng() < 0.5) inFlight.push({ at: t + 1 + Math.floor(rng() * 4), s: server.state() });
+        while (inFlight.length && inFlight[0]!.at <= t) {
+          const c = pred.reconcile(inFlight.shift()!.s);
+          assert.equal(c.dx, 0, `seed ${seed} t ${t}: dx=${c.dx}`);
+          assert.equal(c.dy, 0, `seed ${seed} t ${t}: dy=${c.dy}`);
+        }
+      }
+      server.tick();
+      const predicted = { x: pred.x, y: pred.y, roll: { ...pred.roll } };
+      assert.equal(pred.reconcile(server.state()).dx, 0);
+      assert.deepEqual(predicted, { x: server.x, y: server.y, roll: server.roll }, `seed ${seed}`);
+    }
+    assert.ok(vaults >= 10, `the streams vaulted windows (${vaults})`);
+    assert.ok(walkedFlush > 0, "and walked into the wall without passing");
+  });
+
+  it("a roll that ends inside a window is predicted out on the nearer side, like the server", () => {
+    // The band of body centres overlapping the window is x ∈ (976, 1048); 1030 is nearer the far face.
+    const server = new Server(1030 - ROLL.DISTANCE, 1056, WMAP, WIDX);
+    const pred = new Predictor(wmove);
+    pred.reconcile(server.state());
+    const client = new Client(pred);
+    client.press();
+    for (let i = 0; i < ROLL.TICKS; i++) {
+      const s = client.sample(1, 0, 0);
+      pred.apply(s);
+      server.receive(s);
+    }
+    assert.ok(pred.x >= 1048 - 1e-6 && pred.x <= 1050 && pred.y === 1056, `x=${pred.x}`);
+    server.tick();
+    assert.equal(pred.reconcile(server.state()).dx, 0);
+    assert.deepEqual({ x: pred.x, y: pred.y }, { x: server.x, y: server.y });
   });
 });
 

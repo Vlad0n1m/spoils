@@ -12,7 +12,7 @@ const ARCHS = Object.keys(ARCH) as BuildingArch[];
 /**
  * Property test over 150 random buildings per archetype: rooms tile the interior without overlap,
  * every room is reachable from outside through the doors (the BSP + DOOR_CLEAR guarantee), no wall
- * covers a door gap, and windows are MOVE-only.
+ * covers a door gap, and windows are SOLID.WINDOW (MOVE|VAULT: no SHOT, no SIGHT).
  */
 test("BSP buildings: every room reachable from outside, rooms disjoint, doors open", () => {
   for (const arch of ARCHS) {
@@ -36,7 +36,7 @@ test("BSP buildings: every room reachable from outside, rooms disjoint, doors op
       }
       for (const wl of b.walls) {
         for (const d of b.building.doors) assert.ok(!overlaps(wl, d), `${where}: wall covers a door`);
-        if (wl.k === "window") assert.equal(wl.f, SOLID.MOVE, where);
+        if (wl.k === "window") assert.equal(wl.f, SOLID.WINDOW, where);
         else assert.equal(wl.f, SOLID.ALL, where);
         assert.ok(Number.isInteger(wl.x) && Number.isInteger(wl.y) && Number.isInteger(wl.w) && Number.isInteger(wl.h), where);
       }

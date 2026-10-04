@@ -1,6 +1,7 @@
 /**
- * BSP buildings (map memo §4.6). A building is an outer wall ring with door gaps and MOVE-only
- * windows, split recursively into rooms; every split wall gets exactly one door, so the BSP tree
+ * BSP buildings (map memo §4.6). A building is an outer wall ring with door gaps and windows
+ * (SOLID.WINDOW = MOVE|VAULT: no walking through, a dodge roll vaults it, bullets and sight pass),
+ * split recursively into rooms; every split wall gets exactly one door, so the BSP tree
  * itself guarantees every room is reachable. Doors are plain gaps — openable doors would break the
  * static collision index and client prediction (critique cut list).
  *
@@ -177,7 +178,7 @@ export function makeBuilding(
     let cur = a0;
     for (const g of gs) {
       if (g.at > cur) walls.push(seg(horiz, fixed, cur, g.at - cur, t, SOLID.ALL, wallKind));
-      if (g.win) walls.push(seg(horiz, fixed, g.at, g.len, t, SOLID.MOVE, "window"));
+      if (g.win) walls.push(seg(horiz, fixed, g.at, g.len, t, SOLID.WINDOW, "window"));
       cur = Math.max(cur, g.at + g.len);
     }
     if (a1 > cur) walls.push(seg(horiz, fixed, cur, a1 - cur, t, SOLID.ALL, wallKind));

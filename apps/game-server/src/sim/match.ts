@@ -987,7 +987,9 @@ export class Match {
       // finishHealIfDue already ran this step, so this equals the client prediction's rule.
       const healMult = healSpeedMult(s.healUntil, this.clock);
       const terrainMult = terrainSpeedMult(terrainAt(this.map, p.x, p.y));
-      const r = stepMovement(this.idx, p.x, p.y, readRoll(s), input, healMult, terrainMult);
+      // Players' rolls vault windows (the client predicts the same); NPCs never vault: their roll
+      // treats windows as walls, like their nav and walk grid.
+      const r = stepMovement(this.idx, p.x, p.y, readRoll(s), input, healMult, terrainMult, !rt.isNpc);
       if (r.started) {
         // A roll cancels heal and search (mobility memo); reload keeps running.
         cancelHeal(rt);

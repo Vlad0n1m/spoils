@@ -125,7 +125,7 @@ test("hugging a long wall still darkens everything behind it (wide back edges ar
 
 test("non-SIGHT solids cast no shadow; maxQuads bounds the output", () => {
   const map = fixtureMap(2000, 2000, [
-    { x: 900, y: 500, w: 200, h: 24, f: SOLID.MOVE }, // window
+    { x: 900, y: 500, w: 200, h: 24, f: SOLID.WINDOW }, // window
     { x: 900, y: 700, w: 200, h: 24, f: SOLID.MOVE | SOLID.SHOT }, // sandbags
   ], [{ x: 500, y: 500, r: 30, f: SOLID.MOVE | SOLID.SHOT }]);
   const grid = buildOccluderGrid(map);

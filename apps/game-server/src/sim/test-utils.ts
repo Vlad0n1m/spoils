@@ -34,6 +34,8 @@ import type { EntryInit, MatchEvent, PlayerRuntime, RosterEntry } from "./types.
 
 export interface TestMapOpts {
   walls?: Array<{ x: number; y: number; w: number; h: number }>;
+  /** Window segments (k "window", SOLID.WINDOW: no walking, the roll vaults, bullets and sight pass). */
+  windows?: Array<{ x: number; y: number; w: number; h: number }>;
   bushes?: Array<{ x: number; y: number; r: number }>;
   containers?: ContainerSpot[];
 }
@@ -45,7 +47,7 @@ export function testMap(o: TestMapOpts = {}): MapData {
   const B = LEGACY_WORLD.BORDER;
   const cell = 64;
   const cols = Math.ceil(W / cell), rows = Math.ceil(H / cell);
-  const rect = (x: number, y: number, w: number, h: number, k: MapRect["k"]): MapRect => ({ x, y, w, h, f: SOLID.ALL, k });
+  const rect = (x: number, y: number, w: number, h: number, k: MapRect["k"], f: number = SOLID.ALL): MapRect => ({ x, y, w, h, f, k });
   return {
     id: "steppe", genVersion: MAP_GEN_VERSION, seed: 0x7e57, width: W, height: H,
     terrain: new Uint8Array(cols * rows), terrainCols: cols, terrainRows: rows, terrainCell: cell,
@@ -54,6 +56,7 @@ export function testMap(o: TestMapOpts = {}): MapData {
       rect(0, 0, W, B, "border"), rect(0, H - B, W, B, "border"), rect(0, 0, B, H, "border"), rect(W - B, 0, B, H, "border"),
       rect(3000, 3000, 64, 400, "crate"),
       ...(o.walls ?? []).map((w) => rect(w.x, w.y, w.w, w.h, "wall")),
+      ...(o.windows ?? []).map((w) => rect(w.x, w.y, w.w, w.h, "window", SOLID.WINDOW)),
     ],
     circles: [],
     bushes: o.bushes ?? [],

@@ -6,7 +6,7 @@
  */
 
 import { INPUT_DT_MS, PLAYER, ROLL } from "./constants.js";
-import { moveCircle, type CollisionIndex } from "./geometry.js";
+import { SOLID, leaveVault, moveCircle, type CollisionIndex } from "./geometry.js";
 
 /** One input sample. The client sends one every INPUT_DT_MS; each moves the player by INPUT_DT_MS. */
 export interface InputSample {
@@ -121,6 +121,11 @@ export interface MoveResult {
  * - `terrainMult` = terrainSpeedMult(terrainAt(map, x, y)) sampled at the input's start position
  *   (SHALLOW water 0.6). It scales both walking and the roll step, so rolling is not a way to
  *   cross water at full speed.
+ * - `vault` (default true: players, so the client prediction just uses the default): the roll
+ *   passes windows (SOLID.VAULT solids; walking never does). Its ticks may cross a window; on the
+ *   roll's last tick a body still overlapping one leaves it on the nearer side along the roll axis
+ *   (leaveVault), so no roll ever ends with a body standing in a window. The server passes false
+ *   for NPCs: their dodge roll treats windows as walls, like their nav does.
  * No i-frames: the roll only moves you.
  */
 export function stepMovement(
@@ -131,6 +136,7 @@ export function stepMovement(
   input: Pick<InputSample, "mx" | "my" | "aim" | "roll" | "walk">,
   healMult = 1,
   terrainMult = 1,
+  vault = true,
 ): MoveResult {
   let { left, dx, dy } = roll;
   let cd = roll.cd > 0 ? roll.cd - 1 : 0;
@@ -151,9 +157,10 @@ export function stepMovement(
   }
   if (left > 0) {
     const d = ROLL_PROFILE[ROLL.TICKS - left]! * terrainMult;
-    const p = moveCircle(idx, x, y, PLAYER.RADIUS, dx * d, dy * d);
+    let p = moveCircle(idx, x, y, PLAYER.RADIUS, dx * d, dy * d, vault ? SOLID.VAULT : 0);
     left -= 1;
     if (left === 0) {
+      if (vault) p = leaveVault(idx, p.x, p.y, PLAYER.RADIUS, dx, dy);
       dx = 0;
       dy = 0;
     }

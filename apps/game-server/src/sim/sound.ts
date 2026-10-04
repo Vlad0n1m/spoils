@@ -13,8 +13,9 @@
  *   2. listener sees the source (published vision row) → visible entry [kind, sessionId, variant]:
  *      the client places it on the entity it already renders;
  *   3. otherwise → hidden entry [kind, sector, band | occluded<<2, variant] from quantizeSound,
- *      where `occluded` = one ray against the walls-only index (crates, cars and trees never
- *      muffle; an occluded source counts as OCCLUSION_MULT× farther, so it may drop out).
+ *      where the occlusion is soundOcclusion: a ray against the walls-only index (crates, cars
+ *      and trees never muffle). A solid wall → `occluded`, OCCLUSION_MULT× farther, so it may drop
+ *      out; windows only (an opening in the wall) → WINDOW_MULT× farther, not flagged.
  *      Hidden entries never carry coordinates or ids: moving the source anywhere inside one
  *      (sector, band) bucket gives a byte-identical payload.
  *   Per listener per tick: dedupe identical entries, cap at SOUND.MAX_PER_TICK by SOUND_PRIORITY,
@@ -26,7 +27,7 @@
  */
 
 import {
-  SOLID,
+  OCCLUSION,
   SOUND,
   SOUND_PRIORITY,
   SoundKind,
@@ -34,10 +35,11 @@ import {
   bushIndexAt,
   decodeSoundMsg,
   getWallIndex,
+  occlusionMult,
   pushHiddenSound,
   pushVisibleSound,
   quantizeSound,
-  raycastSolidsDDA,
+  soundOcclusion,
   surfaceAt,
   type DecodedSound,
   type SoundMsg,
@@ -196,9 +198,10 @@ export function deliverSounds(m: Match): void {
         const id = src.id;
         e = { kind: s.kind, prio: SOUND_PRIORITY[s.kind], key: `v${s.kind}:${id}:${s.variant}`, push: (msg) => pushVisibleSound(msg, s.kind, id, s.variant) };
       } else {
-        // Walls and windows muffle (MOVE covers both; windows carry no SIGHT flag).
-        const occluded = raycastSolidsDDA(walls, lx, ly, s.x, s.y, SOLID.MOVE) !== Infinity;
-        const q = quantizeSound(lx, ly, s.x, s.y, R, occluded);
+        // A wall muffles (flagged, OCCLUSION_MULT); a window is an opening (WINDOW_MULT, no flag).
+        const occ = soundOcclusion(walls, lx, ly, s.x, s.y);
+        const occluded = occ === OCCLUSION.WALL;
+        const q = quantizeSound(lx, ly, s.x, s.y, R, occluded, occlusionMult(occ));
         if (q) {
           e = {
             kind: s.kind, prio: SOUND_PRIORITY[s.kind], key: `h${s.kind}:${q.a}:${q.b}:${occluded ? 1 : 0}:${s.variant}`,
