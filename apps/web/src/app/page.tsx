@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BREAK_CHANCE_ON_DEATH, MATCH, RARITY_NAMES, WORLD, type WeaponId } from "@extract/shared";
+import { BREAK_CHANCE_ON_DEATH, MATCH, PARTY, RARITY_NAMES, WORLD, type WeaponId } from "@extract/shared";
 import { Reveal } from "@/components/reveal";
 import { Trailer } from "@/components/trailer";
 import { ALPHA_SHORT, alphaWipeText } from "@/content/alpha";
@@ -364,6 +364,87 @@ function AlphaSection() {
   );
 }
 
+const PASS_SHOWCASE: { tier: number; label: string; kind: string }[] = [
+  { tier: 1, label: "Alpha Raider", kind: "Title" },
+  { tier: 3, label: "Founder", kind: "Profile frame" },
+  { tier: 5, label: "Alpha Mint", kind: "Name colour" },
+  { tier: 7, label: "Alpha Signal", kind: "Animated frame" },
+  { tier: 8, label: "Alpha Veteran", kind: "Skin" },
+  { tier: 10, label: "Founder badge", kind: "On every leaderboard" },
+];
+
+function PassSection() {
+  return (
+    <section className="relative overflow-hidden bg-[#0d1119] px-4 py-20 md:px-8 md:py-28">
+      <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-12 lg:grid-cols-[1fr_1.1fr]">
+        <div className="flex flex-col items-center lg:items-start">
+          {/* eslint-disable-next-line @next/next/no-img-element -- static lobby art */}
+          <img src="/lobby/hero_alpha.png" alt="The Alpha Veteran skin" className="h-72 w-auto drop-shadow-[0_12px_0_rgba(0,0,0,0.4)] md:h-96" />
+        </div>
+        <div>
+          <span className="inline-block rounded-full border-[3px] border-black bg-amber-300 px-3 py-1 text-sm font-bold tracking-wide text-black">
+            ALPHA PASS
+          </span>
+          <Reveal as="h2" className="toon-text mt-4 text-5xl tracking-wide text-white md:text-6xl">
+            A battle pass for founders
+          </Reveal>
+          <Reveal as="p" delay={80} className="font-body mt-5 max-w-[56ch] text-lg leading-relaxed text-white/80">
+            Daily and weekly tasks fill a 10-tier track. Every reward is alpha-only and stays on your account forever —
+            through the wipe and into launch. Nobody who joins later can get them.
+          </Reveal>
+          <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {PASS_SHOWCASE.map((r, i) => (
+              <Reveal key={r.tier} delay={i * 60} className="toon-panel flex flex-col gap-1 bg-[#1d2333] p-4">
+                <span className="text-sm font-bold tracking-wide text-zooa-lime">TIER {r.tier}</span>
+                <span className="text-lg leading-tight tracking-wide text-white">{r.label}</span>
+                <span className="font-body text-sm text-white/70">{r.kind}</span>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SocialSection() {
+  return (
+    <section className="bg-[#141a26] px-4 py-20 md:px-8 md:py-28">
+      <div className="mx-auto max-w-6xl">
+        <Reveal as="h2" className="toon-text text-center text-5xl tracking-wide text-white md:text-6xl">
+          Better with friends
+        </Reveal>
+        <div className="mt-12 grid grid-cols-1 gap-5 md:grid-cols-2">
+          <Reveal className="toon-panel flex items-center gap-5 bg-[#1d2333] p-6 md:p-8">
+            {/* eslint-disable-next-line @next/next/no-img-element -- static lobby art */}
+            <img src="/lobby/menu_friends.png" alt="" className="h-24 w-24 shrink-0 md:h-28 md:w-28" />
+            <div>
+              <h3 className="text-2xl tracking-wide text-zooa-lime">Squad up</h3>
+              <p className="font-body mt-2 text-base leading-relaxed text-white/80 md:text-lg">
+                Add friends and drop in together as a party of up to {PARTY.MAX_SIZE}. You land side by side, see each
+                other on the map and can&apos;t shoot each other by accident.
+              </p>
+            </div>
+          </Reveal>
+          <Reveal delay={90} className="toon-panel relative flex items-center gap-5 bg-[#1d2333] p-6 md:p-8">
+            <span className="absolute right-4 top-4 rounded-full border-[3px] border-black bg-amber-300 px-3 py-0.5 text-sm font-bold tracking-wide text-black">
+              COMING SOON
+            </span>
+            {/* eslint-disable-next-line @next/next/no-img-element -- static lobby art */}
+            <img src="/lobby/menu_guilds.png" alt="" className="h-24 w-24 shrink-0 md:h-28 md:w-28" />
+            <div>
+              <h3 className="text-2xl tracking-wide text-zooa-lime">Guilds</h3>
+              <p className="font-body mt-2 text-base leading-relaxed text-white/80 md:text-lg">
+                Build a crew with a shared base, a guild rank and guild-only events.
+              </p>
+            </div>
+          </Reveal>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function Home() {
   return (
     <div className="min-h-screen bg-[#0a100c] text-white">
@@ -372,6 +453,8 @@ export default function Home() {
       <TrailerSection />
       <AlphaSection />
       <HowItWorks />
+      <PassSection />
+      <SocialSection />
       <LootSection />
       <ComingSoon />
       <Footer />
