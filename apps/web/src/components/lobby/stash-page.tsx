@@ -152,7 +152,7 @@ const KIT_TEXT = (() => {
 })();
 
 /**
- * The paid starter kit (design §19): always for sale, up to STARTER_KIT.DAILY_MAX a day. A big lime card
+ * The paid starter kit (design §19): always for sale, up to STARTER_KIT.DAILY_MAX a day. A big lime-edged card
  * while the stash holds no weapon, else a slim row; disabled when paused, at the daily cap or short of money.
  */
 function StarterKitCard({ stash, buying, onBuy }: { stash: StashResponse; buying: boolean; onBuy: () => void }) {
@@ -169,7 +169,7 @@ function StarterKitCard({ stash, buying, onBuy }: { stash: StashResponse; buying
   const status = blocked ?? (short ? (
     <>
       Not enough in your wallet.{" "}
-      <Link href="/wallet" className="font-semibold underline underline-offset-4">
+      <Link href="/wallet" className="font-semibold text-zooa-lime underline underline-offset-4">
         Top up
       </Link>
     </>
@@ -179,14 +179,14 @@ function StarterKitCard({ stash, buying, onBuy }: { stash: StashResponse; buying
       <section className="toon-panel flex flex-wrap items-center gap-4 bg-[#161b28]/95 p-5">
         <div className="min-w-0 flex-1">
           <h2 className="toon-text-thin text-xl tracking-wide text-white">Starter kit</h2>
-          <p className="font-body mt-1 text-sm text-white/70">{KIT_TEXT} <span className="text-white/55">{status}</span></p>
+          <p className="font-body mt-1 text-sm text-white/85">{KIT_TEXT} <span className="text-white/75">{status}</span></p>
         </div>
         {button}
       </section>
     );
   }
   return (
-    <section className="toon-panel relative overflow-hidden bg-zooa-lime p-5 text-black">
+    <section className="toon-panel relative overflow-hidden border-zooa-lime bg-[#161b28]/95 p-5 text-white">
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex -space-x-3">
           {KIT_ICONS.map((def) => (
@@ -197,15 +197,15 @@ function StarterKitCard({ stash, buying, onBuy }: { stash: StashResponse; buying
           ))}
         </div>
         <div className="min-w-0 flex-1">
-          <h2 className="text-2xl tracking-wide">Starter kit</h2>
-          <p className="font-body text-sm">
+          <h2 className="toon-text-thin text-2xl tracking-wide text-zooa-lime">Starter kit</h2>
+          <p className="font-body text-sm text-white/90">
             {KIT_TEXT} Lost on death like any gear; sellable on the market once you&apos;ve extracted with it. No kit? You
             still drop with the basic gear.
           </p>
         </div>
         <div className="flex w-full flex-wrap items-center gap-3">
           {button}
-          <p className="font-body text-sm">{status}</p>
+          <p className="font-body text-sm text-white/80">{status}</p>
         </div>
       </div>
     </section>
