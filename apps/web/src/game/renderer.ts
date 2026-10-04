@@ -16,6 +16,9 @@
  * - The static map is rebuilt locally (generateMap(state.mapId), or the legacy v1 map while the
  *   server still runs it — state.mapId === "legacy").
  *
+ * - Phones (coarse pointer, ?touch=1): touch-controls.ts sticks and buttons feed the same
+ *   InputController; the move stick steers the facing while the aim stick is idle.
+ *
  * Used by battle-screen.tsx: `new GameRenderer({ mountEl, room, onHud, selfKey }); await r.start(); … r.stop()`.
  */
 
@@ -66,10 +69,11 @@ import { FogOfWar, PLAYER_PAD, entityVisibility, fadeToward, fogLook, fogRange, 
 import { buildHud, extractAllowed, personalExtractStatus, stickyCounts, type PlayerCounts } from "./hud";
 import { EXPIRE_FADE_TAU_MS, expiryBlink, expiryFading } from "./expiry";
 import { InputController } from "./input";
+import { PerfOverlay, TouchControls, shouldUseTouch } from "./touch-controls";
 import { Minimap, type MinimapExtract } from "./minimap";
 import { canStartHeal, decayFactor, inputCancelsHeal, moveFnFor, Predictor, readServerMove } from "./prediction";
 import { DelayQueue, shotCentre } from "./shots";
-import type { CameraView, GameContext, GameLayers, GameSystem } from "./systems";
+import type { CameraView, GameContext, GameLayers, GameSystem, SystemCommand } from "./systems";
 import { SYSTEM_FACTORIES } from "./systems-registry";
 import type { GameRendererApi, HudSnapshot, KillFeedEntry, RendererOptions } from "./types";
 import { WorldView, type ViewRect } from "./world";
@@ -190,6 +194,9 @@ export class GameRenderer implements GameRendererApi {
   /** Other players' shots / hits, waiting to be shown on the interpolated (past) timeline. */
   private readonly remoteFx = new DelayQueue();
   private input: InputController | null = null;
+  /** Phones (touch-controls.ts): sticks + buttons; ?perf=1 overlay. */
+  private touch: TouchControls | null = null;
+  private perf: PerfOverlay | null = null;
 
   private players = new Map<string, Fading<Player, PlayerView>>();
   /** Where players that left this client's view were last drawn (GameContext.lastSeen). */
@@ -374,8 +381,19 @@ export class GameRenderer implements GameRendererApi {
       takeAll: this.opts.panelActions?.takeAll ? () => this.opts.panelActions?.takeAll?.() : undefined,
       closePanel: () => this.opts.panelActions?.closePanel?.(),
       toggleMap: this.opts.panelActions?.toggleMap ? () => this.opts.panelActions?.toggleMap?.() : undefined,
+      toggleFullMap: () => this.systemCommand("toggleMap"),
     });
     this.input.attach();
+
+    if (shouldUseTouch()) {
+      this.touch = new TouchControls(this.opts.mountEl, this.input);
+      this.touch.onPress = (t) => this.perf?.markInput(t);
+      this.touch.attach();
+    }
+    if (new URLSearchParams(window.location.search).get("perf") === "1") {
+      this.perf = new PerfOverlay(this.opts.mountEl);
+      this.perf.attach();
+    }
 
     this.attachMessages();
     this.attachState();
@@ -404,6 +422,10 @@ export class GameRenderer implements GameRendererApi {
       }
     }
     this.stopPing();
+    this.touch?.detach();
+    this.touch = null;
+    this.perf?.detach();
+    this.perf = null;
     this.input?.detach();
     this.input = null;
 
@@ -961,6 +983,9 @@ export class GameRenderer implements GameRendererApi {
     const blocked = inputBlockedBy(this.opts.isInputBlocked, this.systemsReady ? this.systems : NO_SYSTEMS);
     this.inputBlockedNow = blocked;
     this.input?.setFireBlocked(blocked);
+    // A held fire stick re-presses at the fire interval of a semi-auto weapon.
+    const weaponDef = me?.weapon && me.weapon in WEAPONS ? WEAPONS[me.weapon as WeaponId] : null;
+    if (this.touch) this.input?.setTouchRepeatMs(weaponDef && !weaponDef.auto ? weaponDef.fireIntervalMs : 0);
 
     // Fixed-rate input loop, only while the player can act. Bursts are capped so a hidden tab
     // does not dump a backlog.
@@ -1301,8 +1326,23 @@ export class GameRenderer implements GameRendererApi {
     return true;
   }
 
+  /** Forward a UI command to the first system that handles it. */
+  private systemCommand(name: SystemCommand): void {
+    for (const s of this.systems) {
+      let handled = false;
+      if (s.command) this.runSystem(s, () => (handled = s.command!(name)));
+      if (handled) return;
+    }
+  }
+
   /** Aim from the rendered player position to the cursor, in world space (shake excluded). */
   private updateAim(w: number, h: number) {
+    // Phones: the aim stick, else the facing follows the move stick.
+    const touchAim = this.input?.touchAimAngle ?? this.input?.touchMoveAngle ?? null;
+    if (touchAim !== null) {
+      this.aim = touchAim;
+      return;
+    }
     if (!this.input?.hasPointer || !this.selfRender) return;
     const wx = this.camX + (this.input.mouseX - w / 2) / this.zoom;
     const wy = this.camY + (this.input.mouseY - h / 2) / this.zoom;
@@ -1329,6 +1369,15 @@ export class GameRenderer implements GameRendererApi {
     });
     this.counts = stickyCounts(this.counts, snapshot);
     snapshot = { ...snapshot, aliveCount: this.counts.alive, totalPlayers: this.counts.total };
+    if (this.touch) {
+      const s = snapshot.self;
+      this.touch.sync({
+        active: !!s && s.alive && s.extractedAt === 0 && snapshot.phase !== "ended",
+        canUse: !!snapshot.interactHint,
+        bandages: s?.bandages ?? 0,
+        medkits: s?.medkits ?? 0,
+      });
+    }
     try {
       this.opts.onHud(snapshot);
     } catch (err) {

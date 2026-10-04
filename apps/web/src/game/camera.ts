@@ -299,7 +299,10 @@ export function getCameraRig(): CameraRig | null {
 
 // ---------------------------------------------------------------- pointer
 
-/** Cursor position in canvas px, from window pointer events (the renderer's input does the same). */
+/**
+ * Cursor position in canvas px, from window pointer events (the renderer's input does the same).
+ * Finger events are ignored: on a phone the fingers sit on the touch sticks, not on the target.
+ */
 export class PointerTracker {
   x = 0;
   y = 0;
@@ -324,7 +327,7 @@ export class PointerTracker {
 
   private onMove = (e: PointerEvent) => {
     const c = this.canvas;
-    if (!c) return;
+    if (!c || e.pointerType === "touch") return;
     const r = c.getBoundingClientRect();
     this.x = e.clientX - r.left;
     this.y = e.clientY - r.top;

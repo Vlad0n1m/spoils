@@ -26,7 +26,13 @@ export const MINIMAP_WINDOW = 4096;
 
 /** Minimap is drawn at this size and scaled to the layout size. */
 const BASE = 200;
-const MARGIN = 16;
+/** Gap between the minimap and the top-right corner (px). */
+export const MINIMAP_MARGIN = 16;
+
+/** Laid-out minimap side (px) for a screen; it sits MINIMAP_MARGIN from the top-right corner. */
+export function minimapSize(screenW: number, screenH: number): number {
+  return Math.max(120, Math.min(BASE, Math.min(screenW, screenH) * 0.24));
+}
 
 function rgb(c: number): [number, number, number] {
   return [(c >> 16) & 255, (c >> 8) & 255, c & 255];
@@ -222,9 +228,9 @@ export class Minimap {
   }
 
   layout(screenW: number, screenH: number) {
-    const size = Math.max(120, Math.min(200, Math.min(screenW, screenH) * 0.24));
+    const size = minimapSize(screenW, screenH);
     this.root.scale.set(size / BASE);
-    this.root.position.set(screenW - size - MARGIN, MARGIN);
+    this.root.position.set(screenW - size - MINIMAP_MARGIN, MINIMAP_MARGIN);
   }
 
   /**

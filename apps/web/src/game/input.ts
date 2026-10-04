@@ -6,6 +6,10 @@
  * Bindings: WASD/arrows move, Shift walk (quiet), Space roll, LMB fire, wheel / 1 / 2 weapon,
  * 3 / 4 heal, R reload, F interact/search, Tab inventory, T take all, M full map, Esc close.
  *
+ * Phones (touch-controls.ts): an analog move stick (part deflection = quiet walk), an aim stick
+ * that fires past its fire threshold, and buttons that go through press(). Finger pointer events
+ * on the canvas never aim or fire.
+ *
  * DOM access goes through InputEnv so the controller runs under node:test with fakes.
  */
 
@@ -26,7 +30,20 @@ export interface InputActions {
   closePanel?(): void;
   /** M: full-screen map. */
   toggleMap?(): void;
+  /**
+   * Touch MAP button when no panel handles M: the full map system listens to the M key itself, so
+   * the keyboard path never calls this.
+   */
+  toggleFullMap?(): void;
 }
+
+/** Touch buttons (touch-controls.ts), dispatched by InputController.press(). */
+export type TouchAction = "roll" | "interact" | "reload" | "swap" | "bandage" | "medkit" | "inventory" | "map";
+
+/** Move stick pushed less than this far (0..1) = quiet walk. */
+export const TOUCH_WALK_BELOW = 0.55;
+/** Move stick deflection under which it does not steer the facing (aim follows movement). */
+const TOUCH_FACE_FROM = 0.2;
 
 /** The DOM surface the controller needs (window, document, clock). */
 export interface InputEnv {
@@ -75,6 +92,19 @@ export class InputController {
   /** An open panel (inventory, search, map) owns the mouse: no fire from canvas clicks. */
   private fireBlocked = false;
   private lastWheelAt = -Infinity;
+  /** Touch twin-stick (touch-controls.ts): analog move vector, aim direction, trigger. */
+  private touchMove: { x: number; y: number } | null = null;
+  private touchAim: number | null = null;
+  private touchFire = false;
+  /**
+   * Semi-auto weapons fire on a press, so a held fire stick re-presses every this many ms
+   * (the weapon's fire interval; 0 = automatic weapon, the trigger is simply held).
+   */
+  private touchRepeatMs = 0;
+  /** Clock of the last touch press edge sent; null = the touch trigger is not pressed. */
+  private touchPressAt: number | null = null;
+  /** The last sample carried the touch press. */
+  private touchHigh = false;
   private attached = false;
   private readonly env: InputEnv;
 
@@ -128,6 +158,11 @@ export class InputController {
   }
 
   movement(): { mx: number; my: number } {
+    if (this.touchMove) {
+      const { x, y } = this.touchMove;
+      const len = Math.hypot(x, y);
+      return len > 1 ? { mx: x / len, my: y / len } : { mx: x, my: y };
+    }
     let mx = 0;
     let my = 0;
     for (const code of this.keys) {
@@ -141,9 +176,32 @@ export class InputController {
 
   /** Trigger state for one input sample. */
   sampleFire(): boolean {
-    const fire = !this.fireBlocked && (this.fireHeld || this.fireLatched);
+    const fire = !this.fireBlocked && (this.fireHeld || this.fireLatched || this.sampleTouchFire());
     this.fireLatched = false;
     return fire;
+  }
+
+  /**
+   * The touch trigger for one sample. Automatic weapons: held. Semi-auto: a press on the first
+   * sample, then one released sample, then a new press every touchRepeatMs while the stick stays
+   * past the fire threshold, so holding the stick keeps firing at the weapon's rate.
+   */
+  private sampleTouchFire(): boolean {
+    if (!this.touchFire || this.fireBlocked) {
+      this.touchPressAt = null;
+      this.touchHigh = false;
+      return false;
+    }
+    if (this.touchRepeatMs <= 0) return true;
+    const now = this.env.now();
+    // A new press needs a released sample before it (the server fires semi-autos on the edge).
+    if (this.touchPressAt === null || (!this.touchHigh && now - this.touchPressAt >= this.touchRepeatMs)) {
+      this.touchPressAt = now;
+      this.touchHigh = true;
+      return true;
+    }
+    this.touchHigh = false;
+    return false;
   }
 
   /**
@@ -157,10 +215,72 @@ export class InputController {
     return true;
   }
 
-  /** Quiet walk (Shift) held. */
+  /** Quiet walk (Shift) held, or the move stick pushed only part way. */
   walkHeld(): boolean {
     for (const k of WALK_KEYS) if (this.keys.has(k)) return true;
+    if (this.touchMove) {
+      const len = Math.hypot(this.touchMove.x, this.touchMove.y);
+      return len > 0 && len < TOUCH_WALK_BELOW;
+    }
     return false;
+  }
+
+  /** Move stick: x, y in -1..1 (screen axes = world axes), null when released. */
+  setTouchMove(v: { x: number; y: number } | null): void {
+    this.touchMove = v && Number.isFinite(v.x) && Number.isFinite(v.y) ? { x: v.x, y: v.y } : null;
+  }
+
+  /** Aim stick: direction in radians (screen axes = world axes) and trigger; null aim = released. */
+  setTouchAim(angle: number | null, fire: boolean): void {
+    this.touchAim = angle !== null && Number.isFinite(angle) ? angle : null;
+    this.touchFire = this.touchAim !== null && fire;
+  }
+
+  /** Re-press interval of a held fire stick: the semi-auto weapon's fire interval, 0 = automatic. */
+  setTouchRepeatMs(ms: number): void {
+    this.touchRepeatMs = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  }
+
+  /** Aim set by the touch aim stick (overrides the mouse while held), null when released. */
+  get touchAimAngle(): number | null {
+    return this.touchAim;
+  }
+
+  /** Direction of the move stick when pushed past the facing dead zone, else null. */
+  get touchMoveAngle(): number | null {
+    const m = this.touchMove;
+    if (!m || Math.hypot(m.x, m.y) < TOUCH_FACE_FROM) return null;
+    return Math.atan2(m.y, m.x);
+  }
+
+  /** Touch button press: the same paths as the keys (roll buffer, heal prediction, panels). */
+  press(action: TouchAction): void {
+    const a = this.actions;
+    switch (action) {
+      case "roll":
+        this.rollSamplesLeft = ROLL.BUFFER_SAMPLES;
+        return;
+      case "interact":
+        a.interact();
+        return;
+      case "reload":
+        a.reload();
+        return;
+      case "swap":
+        a.toggleSlot();
+        return;
+      case "bandage":
+      case "medkit":
+        a.heal(action);
+        return;
+      case "inventory":
+        a.toggleInventory?.();
+        return;
+      case "map":
+        if (a.toggleMap) a.toggleMap();
+        else a.toggleFullMap?.();
+        return;
+    }
   }
 
   /**
@@ -193,6 +313,11 @@ export class InputController {
 
   private releaseAll() {
     this.keys.clear();
+    this.touchMove = null;
+    this.touchAim = null;
+    this.touchFire = false;
+    this.touchPressAt = null;
+    this.touchHigh = false;
     this.fireHeld = false;
     this.fireLatched = false;
     this.rollSamplesLeft = 0;
@@ -276,6 +401,8 @@ export class InputController {
   };
 
   private onPointerMove = (e: PointerEvent) => {
+    // Fingers drive the touch sticks; only a mouse or a pen aims by position.
+    if (e.pointerType === "touch") return;
     const rect = this.canvas.getBoundingClientRect();
     this.mouseX = e.clientX - rect.left;
     this.mouseY = e.clientY - rect.top;
@@ -283,6 +410,8 @@ export class InputController {
   };
 
   private onPointerDown = (e: PointerEvent) => {
+    // A tap on the open canvas (outside the sticks and buttons) neither aims nor fires.
+    if (e.pointerType === "touch") return;
     this.onPointerMove(e);
     // Clicking the canvas takes focus away from any HUD input / button so keys reach the game.
     const active = this.env.doc.activeElement as (Element & Focusable) | null;
@@ -298,6 +427,7 @@ export class InputController {
   };
 
   private onPointerUp = (e: PointerEvent) => {
+    if (e.pointerType === "touch") return;
     if (e.button !== 0 && e.type !== "pointercancel") return;
     this.fireHeld = false;
   };

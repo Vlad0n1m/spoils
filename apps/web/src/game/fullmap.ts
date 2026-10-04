@@ -567,6 +567,13 @@ export function createMapOverlaySystem(opts: MapOverlaySystemOptions = {}): Game
     },
     // The open map owns the mouse (renderer: no fire, aim and look-ahead frozen).
     isInputBlocked: () => wantOpen && !disposed,
+    // Touch MAP button: same toggle as the key.
+    command(name) {
+      if (name !== "toggleMap" || disposed) return false;
+      wantOpen = !wantOpen;
+      overlay?.setOpen(wantOpen);
+      return true;
+    },
     resize(w, h) {
       size = { w, h };
       overlay?.layout(w, h);
