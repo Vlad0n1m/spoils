@@ -171,6 +171,42 @@ test("announceBoot posts this process' identity to void-orphans, retries, return
   });
 });
 
+test("announceBoot with retryEveryMs keeps announcing in the background until the web takes it, then stops", async () => {
+  // The first three rounds fail (web down); the fourth lands. Nothing is posted after that.
+  const srv = await serve((n) => (n <= 3 ? 503 : 200), JSON.stringify({ ok: true, status: "applied", voided: ["m-old"] }));
+  const prev = { log: console.log, error: console.error };
+  console.log = () => {};
+  console.error = () => {};
+  try {
+    await withEnv({ WEB_API_BASE_URL: `http://127.0.0.1:${srv.port}`, GAME_SERVER_HMAC_SECRET: "s" }, async () => {
+      assert.deepEqual(await announceBoot(SERVER_INSTANCE, { attempts: 1, backoffMs: 1, retryEveryMs: 15 }), [], "the first round failed: handed to the background");
+      for (let i = 0; i < 200 && srv.seen.length < 4; i++) await new Promise((r) => setTimeout(r, 10));
+      assert.equal(srv.seen.length, 4, "retried until it landed");
+      await new Promise((r) => setTimeout(r, 80));
+    });
+    assert.equal(srv.seen.length, 4, "no announce after it landed");
+    assert.ok(srv.seen.every((s) => s.path === "/api/raids/void-orphans"));
+    assert.deepEqual(JSON.parse(srv.seen[3]!.body), { ...SERVER_INSTANCE });
+  } finally {
+    console.log = prev.log;
+    console.error = prev.error;
+    srv.close();
+  }
+  // A refusal (4xx) is final: no background retry.
+  const bad = await serve(() => 400, JSON.stringify({ error: "bad_body" }));
+  console.error = () => {};
+  try {
+    await withEnv({ WEB_API_BASE_URL: `http://127.0.0.1:${bad.port}`, GAME_SERVER_HMAC_SECRET: "s" }, async () => {
+      assert.deepEqual(await announceBoot(SERVER_INSTANCE, { attempts: 1, backoffMs: 1, retryEveryMs: 15 }), []);
+      await new Promise((r) => setTimeout(r, 80));
+    });
+    assert.equal(bad.seen.length, 1);
+  } finally {
+    console.error = prev.error;
+    bad.close();
+  }
+});
+
 const exitReport = (matchId: string) =>
   ({ ...payload, matchId, atMs: 1, kills: 0, level: 1, lost: [], destroyed: [], stats: { shotsFired: 0, dmgDealt: 0, containersSearched: 0, corpsesSearched: 0, bossKills: 0 } }) as never;
 

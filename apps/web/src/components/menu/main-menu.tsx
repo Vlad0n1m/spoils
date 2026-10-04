@@ -159,7 +159,9 @@ function MenuScreen({
   const openPanel = useCallback(
     (p: LobbyPanel, tab?: string) => {
       const active = document.activeElement;
-      if (active instanceof HTMLElement && active !== document.body) opener.current = active;
+      // Switching panels (hotkey, link) from inside an open panel keeps the button that opened the
+      // first one: the focused element inside the old panel unmounts with it.
+      if (active instanceof HTMLElement && active !== document.body && !active.closest('[role="dialog"]')) opener.current = active;
       const href = panelHref({ panel: p, tab });
       if (panel.panel) {
         window.history.replaceState(null, "", href);
@@ -179,6 +181,23 @@ function MenuScreen({
       window.history.replaceState(null, "", "/play");
     }
   }, []);
+  // Links inside a panel to another panel or tab (Shop · Traders, Equip in loadout, …): replace the
+  // panel's history entry like setTab does. A Next <Link> would push a second entry that the menu does
+  // not track, and × / Esc would then need two presses (the first one reopening the previous panel).
+  const onPanelLinkCapture = useCallback(
+    (e: React.MouseEvent<HTMLElement>) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
+      if (!(a instanceof HTMLAnchorElement) || (a.target && a.target !== "_self") || a.hasAttribute("download")) return;
+      const url = new URL(a.href, window.location.href);
+      if (url.origin !== window.location.origin || url.pathname !== "/play") return;
+      e.preventDefault(); // Next's Link skips its own navigation for a prevented click
+      const next = parseLobbyPanel(url.searchParams);
+      if (next.panel) window.history.replaceState(null, "", panelHref(next));
+      else closePanel();
+    },
+    [closePanel],
+  );
   const setTab = useCallback(
     (tab: string) => {
       if (!panel.panel) return;
@@ -385,7 +404,9 @@ function MenuScreen({
             onClose={closePanel}
             headerExtra={panel.panel === "inventory" ? undefined : <PlayMiniChip />}
           >
-            {panelBody}
+            <div className="contents" onClickCapture={onPanelLinkCapture}>
+              {panelBody}
+            </div>
           </Panel>
         )}
 

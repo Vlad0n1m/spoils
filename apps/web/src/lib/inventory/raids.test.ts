@@ -24,6 +24,7 @@ import {
   XP,
   xpForExit,
   levelForXp,
+  xpToNext,
   type EntryRequest,
   type ShardOpenRequest,
   type MatchEndReport,
@@ -363,6 +364,19 @@ function xpOf(over: Partial<Parameters<typeof xpForExit>[0]>) {
     firstExtractToday: true,
     ...over,
   });
+}
+
+/** XP needed for level 5 (the ranked-victim minimum, XP.PVP_VICTIM_MIN_LEVEL). */
+const XP_L5 = Array.from({ length: XP.PVP_VICTIM_MIN_LEVEL - 1 }, (_, i) => xpToNext(i + 1)).reduce((a, b) => a + b, 0);
+
+/** A registered user that counts as a ranked PvP victim: account older than 72 h, `xp` (default level 5). */
+async function rankableUser(xp = XP_L5): Promise<string> {
+  const id = await makeUser(db);
+  await db
+    .update(users)
+    .set({ xp, createdAt: new Date(Date.now() - XP.PVP_VICTIM_MIN_AGE_MS - 3_600_000) })
+    .where(eq(users.id, id));
+  return id;
 }
 
 /** `n` lost-pool items in one insert: rifles of rarity 1 / 3 (rare / top) and armor_1 (score 0). */
@@ -1086,7 +1100,7 @@ describe("WORLD v6 exit settlement (T20)", () => {
     const s = wShard();
     await openShard(db, s);
     const k = await makeUser(db);
-    const v1 = await makeUser(db);
+    const v1 = await rankableUser();
     const guestVictim = randomUUID();
     const e1 = wEntry(s.matchId, k);
     await enterOk(e1);
@@ -1150,6 +1164,29 @@ describe("WORLD v6 exit settlement (T20)", () => {
     const u = (await db.select().from(users).where(eq(users.id, k)))[0]!;
     assert.equal(u.xp, want1.total + want2.total);
     assert.equal(u.level, levelForXp(want1.total + want2.total));
+  });
+
+  test("ranked PvP victims (review fix): accounts younger than 72 h or below level 5 are not ranked; the pvp line pays 10 ranked kills a UTC day", async () => {
+    const s = wShard();
+    await openShard(db, s);
+    const k = await makeUser(db);
+    const fresh = await makeUser(db);
+    await db.update(users).set({ xp: 9_000 }).where(eq(users.id, fresh)); // high level, but a new account
+    const low = await rankableUser(XP_L5 - 1); // old account, level 4
+    const vets = [await rankableUser(), await rankableUser()];
+    // Earlier today this killer already had XP.PVP_DAILY_MAX − 1 ranked kills (another map).
+    for (let i = 0; i < XP.PVP_DAILY_MAX - 1; i++) {
+      await db.insert(pvpKills).values({ killerId: k, victimId: await makeUser(db), matchId: randomUUID(), entryId: randomUUID(), cycleId: W_CYCLE, ranked: true, at: new Date() });
+    }
+    const e = wEntry(s.matchId, k);
+    await enterOk(e);
+    const r = await applyExit(db, wExit(e, 3, { exit: "dead", victims: [fresh, low, ...vets] }));
+    const rows = await db.select().from(pvpKills).where(eq(pvpKills.entryId, e.entryId));
+    assert.equal(rows.length, 4, "every registered victim is recorded");
+    assert.deepEqual(rows.filter((x) => x.ranked).map((x) => x.victimId).sort(), [...vets].sort());
+    const row = (await db.select().from(raidExits).where(eq(raidExits.entryId, e.entryId)))[0]!;
+    assert.equal(row.pvpRanked, 2, "the Kills board counts both ranked kills");
+    assert.deepEqual(r.xpLines.find((l) => l.key === "pvp"), { key: "pvp", qty: 1, xp: XP.PVP }, "only one fits under the daily max");
   });
 });
 

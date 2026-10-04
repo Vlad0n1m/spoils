@@ -22,9 +22,9 @@ import {
   type PlayerExitReport,
   type ShardOpenRequest,
 } from "@extract/shared";
-import { pvpKills, raidEntries, raidExits, raids, users } from "../../db/schema";
+import { items, pvpKills, raidEntries, raidExits, raids, users } from "../../db/schema";
 import { lockLoadout } from "../inventory/loadout";
-import { RAID_USER_VOID_GRACE_MS } from "../inventory/raids";
+import { RAID_USER_VOID_GRACE_MS, voidOrphans } from "../inventory/raids";
 import { closeTestDb, lockTestDb, makeItem, makeUser, openTestDb, resetDb } from "../inventory/test-db";
 import { enterRaid, openShard, recordWorldEvent } from "../inventory/world";
 import { getEconomyStats } from "../lobby/economy-stats";
@@ -260,6 +260,55 @@ describe("worldJoin", () => {
     const late = await worldJoin(db, u, undefined, WC.entryClosesAt + 60_000);
     assert.ok(late.ok && late.body.rejoin);
   });
+
+  for (const serverId of ["eu-1", "default"]) {
+    test(`restart (${serverId}): a newer shard row of the cycle voids the dead shard's entry; PLAY gets a fresh entry on the new shard`, async () => {
+      const u = await user();
+      const rifle = await makeItem(db, { def: "rifle", rarity: 1, ownerId: u.userId });
+      const t0 = WC.openAt + 30_000;
+      // Process A boots (its void-orphans landed) and opens the shard; the user enters with the rifle.
+      await voidOrphans(db, { serverId, instanceId: "inst-A", bootedAt: t0 }, new Date(t0));
+      const a = shardReq({ serverId, instanceId: "inst-A", roomId: "room-A" });
+      await openShard(db, a, new Date(t0 + 1_000));
+      const j = await worldJoin(db, u, [{ key: "w1", itemId: rifle, def: "rifle", qty: 1 }], t0 + 2_000);
+      assert.ok(j.ok, JSON.stringify(j));
+      if (!j.ok) return;
+      const entryId = j.body.ticket.entryId!;
+      const res = await enterRaid(
+        db,
+        { matchId: a.matchId, entryId, userId: u.userId, loadoutId: j.body.loadoutId, atMs: 60_000, targets: 0, bossAlive: false },
+        new Date(t0 + 3_000),
+      );
+      assert.equal(res.status, "accepted", JSON.stringify(res));
+      // The next cycle's prewarmed row is no restart: the entry stays rejoinable.
+      await openShard(db, shardReq({ cycleId: C + 1, serverId, instanceId: "inst-A", roomId: "room-A2" }), new Date(t0 + 4_000));
+      assert.equal((await meWorld(db, u.userId, t0 + 5_000)).activeEntry?.rejoinable, true);
+      // Neither is a newer row of this cycle from a server with another GAME_SERVER_ID.
+      await openShard(db, shardReq({ serverId: `${serverId}-other`, instanceId: "inst-X", roomId: "room-X" }), new Date(t0 + 6_000));
+      assert.equal((await meWorld(db, u.userId, t0 + 7_000)).activeEntry?.rejoinable, true);
+
+      // A crashes; B boots but its void-orphans never lands, then raids/open of a fresh shard of this cycle does.
+      const b = shardReq({ serverId, instanceId: "inst-B", roomId: "room-B" });
+      await openShard(db, b, new Date(t0 + 120_000));
+
+      const me = await meWorld(db, u.userId, t0 + 180_000);
+      assert.equal(me.activeEntry, null, "the dead shard's entry is voided, not offered as a rejoin");
+      const [entry] = await db.select().from(raidEntries).where(eq(raidEntries.entryId, entryId));
+      assert.equal(entry!.status, "voided");
+      const [raidA] = await db.select().from(raids).where(eq(raids.matchId, a.matchId));
+      assert.equal(raidA!.status, "voided");
+      const [raidB] = await db.select().from(raids).where(eq(raids.matchId, b.matchId));
+      assert.equal(raidB!.status, "running", "the live shard is untouched");
+      const [item] = await db.select().from(items).where(eq(items.id, rifle));
+      assert.deepEqual([item!.state, item!.ownerId], ["in_stash", u.userId], "the gear came back");
+
+      const again = await worldJoin(db, u, undefined, t0 + 181_000);
+      assert.ok(again.ok, JSON.stringify(again));
+      if (!again.ok) return;
+      assert.deepEqual([again.body.rejoin, again.body.matchId, again.body.roomId], [false, b.matchId, "room-B"]);
+      assert.notEqual(again.body.ticket.entryId, entryId);
+    });
+  }
 
   test("an active entry on a shard of another cycle → 409 in_raid with settlesAt = ends_at + 5 min", async () => {
     const u = await user();

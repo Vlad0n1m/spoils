@@ -126,21 +126,40 @@ export const SERVER_INSTANCE: Readonly<GameServerBoot> = Object.freeze({
 /** Boot announce: the web may still be starting (dev), so retry for ≈1 min. */
 const BOOT_ATTEMPTS = 8;
 const BOOT_BACKOFF_MS = 500;
+/**
+ * After those attempts fail, index.ts keeps announcing in the background this often until the web
+ * takes it: until then the web cannot tell that the previous process' shards are gone.
+ */
+export const BOOT_RETRY_MS = 30_000;
+
+export interface AnnounceBootOptions extends PostOptions {
+  /**
+   * > 0: when every attempt failed (web unreachable / 5xx), try again in the background after this
+   * long, round after round, until it lands or is refused (4xx). The returned promise does not wait.
+   */
+  retryEveryMs?: number;
+}
 
 /**
- * POST /api/raids/void-orphans once at process boot (index.ts): raids started by a previous
- * process of this serverId can never report their end, so the web voids them at once (gear back
- * to its owners, pool items back to the pool) instead of after the stale-raid timeout. Returns
- * the voided match ids ([] when skipped / failed). Never throws.
+ * POST /api/raids/void-orphans at process boot (index.ts): raids started by a previous process of
+ * this serverId can never report their end, so the web voids them at once (gear back to its
+ * owners, pool items back to the pool) instead of after the stale-raid timeout. Returns the voided
+ * match ids ([] when skipped / failed / handed to the background retry). Never throws.
  */
-export async function announceBoot(boot: GameServerBoot = SERVER_INSTANCE, opts: PostOptions = {}): Promise<string[]> {
+export async function announceBoot(boot: GameServerBoot = SERVER_INSTANCE, opts: AnnounceBootOptions = {}): Promise<string[]> {
+  const { retryEveryMs = 0, ...post } = opts;
   const r = await postSigned<unknown>("/api/raids/void-orphans", boot, {
     attempts: BOOT_ATTEMPTS,
     backoffMs: BOOT_BACKOFF_MS,
-    ...opts,
+    ...post,
   });
   if (r.status !== "ok") {
     if (r.status === "rejected") console.error(`[web-api] raids/void-orphans refused: ${r.code} ${r.body}`);
+    if (r.status === "failed" && retryEveryMs > 0) {
+      console.error(`[web-api] raids/void-orphans did not land: retrying every ${Math.round(retryEveryMs / 1000)} s in the background`);
+      const h = setTimeout(() => void announceBoot(boot, opts), retryEveryMs);
+      h.unref?.();
+    }
     return [];
   }
   const v = (r.body as { voided?: unknown } | null)?.voided;

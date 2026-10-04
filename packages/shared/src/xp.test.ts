@@ -63,6 +63,28 @@ test("T3 daily soft cap at 2 400 + 300 (× 0.25 above 2 500)", () => {
   assert.ok(!x({ exit: "dead", marauders: 5, grindToday: 100 }).lines.some((l) => l.key === "daily_cap"));
 });
 
+test("T3 above the daily cap time lines (extract, haul) pay nothing; activity keeps × 0.25 (review fix)", () => {
+  // Fully above the cap: a 25-min extract with a full haul and 10 containers → only the containers' quarter.
+  const over = x({ onMapMs: 25 * MIN, haulCr: 1500, containers: 10, grindToday: 2500 });
+  assert.equal(over.grind, 5);
+  assert.deepEqual(lineMap(over), { extract: 350, haul: 150, containers: 20, daily_cap: -515 });
+  // Straddling: the time lines fill the room first (pays the player most), the activity rest × 0.25.
+  const mid = x({ onMapMs: 10 * MIN, marauders: 2, grindToday: 2400 });
+  // time 200, act 40, room 100 → timeIn 100, actIn 0 → 100 + 0 + floor(40 × 0.25) = 110.
+  assert.equal(mid.grind, 110);
+  // An idle hide-and-extract bot (4 × 8-min extracts every cycle, 32 cycles) is held at the cap
+  // plus the first-extract bonus instead of ≈ 7 800 XP a day.
+  let grind = 0, total = 0;
+  for (let k = 0; k < 128; k++) {
+    const r = x({ onMapMs: 8 * MIN + 5_000, grindToday: grind, firstExtractToday: k === 0 });
+    grind += r.grind;
+    total += r.total;
+  }
+  assert.equal(grind, XP.DAILY_SOFT_CAP);
+  assert.equal(total, XP.DAILY_SOFT_CAP + 180);
+  assert.equal(XP.DAILY_TIME_OVER_MULT, 0);
+});
+
 test("T3 first-extract bonus doubles the entry up to 300", () => {
   const small = x({ onMapMs: 10 * MIN, firstExtractToday: true });
   assert.equal(small.total, 400, "200 + 200");

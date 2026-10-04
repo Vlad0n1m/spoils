@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WORLD, type JoinTicket, type WorldJoinResponse } from "@extract/shared";
 import { BRAND } from "@/lib/brand";
 import { PlayProvider, useLobby, useNow, type PlayValue } from "@/lib/lobby/lobby-context";
+import { flushDraft } from "@/lib/lobby/draft-flush";
 import { readArmedCycle, writeArmedCycle } from "@/lib/lobby/news-seen";
 import { classifyJoinFailure, derivePlayState, playAction, type PlayError } from "@/lib/lobby/play-state";
 import type { WorldJoinErrorBody } from "@/lib/lobby/api-types";
@@ -75,6 +76,10 @@ export function PlayController({
   const jitter = useRef(0);
   const [error, setError] = useState<PlayError | null>(null);
   const [inRaidUntil, setInRaidUntil] = useState<number | null>(null);
+  const meRef = useRef(me);
+  meRef.current = me;
+  /** The me/world answer the lobby held when /api/world/join said in_raid (only later answers count). */
+  const meAtInRaid = useRef<typeof me | null>(null);
   const alive = useRef(true);
   useEffect(
     () => () => {
@@ -121,6 +126,9 @@ export function PlayController({
     setError(null);
     let tries = 0;
     try {
+      // The join locks the saved draft: send a loadout edit still inside its autosave debounce first.
+      await flushDraft();
+      if (!alive.current) return;
       for (;;) {
         tries++;
         let status = 0;
@@ -155,6 +163,7 @@ export function PlayController({
         if (f.kind === "retry") setError({ message: f.message, fix: "retry" });
         else if (f.kind === "closed") void reloadStatus();
         else if (f.kind === "in_raid") {
+          meAtInRaid.current = meRef.current;
           setInRaidUntil(f.settlesAt ?? Date.now() + IN_RAID_FALLBACK_MS);
           void reloadMe();
           void stash.reload();
@@ -171,6 +180,15 @@ export function PlayController({
       if (alive.current) setJoining(false);
     }
   }, [adoptServerTime, onBattle, reloadMe, reloadStatus, refreshSession, setArmedCycle, stash]);
+
+  // The raid behind an in_raid answer often settles long before settlesAt (an exit report a few
+  // seconds late): a me/world answer that arrived after it with no active entry, and no gear held by a
+  // raid, frees PLAY at once instead of keeping GEAR IN RAID until the old map's ends_at + 5 min.
+  const stashInRaid = stashInput?.inRaid ?? false;
+  useEffect(() => {
+    if (inRaidUntil === null || me === undefined || me === meAtInRaid.current) return;
+    if (!me?.activeEntry && !stashInRaid) setInRaidUntil(null);
+  }, [me, inRaidUntil, stashInRaid]);
 
   // A retry from the battle screen: show DROPPING IN… during the wait, then a fresh join.
   const retrySeq = retry?.seq ?? null;

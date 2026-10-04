@@ -9,6 +9,7 @@ services:
       POSTGRES_DB: extract
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
       test:
         [
@@ -50,6 +51,7 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/extract
     ports:
       - "3000:3000"
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,11 +80,17 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/extract
       WEB_API_BASE_URL: http://web:3000
       GAME_SERVER_PORT: "2567"
+      # Required in production (boot fails without it); stable across restarts so the web can void
+      # the shards of a crashed process. One game server per world: any fixed name works.
+      GAME_SERVER_ID: ${GAME_SERVER_ID:-world-1}
     ports:
       - "2567:2567"
     depends_on:
       web:
         condition: service_healthy
+    # The world is always live: a crash must not leave it offline until someone restarts it by hand.
+    # The new process opens a fresh shard of the current cycle and the web returns the old shard's gear.
+    restart: unless-stopped
 
 volumes:
   postgres_data:

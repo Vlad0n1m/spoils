@@ -319,7 +319,11 @@ export async function fillBossBag(tx: Tx, a: FillBossBagArgs): Promise<SettledIt
     filled: a.filled,
   });
   if (plan.n === 0) return [];
-  return takeFromPool(tx, { matchId: a.matchId, entryId: a.entryId, n: plan.n, maxTier: plan.maxTier, reason: "alloc_boss", bestFirst: true });
+  // Top items first, but never below POOL.TOP_RESERVE (plan.maxTop); the other slots take ≤ rare.
+  const base = { matchId: a.matchId, entryId: a.entryId, reason: "alloc_boss", bestFirst: true } as const;
+  const best = plan.maxTop > 0 ? await takeFromPool(tx, { ...base, n: Math.min(plan.n, plan.maxTop), maxTier: 2 }) : [];
+  const rest = await takeFromPool(tx, { ...base, n: plan.n - best.length, maxTier: Math.min(plan.maxTier, 1) });
+  return [...best, ...rest];
 }
 
 // ---------------------------------------------------------------- legacy v4/v5 release math

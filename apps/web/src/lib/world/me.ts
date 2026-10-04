@@ -10,10 +10,13 @@ import {
   type XpLine,
 } from "@extract/shared";
 import type { Db } from "../inventory/db";
+import { voidStaleForUser } from "../inventory/raids";
 import { worldNow } from "./clock";
 
 /**
  * GET /api/me/world (spec §4.9, private, no-store): the caller's world state for the lobby.
+ * Runs the user's lazy void first (voidStaleForUser, as /api/world/join does), so an entry on the
+ * shard of a crashed or restarted game server is voided here instead of showing as rejoinable.
  * - activeEntry: their active raid_entries row; `rejoinable` = its shard row is running and in the
  *   current cycle (then /api/world/join hands back a rejoin ticket for it).
  * - lastRaid: their newest raid_exits row that belongs to an entry (world exits; legacy exits have
@@ -24,6 +27,7 @@ import { worldNow } from "./clock";
  */
 export async function meWorld(db: Db, userId: string, now = worldNow()): Promise<MeWorldDto> {
   const wc = worldCycleAt(now);
+  await voidStaleForUser(db, userId, new Date(now));
   const [act, last, user] = await Promise.all([
     db.execute<{ entry_id: string; match_id: string; cycle_id: number; ends_at: Date | string | null; status: string | null; raid_cycle: number | null }>(sql`
       select e.entry_id, e.match_id, e.cycle_id, r.ends_at, r.status, r.cycle_id as raid_cycle

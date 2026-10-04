@@ -102,7 +102,10 @@ const XP_ROWS: Array<[string, string]> = [
   ["Marauder", `${XP.NPC}`],
   ["Guard", `${XP.GUARD}`],
   ["Boss", `${XP.BOSS}`],
-  ["Raider", `${XP.PVP} (at most ${XP.PVP_PAIR_PER_DAY} per opponent a day)`],
+  [
+    "Raider",
+    `${XP.PVP} for a raider of level ${XP.PVP_VICTIM_MIN_LEVEL}+ whose account is ${Math.round(XP.PVP_VICTIM_MIN_AGE_MS / 3_600_000)}+ hours old (at most ${XP.PVP_PAIR_PER_DAY} per opponent and ${XP.PVP_DAILY_MAX} in all a day)`,
+  ],
   ["First extract of the day", `doubles that drop (up to +${XP.FIRST_EXTRACT_MAX})`],
 ];
 
@@ -155,7 +158,8 @@ export function RulesSection() {
         </table>
         <p className="mt-3 text-sm">
           No XP for time alive or for dropping in. After {XP.DAILY_SOFT_CAP.toLocaleString("en-US")} XP a day from extracts, hauls,
-          containers, marauders and guards, those lines give a quarter. Caught in the wipe: kill XP only. Level 2 takes{" "}
+          containers, marauders and guards, extracts and hauls give no more XP that day and the rest give a quarter. Caught in
+          the wipe: kill XP only. Level 2 takes{" "}
           {xpToNext(1)} XP, and each next level {xpToNext(2) - xpToNext(1)} more.
         </p>
       </Block>
