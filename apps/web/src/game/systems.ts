@@ -9,6 +9,7 @@
 import type { Application, Container } from "pixi.js";
 import type { Room } from "colyseus.js";
 import type { BattleState, EventsMsg, MapData, Player, SelfState } from "@extract/shared";
+import type { PartyMateView } from "./party";
 
 /** Named layers a system may draw into (created by the renderer, z-ordered bottom → top). */
 export interface GameLayers {
@@ -65,6 +66,11 @@ export interface GameContext {
    * drops every other player before the kill event arrives. Null if never seen.
    */
   lastSeen(id: string): { x: number; y: number; at: number } | null;
+  /**
+   * The local player's party mates from S2C.PARTY (party.ts PartyTracker), smoothed; empty when
+   * solo. Allies are shown through fog by design. The array is reused every frame: do not keep it.
+   */
+  partyMates?(): readonly PartyMateView[];
 }
 
 export interface GameSystem {

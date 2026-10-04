@@ -119,3 +119,42 @@ test("WORLD v6: matchId / entryId are covered by the signature; legacy tickets s
     assert.equal(verifyJoinTicket(up, NOW)?.matchId, matchId);
   });
 });
+
+test("party: dropId / partyId are signed after the world fields; solo tickets sign the old payload", () => {
+  withSecret(SECRET, () => {
+    const matchId = "0b9d2c1e-7f43-4a51-9c3e-2f1d8a6b5c40";
+    const entryId = "6f1c7e2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+    const dropId = "2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d";
+    const partyId = "9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a";
+    const t = signJoinTicket({ userId: "user-1", nickname: "Neo", issuedAt: NOW, matchId, entryId, dropId, partyId }, SECRET);
+    assert.deepEqual(verifyJoinTicket(t, NOW), t);
+    // Moving the ticket to another drop / party, or dropping a field, breaks the signature.
+    assert.equal(verifyJoinTicket({ ...t, dropId: "3a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d" }, NOW), null);
+    assert.equal(verifyJoinTicket({ ...t, partyId: "8f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a" }, NOW), null);
+    const { dropId: _d, ...noDrop } = t;
+    assert.equal(verifyJoinTicket(noDrop, NOW), null);
+    const { partyId: _p, ...noParty } = t;
+    assert.equal(verifyJoinTicket(noParty, NOW), null);
+    // Malformed ids are refused before the signature check.
+    assert.equal(verifyJoinTicket({ ...t, dropId: "nope" }, NOW), null);
+    assert.equal(verifyJoinTicket({ ...t, partyId: 5 }, NOW), null);
+    // A member following on their own (partyId only) verifies without a dropId.
+    const member = signJoinTicket({ userId: "user-2", nickname: "Ann", issuedAt: NOW, matchId, entryId, partyId }, SECRET);
+    const v = verifyJoinTicket(member, NOW)!;
+    assert.equal(v.partyId, partyId);
+    assert.equal(v.dropId, undefined);
+    // Upper-case ids verify and come out lower-case.
+    const up = signJoinTicket({ userId: "user-1", nickname: "Neo", issuedAt: NOW, matchId, entryId, dropId: dropId.toUpperCase(), partyId: partyId.toUpperCase() }, SECRET);
+    const u = verifyJoinTicket(up, NOW)!;
+    assert.equal(u.dropId, dropId);
+    assert.equal(u.partyId, partyId);
+    // A dropId without its partyId still verifies (it is signed) but drops solo: no party fields.
+    const lone = signJoinTicket({ userId: "user-3", nickname: "Lone", issuedAt: NOW, matchId, entryId, dropId }, SECRET);
+    const l = verifyJoinTicket(lone, NOW)!;
+    assert.equal(l.dropId, undefined);
+    assert.equal(l.partyId, undefined);
+    // Solo tickets are unchanged: no party fields, the pre-party payload.
+    const solo = signJoinTicket({ userId: "user-1", nickname: "Neo", issuedAt: NOW, matchId, entryId }, SECRET);
+    assert.deepEqual(verifyJoinTicket(solo, NOW), solo);
+  });
+});

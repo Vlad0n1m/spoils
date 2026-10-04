@@ -1,6 +1,10 @@
 /**
  * Shooting, server-side bullets and damage. Bullets are never synced: clients draw tracers from
  * the ShotMsg in their `ev` batch, and the state (hp, alive) is the truth about hits.
+ *
+ * Party (shared party.ts, PARTY.FRIENDLY_FIRE = false): a bullet passes through its shooter's party
+ * mates exactly as NPC bullets pass through NPCs (no hit, no damage, no hit marker, it flies on to
+ * whoever stands behind), and damagePlayer refuses any mate-on-mate damage as a backstop.
  */
 
 import {
@@ -10,6 +14,7 @@ import {
   SoundKind,
   applyDamage,
   itemDef,
+  partyMates,
   raycastSolids,
   segmentCircleT,
   weaponVariant,
@@ -119,8 +124,11 @@ export function stepBullets(m: Match, dtMs: number): void {
     // NPCs are one faction (NPC.FRIENDLY_FIRE false): their bullets pass through other NPCs, so
     // luring squads into a crossfire gives nothing.
     const npcShot = b.owner.isNpc && !NPC.FRIENDLY_FIRE;
+    const party = b.owner.partyId;
     for (const rt of m.allRuntimes()) {
       if (!rt.pub.alive || rt === b.owner || (npcShot && rt.isNpc)) continue;
+      // Party mates are transparent to each other's bullets (PARTY.FRIENDLY_FIRE = false).
+      if (party && partyMates(party, rt.partyId)) continue;
       const t = segmentCircleT(b.x, b.y, sx, sy, rt.pub.x, rt.pub.y, R);
       if (t < hitT) { hitT = t; hit = rt; }
     }
@@ -149,6 +157,8 @@ export function damagePlayer(
 ): void {
   const p = rt.pub;
   if (!p.alive) return;
+  // No damage between party mates from any source (HP, armor and its durability stay untouched).
+  if (attacker && attacker !== rt && partyMates(attacker.partyId, rt.partyId)) return;
   const s = rt.self;
   const armor = s.slots.get("armor");
   const level = armor ? (itemDef(armor.def)?.armorLevel ?? 0) : 0;

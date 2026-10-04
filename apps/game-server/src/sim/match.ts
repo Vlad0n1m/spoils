@@ -106,7 +106,7 @@ import { GroundStore, autoPickup, dropSpot, groundUniques, nearestGroundItem, pi
 import { Ledger, cloneItem, isTrackedUnique, makeItem, toPlain, toSettled } from "./items.js";
 import { NpcSystem, type NpcSpawn } from "./npc.js";
 import { leftoverPool, poolTargetCount, poolTick, receiveBossFill, receiveEntryPool, takeUnplaced, type UnplacedPoolItem } from "./pool-place.js";
-import { pickEntrySpawn } from "./spawn.js";
+import { pickDropSpawn, pickEntrySpawn, type PartyDropAnchor } from "./spawn.js";
 import { deliverSounds, emitSound, footstep } from "./sound.js";
 import type { Bullet, EntryInit, LoadoutMap, MatchEvent, PlayerRuntime, RosterEntry } from "./types.js";
 import { VisionSystem, followAim } from "./vision.js";
@@ -294,6 +294,8 @@ export class Match {
   readonly world: (WorldOptions & { durationMs: number }) | null;
   /** Spawn spots handed out recently (spawn.ts pickEntrySpawn). */
   readonly recentSpawns: Array<{ x: number; y: number; at: number }> = [];
+  /** Party drops by dropId: the first member's spot, where later members of the drop land (spawn.ts). */
+  readonly partyDrops = new Map<string, PartyDropAnchor>();
   /** Released entry pool items waiting for a valid target (pool-place.ts). */
   readonly unplacedPool: UnplacedPoolItem[] = [];
   /** Boss bag items waiting for the event boss to calm down (pool-place.ts). */
@@ -531,7 +533,11 @@ export class Match {
     const i = this.ordered.length;
     if (i >= this.vision.n) throw new Error(`addHuman: runtime capacity ${this.vision.n} reached`);
     const clock = this.clock;
-    const spawn = pickEntrySpawn(this, this.rng, e.userId);
+    const partyId = e.partyId ?? "";
+    const dropId = partyId ? (e.dropId ?? "") : "";
+    // A party drop (spawn.ts): the drop's first member picks a normal entry spot, later members of
+    // the same drop land 150–300 px from it within PARTY.DROP_TTL_MS.
+    const spawn = dropId ? pickDropSpawn(this, this.rng, e.userId, dropId, partyId) : pickEntrySpawn(this, this.rng, e.userId);
     const id = `e${i}`;
     const p = new Player();
     p.sessionId = id;
@@ -557,6 +563,8 @@ export class Match {
     rt.guest = e.guest;
     rt.level = e.level;
     rt.loadoutId = e.loadoutId;
+    rt.partyId = partyId;
+    rt.dropId = dropId;
     if (e.snapshot) this.loadLoadout(rt, e.snapshot);
     giveFreeKit(rt);
     syncPublic(rt);
@@ -1255,6 +1263,8 @@ function newRuntime(
     pendingPool: [],
     poolApplyAt: 0,
     exitSettled: false,
+    partyId: "",
+    dropId: "",
   };
 }
 

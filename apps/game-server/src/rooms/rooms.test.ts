@@ -30,6 +30,7 @@ const { killPlayer } = await import("../sim/death.js");
 const { worldDirectory } = await import("../world/directory.js");
 type Shard = NonNullable<ReturnType<typeof worldDirectory.current>>;
 type MatchT = import("../sim/match.js").Match;
+type PartyWireMsg = import("../sim/party.js").PartyWireMsg;
 
 /** colyseus.js as the web app ships it (the game server has no client dependency of its own). */
 interface SdkRoom {
@@ -313,6 +314,43 @@ test("entry_closed outside the open phase (A1 clock offset)", async () => {
   } finally {
     setEnv("WORLD_DEV_CLOCK_OFFSET_MS", offset);
   }
+});
+
+test("party tickets: a drop's members land together and get S2C.PARTY with each other only; a solo raider gets none", async () => {
+  const partyId = randomUUID();
+  const dropId = randomUUID();
+  const member = (nickname: string) =>
+    signJoinTicket({ userId: randomUUID(), nickname, issuedAt: Date.now(), matchId: shard.matchId, entryId: randomUUID(), dropId, partyId }, SECRET);
+  const got = new Map<string, PartyWireMsg[]>();
+  const listen = (who: string, room: SdkRoom) =>
+    room.onMessage(S2C.PARTY, (m) => {
+      const list = got.get(who) ?? [];
+      list.push(m as PartyWireMsg);
+      got.set(who, list);
+    });
+  const lead = member("Lead");
+  const mate = member("Mate");
+  const L = await joinAndHello(lead);
+  listen("lead", L.room);
+  const M = await joinAndHello(mate);
+  listen("mate", M.room);
+  const S = await joinAndHello(ticket(randomUUID(), { nickname: "Solo" }));
+  listen("solo", S.room);
+  const a = match.currentOf(lead.userId)!;
+  const b = match.currentOf(mate.userId)!;
+  assert.equal(a.partyId, partyId);
+  assert.equal(b.dropId, dropId);
+  const d = Math.hypot(a.pub.x - b.pub.x, a.pub.y - b.pub.y);
+  assert.ok(d >= 150 && d <= 300, `the mate landed ${d.toFixed(0)} px from the leader`);
+  await waitFor(() => (got.get("lead")?.length ?? 0) > 0 && (got.get("mate")?.length ?? 0) > 0);
+  const toLead = got.get("lead")!.at(-1)!;
+  assert.deepEqual(toLead.mates.map((x) => [x.key, x.name, x.alive]), [[M.hello.selfKey, "Mate", true]]);
+  assert.deepEqual(got.get("mate")!.at(-1)!.mates.map((x) => x.key), [L.hello.selfKey]);
+  // About PARTY.POS_HZ, and never to anyone outside the party.
+  await new Promise((r) => setTimeout(r, 1_100));
+  assert.equal(got.get("solo"), undefined);
+  const n = got.get("lead")!.length;
+  assert.ok(n >= 2 && n <= 5, `${n} party messages in ~1.5 s`);
 });
 
 test("world_full at WORLD.CAPACITY humans on the map, without a web call", async () => {

@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
+  PARTY,
   WORLD,
   cycleEnvSeed,
   mulberry32,
@@ -19,7 +20,8 @@ import {
 import { Match } from "../sim/match.js";
 import { counterUid, testMap } from "../sim/test-utils.js";
 import type { ShardOpenOutcome } from "../net/web-api.js";
-import { HARD_STOP_AFTER_MS, OPEN_RETRY_MS, WorldDirectory, type DirectoryDeps, type ShardRoom, type WorldCreateOptions } from "./directory.js";
+import { HARD_STOP_AFTER_MS, OPEN_RETRY_MS, PARTY_FULL_DETAIL, WorldDirectory, type DirectoryDeps, type ShardRoom, type WorldCreateOptions } from "./directory.js";
+import { PARTY_SPAWN_MAX_PX, PARTY_SPAWN_MIN_PX } from "../sim/spawn.js";
 
 const K = 663_000;
 const WC = worldCycleOf(K);
@@ -392,4 +394,96 @@ test("a failed room creation is retried while the cycle lasts", () =>
     assert.ok(dir.shardOfCycle(K));
     assert.equal(rooms[0]!.opts.mode, "demo");
     dir.stop();
+  }));
+
+test("party drop admission: the first member needs room for a whole party; held seats, refusals give them back, expiry", () =>
+  quiet(async () => {
+    let refuse: string | null = null;
+    const h = harness(WC.startAt + 60_000);
+    await h.dir.start();
+    const s = h.dir.shardOfCycle(K)!;
+    const m = s.room.match as Match;
+    const fill = (n: number) => {
+      while (m.humansOnMap() < n) {
+        m.addHuman({ entryId: randomUUID(), userId: randomUUID(), nickname: "F", loadoutId: "", guest: false, level: 0, snapshot: null, pool: [], bossFill: [] });
+      }
+    };
+    const partyId = randomUUID();
+    const dropId = randomUUID();
+    const member = (userId = randomUUID()): JoinTicket => ({ ...ticket(s.matchId, userId), partyId, dropId });
+
+    // 21 on the map: a party of up to 4 does not fit → the first member is refused with a clear code.
+    fill(WORLD.CAPACITY - PARTY.MAX_SIZE + 1);
+    const before = h.enters.length;
+    await assert.rejects(h.dir.admit(member()), { message: `world_full:${PARTY_FULL_DETAIL}` });
+    assert.equal(h.enters.length, before, "no web call");
+    assert.equal(s.drops.size, 0, "a refused first member holds nothing");
+    // A solo raider still fits in the last seats.
+    await h.dir.admit(ticket(s.matchId));
+
+    // A fresh shard with exactly a party's room left: the first member gets in and holds 3 seats.
+    const g = harness(WC.startAt + 60_000);
+    await g.dir.start();
+    const gs = g.dir.shardOfCycle(K)!;
+    const gm = gs.room.match as Match;
+    while (gm.humansOnMap() < WORLD.CAPACITY - PARTY.MAX_SIZE) {
+      gm.addHuman({ entryId: randomUUID(), userId: randomUUID(), nickname: "F", loadoutId: "", guest: false, level: 0, snapshot: null, pool: [], bossFill: [] });
+    }
+    const gm2 = (userId = randomUUID()): JoinTicket => ({ ...ticket(gs.matchId, userId), partyId, dropId });
+    const lead = gm2();
+    await g.dir.admit(lead);
+    assert.equal(gs.drops.get(dropId)?.users.size, 1);
+    const anchor = gm.currentOf(lead.userId)!.pub;
+    // Everyone else sees the held seats as taken.
+    await assert.rejects(g.dir.admit(ticket(gs.matchId)), { message: "world_full" });
+    // The members take their held seats (no capacity refusal) and land next to the leader.
+    for (let i = 0; i < PARTY.MAX_SIZE - 1; i++) {
+      const t = gm2();
+      await g.dir.admit(t);
+      const rt = gm.currentOf(t.userId)!;
+      const d = Math.hypot(rt.pub.x - anchor.x, rt.pub.y - anchor.y);
+      assert.ok(d >= PARTY_SPAWN_MIN_PX && d <= PARTY_SPAWN_MAX_PX, `member ${i + 1} ${d.toFixed(0)} px from the leader`);
+      assert.equal(rt.partyId, partyId);
+      assert.equal(rt.dropId, dropId);
+    }
+    assert.equal(gm.humansOnMap(), WORLD.CAPACITY);
+    // A fifth ticket of the drop has no held seat left: the normal check.
+    await assert.rejects(g.dir.admit(gm2()), /world_full/);
+    g.dir.stop();
+
+    // A refused first member gives the drop back; a refused later member gives their seat back.
+    const r = harness(WC.startAt + 60_000, {
+      enterRaid: async (req) => (req.userId === refuse ? { ...accepted(), status: "rejected", reason: "entry_limit" } : accepted()),
+    });
+    await r.dir.start();
+    const rs = r.dir.shardOfCycle(K)!;
+    const rDrop = randomUUID();
+    const rt = (userId = randomUUID()): JoinTicket => ({ ...ticket(rs.matchId, userId), partyId, dropId: rDrop });
+    const first = rt();
+    refuse = first.userId;
+    await assert.rejects(r.dir.admit(first), /entry_limit/);
+    assert.equal(rs.drops.size, 0);
+    refuse = null;
+    await r.dir.admit(first);
+    const late = rt();
+    refuse = late.userId;
+    await assert.rejects(r.dir.admit(late), /entry_limit/);
+    assert.deepEqual([...rs.drops.get(rDrop)!.users], [first.userId]);
+
+    // Held seats expire with the drop window.
+    const e = harness(WC.startAt + 60_000);
+    await e.dir.start();
+    const es = e.dir.shardOfCycle(K)!;
+    const em = es.room.match as Match;
+    while (em.humansOnMap() < WORLD.CAPACITY - PARTY.MAX_SIZE) {
+      em.addHuman({ entryId: randomUUID(), userId: randomUUID(), nickname: "F", loadoutId: "", guest: false, level: 0, snapshot: null, pool: [], bossFill: [] });
+    }
+    await e.dir.admit({ ...ticket(es.matchId), partyId, dropId });
+    await assert.rejects(e.dir.admit(ticket(es.matchId)), /world_full/);
+    await e.time.advance(PARTY.DROP_TTL_MS + 1);
+    await e.dir.admit(ticket(es.matchId));
+    assert.equal(es.drops.size, 0);
+    e.dir.stop();
+    r.dir.stop();
+    h.dir.stop();
   }));

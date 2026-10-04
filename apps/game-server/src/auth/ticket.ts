@@ -48,6 +48,12 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
   const entryId = t.entryId === undefined ? "" : t.entryId;
   if (typeof matchId !== "string" || !OPT_UUID_RE.test(matchId)) return null;
   if (typeof entryId !== "string" || !OPT_UUID_RE.test(entryId)) return null;
+  // Party (party.ts): the drop this join follows and the caller's party, both signed after the
+  // WORLD v6 fields (joinTicketPayload signs the old string when neither is present).
+  const dropId = t.dropId === undefined ? "" : t.dropId;
+  const partyId = t.partyId === undefined ? "" : t.partyId;
+  if (typeof dropId !== "string" || !OPT_UUID_RE.test(dropId)) return null;
+  if (typeof partyId !== "string" || !OPT_UUID_RE.test(partyId)) return null;
   if (typeof userId !== "string" || userId.length < 1 || userId.length > MAX_USER_ID_LEN) return null;
   if (typeof nickname !== "string") return null;
   const nickLen = [...nickname].length;
@@ -59,7 +65,7 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
   if (now - issuedAt > JOIN_TICKET_TTL_MS) return null;
 
   const expected = createHmac("sha256", secret)
-    .update(joinTicketPayload({ userId, nickname, issuedAt, loadoutId, matchId, entryId }))
+    .update(joinTicketPayload({ userId, nickname, issuedAt, loadoutId, matchId, entryId, dropId, partyId }))
     .digest();
   const given = Buffer.from(sig, "hex");
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
@@ -67,17 +73,34 @@ export function verifyJoinTicket(raw: unknown, now = Date.now()): JoinTicket | n
   const out: JoinTicket = { userId, nickname, issuedAt, loadoutId, sig: sig.toLowerCase() };
   if (matchId) out.matchId = matchId.toLowerCase();
   if (entryId) out.entryId = entryId.toLowerCase();
+  // A drop is only ever followed as a party (contract: never a dropId without its partyId); a ticket
+  // that still has one alone verified, but drops solo.
+  if (partyId) {
+    out.partyId = partyId.toLowerCase();
+    if (dropId) out.dropId = dropId.toLowerCase();
+  }
   return out;
 }
 
 /** Test helper and the format the web API uses (apps/web/src/lib/join-ticket.ts). */
 export function signJoinTicket(
-  who: { userId: string; nickname: string; issuedAt: number; loadoutId?: string; matchId?: string; entryId?: string },
+  who: {
+    userId: string;
+    nickname: string;
+    issuedAt: number;
+    loadoutId?: string;
+    matchId?: string;
+    entryId?: string;
+    dropId?: string;
+    partyId?: string;
+  },
   secret: string,
 ): JoinTicket {
   const t: Omit<JoinTicket, "sig"> = { ...who, loadoutId: who.loadoutId ?? "" };
   if (!t.matchId) delete t.matchId;
   if (!t.entryId) delete t.entryId;
+  if (!t.dropId) delete t.dropId;
+  if (!t.partyId) delete t.partyId;
   const sig = createHmac("sha256", secret).update(joinTicketPayload(t)).digest("hex");
   return { ...t, sig };
 }

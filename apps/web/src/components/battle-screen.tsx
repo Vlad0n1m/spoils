@@ -175,6 +175,9 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
         cb.onOutcome(msg);
       });
       joined.onMessage(S2C.SETTLED, (msg: MatchSummaryMsg) => cb.onSettled(msg));
+      // Party mates' positions (S2C.PARTY, ~2 Hz) start before the renderer module has loaded; the
+      // renderer adds its own handler (game/party.ts). This one only keeps the console quiet.
+      joined.onMessage(S2C.PARTY, () => {});
       joined.onLeave((code, reason) => {
         if (!disposed) cb.onDisconnect(describeRoomExit(code, reason, { hadOutcome }));
       });

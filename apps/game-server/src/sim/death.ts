@@ -10,11 +10,13 @@
  *   on bosses and carriers always reach the corpse; NPC gear is FREE and vanishes.
  * Kill credit: `kills` (HUD, reports, XP_KILL) counts human victims only; a human's NPC kills go to
  * stats.bossKills (bosses) and stats.npcKills (guards, marauders). KillMsg carries both roles.
+ * Party mates (partyMates) never credit each other: no kill, no victims entry (ranked PvP XP), no
+ * killerUserId (full dog tag price). combat.ts already keeps them from damaging each other.
  * Nothing is scattered on the ground: the body is a searchable Corpse (state.corpses, AOI-filtered)
  * whose contents go through the searchers' loot entry k<id> (containers.ts).
  */
 
-import { BREAK_CHANCE_ON_DEATH, DOG_TAG, ITEM_FLAG, NPC, NPC_ROLE, SoundKind, type ItemLike, type WeaponId } from "@extract/shared";
+import { BREAK_CHANCE_ON_DEATH, DOG_TAG, ITEM_FLAG, NPC, NPC_ROLE, SoundKind, partyMates, type ItemLike, type WeaponId } from "@extract/shared";
 import { cancelHeal, cancelReload } from "./actions.js";
 import { carriedItems, clearSlots, syncPublic } from "./bag.js";
 import { closeSearch } from "./containers.js";
@@ -41,7 +43,7 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
 
   if (killer && killer !== rt) {
     rt.killedBy = killer.nickname;
-    if (!killer.isNpc) {
+    if (!killer.isNpc && !partyMates(killer.partyId, rt.partyId)) {
       // Kill credit (web XP): human victims → kills (XP_KILL); bosses → bossKills (XP_BOSS);
       // guards and marauders → npcKills (XP_NPC; guards also guardKills → XP_GUARD). NPCs earn nothing.
       if (p.role === NPC_ROLE.NONE) killer.self.kills = Math.min(255, killer.self.kills + 1);
