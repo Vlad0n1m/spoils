@@ -183,7 +183,13 @@ docker compose logs -f web game-server cron
   time: the game server records replays in format 2 (Weapons v2 weapon codes), which an older web refuses, and the new
   client needs the new server for grenades (`C2S.THROW`, sound kinds 14 and 15).
 - Game server env: `REPLAY_RECORD=0` turns the admin replay recording off (on by default whenever `WEB_API_BASE_URL` is
-  set).
+  set). The game server does not read `.env` in compose: it gets an explicit list of variables (`environment:` in
+  `docker-compose.yml`, interpolated from `.env`), so a new game-server variable must be added there. It is not on the
+  `db` network and never sees the wallet keys, `SESSION_SECRET`, `CRON_SECRET` or the database password.
+- Secrets (docs/SECURITY_AUDIT.md, Russian): `chmod 600 .env`; set `POSTGRES_PASSWORD` (unset → `postgres`, the
+  preflight warns); `SESSION_SECRET` of 32+ characters (`openssl rand -hex 32`; production refuses a shorter one);
+  `NEXT_PUBLIC_WALLET_DEV_TOPUP=0` (production refuses it unless `WALLET_DEV_TOPUP_PRODUCTION=1` on a devnet demo).
+  Behind a CDN, enable the `set_real_ip_from` block of the nginx sample, or every player shares one auth throttle bucket.
 - Routes added since World v6 (all JSON):
 
   | Route | Who |

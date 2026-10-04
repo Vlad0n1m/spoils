@@ -22,5 +22,7 @@ FROM base AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /out/ .
+# Not root (security audit): the game server parses untrusted traffic and writes nothing to disk.
+USER node
 EXPOSE 2567
 CMD ["node", "dist/index.js"]
