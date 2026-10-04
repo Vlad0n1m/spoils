@@ -379,7 +379,7 @@ function PassSection() {
       <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-12 lg:grid-cols-[1fr_1.1fr]">
         <div className="flex flex-col items-center lg:items-start">
           {/* eslint-disable-next-line @next/next/no-img-element -- static lobby art */}
-          <img src="/lobby/hero_alpha.png" alt="The Alpha Veteran skin" className="h-72 w-auto drop-shadow-[0_12px_0_rgba(0,0,0,0.4)] md:h-96" />
+          <img src="/lobby/hero_0.png" alt="A SPOILS raider" className="h-72 w-auto drop-shadow-[0_12px_0_rgba(0,0,0,0.4)] md:h-96" />
         </div>
         <div>
           <span className="inline-block rounded-full border-[3px] border-black bg-amber-300 px-3 py-1 text-sm font-bold tracking-wide text-black">
