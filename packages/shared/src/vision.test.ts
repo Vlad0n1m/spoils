@@ -42,7 +42,7 @@ test("a wall between viewer and target blocks; a door gap lets the target be see
 
 test("SIGHT mask: windows and sandbags are see-through, fences block", () => {
   const mk = (f: number) => envOf([{ x: 1500, y: 1000, w: 24, h: 2000, f }]);
-  assert.equal(canSee(mk(SOLID.MOVE), V(1200, 2000), T(1800, 2000)), true, "window");
+  assert.equal(canSee(mk(SOLID.WINDOW), V(1200, 2000), T(1800, 2000)), true, "window");
   assert.equal(canSee(mk(SOLID.MOVE | SOLID.SHOT), V(1200, 2000), T(1800, 2000)), true, "sandbags");
   assert.equal(canSee(mk(SOLID.MOVE | SOLID.SIGHT), V(1200, 2000), T(1800, 2000)), false, "fence");
 });

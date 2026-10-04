@@ -34,6 +34,7 @@ import {
   ContainerLoot,
   Corpse,
   ITEM_FLAG,
+  PLAYER,
   SEARCH,
   SOLID,
   SOUND,
@@ -47,6 +48,7 @@ import {
   hasLineOfSight,
   isSlotKey,
   itemDef,
+  leaveVault,
   lootRollToItem,
   mulberry32,
   parseNpcCarrierKey,
@@ -333,18 +335,21 @@ export class ContainerSystem {
    * state.corpses (AOI-filtered); the contents only through the searchers' loot entry k<id>.
    */
   addCorpse(rt: PlayerRuntime, items: ItemLike[]): SearchTarget {
+    // A body killed mid-vault lies on the nearer side of the window, never inside it: interaction
+    // line of sight (MOVE) cannot reach a point inside a window, so it would be unlootable.
     const p = rt.pub;
+    const at = leaveVault(this.m.idx, p.x, p.y, PLAYER.RADIUS, rt.self.rollDx, rt.self.rollDy);
     const c = new Corpse();
     c.id = String(rt.rosterIndex);
-    c.x = p.x;
-    c.y = p.y;
+    c.x = at.x;
+    c.y = at.y;
     c.label = rt.nickname;
     c.color = p.color;
     c.rot = p.aim;
     // WORLD v6 (A6): the body and what is left in it vanish CORPSE_EXPIRE_MS after the death.
     if (this.m.world) c.expiresAt = this.m.clock + WORLD.CORPSE_EXPIRE_MS;
     const t = this.createTarget({
-      key: corpseLootKey(c.id), kind: "corpse", idx: -1, corpse: c, owner: rt.rosterIndex, x: p.x, y: p.y,
+      key: corpseLootKey(c.id), kind: "corpse", idx: -1, corpse: c, owner: rt.rosterIndex, x: at.x, y: at.y,
       openMs: SEARCH.OPEN_MS.corpse, items, ownerUser: rt.isNpc ? null : rt.userId, npcCorpse: rt.isNpc,
     });
     this.corpseList.push(t);

@@ -7,9 +7,16 @@
 /**
  * Collision flags: one index, three masks (map memo §5). Every solid carries `f`:
  * movement (shared prediction) queries MOVE, bullets SHOT, fog-of-war rays and bot sight SIGHT.
- * Windows are MOVE only, sandbags/barrels MOVE|SHOT, wooden fences MOVE|SIGHT (wallbang), water MOVE.
+ * Windows are MOVE|VAULT (SOLID.WINDOW), sandbags/barrels MOVE|SHOT, wooden fences MOVE|SIGHT
+ * (wallbang), water MOVE.
+ *
+ * VAULT is not a query mask but an exemption: a MOVE solid that also carries VAULT is an opening a
+ * player's dodge roll passes through (a window). Walking, NPC nav and every other MOVE query still
+ * treat it as a wall; only stepMovement's roll ticks skip it (moveCircle `ignore` = VAULT) and
+ * leaveVault puts a roll that ended inside it back on one side. Bullets (no SHOT) and sight (no
+ * SIGHT) pass a window as open space; sound treats it as an opening in a wall (sound.ts).
  */
-export const SOLID = { MOVE: 1, SHOT: 2, SIGHT: 4, ALL: 7 } as const;
+export const SOLID = { MOVE: 1, SHOT: 2, SIGHT: 4, ALL: 7, VAULT: 8, WINDOW: 9 } as const;
 export type SolidMask = number;
 
 /** Axis-aligned rectangle, top-left origin. */
@@ -99,8 +106,8 @@ export function buildCollisionIndex(
 }
 
 /**
- * Visit every solid with (f & mask) !== 0 whose cells overlap the box [x0,x1]×[y0,y1].
- * Return true from a callback to stop.
+ * Visit every solid with (f & mask) !== 0 and (f & ignore) === 0 whose cells overlap the box
+ * [x0,x1]×[y0,y1]. Return true from a callback to stop.
  */
 export function forEachSolidNear(
   idx: CollisionIndex,
@@ -108,6 +115,7 @@ export function forEachSolidNear(
   mask: SolidMask,
   onRect: (r: Rect) => boolean | void,
   onCircle: (c: Circle) => boolean | void,
+  ignore: SolidMask = 0,
 ): void {
   idx.stamp = (idx.stamp + 1) >>> 0;
   if (idx.stamp === 0) {
@@ -126,13 +134,15 @@ export function forEachSolidNear(
       for (const i of idx.rectCells[k]!) {
         if (idx.rectStamp[i] === s) continue;
         idx.rectStamp[i] = s;
-        if ((idx.rectFlags[i]! & mask) === 0) continue;
+        const f = idx.rectFlags[i]!;
+        if ((f & mask) === 0 || (f & ignore) !== 0) continue;
         if (onRect(idx.rects[i]!)) return;
       }
       for (const i of idx.circleCells[k]!) {
         if (idx.circleStamp[i] === s) continue;
         idx.circleStamp[i] = s;
-        if ((idx.circleFlags[i]! & mask) === 0) continue;
+        const f = idx.circleFlags[i]!;
+        if ((f & mask) === 0 || (f & ignore) !== 0) continue;
         if (onCircle(idx.circles[i]!)) return;
       }
     }
@@ -174,12 +184,16 @@ function pushOutOfCircle(x: number, y: number, r: number, c: Circle): { x: numbe
   return { x: c.x + (dx / d) * min, y: c.y + (dy / d) * min };
 }
 
-/** Resolve overlaps of a circle with nearby MOVE solids (a few relaxation passes). */
+/**
+ * Resolve overlaps of a circle with nearby MOVE solids (a few relaxation passes). Solids carrying
+ * any `ignore` bit are skipped (the roll passes SOLID.VAULT: windows).
+ */
 export function resolveCircle(
   idx: CollisionIndex,
   x: number,
   y: number,
   r: number,
+  ignore: SolidMask = 0,
 ): { x: number; y: number } {
   let px = x;
   let py = y;
@@ -195,13 +209,17 @@ export function resolveCircle(
         const p = pushOutOfCircle(px, py, r, c);
         if (p) { px = p.x; py = p.y; moved = true; }
       },
+      ignore,
     );
     if (!moved) break;
   }
   return { x: px, y: py };
 }
 
-/** Move a circle by (dx, dy), sliding along MOVE solids. Sub-steps keep fast moves from tunneling. */
+/**
+ * Move a circle by (dx, dy), sliding along MOVE solids. Sub-steps keep fast moves from tunneling.
+ * `ignore` skips solids with those bits (SOLID.VAULT while rolling: the roll passes windows).
+ */
 export function moveCircle(
   idx: CollisionIndex,
   x: number,
@@ -209,17 +227,67 @@ export function moveCircle(
   r: number,
   dx: number,
   dy: number,
+  ignore: SolidMask = 0,
 ): { x: number; y: number } {
   const dist = Math.hypot(dx, dy);
   const steps = Math.max(1, Math.ceil(dist / (r * 0.5)));
   let px = x;
   let py = y;
   for (let i = 0; i < steps; i++) {
-    const p = resolveCircle(idx, px + dx / steps, py + dy / steps, r);
+    const p = resolveCircle(idx, px + dx / steps, py + dy / steps, r, ignore);
     px = p.x;
     py = p.y;
   }
   return { x: px, y: py };
+}
+
+/** Step of leaveVault's search along the roll axis (px). */
+export const VAULT_EXIT_STEP = 2;
+/** leaveVault gives up on a direction after this far (window 24 px + a 48 px body + slack). */
+export const VAULT_EXIT_MAX = 96;
+/**
+ * Overlap below this (px) is not "inside a window": a body slid flush against the wall face next
+ * to a window may sit 1e-13 px into it from float rounding, which must not trigger a vault exit.
+ */
+export const VAULT_SLACK = 1e-6;
+
+/**
+ * A body that overlaps a VAULT solid (a dodge roll that ended inside a window) leaves it along its
+ * roll axis (dx, dy) on the NEARER side: it is walked in VAULT_EXIT_STEP px steps forward and
+ * backward at once (sliding along every other MOVE solid like the roll did) and the first position
+ * that overlaps no VAULT solid wins; forward wins a tie, so a body centred in the opening finishes
+ * the vault. If neither side frees it within VAULT_EXIT_MAX px (or the axis is zero), the plain
+ * MOVE push-out (shortest axis) is the fallback. Not overlapping (beyond VAULT_SLACK): returned
+ * unchanged.
+ * Pure and deterministic: the server and the client prediction call it through stepMovement.
+ */
+export function leaveVault(
+  idx: CollisionIndex,
+  x: number,
+  y: number,
+  r: number,
+  dx: number,
+  dy: number,
+): { x: number; y: number } {
+  const rr = r - VAULT_SLACK;
+  if (circleIsFree(idx, x, y, rr, SOLID.VAULT)) return { x, y };
+  const len = Math.hypot(dx, dy);
+  if (len > 1e-9) {
+    const ux = (dx / len) * VAULT_EXIT_STEP;
+    const uy = (dy / len) * VAULT_EXIT_STEP;
+    let fx = x, fy = y, bx = x, by = y;
+    for (let s = VAULT_EXIT_STEP; s <= VAULT_EXIT_MAX; s += VAULT_EXIT_STEP) {
+      const f = resolveCircle(idx, fx + ux, fy + uy, r, SOLID.VAULT);
+      fx = f.x;
+      fy = f.y;
+      if (circleIsFree(idx, fx, fy, rr, SOLID.VAULT)) return { x: fx, y: fy };
+      const b = resolveCircle(idx, bx - ux, by - uy, r, SOLID.VAULT);
+      bx = b.x;
+      by = b.y;
+      if (circleIsFree(idx, bx, by, rr, SOLID.VAULT)) return { x: bx, y: by };
+    }
+  }
+  return resolveCircle(idx, x, y, r);
 }
 
 /** Is a circle at (x, y) free of solids (default: MOVE solids)? */

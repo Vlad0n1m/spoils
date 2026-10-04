@@ -20,11 +20,14 @@ import { REACH_PX } from "./spots.js";
 import { TERRAIN, TERRAIN_INDOOR, TERRAIN_KIND_MASK, type MapData, type MapSide } from "./types.js";
 
 /**
- * Golden layout hash for MAP_GEN_VERSION 2. If this fails you changed generated geometry: if that
+ * Golden layout hash for MAP_GEN_VERSION 3. If this fails you changed generated geometry: if that
  * was intended, bump MAP_GEN_VERSION (constants.ts — clients cache the minimap by it) and update
  * this value; if not, something made the generator non-deterministic.
+ * v3 (windows): same geometry as v2 ("d066dcca"); only the 122 windows' flags changed from MOVE to
+ * SOLID.WINDOW (MOVE|VAULT: the dodge roll vaults them), so a client without the vault rule is
+ * refused with map_mismatch instead of mispredicting rolls.
  */
-const GOLDEN_HASH = "d066dcca";
+const GOLDEN_HASH = "eba1a43b";
 
 const m = generateMap("steppe");
 
@@ -105,7 +108,7 @@ test("collision flags follow the memo table", () => {
   const expect: Record<string, number> = {
     border: SOLID.ALL, wall: SOLID.ALL, concrete_wall: SOLID.ALL, crate: SOLID.ALL, ship_container: SOLID.ALL,
     shelf: SOLID.ALL, wagon: SOLID.ALL, logpile: SOLID.ALL, watchtower: SOLID.ALL,
-    window: SOLID.MOVE, water: SOLID.MOVE,
+    window: SOLID.WINDOW, water: SOLID.MOVE,
     sandbags: SOLID.MOVE | SOLID.SHOT, car: SOLID.MOVE | SOLID.SHOT,
     fence: SOLID.MOVE | SOLID.SIGHT,
   };

@@ -8,8 +8,10 @@ import {
   countOccluders,
   forEachSolidNear,
   hasLineOfSight,
+  leaveVault,
   moveCircle,
   raycastSolids,
+  resolveCircle,
   raycastSolidsDDA,
   segmentCircleT,
   segmentRectT,
@@ -20,12 +22,12 @@ import {
 import { mulberry32 } from "./rng.js";
 
 /**
- * Hand-built dense map with every flag combination the generator uses (walls ALL, windows MOVE,
+ * Hand-built dense map with every flag combination the generator uses (walls ALL, windows MOVE|VAULT,
  * sandbags MOVE|SHOT, fences MOVE|SIGHT, water MOVE), so mask handling is exercised without
  * depending on the map generator.
  */
 const W = 8192;
-const FLAGS: SolidMask[] = [SOLID.ALL, SOLID.MOVE, SOLID.MOVE | SOLID.SHOT, SOLID.MOVE | SOLID.SIGHT, SOLID.SIGHT];
+const FLAGS: SolidMask[] = [SOLID.ALL, SOLID.MOVE, SOLID.WINDOW, SOLID.MOVE | SOLID.SHOT, SOLID.MOVE | SOLID.SIGHT, SOLID.SIGHT];
 function syntheticMap(seed: number) {
   const rng = mulberry32(seed);
   const rects: Array<Rect & { f: SolidMask }> = [];
@@ -105,10 +107,12 @@ test("DDA: axis-aligned rays, rays on cell borders, zero-length and reversed ray
 });
 
 test("masks: windows block movement only, sandbags block bullets, fences block sight", () => {
+  assert.equal(SOLID.WINDOW, SOLID.MOVE | SOLID.VAULT);
+  assert.equal(SOLID.ALL & SOLID.VAULT, 0, "VAULT is an exemption, not part of ALL");
   const m = buildCollisionIndex(
     {
       rects: [
-        { x: 100, y: 0, w: 10, h: 200, f: SOLID.MOVE }, // window
+        { x: 100, y: 0, w: 10, h: 200, f: SOLID.WINDOW }, // window
         { x: 300, y: 0, w: 10, h: 200, f: SOLID.MOVE | SOLID.SIGHT }, // wooden fence
         { x: 500, y: 0, w: 10, h: 200, f: SOLID.MOVE | SOLID.SHOT }, // sandbags
       ],
@@ -173,4 +177,68 @@ test("countOccluders counts rect walls crossed, capped at max", () => {
   assert.equal(countOccluders(walls, 0, 200, 900, 200), 3, "capped at the default max 3");
   assert.equal(countOccluders(walls, 0, 200, 900, 200, 10), 4);
   assert.equal(countOccluders(walls, 0, 500, 900, 500), 0, "passing below the walls");
+});
+
+test("ignore mask: VAULT solids are skipped only when asked (the roll), every MOVE query still sees them", () => {
+  const m = buildCollisionIndex(
+    {
+      rects: [
+        { x: 500, y: 0, w: 24, h: 1000, f: SOLID.WINDOW },
+        { x: 800, y: 0, w: 24, h: 1000, f: SOLID.MOVE }, // water: MOVE without VAULT
+      ],
+      circles: [{ x: 300, y: 500, r: 20, f: SOLID.MOVE | SOLID.VAULT }],
+    },
+    1000, 1000,
+  );
+  const seen = (ignore: number) => {
+    let n = 0;
+    forEachSolidNear(m, 0, 0, 999, 999, SOLID.MOVE, () => { n++; }, () => { n++; }, ignore);
+    return n;
+  };
+  assert.equal(seen(0), 3);
+  assert.equal(seen(SOLID.VAULT), 1, "only the water is left");
+  assert.ok(Math.abs(moveCircle(m, 400, 300, PLAYER.RADIUS, 300, 0).x - (500 - PLAYER.RADIUS)) < 1e-6, "walking stops");
+  const vaulted = moveCircle(m, 400, 300, PLAYER.RADIUS, 300, 0, SOLID.VAULT);
+  assert.ok(Math.abs(vaulted.x - 700) < 1e-9, "the roll passes the window");
+  assert.ok(Math.abs(moveCircle(m, 700, 300, PLAYER.RADIUS, 200, 0, SOLID.VAULT).x - (800 - PLAYER.RADIUS)) < 1e-6, "but not water");
+  assert.deepEqual(resolveCircle(m, 505, 300, PLAYER.RADIUS, SOLID.VAULT), { x: 505, y: 300 });
+  assert.equal(circleIsFree(m, 512, 300, PLAYER.RADIUS), false, "MOVE queries still see the window");
+  assert.equal(hasLineOfSight(m, 400, 300, 700, 300, SOLID.MOVE), false, "and interaction line of sight stops at it");
+});
+
+test("leaveVault: unchanged outside; inside it exits along the axis on the nearer side, forward on a tie", () => {
+  const W = { x: 500, y: 400, w: 24, h: 200 };
+  const r = PLAYER.RADIUS;
+  const m = buildCollisionIndex(
+    {
+      rects: [{ x: 500, y: 0, w: 24, h: 400, f: SOLID.ALL }, { ...W, f: SOLID.WINDOW }, { x: 500, y: 600, w: 24, h: 400, f: SOLID.ALL }],
+      circles: [],
+    },
+    1000, 1000,
+  );
+  const lo = W.x - r, hi = W.x + W.w + r; // 476 .. 548, middle 512
+  assert.deepEqual(leaveVault(m, 300, 500, r, 1, 0), { x: 300, y: 500 });
+  assert.deepEqual(leaveVault(m, lo, 500, r, 1, 0), { x: lo, y: 500 }, "flush against the face is not inside");
+  assert.deepEqual(leaveVault(m, 512, 500, r, 1, 0), { x: hi, y: 500 }, "tie → forward");
+  assert.deepEqual(leaveVault(m, 512, 500, r, -1, 0), { x: lo, y: 500 }, "tie → forward (−x)");
+  assert.deepEqual(leaveVault(m, 490, 500, r, 1, 0), { x: lo, y: 500 }, "nearer side is back");
+  assert.deepEqual(leaveVault(m, 540, 500, r, 1, 0), { x: hi, y: 500 }, "nearer side is ahead");
+  // Odd offsets land within one VAULT_EXIT_STEP past the face.
+  const odd = leaveVault(m, 541, 500, r, 1, 0);
+  assert.ok(odd.x >= hi && odd.x < hi + 2 && odd.y === 500, JSON.stringify(odd));
+  // Forward blocked by a crate right behind the window: it backs out instead.
+  const crate = buildCollisionIndex(
+    {
+      rects: [
+        { x: 500, y: 0, w: 24, h: 400, f: SOLID.ALL }, { ...W, f: SOLID.WINDOW }, { x: 500, y: 600, w: 24, h: 400, f: SOLID.ALL },
+        { x: 560, y: 300, w: 60, h: 400, f: SOLID.ALL },
+      ],
+      circles: [],
+    },
+    1000, 1000,
+  );
+  const back = leaveVault(crate, 520, 500, r, 1, 0);
+  assert.ok(back.x <= lo && back.x > lo - 2 && back.y === 500, JSON.stringify(back));
+  // No axis (a drop or a body that was not rolling): the plain push-out.
+  assert.deepEqual(leaveVault(m, 505, 500, r, 0, 0), resolveCircle(m, 505, 500, r));
 });

@@ -141,9 +141,10 @@ export const WALL_KINDS: readonly PropKind[] = ["border", "wall", "window", "con
 const wallCache = new WeakMap<MapData, CollisionIndex>();
 
 /**
- * Walls-only index for sound occlusion (countOccluders), so crates, cars and trees never muffle.
- * Windows are in it but carry no SIGHT flag: query with SOLID.MOVE to count every wall and window,
- * or SOLID.SIGHT to let windows pass sound. Built once per MapData, like getCollisionIndex.
+ * Walls-only index for sound occlusion (soundOcclusion / countOccluders), so crates, cars and trees
+ * never muffle. Windows are in it but carry no SIGHT flag: SOLID.MOVE counts every wall and window,
+ * SOLID.SIGHT solid walls only; soundOcclusion uses both to tell a window from a wall. Built once
+ * per MapData, like getCollisionIndex.
  */
 export function getWallIndex(m: MapData): CollisionIndex {
   let idx = wallCache.get(m);

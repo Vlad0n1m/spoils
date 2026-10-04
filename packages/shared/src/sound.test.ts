@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { SOLID, buildCollisionIndex } from "./geometry.js";
 import { WEAPONS, WEAPON_IDS } from "./items.js";
 import {
+  OCCLUSION,
   SOUND,
   SOUND_KIND_COUNT,
   SOUND_PRIORITY,
@@ -12,11 +14,13 @@ import {
   decodeSoundMsg,
   effectiveSoundRadius,
   isBehind,
+  occlusionMult,
   pushHiddenSound,
   pushVisibleSound,
   quantizeSound,
   sectorAngle,
   soundMsgEmpty,
+  soundOcclusion,
   weaponVariant,
   type SoundMsg,
 } from "./sound.js";
@@ -136,4 +140,38 @@ test("encode/decode roundtrip and malformed input", () => {
   assert.deepEqual(decodeSoundMsg({ h: [0, 1, 0, "x" as unknown as number] }), [
     { kind: SoundKind.step, hidden: true, a: 1, b: 0, occluded: false, variant: 0 },
   ]);
+});
+
+test("windows: an opening in the wall — WINDOW_MULT× the distance, no muffle flag; a wall still muffles", () => {
+  assert.equal(occlusionMult(OCCLUSION.OPEN), 1);
+  assert.equal(occlusionMult(OCCLUSION.WINDOW), SOUND.WINDOW_MULT);
+  assert.equal(occlusionMult(OCCLUSION.WALL), SOUND.OCCLUSION_MULT);
+  assert.ok(SOUND.WINDOW_MULT > 1 && SOUND.WINDOW_MULT < SOUND.OCCLUSION_MULT);
+  // Walls-only index: a wall x 1000..1024 with a window at y 900..1100.
+  const walls = buildCollisionIndex(
+    {
+      rects: [
+        { x: 1000, y: 0, w: 24, h: 900, f: SOLID.ALL },
+        { x: 1000, y: 900, w: 24, h: 200, f: SOLID.WINDOW },
+        { x: 1000, y: 1100, w: 24, h: 900, f: SOLID.ALL },
+      ],
+      circles: [],
+    },
+    2000, 2000,
+  );
+  assert.equal(soundOcclusion(walls, 800, 1000, 900, 1000), OCCLUSION.OPEN);
+  assert.equal(soundOcclusion(walls, 800, 1000, 1300, 1000), OCCLUSION.WINDOW);
+  assert.equal(soundOcclusion(walls, 800, 500, 1300, 500), OCCLUSION.WALL);
+  // An oblique path that meets the wall beside the window is muffled.
+  assert.equal(soundOcclusion(walls, 800, 1000, 1300, 1600), OCCLUSION.WALL);
+  // 600 px footstep (800): open 0.75 and window 750 → far band, unflagged; wall 960 → inaudible.
+  assert.deepEqual(quantizeSound(0, 0, 600, 0, 800, false), { a: 0, b: 2, occluded: false });
+  assert.deepEqual(quantizeSound(0, 0, 600, 0, 800, false, occlusionMult(OCCLUSION.WINDOW)), { a: 0, b: 2, occluded: false });
+  assert.equal(quantizeSound(0, 0, 700, 0, 800, false, occlusionMult(OCCLUSION.WINDOW)), null, "875 > 800");
+  assert.equal(quantizeSound(0, 0, 600, 0, 800, true, occlusionMult(OCCLUSION.WALL)), null);
+  // 220 px: open near band (0.275), window 275 → mid band (0.34).
+  assert.equal(quantizeSound(0, 0, 220, 0, 800, false)!.b, 0);
+  assert.equal(quantizeSound(0, 0, 220, 0, 800, false, SOUND.WINDOW_MULT)!.b, 1);
+  // The default distMult keeps the old boolean contract.
+  assert.deepEqual(quantizeSound(0, 0, 400, 0, 800, true), quantizeSound(0, 0, 400, 0, 800, true, SOUND.OCCLUSION_MULT));
 });

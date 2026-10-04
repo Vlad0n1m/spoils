@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { INPUT_DT_MS, PLAYER, ROLL } from "./constants.js";
-import { SOLID, buildCollisionIndex } from "./geometry.js";
+import { SOLID, buildCollisionIndex, circleIsFree } from "./geometry.js";
+import { mulberry32 } from "./rng.js";
 import {
   ROLL_IDLE,
   ROLL_PROFILE,
@@ -175,4 +176,121 @@ test("sanitizeInput: roll/walk only when strictly true, clamps, rejects garbage"
   assert.equal(sanitizeInput({ seq: 1, mx: 0, my: 0, aim: Infinity }), null);
   assert.equal(sanitizeInput("input"), null);
   assert.equal(sanitizeInput(null), null);
+});
+
+// --- windows: walking never passes, the roll vaults, a roll ending inside leaves on the nearer side
+
+/**
+ * A building wall at x 600..624 with a 112 px window at y 944..1056 (walls above and below). A body
+ * at y 1000 clears both wall ends by 32 px, so only the window decides. The window band of body
+ * centres is x ∈ (576, 648): face − radius .. face + thickness + radius.
+ */
+const WIN = { x: 600, y: 944, w: 24, h: 112 };
+const winIdx = buildCollisionIndex(
+  {
+    rects: [
+      { x: 600, y: 0, w: 24, h: 944, f: SOLID.ALL },
+      { ...WIN, f: SOLID.WINDOW },
+      { x: 600, y: 1056, w: 24, h: 944, f: SOLID.ALL },
+    ],
+    circles: [],
+  },
+  2000, 2000,
+);
+const BAND_LO = WIN.x - PLAYER.RADIUS;
+const BAND_HI = WIN.x + WIN.w + PLAYER.RADIUS;
+/** Float slack: a body flush against a face is not inside (VAULT_SLACK in geometry.ts). */
+const EPS = 1e-6;
+const inWindow = (x: number, y: number) => !circleIsFree(winIdx, x, y, PLAYER.RADIUS - EPS, SOLID.VAULT);
+const clear = (x: number, y: number) => circleIsFree(winIdx, x, y, PLAYER.RADIUS - EPS, SOLID.MOVE);
+
+/** Run `n` inputs from (x, y); returns the end state and whether any input ended inside the window. */
+function drive(x: number, y: number, n: number, input: (i: number) => ReturnType<typeof I>, vault = true) {
+  let roll: RollState = { ...ROLL_IDLE };
+  let crossed = false;
+  for (let i = 0; i < n; i++) {
+    const r = stepMovement(winIdx, x, y, roll, input(i), 1, 1, vault);
+    ({ x, y, roll } = r);
+    if (inWindow(x, y)) crossed = true;
+  }
+  return { x, y, roll, crossed };
+}
+
+test("window: walking into it is blocked from both sides, like a wall", () => {
+  const out = drive(500, 1000, 90, () => I({ mx: 1 }));
+  assert.ok(near(out.x, BAND_LO, 1e-6), `outside face, x=${out.x}`);
+  assert.equal(out.crossed, false);
+  const back = drive(760, 1000, 90, () => I({ mx: -1 }));
+  assert.ok(near(back.x, BAND_HI, 1e-6), `inside face, x=${back.x}`);
+  // Diagonal pressing slides along the face but never enters the opening.
+  const diag = drive(560, 900, 120, () => I({ mx: 1, my: 0.4 }));
+  assert.ok(diag.x <= BAND_LO + EPS && !diag.crossed, `x=${diag.x}`);
+});
+
+test("window: a dodge roll vaults through and lands clear on the far side", () => {
+  const out = drive(560, 1000, ROLL.TICKS, (i) => I({ mx: 1, roll: i === 0 }));
+  assert.ok(out.crossed, "the swept path crossed the window");
+  assert.ok(near(out.x, 560 + ROLL.DISTANCE, 1e-6) && out.y === 1000, `x=${out.x}`);
+  assert.ok(clear(out.x, out.y));
+  assert.equal(out.roll.left, 0);
+  // And back out the other way once the cooldown is over.
+  let roll = out.roll, x = out.x, y = out.y;
+  for (let i = 0; i < ROLL.COOLDOWN_TICKS; i++) ({ x, y, roll } = stepMovement(winIdx, x, y, roll, I()));
+  for (let i = 0; i < ROLL.TICKS; i++) ({ x, y, roll } = stepMovement(winIdx, x, y, roll, I({ mx: -1, roll: i === 0 })));
+  assert.ok(near(x, 560, 1e-6), `rolled back to x=${x}`);
+});
+
+test("window: a roll that ends inside the opening leaves it on the nearer side along the roll axis", () => {
+  // End centre c = start + DISTANCE; the band is (576, 648), its middle 612.
+  for (const c of [580, 590, 600, 611, 613, 630, 646]) {
+    const out = drive(c - ROLL.DISTANCE, 1000, ROLL.TICKS, (i) => I({ mx: 1, roll: i === 0 }));
+    assert.ok(!inWindow(out.x, out.y), `c=${c}: still in the window at x=${out.x}`);
+    assert.equal(out.y, 1000, `c=${c}: left along the roll axis`);
+    const forward = BAND_HI - c <= c - BAND_LO;
+    if (forward) assert.ok(out.x >= BAND_HI - EPS && out.x <= BAND_HI + 2, `c=${c}: finished the vault, x=${out.x}`);
+    else assert.ok(out.x <= BAND_LO + EPS && out.x >= BAND_LO - 2, `c=${c}: backed out, x=${out.x}`);
+    assert.ok(clear(out.x, out.y), `c=${c}: clear of every solid`);
+  }
+  // The same from the inside, rolling out (−x): "forward" is now toward the outside.
+  const out = drive(630 + ROLL.DISTANCE, 1000, ROLL.TICKS, (i) => I({ mx: -1, roll: i === 0 }));
+  assert.ok(out.x >= BAND_HI - EPS && out.x <= BAND_HI + 2, `nearer side is back inside, x=${out.x}`);
+  // A diagonal roll that stops in the opening leaves along its own axis too (no sideways pop).
+  const d = drive(612 - 140, 1000 - 140, ROLL.TICKS, (i) => I({ mx: 1, my: 1, roll: i === 0 }));
+  assert.ok(!inWindow(d.x, d.y) && clear(d.x, d.y), `diag ${d.x},${d.y}`);
+});
+
+test("window: vault=false (NPCs) rolls into it like a wall; the wall beside the window stops every roll", () => {
+  const npc = drive(560, 1000, ROLL.TICKS, (i) => I({ mx: 1, roll: i === 0 }), false);
+  assert.ok(near(npc.x, BAND_LO, 1e-6) && !npc.crossed, `npc x=${npc.x}`);
+  const wall = drive(560, 700, ROLL.TICKS, (i) => I({ mx: 1, roll: i === 0 }));
+  assert.ok(wall.x <= BAND_LO + EPS && !wall.crossed, `wall x=${wall.x}`);
+  // Only the window's own span passes: a roll whose body overlaps the wall end slides off it.
+  const edge = drive(560, 944 + 10, ROLL.TICKS, (i) => I({ mx: 1, roll: i === 0 }));
+  assert.ok(clear(edge.x, edge.y), `edge ${edge.x},${edge.y}`);
+});
+
+test("window: replay determinism around a window, every input ends outside it", () => {
+  const rng = mulberry32(77);
+  const inputs = Array.from({ length: 1500 }, (_, i) => {
+    const toward = i % 300 < 150 ? 1 : -1;
+    return I({ mx: toward * (0.6 + rng() * 0.4), my: (rng() - 0.5) * 0.6, aim: rng() * 6, roll: rng() < 0.08, walk: rng() < 0.1 });
+  });
+  const run = (from: number, s0: RollState, x0: number, y0: number) => {
+    let s = s0, x = x0, y = y0;
+    const out: Array<[number, number, RollState]> = [];
+    for (let i = from; i < inputs.length; i++) {
+      const r = stepMovement(winIdx, x, y, s, inputs[i]!);
+      ({ x, y, roll: s } = r);
+      if (s.left === 0) assert.ok(!inWindow(x, y), `input ${i} ended in the window at ${x},${y}`);
+      out.push([x, y, s]);
+    }
+    return out;
+  };
+  const full = run(0, { ...ROLL_IDLE }, 450, 1000);
+  const sides = new Set(full.map(([x]) => (x < WIN.x ? "out" : "in")));
+  assert.deepEqual([...sides].sort(), ["in", "out"], "the stream vaulted the window");
+  for (const k of [1, 333, 777, 1201]) {
+    const [xk, yk, sk] = full[k - 1]!;
+    assert.deepEqual(run(k, sk, xk, yk), full.slice(k), `suffix from ${k}`);
+  }
 });

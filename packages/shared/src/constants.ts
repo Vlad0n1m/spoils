@@ -172,8 +172,11 @@ export const LEGACY_WORLD = {
   BORDER: 40,
 } as const;
 
-/** Bump on any intentional change to generated geometry (invalidates client caches + golden hash). */
-export const MAP_GEN_VERSION = 2;
+/**
+ * Bump on any intentional change to generated geometry or collision flags (invalidates client
+ * caches + golden hash). 3: windows became SOLID.WINDOW (the dodge roll vaults them), same layout.
+ */
+export const MAP_GEN_VERSION = 3;
 
 export const PLAYER = {
   RADIUS: 24,

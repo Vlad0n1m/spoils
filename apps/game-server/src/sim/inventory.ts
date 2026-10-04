@@ -17,6 +17,7 @@ import {
   circleIsFree,
   hasLineOfSight,
   itemDef,
+  leaveVault,
   type ItemLike,
 } from "@extract/shared";
 import { placeItem, syncPublic } from "./bag.js";
@@ -160,9 +161,12 @@ export function spawnGroundItem(m: Match, item: ItemLike, x: number, y: number, 
 /**
  * Position for the n-th item scattered around (x, y): a golden-angle spiral, skipping spots inside
  * solids so loot never ends up unreachable inside a crate or wall, and spots behind a wall so loot
- * from a container or body indoors never lands outside the building (or vice versa).
+ * from a container or body indoors never lands outside the building (or vice versa). A drop from a
+ * player mid-vault (inside a window) starts from the window's nearer face instead: no line of sight
+ * leaves a window rect, so every spot would fail.
  */
-export function dropSpot(m: Match, x: number, y: number, n: number): { x: number; y: number } {
+export function dropSpot(m: Match, x0: number, y0: number, n: number): { x: number; y: number } {
+  const { x, y } = leaveVault(m.idx, x0, y0, PLAYER.RADIUS, 0, 0);
   const B = WORLD.BORDER + 16;
   for (let attempt = 0; attempt < 16; attempt++) {
     const k = n + attempt * 3;
