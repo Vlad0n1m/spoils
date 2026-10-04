@@ -1,0 +1,593 @@
+{
+  "address": "8Jc6sbbLY7PoJ2wms33k9MzYmMBdidH96vX4nLFbqf9B",
+  "metadata": {
+    "name": "spoils_events",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "SPOILS game results on Solana: match settlements, boss kills and rare extracts, written by the game server only"
+  },
+  "instructions": [
+    {
+      "name": "initialize",
+      "docs": [
+        "One-time setup. Only the program's upgrade authority may create the Config, so nobody can",
+        "claim it between the deploy and this call."
+      ],
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "program",
+          "address": "8Jc6sbbLY7PoJ2wms33k9MzYmMBdidH96vX4nLFbqf9B"
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "authority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "record_boss_kill",
+      "docs": [
+        "The event boss of a shard died. `boss_kind` is the index in packages/shared BOSS_KINDS."
+      ],
+      "discriminator": [
+        40,
+        68,
+        167,
+        187,
+        140,
+        8,
+        194,
+        144
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "cycle_id",
+          "type": "u64"
+        },
+        {
+          "name": "boss_kind",
+          "type": "u8"
+        },
+        {
+          "name": "killer_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "record_match",
+      "docs": [
+        "A world shard ended and the web settled it."
+      ],
+      "discriminator": [
+        148,
+        41,
+        163,
+        203,
+        58,
+        251,
+        192,
+        228
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "cycle_id",
+          "type": "u64"
+        },
+        {
+          "name": "shard",
+          "type": "u8"
+        },
+        {
+          "name": "match_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "humans",
+          "type": "u16"
+        },
+        {
+          "name": "mia",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "record_rare_extract",
+      "docs": [
+        "A player brought a rare item out of the map."
+      ],
+      "discriminator": [
+        238,
+        101,
+        140,
+        153,
+        75,
+        207,
+        223,
+        207
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "cycle_id",
+          "type": "u64"
+        },
+        {
+          "name": "item_def_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "rarity",
+          "type": "u8"
+        },
+        {
+          "name": "owner_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_authority",
+      "docs": [
+        "Rotates the record signer. Signed by the current authority, or by the upgrade authority",
+        "(recovery when the server key is lost or leaked)."
+      ],
+      "discriminator": [
+        133,
+        250,
+        37,
+        21,
+        110,
+        163,
+        26,
+        121
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "program",
+          "address": "8Jc6sbbLY7PoJ2wms33k9MzYmMBdidH96vX4nLFbqf9B"
+        },
+        {
+          "name": "program_data"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_authority",
+          "type": "pubkey"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Config",
+      "discriminator": [
+        155,
+        12,
+        170,
+        224,
+        30,
+        250,
+        204,
+        130
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AuthoritySet",
+      "discriminator": [
+        122,
+        178,
+        145,
+        44,
+        172,
+        30,
+        25,
+        16
+      ]
+    },
+    {
+      "name": "BossKillRecorded",
+      "discriminator": [
+        115,
+        202,
+        43,
+        122,
+        210,
+        180,
+        161,
+        165
+      ]
+    },
+    {
+      "name": "MatchRecorded",
+      "discriminator": [
+        24,
+        16,
+        103,
+        141,
+        92,
+        206,
+        126,
+        192
+      ]
+    },
+    {
+      "name": "RareExtractRecorded",
+      "discriminator": [
+        109,
+        101,
+        95,
+        166,
+        3,
+        141,
+        53,
+        180
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Signer is not allowed to do this"
+    },
+    {
+      "code": 6001,
+      "name": "BadProgramData",
+      "msg": "Program data account does not belong to this program"
+    },
+    {
+      "code": 6002,
+      "name": "MiaExceedsHumans",
+      "msg": "More MIA players than humans"
+    },
+    {
+      "code": 6003,
+      "name": "BadRarity",
+      "msg": "Rarity out of range"
+    },
+    {
+      "code": 6004,
+      "name": "CounterOverflow",
+      "msg": "Counter overflow"
+    }
+  ],
+  "types": [
+    {
+      "name": "AuthoritySet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old",
+            "type": "pubkey"
+          },
+          {
+            "name": "new",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BossKillRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "cycle_id",
+            "type": "u64"
+          },
+          {
+            "name": "boss_kind",
+            "type": "u8"
+          },
+          {
+            "name": "killer_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "docs": [
+              "The only key allowed to record (the web server's CHAIN_AUTHORITY_SECRET)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "matches",
+            "type": "u64"
+          },
+          {
+            "name": "boss_kills",
+            "type": "u64"
+          },
+          {
+            "name": "rare_extracts",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MatchRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "cycle_id",
+            "type": "u64"
+          },
+          {
+            "name": "shard",
+            "type": "u8"
+          },
+          {
+            "name": "match_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "humans",
+            "type": "u16"
+          },
+          {
+            "name": "mia",
+            "type": "u16"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RareExtractRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "cycle_id",
+            "type": "u64"
+          },
+          {
+            "name": "item_def_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "rarity",
+            "type": "u8"
+          },
+          {
+            "name": "owner_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    }
+  ]
+}

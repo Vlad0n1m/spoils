@@ -12,3 +12,9 @@ dist
 drizzle/meta
 node_modules
 *.tsbuildinfo
+# Solana program workspace (programs/): build output, local ledgers and keypairs never go to git
+programs/target/
+programs/.keys/
+programs/.anchor/
+programs/test-ledger/
+programs/**/*-keypair.json
