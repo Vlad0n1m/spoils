@@ -15,17 +15,20 @@ import { lockLoadout } from "../inventory/loadout";
 import { applyEnd, applyExit } from "../inventory/raids";
 import { closeTestDb, lockTestDb, makeItem, makeUser, openTestDb, resetDb } from "../inventory/test-db";
 import { enterRaid, openShard, recordWorldEvent } from "../inventory/world";
-import { matchEvent, matchHashHex, toRecordArgs, type ChainEvent } from "./events";
+import { NO_KILLER, matchEvent, matchHashHex, toRecordArgs, type ChainEvent } from "./events";
 import type { RecordArgs } from "./program";
 import {
   BACKOFF_BASE_MS,
   BACKOFF_MAX_MS,
+  BLOCKED_RETRY_MS,
   MAX_REJECTED_ATTEMPTS,
   backoffMs,
   claimDue,
   enqueueChainEvents,
   enqueueRareExtracts,
   getChainSummary,
+  parkQueued,
+  requeueFailed,
 } from "./queue";
 import { runChainEventsCron } from "./run";
 import { runChainWorker, type ChainSender, type SendOutcome, type SigStatus } from "./worker";
@@ -193,26 +196,45 @@ describe("enqueue hooks in the settlement flows", () => {
     assert.equal((await rows()).length, 1);
   });
 
-  test("world/event queues the boss kill once; the killer is a user id or a guest nickname", async () => {
+  test("world/event queues the boss kill once; the killer is a registered entry of that shard, a guest or nobody", async () => {
     const u = await makeUser(db, "bosshunter");
+    const u2 = await makeUser(db, "hunter2");
     const a = shardReq({ boss: { kind: "warden", zone: "z1" } });
     const b = shardReq({ boss: { kind: "foreman", zone: "z2" } });
+    const c = shardReq({ boss: { kind: "warden", zone: "z1" } });
+    const d = shardReq({ boss: { kind: "foreman", zone: "z2" } });
+    const e = shardReq({ boss: { kind: "warden", zone: "z1" } });
     const demo = shardReq({ mode: "demo", boss: { kind: "warden", zone: "z1" } });
-    for (const s of [a, b, demo]) await openShard(db, s);
-    const ev = (matchId: string, boss: "warden" | "foreman", by: string) =>
-      recordWorldEvent(db, { matchId, cycleId: CYCLE, kind: "boss_killed", boss, by, atMs: 900_000 });
-    assert.equal((await ev(a.matchId, "warden", "bosshunter")).status, "applied");
-    assert.equal((await ev(a.matchId, "warden", "bosshunter")).status, "duplicate");
-    await ev(b.matchId, "foreman", "Guest 42");
-    await ev(demo.matchId, "warden", "bosshunter");
+    for (const s of [a, b, c, d, e, demo]) await openShard(db, s);
+    assert.equal((await enterRaid(db, entryReq(a.matchId, u))).status, "accepted");
+    assert.equal((await enterRaid(db, entryReq(b.matchId, randomUUID()))).status, "accepted", "a guest");
+    assert.equal((await enterRaid(db, entryReq(c.matchId, u2))).status, "accepted");
+    const ev = (matchId: string, boss: "warden" | "foreman", by: string, byUserId?: string) =>
+      recordWorldEvent(db, { matchId, cycleId: CYCLE, kind: "boss_killed", boss, by, ...(byUserId ? { byUserId } : {}), atMs: 900_000 });
+    assert.equal((await ev(a.matchId, "warden", "bosshunter", u)).status, "applied");
+    assert.equal((await ev(a.matchId, "warden", "bosshunter", u)).status, "duplicate");
+    // a guest who picked a registered player's nickname stays a guest
+    await ev(b.matchId, "foreman", "bosshunter");
+    // an older game server without byUserId: the shard's own registered entry with that nickname
+    await ev(c.matchId, "warden", "hunter2");
+    // killed by no raider
+    await ev(d.matchId, "foreman", "");
+    // a byUserId with no registered entry in this shard is not trusted
+    await ev(e.matchId, "warden", "bosshunter", u);
+    await ev(demo.matchId, "warden", "bosshunter", u);
     const got = await rows();
     assert.deepEqual(
       got.map((x) => x.payload),
       [
         { matchId: a.matchId, cycleId: CYCLE, boss: "warden", killer: `user:${u}` },
-        { matchId: b.matchId, cycleId: CYCLE, boss: "foreman", killer: "guest:Guest 42" },
+        { matchId: b.matchId, cycleId: CYCLE, boss: "foreman", killer: "guest:bosshunter" },
+        { matchId: c.matchId, cycleId: CYCLE, boss: "warden", killer: `user:${u2}` },
+        { matchId: d.matchId, cycleId: CYCLE, boss: "foreman", killer: NO_KILLER },
+        { matchId: e.matchId, cycleId: CYCLE, boss: "warden", killer: "guest:bosshunter" },
       ],
     );
+    const none = toRecordArgs("boss_kill", got[3]!.payload, SALT);
+    assert.ok(none.kind === "boss_kill" && Buffer.from(none.killerHash).equals(Buffer.alloc(32)), "no killer: zero hash");
   });
 
   test("a failing enqueue rolls back to its savepoint: the game transaction still commits", async () => {
@@ -307,7 +329,7 @@ describe("chain worker", () => {
     assert.equal(await enqueueChainEvents(db, [matchEv(), matchEv()], T0), 1, "dedupe key");
     const s = new StubSender();
     const r = await run(s, T0);
-    assert.deepEqual(r, { claimed: 1, sent: 1, retried: 0, failed: 0, released: 0, signatures: ["sig1"] });
+    assert.deepEqual(r, { claimed: 1, sent: 1, retried: 0, failed: 0, released: 0, signatures: ["sig1"], stopped: null });
     const row = await one();
     assert.deepEqual([row.status, row.txSig, row.attempts, row.error], ["sent", "sig1", 1, null]);
     assert.equal(row.sentAt?.getTime(), T0.getTime());
@@ -325,6 +347,7 @@ describe("chain worker", () => {
       const r = await run(s, now);
       const row = await one();
       assert.equal(row.attempts, attempt);
+      assert.equal(row.rejections, attempt);
       assert.equal(row.txSig, null, "a rejected transaction never landed: no signature kept");
       assert.equal(row.error, "custom program error: 0x1770");
       if (attempt < MAX_REJECTED_ATTEMPTS) {
@@ -338,6 +361,70 @@ describe("chain worker", () => {
       }
     }
     assert.equal((await run(s, at(86_400_000))).claimed, 0);
+  });
+
+  test("only rejections count toward failing a row: transport errors and pending re-checks never do", async () => {
+    await enqueueChainEvents(db, [matchEv()], T0);
+    const s = new StubSender();
+    let now = T0;
+    // four passes that cost an attempt each without a rejection: unknown, pending, expired + unknown, dead RPC
+    s.sends.push({ status: "unknown", error: "Node is behind by 150 slots" });
+    await run(s, now);
+    now = (await one()).nextAt;
+    s.statuses.push({ status: "pending" });
+    await run(s, now);
+    now = (await one()).nextAt;
+    s.statuses.push({ status: "expired" });
+    s.sends.push({ status: "unknown", error: "timeout" });
+    await run(s, now);
+    now = (await one()).nextAt;
+    s.statuses.push({ status: "expired" });
+    s.prepareError = new Error("fetch failed");
+    await run(s, now);
+    s.prepareError = null;
+    let row = await one();
+    assert.deepEqual([row.status, row.attempts, row.rejections], ["queued", 4, 0]);
+    for (let i = 1; i < MAX_REJECTED_ATTEMPTS; i++) {
+      s.sends.push({ status: "rejected", error: "custom program error: 0x1770" });
+      const r = await run(s, row.nextAt);
+      row = await one();
+      assert.deepEqual([r.retried, row.status, row.rejections], [1, "queued", i], `rejection ${i}`);
+    }
+    s.sends.push({ status: "rejected", error: "custom program error: 0x1770" });
+    assert.equal((await run(s, row.nextAt)).failed, 1);
+    row = await one();
+    assert.deepEqual([row.status, row.rejections], ["failed", MAX_REJECTED_ATTEMPTS]);
+    // the operator command puts it back with fresh counters
+    assert.equal(await requeueFailed(db, { now: at(86_400_000) }), 1);
+    row = await one();
+    assert.deepEqual([row.status, row.attempts, row.rejections, row.nextAt.getTime()], ["queued", 0, 0, at(86_400_000).getTime()]);
+    assert.match(row.error ?? "", /^requeued: custom program error/);
+    assert.equal(await requeueFailed(db, { ids: [] }), 0);
+    assert.equal((await run(s, at(86_400_000))).sent, 1);
+  });
+
+  test("send-test-events parks leftover queued rows, so only its own samples reach the public program", async () => {
+    await enqueueChainEvents(db, [matchEv(1), matchEv(2)], T0);
+    assert.equal(await parkQueued(db, "parked by send-test-events (not sent)"), 2);
+    await enqueueChainEvents(db, [matchEv(3)], T0);
+    const r = await run(new StubSender(), T0);
+    assert.deepEqual([r.claimed, r.sent], [1, 1]);
+    assert.deepEqual((await rows()).map((x) => x.status), ["failed", "failed", "sent"]);
+  });
+
+  test("a blocked send (fee payer refused) hands every claimed row back uncounted and stops the pass", async () => {
+    await enqueueChainEvents(db, [matchEv(1), matchEv(2), matchEv(3)], T0);
+    const s = new StubSender();
+    const msg = "Simulation failed. Message: Transaction simulation failed: Transaction results in an account (0) with insufficient funds for rent.";
+    s.sends.push({ status: "blocked", error: msg });
+    const r = await run(s, T0);
+    assert.deepEqual([r.claimed, r.sent, r.failed, r.retried, r.released, r.stopped], [3, 0, 0, 0, 3, msg]);
+    assert.equal(s.prepared.length, 1, "stops after the first blocked send");
+    const all = await rows();
+    for (const row of all) assert.deepEqual([row.status, row.attempts, row.rejections, row.txSig], ["queued", 0, 0, null]);
+    assert.equal(all[0]!.error, msg);
+    assert.equal(all[0]!.nextAt.getTime(), T0.getTime() + BLOCKED_RETRY_MS);
+    assert.equal(all[1]!.nextAt.getTime(), T0.getTime(), "the untouched rows are due again at once");
   });
 
   test("an unconfirmed send keeps its signature; the next pass finds it landed and never re-records", async () => {

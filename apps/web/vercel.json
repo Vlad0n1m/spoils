@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/economy-daily",
       "schedule": "5 0 * * *"
+    },
+    {
+      "path": "/api/cron/chain-events",
+      "schedule": "*/1 * * * *"
     }
   ]
 }

@@ -4,7 +4,6 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import path from "node:path";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import {
@@ -13,13 +12,12 @@ import {
   chainHashSalt,
   chainProgramId,
   chainRpcUrl,
-  devKeyCandidates,
   explorerUrl,
   loadChainAuthority,
   parseSecretKey,
 } from "./config";
 import { cleanError } from "./worker";
-import { FEE_LAMPORTS, readinessProblem } from "./run";
+import { FEE_LAMPORTS, RENT_EXEMPT_MIN_LAMPORTS, readinessProblem } from "./run";
 
 const kp = Keypair.generate();
 const asJson = JSON.stringify([...kp.secretKey]);
@@ -45,38 +43,29 @@ describe("parseSecretKey", () => {
 });
 
 describe("loadChainAuthority", () => {
-  const noFile = () => null;
-  test("CHAIN_AUTHORITY_SECRET wins", () => {
-    const r = loadChainAuthority({ CHAIN_AUTHORITY_SECRET: asB58, NODE_ENV: "production" }, noFile);
-    assert.equal(r?.source, "env");
-    assert.ok(r!.keypair.publicKey.equals(kp.publicKey));
+  test("CHAIN_AUTHORITY_SECRET (base58 or JSON) is the signer", () => {
+    for (const secret of [asB58, asJson]) {
+      const r = loadChainAuthority({ CHAIN_AUTHORITY_SECRET: secret, NODE_ENV: "production" });
+      assert.equal(r?.source, "env");
+      assert.ok(r!.keypair.publicKey.equals(kp.publicKey));
+    }
   });
-  test("a malformed secret is null (reported by name only), never the dev file", () => {
+  test("a malformed secret is null (reported by name only)", () => {
     const logs: string[] = [];
     const orig = console.error;
     console.error = (...a: unknown[]) => void logs.push(a.join(" "));
     try {
-      assert.equal(loadChainAuthority({ CHAIN_AUTHORITY_SECRET: "garbage-value" }, () => asJson), null);
+      assert.equal(loadChainAuthority({ CHAIN_AUTHORITY_SECRET: "garbage-value" }), null);
     } finally {
       console.error = orig;
     }
     assert.equal(logs.length, 1);
     assert.ok(!logs[0]!.includes("garbage-value"));
   });
-  test("outside production the gitignored dev key file is the fallback", () => {
-    const seen: string[] = [];
-    const repoKey = path.join("/repo", "programs", ".keys", "authority.json");
-    const r = loadChainAuthority({ NODE_ENV: "development" }, (p) => (seen.push(p), p === repoKey ? asJson : null), "/repo/apps/web");
-    assert.equal(r?.source, "dev-file");
-    assert.ok(r!.keypair.publicKey.equals(kp.publicKey));
-    assert.deepEqual(seen, devKeyCandidates("/repo/apps/web"));
-    assert.deepEqual(seen, [path.join("/repo/apps/web", "programs", ".keys", "authority.json"), repoKey]);
-  });
-  test("production never reads the dev file", () => {
-    let read = false;
-    const r = quiet(() => loadChainAuthority({ NODE_ENV: "production" }, () => ((read = true), asJson)));
-    assert.equal(r, null);
-    assert.equal(read, false);
+  test("unset is null in every environment: no key-file fallback that would sign dev rows with the production key", () => {
+    for (const NODE_ENV of ["development", "test", "production", undefined]) {
+      assert.equal(quiet(() => loadChainAuthority({ NODE_ENV, CHAIN_AUTHORITY_SECRET: "  " })), null, String(NODE_ENV));
+    }
   });
 });
 
@@ -108,7 +97,7 @@ describe("other settings", () => {
 describe("readinessProblem", () => {
   const signer = kp.publicKey;
   const config = { authority: signer, matches: 0n, bossKills: 0n, rareExtracts: 0n, bump: 255 };
-  const ok = { programDeployed: true, config, signer, lamports: FEE_LAMPORTS * 10, batch: 10 };
+  const ok = { programDeployed: true, config, signer, lamports: RENT_EXEMPT_MIN_LAMPORTS + FEE_LAMPORTS * 10, batch: 10 };
   test("ready when deployed, initialized for this signer and able to pay a batch", () => {
     assert.equal(readinessProblem(ok), null);
   });
@@ -116,6 +105,13 @@ describe("readinessProblem", () => {
     assert.match(readinessProblem({ ...ok, programDeployed: false })!, /not deployed/);
     assert.match(readinessProblem({ ...ok, config: null })!, /not initialized/);
     assert.match(readinessProblem({ ...ok, config: { ...config, authority: Keypair.generate().publicKey } })!, /not this signer/);
-    assert.match(readinessProblem({ ...ok, lamports: FEE_LAMPORTS * 10 - 1 })!, /needs 50000/);
+    assert.match(readinessProblem({ ...ok, lamports: ok.lamports - 1 })!, /needs 940880/);
+  });
+  test("a signer that covers the fees but not its rent-exempt minimum is not ready", () => {
+    // The runtime refuses a fee that leaves the payer between 0 and the rent floor ("insufficient
+    // funds for rent"), so such a signer could not send a single record.
+    assert.equal(RENT_EXEMPT_MIN_LAMPORTS, 890_880);
+    assert.match(readinessProblem({ ...ok, lamports: 890_000 })!, /rent-exempt minimum/);
+    assert.match(readinessProblem({ ...ok, lamports: FEE_LAMPORTS * 10 })!, /needs 940880/);
   });
 });

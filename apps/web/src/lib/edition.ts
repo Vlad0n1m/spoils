@@ -13,6 +13,7 @@ export {
   frameAncestorsDirective,
   isIdosBuildEnv,
   parseFrameAncestors,
+  wildcardSources,
 } from "./edition-frame.mjs";
 import { flagOn } from "./edition-frame.mjs";
 

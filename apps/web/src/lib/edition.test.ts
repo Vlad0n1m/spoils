@@ -18,6 +18,7 @@ import {
   isIdosBuildEnv,
   isIdosFramed,
   parseFrameAncestors,
+  wildcardSources,
 } from "./edition";
 import { BRAND } from "./brand";
 
@@ -63,7 +64,17 @@ describe("parseFrameAncestors", () => {
       assert.equal(r.usedDefault, true);
       assert.deepEqual(r.rejected, []);
     }
-    assert.deepEqual(DEFAULT_IDOS_FRAME_ANCESTORS, ["https://idosgames.com", "https://www.idosgames.com", "https://*.idos.games"]);
+    assert.deepEqual(DEFAULT_IDOS_FRAME_ANCESTORS, ["https://idosgames.com", "https://www.idosgames.com"]);
+  });
+
+  it("never trusts every iDos-hosted title by default; a wildcard is an explicit opt-in", () => {
+    // Other publishers' titles live at {titleid}.idos.games too: a wildcard default would let any of
+    // them frame the signed-in edition.
+    assert.deepEqual(wildcardSources(DEFAULT_IDOS_FRAME_ANCESTORS), []);
+    assert.ok(!DEFAULT_IDOS_FRAME_ANCESTORS.some((s) => s.includes("idos.games")));
+    const exact = parseFrameAncestors("https://idosgames.com https://www.idosgames.com https://spoils.idos.games");
+    assert.deepEqual(wildcardSources(exact.sources), []);
+    assert.deepEqual(wildcardSources(parseFrameAncestors("https://idosgames.com https://*.idos.games").sources), ["https://*.idos.games"]);
   });
 
   it("accepts https origins and wildcard subdomains, split by spaces or commas", () => {
@@ -112,7 +123,7 @@ describe("editionHeaders", () => {
     assert.equal(h.length, 1);
     assert.equal(h[0]!.source, "/:path*");
     assert.deepEqual(h[0]!.headers, [
-      { key: "Content-Security-Policy", value: "frame-ancestors 'self' https://idosgames.com https://www.idosgames.com https://*.idos.games" },
+      { key: "Content-Security-Policy", value: "frame-ancestors 'self' https://idosgames.com https://www.idosgames.com" },
     ]);
     assert.ok(!h[0]!.headers.some((x) => x.key.toLowerCase() === "x-frame-options"));
     assert.deepEqual(editionPublicEnv({ IDOS_BUILD: "1" }), { NEXT_PUBLIC_IDOS_BUILD: "1" });

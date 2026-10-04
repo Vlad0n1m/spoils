@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { TopBar } from "@/components/top-bar";
 import { BRAND } from "@/lib/brand";
+import { SITE_URL } from "@/lib/site-url";
 import { NEWS_POSTS, type NewsPost } from "@/content/news";
 import { fmtPostDate, parseInline, postAnchor, postTags, sortNewestFirst } from "./format";
 
@@ -15,11 +16,14 @@ export const metadata: Metadata = {
     description: DESCRIPTION,
     type: "website",
     siteName: BRAND.name,
+    // Absolute URLs need the layout's metadataBase (NEXT_PUBLIC_SITE_URL); without it, none are sent.
+    ...(SITE_URL ? { url: "/news", images: [{ url: "/feature-extract.png", width: 1264, height: 848, alt: `${BRAND.name} raid` }] } : {}),
   },
   twitter: {
-    card: "summary",
+    card: SITE_URL ? "summary_large_image" : "summary",
     title: `${BRAND.name} patch notes`,
     description: DESCRIPTION,
+    ...(SITE_URL ? { images: ["/feature-extract.png"] } : {}),
   },
 };
 

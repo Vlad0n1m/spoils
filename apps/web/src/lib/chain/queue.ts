@@ -24,8 +24,13 @@ export const BACKOFF_BASE_MS = 30_000;
 export const BACKOFF_MAX_MS = 30 * 60_000;
 /** A claimed row is hidden from other workers this long (a crashed call frees it afterwards). */
 export const CLAIM_LEASE_MS = 2 * 60_000;
-/** A program rejection on the n-th attempt or later marks the row failed (transport errors never do). */
+/**
+ * The n-th program rejection of a row marks it failed. Only rejections count (column rejections):
+ * transport errors, pending re-checks and blocked sends never do, however many attempts they cost.
+ */
 export const MAX_REJECTED_ATTEMPTS = 5;
+/** A blocked send (fee payer refused, operator problem) is retried after this long, uncounted. */
+export const BLOCKED_RETRY_MS = BACKOFF_BASE_MS;
 
 export function backoffMs(attempts: number): number {
   const n = Math.max(1, Math.floor(attempts));
@@ -72,11 +77,28 @@ export function enqueueMatchSettled(tx: Tx, report: MatchEndReport, mode: string
   });
 }
 
-/** world/event stored a boss kill (recordWorldEvent): live world shards only, killer resolved by nickname. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * world/event stored a boss kill (recordWorldEvent): live world shards only. The killer counts as a
+ * registered user only when this shard admitted them as a non-guest entry: the report's byUserId
+ * (game server, the killer's own entry), else (an older game server) the shard's registered entry
+ * whose user has that nickname. Never a global nickname lookup, which a guest could hijack by
+ * picking a registered player's name. Anyone else is a guest by nickname; no killer → NO_KILLER.
+ */
 export function enqueueBossKill(db: DbOrTx, ev: WorldEventReport, now = new Date()): Promise<number> {
   return inSavepoint(db, "boss_kill", async (sp) => {
+    const byUserId = ev.byUserId && UUID_RE.test(ev.byUserId) ? ev.byUserId : null;
+    const killer = byUserId
+      ? sql`(select re.user_id::text from raid_entries re
+          where re.match_id = r.match_id and not re.guest and re.user_id = ${byUserId}::uuid limit 1)`
+      : ev.by
+        ? sql`(select re.user_id::text from raid_entries re join users u on u.id = re.user_id
+            where re.match_id = r.match_id and not re.guest and u.nickname = ${ev.by}
+            order by re.created_at limit 1)`
+        : sql`null::text`;
     const r = await sp.execute<{ mode: string; killer: string | null }>(sql`
-      select r.mode, (select u.id::text from users u where u.nickname = ${ev.by}) as killer
+      select r.mode, ${killer} as killer
       from raids r where r.match_id = ${ev.matchId} and r.kind = 'world'`);
     const row = r.rows[0];
     if (!row || row.mode !== "live") return 0;
@@ -84,8 +106,6 @@ export function enqueueBossKill(db: DbOrTx, ev: WorldEventReport, now = new Date
     return e ? insertEvents(sp, [e], now) : 0;
   });
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * raids/exit (applyExit, after the extracted items moved): rare finds a registered user brought out
@@ -158,16 +178,18 @@ export async function markSent(db: Db, id: number, sig: string, now: Date): Prom
 }
 
 /**
- * Not recorded this time. A rejection by the program (or a payload that cannot be encoded) on the
- * MAX_REJECTED_ATTEMPTS-th attempt or later fails the row; anything else waits backoffMs(attempts).
- * keepTx keeps tx_sig when the transaction may still land (the next attempt checks it first).
+ * Not recorded this time. A rejection by the program counts in `rejections`, and the
+ * MAX_REJECTED_ATTEMPTS-th one fails the row, as does a payload that cannot be encoded (permanent);
+ * anything else waits backoffMs(attempts) and never fails it. keepTx keeps tx_sig when the
+ * transaction may still land (the next attempt checks it first).
  */
 export async function markRetry(
   db: Db,
-  row: Pick<ChainEventRow, "id" | "attempts">,
+  row: Pick<ChainEventRow, "id" | "attempts" | "rejections">,
   o: { error: string; now: Date; rejected?: boolean; permanent?: boolean; keepTx?: boolean; delayMs?: number },
 ): Promise<"queued" | "failed"> {
-  const fail = o.permanent || (o.rejected && row.attempts >= MAX_REJECTED_ATTEMPTS);
+  const rejections = (row.rejections ?? 0) + (o.rejected ? 1 : 0);
+  const fail = o.permanent || (o.rejected && rejections >= MAX_REJECTED_ATTEMPTS);
   const next = new Date(o.now.getTime() + (o.delayMs ?? backoffMs(row.attempts)));
   await db
     .update(chainEvents)
@@ -175,10 +197,53 @@ export async function markRetry(
       status: fail ? "failed" : "queued",
       nextAt: fail ? o.now : next,
       error: o.error.slice(0, 500),
+      ...(o.rejected ? { rejections: sql`${chainEvents.rejections} + 1` } : {}),
       ...(o.keepTx ? {} : { txSig: null, txValidUntil: null }),
     })
     .where(eq(chainEvents.id, row.id));
   return fail ? "failed" : "queued";
+}
+
+/**
+ * The cluster refused the fee payer before the transaction left preflight (operator problem): back
+ * to the queue after BLOCKED_RETRY_MS, the attempt not counted and the unsent signature dropped.
+ */
+export async function markBlocked(db: Db, id: number, error: string, now: Date): Promise<void> {
+  await db
+    .update(chainEvents)
+    .set({
+      status: "queued",
+      nextAt: new Date(now.getTime() + BLOCKED_RETRY_MS),
+      attempts: sql`greatest(${chainEvents.attempts} - 1, 0)`,
+      error: error.slice(0, 500),
+      txSig: null,
+      txValidUntil: null,
+    })
+    .where(eq(chainEvents.id, id));
+}
+
+/**
+ * chain-admin send-test-events (test database only): every queued row is set aside as failed, so the
+ * worker pass that follows sends only the sample events queued after it. Returns how many.
+ */
+export async function parkQueued(db: Db, reason: string): Promise<number> {
+  const r = await db.execute(sql`update chain_events set status = 'failed', error = ${reason.slice(0, 500)} where status = 'queued'`);
+  return r.rowCount ?? 0;
+}
+
+/**
+ * Operator command (programs/scripts/chain-admin.ts requeue-failed): failed rows back to the queue,
+ * due now, with fresh attempt and rejection counts. Optionally only some ids. Returns how many.
+ */
+export async function requeueFailed(db: Db, o: { now?: Date; ids?: readonly number[] } = {}): Promise<number> {
+  const now = o.now ?? new Date();
+  if (o.ids && o.ids.length === 0) return 0;
+  const only = o.ids ? sql` and id in (${sql.join(o.ids.map((i) => sql`${Math.floor(i)}`), sql`, `)})` : sql``;
+  const r = await db.execute(sql`
+    update chain_events set status = 'queued', attempts = 0, rejections = 0, next_at = ${now},
+      error = 'requeued: ' || coalesce(error, ''), tx_sig = null, tx_valid_until = null
+    where status = 'failed'${only}`);
+  return r.rowCount ?? 0;
 }
 
 /** A claimed row the worker did not get to (time budget): back to due now, the claim not counted. */

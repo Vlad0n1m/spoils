@@ -15,6 +15,9 @@ apps/web/drizzle
 art
 videos
 docs
+# Anchor workspace: ~900 MB of Rust build output and the gitignored keypairs (programs/.keys/). No
+# image needs it: only the web's program.test.ts reads programs/idl, and tests never run in Docker.
+programs
 # Android TWA project and signing keys must never enter an image.
 twa
 **/*.keystore

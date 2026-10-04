@@ -25,11 +25,14 @@ services:
 
   web:
     build:
-      dockerfile: deploy/idos/web.Dockerfile
+      # The main Dockerfile: its IDOS_BUILD / IDOS_FRAME_ANCESTORS build args are empty by default.
+      dockerfile: apps/web/Dockerfile
       args:
         # Fixed at build: rebuild the image after changing them (README "Deploy", NEXT_PUBLIC_* note).
         IDOS_BUILD: ${IDOS_BUILD:?IDOS_BUILD=1 must be set in .env.idos.local (run with --env-file .env.idos.local)}
-        # Sites allowed to frame the edition; unset → https://idosgames.com https://www.idosgames.com https://*.idos.games
+        # Sites allowed to frame the edition; unset → https://idosgames.com https://www.idosgames.com only.
+        # Add the exact shell origin of our title (https://<titleid>.idos.games) once it exists; never
+        # https://*.idos.games unless on purpose (every title hosted there could frame the edition).
         IDOS_FRAME_ANCESTORS: ${IDOS_FRAME_ANCESTORS:-}
     env_file: !override
       - .env.idos.local

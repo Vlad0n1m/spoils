@@ -7,7 +7,11 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
+import * as schema from "../../db/schema";
 import { configPda, decodeConfig, initializeIx, programDataAddress, setAuthorityIx, type ConfigAccount } from "./program";
+import { requeueFailed } from "./queue";
 
 /**
  * Operator helpers for programs/scripts/chain-admin.ts (devnet setup): never imported by the app.
@@ -54,4 +58,17 @@ export function topUp(conn: Connection, from: Keypair, to: PublicKey, sol: numbe
 
 export async function balanceSol(conn: Connection, key: PublicKey): Promise<number> {
   return (await conn.getBalance(key, "confirmed")) / LAMPORTS_PER_SOL;
+}
+
+/**
+ * chain-admin requeue-failed: failed chain_events rows (all, or these ids) of the database at `url`
+ * back in the queue. The URL is passed explicitly; the app's own pool is never used.
+ */
+export async function requeueFailedAt(url: string, ids: readonly number[] = []): Promise<number> {
+  const pool = new Pool({ connectionString: url, max: 1 });
+  try {
+    return await requeueFailed(drizzle(pool, { schema }), ids.length ? { ids } : {});
+  } finally {
+    await pool.end();
+  }
 }

@@ -33,21 +33,59 @@ export function chainConnection(rpcUrl: string, requestTimeoutMs = 8_000): Conne
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The fee payer or the program cannot take a transaction (TransactionError texts of the runtime):
+ * InsufficientFundsForFee, InsufficientFundsForRent (a fee that would leave the payer below its
+ * rent-exempt minimum), AccountNotFound (payer never funded), InvalidAccountForFee and
+ * ProgramAccountNotFound. Operator problems: they say nothing about the event itself.
+ */
+const BLOCKED_RE =
+  /insufficient funds for fee|insufficient funds for rent|found no record of a prior credit|may not be used to pay transaction fees|load a program that does not exist/i;
+/** The program (an instruction) refused the transaction: InstructionError / custom program error. */
+const PROGRAM_RE = /error processing instruction \d+|custom program error|InstructionError/i;
+
+/**
+ * What a sendRawTransaction error means for the event. web3.js throws SendTransactionError for every
+ * JSON-RPC error of sendTransaction, not only for a failed simulation: a node that is behind
+ * (-32005 "Node is behind by N slots"), a min-context-slot miss and the like are transient. Only an
+ * instruction error is a rejection of the event; a fee payer that cannot pay is "blocked" (the
+ * operator must top it up); "already processed" means an earlier copy landed; anything else is
+ * "unknown", so the next pass checks the signature and, once its blockhash expired, signs again.
+ */
+export function classifySendError(e: unknown): SendOutcome {
+  const msg = cleanError(e);
+  const raw = e instanceof Error ? e.message : String(e);
+  if (/blockhash not found/i.test(raw)) return { status: "expired" };
+  if (!(e instanceof SendTransactionError)) return { status: "unknown", error: msg };
+  if (/already been processed/i.test(raw)) return { status: "unknown", error: msg };
+  if (BLOCKED_RE.test(raw)) return { status: "blocked", error: msg };
+  if (PROGRAM_RE.test(raw)) return { status: "rejected", error: msg };
+  return { status: "unknown", error: msg };
+}
+
 export function createWeb3Sender(o: Web3SenderOptions): ChainSender {
   const connection = o.connection ?? chainConnection(o.rpcUrl, o.requestTimeoutMs);
   const confirmTimeoutMs = o.confirmTimeoutMs ?? 12_000;
   const pollMs = o.pollMs ?? 800;
 
-  async function status(sig: string, validUntil: number | null): Promise<SigStatus> {
+  async function lookup(sig: string): Promise<SigStatus | null> {
     const { value } = await connection.getSignatureStatuses([sig], { searchTransactionHistory: true });
     const s = value[0];
-    if (s) {
-      if (s.err) return { status: "failed", error: `on-chain error ${JSON.stringify(s.err)}` };
-      return s.confirmationStatus === "confirmed" || s.confirmationStatus === "finalized" ? { status: "confirmed" } : { status: "pending" };
-    }
+    if (!s) return null;
+    if (s.err) return { status: "failed", error: `on-chain error ${JSON.stringify(s.err)}` };
+    return s.confirmationStatus === "confirmed" || s.confirmationStatus === "finalized" ? { status: "confirmed" } : { status: "pending" };
+  }
+
+  async function status(sig: string, validUntil: number | null): Promise<SigStatus> {
+    const first = await lookup(sig);
+    if (first) return first;
     if (validUntil === null) return { status: "expired" };
     const height = await connection.getBlockHeight("confirmed");
-    return height > validUntil ? { status: "expired" } : { status: "pending" };
+    if (height <= validUntil) return { status: "pending" };
+    // The height was read after the first lookup: a transaction that landed in between would be
+    // called expired and recorded twice. Once the height is past, it can no longer land, so one
+    // more lookup settles it.
+    return (await lookup(sig)) ?? { status: "expired" };
   }
 
   async function prepare(args: RecordArgs): Promise<PreparedTx> {
@@ -65,11 +103,7 @@ export function createWeb3Sender(o: Web3SenderOptions): ChainSender {
         try {
           await connection.sendRawTransaction(raw, { preflightCommitment: "confirmed", maxRetries: 3 });
         } catch (e) {
-          const msg = cleanError(e);
-          if (/blockhash not found/i.test(msg)) return { status: "expired" };
-          // A failed simulation never reaches the cluster: the program (or the runtime) refused it.
-          if (e instanceof SendTransactionError) return { status: "rejected", error: msg };
-          return { status: "unknown", error: msg };
+          return classifySendError(e);
         }
         const deadline = Date.now() + confirmTimeoutMs;
         let last = "not confirmed in time";

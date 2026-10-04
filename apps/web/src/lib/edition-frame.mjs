@@ -25,15 +25,24 @@ export function isIdosBuildEnv(env) {
 }
 
 /**
- * Sites allowed to frame the edition: idosgames.com (the site and its www host) and the per-title
- * hosting `{titleid}.idos.games`, where the iDos shell around the game lives.
+ * Sites allowed to frame the edition by default: idosgames.com and its www host only. The iDos
+ * shell of our title lives at `https://<titleid>.idos.games`; add that exact origin through
+ * IDOS_FRAME_ANCESTORS once the Title exists. Never `https://*.idos.games` by default: every
+ * publisher uploads their own static build there, so a wildcard would let any other title frame the
+ * signed-in edition (same partitioned cookie) and clickjack its buy and list buttons.
  * @type {readonly string[]}
  */
-export const DEFAULT_IDOS_FRAME_ANCESTORS = Object.freeze([
-  "https://idosgames.com",
-  "https://www.idosgames.com",
-  "https://*.idos.games",
-]);
+export const DEFAULT_IDOS_FRAME_ANCESTORS = Object.freeze(["https://idosgames.com", "https://www.idosgames.com"]);
+
+/**
+ * Wildcard sources (`https://*.host`) of a list: allowed only when IDOS_FRAME_ANCESTORS names them
+ * on purpose; next.config.mjs warns at build time.
+ * @param {readonly string[]} sources
+ * @returns {string[]}
+ */
+export function wildcardSources(sources) {
+  return sources.filter((s) => s.startsWith("https://*."));
+}
 
 /** https origin, optionally with one leading `*.` wildcard label and a port; no path. */
 const HTTPS_SOURCE = /^https:\/\/(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d{1,5})?$/;
@@ -41,8 +50,9 @@ const HTTPS_SOURCE = /^https:\/\/(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]
 const LOCAL_SOURCE = /^http:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/;
 
 /**
- * IDOS_FRAME_ANCESTORS: sources separated by spaces or commas, e.g.
- * "https://idosgames.com https://*.idos.games". Unset or empty → the defaults. Tokens that are not a
+ * IDOS_FRAME_ANCESTORS: sources separated by spaces or commas that replace the defaults, e.g.
+ * "https://idosgames.com https://www.idosgames.com https://<titleid>.idos.games". Unset or empty →
+ * the defaults. A `https://*.host` wildcard is accepted (an explicit opt-in). Tokens that are not a
  * plain https origin (a bare `*`, `https:`, paths, quotes, `data:`…) are dropped and reported in
  * `rejected`; if nothing valid is left, the defaults are used, so a typo never opens the site to
  * every framer and never locks iDos out. A trailing slash is ignored; duplicates are removed.

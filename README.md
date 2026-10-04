@@ -93,17 +93,26 @@ upgrade authority).
 
 Why players never pay: the server authority is the only signer and the fee payer of every record. Players do not
 need a wallet for it and never see a transaction. Privacy: no account ids, nicknames or emails go on chain.
-`killer_hash` / `owner_hash` = sha256(`CHAIN_HASH_SALT` + `":user:"` + userId), or `":guest:"` + nickname for a guest
-killer. The salt stays on the server, so a hash cannot be tested against a known id.
+`owner_hash` = sha256(`CHAIN_HASH_SALT` + `":user:"` + userId); `killer_hash` = sha256(`CHAIN_HASH_SALT` +
+`":boss_kill:user:"` + userId), or `":boss_kill:guest:"` + nickname for a guest killer, and 32 zero bytes when no raider
+killed the boss. The two hashes of one player differ on purpose: the lobby names every boss killer, and a shared hash
+would tie that nickname to the player's rare extracts. A boss kill counts for a registered player only when the game
+server reports their user id and they hold a registered entry in that very shard (a guest cannot borrow a registered
+nickname). The salt stays on the server, so a hash cannot be tested against a known id.
 
 How it flows: settlement inserts a row into `chain_events` inside its own database transaction, in a savepoint, so a
 failure there never breaks a raid. The `cron` service calls `/api/cron/chain-events` every minute (Bearer `CRON_SECRET`).
 Each call first checks that the program is deployed, the Config names this signer and the signer can pay a batch of
-fees, then sends up to 10 due events signed with `CHAIN_AUTHORITY_SECRET` and waits for confirmation. A dead RPC, a
-missing key or any of those checks failing only leaves events queued; send errors back off from 30 s, doubling up to
-30 min. A program rejection fails the
-event after 5 attempts. The signature is stored before sending, so a retry checks whether the earlier transaction
-landed instead of recording the event twice. Code: `apps/web/src/lib/chain`, table `chain_events` (migration
+fees on top of its rent-exempt minimum (0.00089 SOL), then sends up to 10 due events signed with
+`CHAIN_AUTHORITY_SECRET` and waits for confirmation. A dead RPC, a lagging node, a missing key or any of those checks
+failing only leaves events queued; send errors back off from 30 s, doubling up to 30 min. If the cluster still refuses
+the fee payer, the event goes back uncounted and the pass stops. Only a program rejection counts toward failing an
+event: the fifth one marks it failed (/economy shows "not recorded"), and
+`DATABASE_URL=… apps/game-server/node_modules/.bin/tsx programs/scripts/chain-admin.ts requeue-failed [id …]` puts failed
+events back (in Docker: `update chain_events set status='queued', attempts=0, rejections=0, next_at=now() where
+status='failed';` in psql). The signature is stored before sending, so a retry checks whether the earlier transaction
+landed instead of recording the event twice. The signer key is read only from `CHAIN_AUTHORITY_SECRET`, in dev too:
+there is no key-file fallback, so a dev machine never signs with the production key by itself. Code: `apps/web/src/lib/chain`, table `chain_events` (migration
 `apps/web/migrations/004_chain_events.sql` for an existing database). Env names: `.env.example`, block "On-chain game
 results".
 
@@ -194,15 +203,15 @@ The keystore and its passwords never go into the repo (keep them in a password m
 losing the key means a new package on the store). Digital Asset Links: put the SHA-256 fingerprint of the signing key
 (`keytool -list -v -keystore ~/keys/spoils-upload.jks -alias spoils`, or the Play App Signing key from the Play
 Console) into `apps/web/public/.well-known/assetlinks.json` and deploy the web; without it the app shows a browser
-address bar. The icons `/icon-512.png` and `/icon-512-maskable.png` must be served by the web
-(`apps/web/public/icon-512-maskable.png` does not exist yet: add it, or remove `maskableIconUrl` from
-`twa/twa-manifest.json`, before `bubblewrap update`).
+address bar. The icons `/icon-512.png` and `/icon-512-maskable.png` (the character inside the central 80% on the
+`#08070B` background, also listed in `manifest.webmanifest` as `purpose: maskable`) are served from `apps/web/public`.
+The web manifest, the page theme colour, the TWA and the webshell all use `#08070B`.
 
 ### Что вписывает Влад
 
 Только имена — значения в `.env` на сервере и в менеджере паролей, в репозиторий не попадают.
 
-- Домен: `SPOILS_DOMAIN` в `deploy/nginx/spoils.conf` и `twa/twa-manifest.json`, `NEXT_PUBLIC_GAME_SERVER_URL` (`wss://game.<домен>`)
+- Домен: `SPOILS_DOMAIN` в `deploy/nginx/spoils.conf` и `twa/twa-manifest.json`, `NEXT_PUBLIC_GAME_SERVER_URL` (`wss://game.<домен>`), `NEXT_PUBLIC_SITE_URL` (`https://<домен>`, для превью ссылок; необязательно)
 - `CRON_SECRET`
 - `MASTER_SEED_HEX`
 - `WORLD_SEED_SECRET`
@@ -211,6 +220,7 @@ address bar. The icons `/icon-512.png` and `/icon-512-maskable.png` must be serv
 - `SESSION_SECRET`
 - `DATABASE_URL` (вне docker; в docker — `POSTGRES_PASSWORD`)
 - Ключи Solana: `HOT_WALLET_SECRET_B58`, `SOLANA_RPC_URL`, `SOLANA_CLUSTER`, `NEXT_PUBLIC_SOLANA_RPC_URL`, `NEXT_PUBLIC_SOLANA_CLUSTER`
+- Запись результатов в Solana (раздел On-chain): `CHAIN_AUTHORITY_SECRET` (содержимое `programs/.keys/authority.json`) и `CHAIN_HASH_SALT` (например, `openssl rand -hex 32`; после запуска не менять)
 - Отпечаток SHA-256 ключа подписи в `apps/web/public/.well-known/assetlinks.json` (и `package_name`, если меняется `packageId`), путь к keystore в `twa/twa-manifest.json`
 
 Секреты в репозиторий не кладутся: `.env` заполняется вручную.

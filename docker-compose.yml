@@ -55,6 +55,8 @@ services:
         NEXT_PUBLIC_WALLET_DEV_TOPUP: ${NEXT_PUBLIC_WALLET_DEV_TOPUP:-0}
         NEXT_PUBLIC_GUEST_PLAY: ${NEXT_PUBLIC_GUEST_PLAY:-}
         NEXT_PUBLIC_MARKET_CURRENCY: ${NEXT_PUBLIC_MARKET_CURRENCY:-}
+        # Public https origin of the site (absolute og:url / og:image); unset → relative links only.
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
     # The image runs NODE_ENV=production: deploy/web-preflight.mjs refuses to start without
     # CRON_SECRET (16+ chars), DATABASE_URL, SESSION_SECRET or GAME_SERVER_HMAC_SECRET.
     env_file:

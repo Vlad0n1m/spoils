@@ -128,30 +128,44 @@ idosgames-title-bootstrap; скелет `get_host_scaffold`), docs.idosgames.com
    подписи кошелька). Полное имя видно в заголовке вкладки и вверху меню аккаунта (☰). В шапку меню
    подпись ещё не выведена: файл `menu-top-bar.tsx` сейчас правит другая задача.
 3. **Работа во фрейме.**
-   - Заголовок `Content-Security-Policy: frame-ancestors 'self' https://idosgames.com https://www.idosgames.com https://*.idos.games`
+   - Заголовок `Content-Security-Policy: frame-ancestors 'self' https://idosgames.com https://www.idosgames.com`
      на всех страницах, только в издании. Список меняется через `IDOS_FRAME_ANCESTORS`
-     (https-адреса через пробел или запятую; `*`, `http://` кроме localhost, пути и прочий мусор
-     отбрасываются, а если ничего не осталось — берутся адреса по умолчанию). `X-Frame-Options` не
-     отправляется ни в одной сборке; в nginx его тоже не добавлять.
+     (https-адреса через пробел или запятую, заменяют список по умолчанию; `*`, `http://` кроме
+     localhost, пути и прочий мусор отбрасываются, а если ничего не осталось — берутся адреса по
+     умолчанию). `X-Frame-Options` не отправляется ни в одной сборке; в nginx его тоже не добавлять.
+   - **Компромисс по `*.idos.games`.** Шаблона `https://*.idos.games` в списке по умолчанию нет: там
+     лежат статические сборки всех издателей, и любая чужая игра могла бы встроить наше издание с
+     той же partitioned-сессией игрока и подставить кнопки покупки/выставления (clickjacking).
+     Цена: если iDos показывает игру через оболочку `https://<titleid>.idos.games` (§3.2), фрейм не
+     откроется, пока в `IDOS_FRAME_ANCESTORS` не добавлен точный адрес нашего тайтла, например
+     `IDOS_FRAME_ANCESTORS="https://idosgames.com https://www.idosgames.com https://<titleid>.idos.games"`
+     (frame-ancestors проверяет всех предков). Шаблон можно вписать только сознательно — сборка
+     предупредит об этом.
+   - **Защита от CSRF.** Cookie `SameSite=None` уходит и с чужих сайтов, поэтому `src/middleware.ts`
+     (`checkApiMutation` в `lib/request-guard.ts`) на каждом изменяющем `/api`-запросе
+     (POST/PUT/PATCH/DELETE) отвечает 403 на cross-site / чужой `Origin` и 415 на тела форм
+     (`text/plain`, urlencoded, multipart). Запросы самой страницы во фрейме iDos — `same-origin`,
+     они проходят. Маршруты игрового сервера (HMAC) и cron (Bearer) проверяются своими ключами.
+     Работает в обеих сборках.
    - Cookie сессии в издании: `SameSite=None; Secure; Partitioned` (`lib/session.ts`
      → `editionSessionCookie()`). В основной сборке остаётся `lax`. Partitioned-cookie живёт только
      внутри idosgames.com: если открыть поддомен издания напрямую, вход будет отдельный. Safari может
      резать сторонние cookie и так **[не проверено на устройствах]**, запасной путь — токен сессии в
      заголовке (не сделан).
-   - Внутри фрейма (`window.top !== window.self`) пункт «Connect wallet» в меню аккаунта скрыт: во
-     фрейме iDos кошелёк ведёт сайт. Вне фрейма (поддомен издания открыт напрямую) он остаётся.
+   - Внутри фрейма (`window.top !== window.self`) пункт «Connect wallet» в меню аккаунта и блок
+     привязки кошелька на `/wallet` (выбор кошелька, «Get Phantom») скрыты: во фрейме iDos кошелёк
+     ведёт сайт. Вне фрейма (поддомен издания открыт напрямую) они остаются.
    - Pointer Lock и полноэкранный режим во фрейме зависят от атрибутов `allow` у фрейма iDos
      (вопрос 3).
 4. **Отдельный стек.** `deploy/idos.compose.yml` — надстройка над `docker-compose.yml`: свой
    compose-проект `spoils-idos` (своя сеть, свои образы, свой том Postgres — значит, своя база),
    свой файл переменных `.env.idos.local`, свои порты (web 3100, игровой сервер 2667),
-   `GAME_SERVER_ID` по умолчанию `idos-world-1`. Образ web собирается по
-   `deploy/idos/web.Dockerfile` (копия `apps/web/Dockerfile` плюс аргументы `IDOS_BUILD` и
-   `IDOS_FRAME_ANCESTORS`). Nginx: `deploy/nginx/spoils-idos.conf`, `idos.<домен>` → web издания,
-   `game-idos.<домен>` → WebSocket.
-5. **Ещё не сделано:** свой вывод SOL и ссылки «Get Phantom» / «View on Explorer» на странице
-   `/wallet` во фрейме пока показываются (это файлы `components/wallet`, другой владелец).
-   Скрывать ли вывод SOL, **[решает Влад]**.
+   `GAME_SERVER_ID` по умолчанию `idos-world-1`. Образ web собирается по тому же
+   `apps/web/Dockerfile`, что и основной, с аргументами `IDOS_BUILD` и `IDOS_FRAME_ANCESTORS` (в
+   основной сборке они пустые). Nginx: `deploy/nginx/spoils-idos.conf`, `idos.<домен>` → web
+   издания, `game-idos.<домен>` → WebSocket.
+5. **Ещё не сделано:** ссылки на `/wallet` (меню аккаунта, валюта, магазин, склад) и сама страница
+   с балансом и выводом SOL во фрейме остаются. Скрывать ли вывод SOL, **[решает Влад]**.
 
 #### Как собрать и запустить издание
 
@@ -164,7 +178,9 @@ idosgames-title-bootstrap; скелет `get_host_scaffold`), docs.idosgames.com
    - `IDOS_BUILD=1` (без него команда ниже остановится с ошибкой — защита от запуска с основным `.env`);
    - `NEXT_PUBLIC_GAME_SERVER_URL=wss://game-idos.<домен>`;
    - `GAME_SERVER_ID=idos-world-1` (или любое имя, но не как в основном стеке);
-   - при необходимости `IDOS_FRAME_ANCESTORS` (например, адрес DEV-тайтла `https://<titleid>.idos.games`).
+   - `IDOS_FRAME_ANCESTORS`, как только известен адрес тайтла: полный список, например
+     `https://idosgames.com https://www.idosgames.com https://<titleid>.idos.games` (без него игра
+     откроется только во фрейме прямо на idosgames.com, не внутри оболочки тайтла).
    Переменную `DATABASE_URL` compose подставит сам (своя база в контейнере `postgres` проекта).
 2. Запуск (нужен Docker Compose 2.24.4+):
 
@@ -178,7 +194,8 @@ idosgames-title-bootstrap; скелет `get_host_scaffold`), docs.idosgames.com
 3. Nginx: положить `deploy/nginx/spoils-idos.conf`, заменить `SPOILS_DOMAIN`, выпустить сертификат
    (`certbot --nginx -d idos.<домен> -d game-idos.<домен>`). Нужен https: cookie издания `Secure`.
 4. Проверка: `curl -sI https://idos.<домен>/play | grep -i content-security-policy` должен показать
-   `frame-ancestors 'self' https://idosgames.com …`. На основном домене этого заголовка нет.
+   `frame-ancestors 'self' https://idosgames.com https://www.idosgames.com …`. На основном домене этого
+   заголовка нет.
 5. После смены `IDOS_BUILD`, `IDOS_FRAME_ANCESTORS` или любого `NEXT_PUBLIC_*` — пересобрать образ
    (тот же `up -d --build`).
 

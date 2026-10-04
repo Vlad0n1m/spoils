@@ -282,8 +282,14 @@ export interface WorldEventReport {
   cycleId: number;
   kind: "boss_killed";
   boss: BossKind;
-  /** Killer nickname. */
+  /** Killer nickname ("" = not killed by a raider). */
   by: string;
+  /**
+   * userId of the killer when a registered raider (a non-guest entry of this shard) killed it; absent
+   * for a guest, an NPC or no killer. The web records boss kills on chain under this id only after
+   * checking it against the shard's entries (never by nickname alone).
+   */
+  byUserId?: string;
   atMs: number;
 }
 

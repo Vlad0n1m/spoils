@@ -28,6 +28,10 @@ export function TopBar() {
           <Link href="/economy" className={navLinkClass(path === "/economy")}>
             Economy
           </Link>
+          {/* Narrow portrait phones: no room next to the account buttons (the menu's News panel links here). */}
+          <Link href="/news" className={`hidden sm:inline ${navLinkClass(path === "/news")}`}>
+            News
+          </Link>
           <AudioSettingsButton direction="down" align="right" />
           <AuthButton />
         </nav>

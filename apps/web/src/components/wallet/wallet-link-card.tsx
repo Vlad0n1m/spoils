@@ -5,6 +5,7 @@ import { useSession } from "@/lib/session-context";
 import { BRAND } from "@/lib/brand";
 import { SOLANA_CLUSTER, explorerAddressUrl } from "@/lib/wallet/cluster";
 import { shortAddress } from "@/lib/wallet/siws";
+import { useIdosFramed } from "@/components/menu/use-idos-frame";
 import { CopyAddressButton } from "./copy-address-button";
 import { WalletChooser, WalletLinkStatus } from "./wallet-chooser";
 import {
@@ -32,10 +33,15 @@ function linkedOn(iso: string): string {
   return Number.isFinite(d.getTime()) ? d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
 }
 
-/** /wallet: the self-custody Solana wallet linked to the account (registered users only). */
+/**
+ * /wallet: the self-custody Solana wallet linked to the account (registered users only). Hidden in
+ * the iDos Games edition inside the iDos frame: idosgames.com blocks wallet access there and runs its
+ * own wallet card, so our chooser and its "Get Phantom" link would only lead nowhere.
+ */
 export function WalletLinkSection() {
   const { user, loading } = useSession();
-  if (loading || !user || user.isGuest) return null;
+  const idosFramed = useIdosFramed();
+  if (loading || !user || user.isGuest || idosFramed) return null;
   return (
     <div className="relative mx-auto w-full max-w-7xl px-4 pb-10 md:px-6 md:pb-14">
       <WalletLinkCard userId={user.id} />

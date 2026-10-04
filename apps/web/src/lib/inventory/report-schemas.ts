@@ -166,6 +166,7 @@ export const worldEventReportSchema = z
     kind: z.literal("boss_killed"),
     boss: bossKind,
     by: z.string().max(64),
+    byUserId: uuid.optional(),
     atMs: z.number().finite().min(0).max(WORLD.CYCLE_MS),
   })
   .strict() satisfies z.ZodType<WorldEventReport>;
