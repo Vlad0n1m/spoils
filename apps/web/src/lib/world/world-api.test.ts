@@ -210,16 +210,31 @@ describe("worldJoin", () => {
     if (again.ok) assert.notEqual(again.body.ticket.entryId, b.ticket.entryId);
   });
 
-  test("guest: free kit ticket with matchId / entryId", async () => {
+  test("guest: free kit ticket with matchId / entryId; refused once guest play is off (security audit)", async () => {
     const s = shardReq();
     await openShard(db, s);
     const g: Caller = { kind: "guest", userId: randomUUID(), nickname: "Guesty" };
-    const r = await worldJoin(db, g, undefined, OPEN_NOW);
-    assert.ok(r.ok, JSON.stringify(r));
-    if (!r.ok) return;
-    assert.equal(r.body.loadoutId, "");
-    assert.equal(r.body.ticket.matchId, s.matchId);
-    assert.ok(sigOk(r.body.ticket));
+    const prev = process.env.GUEST_PLAY_ENABLED;
+    const prevPublic = process.env.NEXT_PUBLIC_GUEST_PLAY;
+    process.env.GUEST_PLAY_ENABLED = "true";
+    try {
+      const r = await worldJoin(db, g, undefined, OPEN_NOW);
+      assert.ok(r.ok, JSON.stringify(r));
+      if (!r.ok) return;
+      assert.equal(r.body.loadoutId, "");
+      assert.equal(r.body.ticket.matchId, s.matchId);
+      assert.ok(sigOk(r.body.ticket));
+      // The same (still valid) guest cookie after the switch was turned off: no ticket.
+      process.env.GUEST_PLAY_ENABLED = "false";
+      delete process.env.NEXT_PUBLIC_GUEST_PLAY;
+      const off = await worldJoin(db, g, undefined, OPEN_NOW);
+      assert.equal(off.ok, false);
+      if (!off.ok) assert.equal(off.status, 403);
+    } finally {
+      if (prev === undefined) delete process.env.GUEST_PLAY_ENABLED;
+      else process.env.GUEST_PLAY_ENABLED = prev;
+      if (prevPublic !== undefined) process.env.NEXT_PUBLIC_GUEST_PLAY = prevPublic;
+    }
   });
 
   test("geared user: the loadout is locked into the ticket; after admission a PLAY is a rejoin of that entry", async () => {

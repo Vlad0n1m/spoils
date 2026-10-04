@@ -42,15 +42,23 @@ import { enqueueMatchSettled, enqueueRareExtracts } from "../chain/queue";
 import { advanceQuestsForExit } from "../quests/quests";
 
 /**
- * A raid still `running` this long after its `ends_at` (the wipe of a world shard) never reported
- * its end: void it (spec §4.5, D29).
+ * The game server keeps retrying an exit report this long (apps/game-server net/web-api.ts
+ * EXIT_RETRY_WINDOW_MS) and sends the end report after them. A void must not land inside it, or a
+ * late extract is refused and an MIA loss refunded after a web / DB outage around the wipe
+ * (security audit "exit/end vs lazy void race").
  */
-export const RAID_VOID_GRACE_MS = 10 * 60_000;
+export const GS_EXIT_RETRY_WINDOW_MS = 10 * 60_000;
 /**
- * Lazy per-user void (lobby load, world join): the caller's own raid is voided sooner, so a player
- * whose game server crashed gets their gear back 5 min after the map would have wiped.
+ * A raid still `running` this long after its `ends_at` (the wipe of a world shard) never reported
+ * its end: void it (spec §4.5, D29). Longer than the game server's whole exit retry window.
  */
-export const RAID_USER_VOID_GRACE_MS = 5 * 60_000;
+export const RAID_VOID_GRACE_MS = 15 * 60_000;
+/**
+ * Lazy per-user void (lobby load, world join): the caller's own raid is voided a little sooner than
+ * the global sweep, but only after the game server's exit retries and its end report had their time
+ * (a crashed server's shards are voided at once anyway: void-orphans, superseded rows).
+ */
+export const RAID_USER_VOID_GRACE_MS = GS_EXIT_RETRY_WINDOW_MS + 2 * 60_000;
 /** economy_params key of the last boot of a game server (GameServerBoot), per serverId. */
 export const GS_BOOT_PARAM = (serverId: string) => `gs_boot:${serverId}`;
 

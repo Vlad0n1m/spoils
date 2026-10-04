@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { users } from "@/db/schema";
 import { getSession } from "@/lib/session";
 import { deriveDepositPubkey } from "@/lib/keypair";
-import { hashPassword } from "@/lib/password";
+import { BcryptBusyError, hashPassword } from "@/lib/password";
 import { checkSameOriginRequest } from "@/lib/request-guard";
+import { clientIp, registerLimiter } from "@/lib/auth-rate-limit";
 
 const bodySchema = z.object({
   email: z.string().email().transform((s) => s.trim().toLowerCase()),
@@ -22,6 +23,15 @@ const bodySchema = z.object({
 export async function POST(req: Request) {
   const blocked = checkSameOriginRequest(req, { json: true });
   if (blocked) return NextResponse.json({ error: blocked.error }, { status: blocked.status });
+  // Per-IP budget before any DB work or hash (security audit: account farming for world seats,
+  // bcrypt floods, email probing). lib/auth-rate-limit.ts REGISTER_LIMITS.
+  const gate = registerLimiter.take(clientIp(req));
+  if (!gate.ok) {
+    return NextResponse.json(
+      { error: "rate_limited" },
+      { status: 429, headers: { "Retry-After": String(gate.retryAfterSec) } },
+    );
+  }
   const session = await getSession();
   if (session.userId && !session.guest) {
     return NextResponse.json({ error: "already_logged_in" }, { status: 400 });
@@ -45,16 +55,26 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "email_taken" }, { status: 409 });
   }
 
+  // Case-insensitive (security audit): friend and party lookups match nicknames case-insensitively,
+  // so "vLAD" next to "Vlad" would let an impostor receive requests meant for the original.
   const nickDup = await db
     .select({ id: users.id })
     .from(users)
-    .where(eq(users.nickname, nickname))
+    .where(sql`lower(${users.nickname}) = lower(${nickname})`)
     .limit(1);
   if (nickDup.length > 0) {
     return NextResponse.json({ error: "nickname_taken" }, { status: 409 });
   }
 
-  const passwordHash = await hashPassword(password);
+  let passwordHash: string;
+  try {
+    passwordHash = await hashPassword(password);
+  } catch (e) {
+    if (e instanceof BcryptBusyError) {
+      return NextResponse.json({ error: "busy" }, { status: 503, headers: { "Retry-After": "2" } });
+    }
+    throw e;
+  }
 
   const userId = randomUUID();
   let depositAddress: string;

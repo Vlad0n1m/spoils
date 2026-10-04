@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { authErrorMessage } from "@/lib/auth-error-messages";
 
 export function GuestPlayDialog({
   open,
@@ -35,7 +36,7 @@ export function GuestPlayDialog({
         setError(
           data.error === "bad_body"
             ? "2–16 characters: letters, numbers, underscores."
-            : (data.error ?? "guest_failed"),
+            : authErrorMessage(data.error ?? "guest_failed"),
         );
       }
     } catch (err: unknown) {

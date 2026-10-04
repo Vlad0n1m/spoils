@@ -56,7 +56,13 @@ export async function lockLoadout(db: Db, userId: string, entries: readonly Load
       if (cur?.status === "locked") return { ok: true, loadoutId: cur.id, entries: cur.entries, reused: true } as const;
       if (entries.length === 0) return { ok: true, loadoutId: "", entries: [], reused: false } as const;
 
-      const ids = entries.map((e) => e.itemId).filter((x): x is string => !!x && isUuid(x));
+      // Item rows only for entries of unique defs: validateLoadout checks the itemId of those alone,
+      // so an itemId on an ammo / med entry must never move a row (security audit: it pulled a
+      // LISTED item, or a dead entry's in_raid item, out of its state).
+      const ids = entries
+        .filter((e) => itemDef(e.def)?.unique)
+        .map((e) => e.itemId)
+        .filter((x): x is string => !!x && isUuid(x));
       const owned = ids.length
         ? await tx
             .select()
@@ -88,6 +94,8 @@ export async function lockLoadout(db: Db, userId: string, entries: readonly Load
 
       for (const row of owned) {
         if (!ids.includes(row.id)) continue;
+        // validateLoadout already required in_stash; this is the state-machine guard.
+        if (row.state !== "in_stash") throw new LockAbort("item_unavailable");
         await applyMove(
           tx,
           {

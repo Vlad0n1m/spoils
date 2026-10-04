@@ -1,21 +1,13 @@
 import { getIronSession, type SessionOptions } from "iron-session";
 import { cookies, headers } from "next/headers";
 import { editionSessionCookie } from "./edition";
+import { SESSION_TTL_SEC, sessionPassword } from "./session-secret";
 
 export interface AppSession {
   userId?: string;
   nickname?: string;
   /** No DB row; join match without debiting balance. */
   guest?: boolean;
-}
-
-/** iron-session requires password length >= 32 (chars). */
-function sessionPassword(): string {
-  const raw =
-    process.env.SESSION_SECRET?.trim() ||
-    "dev-only-fake-32byte-secret-pad-pad-pad-pad";
-  if (raw.length >= 32) return raw;
-  return raw.padEnd(32, "x");
 }
 
 /**
@@ -41,11 +33,14 @@ async function getSessionOptions(): Promise<SessionOptions> {
   return {
     password,
     cookieName: "extract_session",
+    // The seal expires with the cookie (iron-session's default seal TTL is 14 days: a copied cookie
+    // stayed valid a week past its maxAge, security audit).
+    ttl: SESSION_TTL_SEC,
     cookieOptions: {
       httpOnly: true,
       sameSite: "lax",
       secure: await resolveCookieSecure(),
-      maxAge: 60 * 60 * 24 * 7,
+      maxAge: SESSION_TTL_SEC,
       path: "/",
       // iDos Games edition only (inside the idosgames.com iframe): SameSite=None; Secure; Partitioned.
       ...editionSessionCookie(),

@@ -43,6 +43,8 @@ export function isProductionRuntime(env: EnvSource = process.env): boolean {
 export function productionEnvProblems(env: EnvSource = process.env): string[] {
   if (!isProductionRuntime(env)) return [];
   const problems: string[] = [];
+  // lib/session.ts refuses it too: a short or missing secret makes sessions forgeable.
+  if ((env.SESSION_SECRET?.trim() ?? "").length < 32) problems.push("SESSION_SECRET must be at least 32 characters in production");
   const cron = env.CRON_SECRET?.trim() ?? "";
   if (!cron) problems.push("CRON_SECRET is required in production (Bearer token of /api/cron/**)");
   else if (cron.length < CRON_SECRET_MIN_PROD) {

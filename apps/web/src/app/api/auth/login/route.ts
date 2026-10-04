@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { users } from "@/db/schema";
 import { getSession } from "@/lib/session";
-import { burnPasswordCompare, verifyPassword } from "@/lib/password";
+import { BcryptBusyError, burnPasswordCompare, verifyPassword } from "@/lib/password";
 import { checkSameOriginRequest } from "@/lib/request-guard";
 import { clientIp, loginLimiter } from "@/lib/auth-rate-limit";
 
@@ -25,7 +25,8 @@ export async function POST(req: Request) {
   }
   const { email, password } = parsed.data;
 
-  const gate = loginLimiter.begin(clientIp(req), email);
+  const ip = clientIp(req);
+  const gate = loginLimiter.begin(ip, email);
   if (!gate.ok) {
     return NextResponse.json(
       { error: "rate_limited" },
@@ -39,12 +40,18 @@ export async function POST(req: Request) {
     .where(eq(users.email, email))
     .limit(1);
   const u = rows[0];
-  const ok = u ? await verifyPassword(password, u.passwordHash) : await burnPasswordCompare(password);
+  let ok: boolean;
+  try {
+    ok = u ? await verifyPassword(password, u.passwordHash) : await burnPasswordCompare(password);
+  } catch (e) {
+    if (e instanceof BcryptBusyError) return busy();
+    throw e;
+  }
   if (!u || !ok) {
-    loginLimiter.fail(email);
+    loginLimiter.fail(email, ip);
     return NextResponse.json({ error: "invalid_credentials" }, { status: 401 });
   }
-  loginLimiter.succeed(email);
+  loginLimiter.succeed(email, ip);
 
   const session = await getSession();
   session.guest = false;
@@ -63,4 +70,9 @@ export async function POST(req: Request) {
       isGuest: false,
     },
   });
+}
+
+/** Too many password checks in flight (lib/password.ts BcryptGate). */
+function busy() {
+  return NextResponse.json({ error: "busy" }, { status: 503, headers: { "Retry-After": "2" } });
 }
