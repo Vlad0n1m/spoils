@@ -61,7 +61,8 @@ export function WorldCard() {
   return (
     <section
       aria-label={`${BRAND.mapName}, map ${v.mapNumber}`}
-      className="toon-panel mx-auto w-full max-w-xl bg-[#121722]/90 p-3 backdrop-blur-sm md:p-4"
+      // Landscape phones (≤ 500 px tall): tighter, and the raiders line joins the wipe-time line.
+      className="toon-panel mx-auto w-full max-w-xl bg-[#121722]/90 p-3 backdrop-blur-sm md:p-4 [@media(max-height:500px)]:p-2.5"
     >
       <div className="flex items-center justify-between gap-3">
         <h2 className="min-w-0 truncate text-base tracking-wide text-white md:text-lg">
@@ -75,18 +76,25 @@ export function WorldCard() {
         </span>
       </div>
 
-      <div className="mt-2 flex items-baseline justify-between gap-3">
+      <div className="mt-2 flex items-baseline justify-between gap-3 [@media(max-height:500px)]:mt-1">
         <p
           role="timer"
           aria-live="off"
           className={clsx(
-            "toon-text-thin text-2xl tabular-nums tracking-wide md:text-[2rem]",
+            "toon-text-thin text-2xl tabular-nums tracking-wide md:text-[2rem] [@media(max-height:500px)]:text-2xl",
             v.phase === "open" ? (short ? "text-amber-300" : "text-white") : "text-amber-200",
           )}
         >
           {main}
         </p>
-        <p className="font-body shrink-0 text-xs font-semibold tabular-nums text-white/60">{side}</p>
+        <p className="font-body shrink-0 text-right text-xs font-semibold tabular-nums text-white/60">
+          {side}
+          {raiders && v.humans !== null && (
+            <span className="hidden [@media(max-height:500px)]:block">
+              {v.humans} on the map{v.humans >= v.capacity ? " · full" : ""}
+            </span>
+          )}
+        </p>
       </div>
 
       <div className="relative mt-2.5 hidden h-3 overflow-hidden rounded-full border-2 border-black bg-black/55 md:block [@media(max-height:640px)]:hidden" aria-hidden>
@@ -104,7 +112,7 @@ export function WorldCard() {
         <span className="absolute inset-y-0 w-0.5 bg-black" style={{ left: `${v.closeMark * 100}%` }} />
       </div>
 
-      <div className="mt-2 flex min-h-5 items-center justify-between gap-3">
+      <div className={clsx("mt-2 flex min-h-5 items-center justify-between gap-3", raiders && !offline && !loading && "[@media(max-height:500px)]:hidden")}>
         {offline ? (
           <p className="font-body flex items-center gap-2 text-sm text-white/75">
             World server unreachable.
@@ -129,7 +137,7 @@ export function WorldCard() {
         )}
       </div>
 
-      <div className="mt-2.5 empty:hidden">
+      <div className="mt-2.5 empty:hidden [@media(max-height:500px)]:mt-1.5">
         <BossBanner status={status} fresh={v.fresh} />
       </div>
     </section>

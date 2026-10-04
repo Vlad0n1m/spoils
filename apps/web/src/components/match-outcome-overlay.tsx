@@ -166,7 +166,9 @@ function ResultCard({
   );
 
   return (
-    <section className="toon-panel overflow-hidden bg-[#161b28]/95 p-0" aria-live="polite">
+    // overflow-clip on short screens: unlike overflow-hidden it is no scroll container, so the sticky
+    // "Back to lobby" below sticks to the overlay's scroller.
+    <section className="toon-panel overflow-hidden bg-[#161b28]/95 p-0 [@media(max-height:640px)]:overflow-clip" aria-live="polite">
       <div className={clsx("h-3 border-b-[3px] border-black", style.band)} aria-hidden />
       <div className="p-6 sm:p-8">
         <p className="text-xs uppercase tracking-[0.25em] text-white/50">Raid result</p>
@@ -261,7 +263,12 @@ function ResultCard({
           </p>
         )}
 
-        <button type="button" onClick={onContinue} className="toon-btn mt-8 min-h-14 w-full text-xl tracking-wide">
+        {/* Short (landscape phone) screens: the receipt scrolls, the way back stays on screen. */}
+        <button
+          type="button"
+          onClick={onContinue}
+          className="toon-btn mt-8 min-h-14 w-full text-xl tracking-wide [@media(max-height:640px)]:sticky [@media(max-height:640px)]:bottom-0 [@media(max-height:640px)]:z-10"
+        >
           Back to lobby
         </button>
       </div>

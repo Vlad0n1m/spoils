@@ -17,6 +17,7 @@ import { BOSSES, MAPS, extractOpenAtFor, zoneAt, type BossKind, type BossSpot, t
 import { COLORS } from "./assets";
 import type { GameContext, GameSystem } from "./systems";
 import { acquireOverview, releaseOverview } from "./minimap";
+import { shouldUseTouch } from "./touch-mode";
 import { BOSS_COLOR, bossSpotShown, liveBossTurf, turfLine, type EventBossState } from "./boss";
 import { skullContext } from "./boss-icons";
 
@@ -171,6 +172,15 @@ export function toastAlpha(t: number, holdMs: number = TOAST.HOLD_MS): number {
   return o < TOAST.OUT_MS ? 1 - o / TOAST.OUT_MS : 0;
 }
 
+
+/**
+ * Zone toast top (screen px): 16% of the height, but on a short landscape phone (< 480 px) below
+ * the React HUD's timer + compass and the boss bar (bossBarY), which sit higher than 16% there.
+ */
+export function zoneToastY(screenH: number): number {
+  return screenH < 480 ? 132 : Math.round(screenH * 0.16);
+}
+
 export class ZoneToast {
   readonly root = new Container();
   private readonly title: Text;
@@ -231,7 +241,7 @@ export class ZoneToast {
   }
 
   layout(screenW: number, screenH: number) {
-    this.root.position.set(screenW / 2, Math.round(screenH * 0.16));
+    this.root.position.set(screenW / 2, zoneToastY(screenH));
   }
 
   frame(nowMs: number) {
@@ -323,7 +333,8 @@ export class FullMapOverlay {
 
     this.title = new Text({ text: "", style: labelStyle(0xffffff, 22) });
     this.title.anchor.set(0.5, 1);
-    this.hint = new Text({ text: "M — close", style: { ...labelStyle(0xc9ced6, 13), fontWeight: "700" } });
+    // Touch has no M key: the MAP button toggles it.
+    this.hint = new Text({ text: shouldUseTouch() ? "Tap MAP to close" : "M — close", style: { ...labelStyle(0xc9ced6, 13), fontWeight: "700" } });
     this.hint.anchor.set(0.5, 0);
 
     this.panel.addChild(this.mapSprite, this.zones, this.sideBand, this.labels, this.me, this.compass);
@@ -349,11 +360,13 @@ export class FullMapOverlay {
   layout(screenW: number, screenH: number) {
     if (screenW === this.screen.w && screenH === this.screen.h) return;
     this.screen = { w: screenW, h: screenH };
-    const size = Math.max(200, Math.min(screenW * 0.9, screenH - 120));
+    // Short landscape phones (< 480 px): start under the React HUD's timer so the title stays readable.
+    const short = screenH < 480;
+    const size = Math.max(200, Math.min(screenW * 0.9, screenH - (short ? 160 : 120)));
     this.size = size;
     const k = size / Math.max(this.map.width, this.map.height);
     this.backdrop.clear().rect(0, 0, screenW, screenH).fill({ color: 0x05080a, alpha: 0.72 });
-    this.panel.position.set((screenW - size) / 2, (screenH - size) / 2 + 10);
+    this.panel.position.set((screenW - size) / 2, short ? 90 : (screenH - size) / 2 + 10);
     this.mapSprite.width = this.map.width * k;
     this.mapSprite.height = this.map.height * k;
 

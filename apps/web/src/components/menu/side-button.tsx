@@ -61,6 +61,8 @@ export const SideButton = forwardRef<
       aria-label={locked ? `${label}, coming soon` : dot ? `${label}, new` : label}
       className={clsx(
         "toon-tile h-[5.25rem] w-[5.25rem] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black lg:h-[6.5rem] lg:w-[6.5rem] min-[1440px]:h-[7.25rem] min-[1440px]:w-[7.25rem]",
+        // Landscape phones: 72 px tiles (64 px at ≤ 400 px tall) so a column of four fits.
+        "[@media(max-height:500px)]:h-[4.5rem] [@media(max-height:500px)]:w-[4.5rem] [@media(max-height:400px)]:!h-16 [@media(max-height:400px)]:!w-16",
         active && "!bg-zooa-lime text-black",
         locked && "cursor-not-allowed !bg-[#161b28]/90",
       )}
@@ -70,10 +72,18 @@ export const SideButton = forwardRef<
         fallback={icon.fallback}
         className={clsx(
           "object-contain drop-shadow-[0_3px_0_rgba(0,0,0,0.55)]",
-          locked ? "-mt-5 h-8 w-8 opacity-60 grayscale lg:h-11 lg:w-11" : "-mt-1 h-10 w-10 lg:h-16 lg:w-16",
+          locked
+            ? "-mt-5 h-8 w-8 opacity-60 grayscale lg:h-11 lg:w-11 [@media(max-height:500px)]:-mt-4 [@media(max-height:500px)]:h-7 [@media(max-height:500px)]:w-7"
+            : "-mt-1 h-10 w-10 lg:h-16 lg:w-16 [@media(max-height:500px)]:h-8 [@media(max-height:500px)]:w-8",
         )}
       />
-      <span className={clsx("text-xs tracking-wide lg:text-[0.95rem]", locked && "text-white/60")} aria-hidden>
+      <span
+        className={clsx(
+          "text-xs tracking-wide lg:text-[0.95rem] [@media(max-height:500px)]:text-[0.6rem] [@media(max-height:500px)]:tracking-normal [@media(max-height:400px)]:!text-[0.55rem]",
+          locked && "text-white/60",
+        )}
+        aria-hidden
+      >
         <span className="optical-center">{label}</span>
       </span>
       {locked && (

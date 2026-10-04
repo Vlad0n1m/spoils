@@ -81,12 +81,14 @@ export function PlayController({
   /** The me/world answer the lobby held when /api/world/join said in_raid (only later answers count). */
   const meAtInRaid = useRef<typeof me | null>(null);
   const alive = useRef(true);
-  useEffect(
-    () => () => {
+  // Set on every mount: StrictMode (dev) runs mount → cleanup → mount, and a ref left false by that
+  // first cleanup made every join stop after flushDraft with DROPPING IN… stuck forever.
+  useEffect(() => {
+    alive.current = true;
+    return () => {
       alive.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   // Armed survives a reload of the tab (session storage), not a closed tab.
   useEffect(() => {

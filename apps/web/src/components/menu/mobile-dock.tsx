@@ -44,7 +44,8 @@ export function MobileDock({
     </li>
   );
   return (
-    <nav aria-label="Menu" className="md:hidden">
+    // Landscape phones (≤ 500 px tall) get the side columns instead (main-menu.tsx).
+    <nav aria-label="Menu" className="md:hidden [@media(max-height:500px)]:hidden">
       <ul className="flex gap-1.5">
         {cell("inventory", "Inventory", MENU_ICONS.inventory, active === "inventory", () => onPanel("inventory"))}
         {cell("shop", "Shop", MENU_ICONS.shop, active === "shop", () => onPanel("shop"))}

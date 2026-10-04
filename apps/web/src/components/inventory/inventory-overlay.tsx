@@ -29,6 +29,7 @@ import {
 import type { InvSnapshot, InventoryClient } from "@/game/inventory-client";
 import { useItemDrag, type DragSource, type DropTarget } from "@/hooks/use-item-drag";
 import { describeItem, fmtCr, quickTarget, recordStore } from "@/lib/items-ui";
+import { useTouchMode } from "@/components/use-touch-mode";
 import { InvSlot } from "./inv-slot";
 import { SearchPanel } from "./search-panel";
 
@@ -71,6 +72,8 @@ export function dropAllowed(snap: InvSnapshot, source: DragSource, target: DropT
 
 export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
   const store = useMemo(() => recordStore(snap.slots), [snap.slots]);
+  // Touch (phones, the TWA): a real Close button instead of the Tab hint, tap / drag wording.
+  const touch = useTouchMode();
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   const onDrop = useCallback(
@@ -180,7 +183,7 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
   return (
     <div
       ref={rootRef}
-      className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto p-3 pt-[8vh] sm:p-6 sm:pt-[10vh]"
+      className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto p-3 pt-[8vh] sm:p-6 sm:pt-[10vh] [@media(max-height:500px)]:p-2"
       onKeyDown={onKeyDown}
       onKeyUp={(e) => {
         if (e.code === "Space") e.preventDefault();
@@ -203,13 +206,29 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
         </div>
       )}
 
-      <div className="relative flex flex-wrap items-start justify-center gap-4">
-        <section aria-label="Inventory" className="toon-panel w-[min(92vw,25rem)] bg-[#1d2333]/95 p-4">
+      {/* Landscape phones (≤ 500 px tall): inventory (24 rem) and the search panel (20 rem) side by
+          side from ~732 px wide, so the loot is on screen next to the bag; narrower, the loot comes first. */}
+      <div className="relative flex flex-wrap items-start justify-center gap-4 [@media(max-height:500px)]:gap-3">
+        <section aria-label="Inventory" className="toon-panel w-[min(92vw,25rem)] bg-[#1d2333]/95 p-4 [@media(max-height:500px)]:w-[24rem] [@media(max-height:500px)]:p-3">
           <header className="flex items-center justify-between">
             <h2 className="toon-text text-2xl tracking-wide text-white">Inventory</h2>
-            <span className="flex items-center gap-1.5 text-xs text-white/60">
-              <span className="toon-key">Tab</span> close
-            </span>
+            {touch ? (
+              <button
+                type="button"
+                onClick={() => {
+                  // Closes the search first, then the inventory (both when both are open).
+                  for (let i = 0; i < 3 && actions.escape(); i++);
+                }}
+                className="toon-btn-ghost h-11 min-w-11 shrink-0 px-3 text-sm"
+                aria-label="Close inventory"
+              >
+                <span className="optical-center">Close</span>
+              </button>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs text-white/60">
+                <span className="toon-key">Tab</span> close
+              </span>
+            )}
           </header>
 
           <div className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3">
@@ -259,7 +278,9 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
             </span>
           </footer>
           <p className="font-body mt-2 text-[0.7rem] leading-snug text-white/45">
-            Click to equip / use · drag to move · right-click or Del to drop
+            {touch
+              ? "Tap to equip / use · drag to move · drag onto the dark area to drop"
+              : "Click to equip / use · drag to move · right-click or Del to drop"}
           </p>
         </section>
 
@@ -272,6 +293,7 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
             onTake={(i, it) => actions.move({ from: "loot", key: String(i), expect: { uid: it.uid, def: it.def } })}
             onTakeAll={() => actions.takeAll()}
             onClose={() => actions.closeSearch()}
+            touch={touch}
           />
         )}
       </div>

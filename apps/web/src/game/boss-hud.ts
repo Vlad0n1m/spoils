@@ -37,8 +37,12 @@ const BAR_H = 12;
 /** "FOREMAN DOWN" banner on the bar after a known boss dies. */
 const DOWN_MS = 3500;
 
-/** Screen bar top: below the React HUD's top-centre timer, above the zone toast (16% of h). */
+/**
+ * Screen bar top: below the React HUD's top-centre timer, above the zone toast (16% of h). On a
+ * short landscape phone (< 480 px) also below the extract compass, which ends at ~100 px there.
+ */
 export function bossBarY(screenH: number): number {
+  if (screenH < 480) return 108;
   return Math.round(Math.max(64, Math.min(118, screenH * 0.095)));
 }
 

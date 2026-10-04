@@ -74,7 +74,7 @@ export function MyListings({ refreshKey, onChanged }: { refreshKey: number; onCh
                   </p>
                 </div>
                 {open && (
-                  <button type="button" onClick={() => cancel(l.id)} disabled={busy !== null} className="toon-btn-ghost min-h-8 shrink-0 px-2.5 text-xs">
+                  <button type="button" onClick={() => cancel(l.id)} disabled={busy !== null} className="toon-btn-ghost min-h-8 shrink-0 px-2.5 text-xs [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-3.5">
                     <span className="optical-center">{busy === l.id ? "…" : "Cancel"}</span>
                   </button>
                 )}

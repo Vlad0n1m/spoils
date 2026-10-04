@@ -21,10 +21,10 @@ export function atRiskOf(entries: readonly LoadoutEntry[]): number {
 
 function KitTile({ icon, label, note }: { icon: string; label: string; note: string }) {
   return (
-    <li className="flex items-center gap-2.5 rounded-2xl border-[3px] border-black bg-[#161b28]/90 py-1.5 pl-1.5 pr-3 shadow-[0_3px_0_#000]">
-      <span className="grid h-11 w-11 place-items-center rounded-xl border-2 border-black bg-zinc-300/80">
+    <li className="flex items-center gap-2.5 rounded-2xl border-[3px] border-black bg-[#161b28]/90 py-1.5 pl-1.5 pr-3 shadow-[0_3px_0_#000] [@media(max-height:500px)]:py-1">
+      <span className="grid h-11 w-11 place-items-center rounded-xl border-2 border-black bg-zinc-300/80 [@media(max-height:500px)]:h-9 [@media(max-height:500px)]:w-9">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={icon} alt="" className="h-9 w-9 object-contain" draggable={false} />
+        <img src={icon} alt="" className="h-9 w-9 object-contain [@media(max-height:500px)]:h-7 [@media(max-height:500px)]:w-7" draggable={false} />
       </span>
       <span className="min-w-0">
         <span className="block text-sm tracking-wide text-white">{label}</span>
@@ -79,7 +79,7 @@ export function GearStrip({
   const entries = guest || !signedIn ? [] : loadoutOf(stash);
   if (entries.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-2">
+      <div className="flex flex-col items-center gap-2 [@media(max-height:500px)]:gap-1">
         <ul className="flex flex-wrap justify-center gap-2" aria-label="You drop with the free kit">
           <KitTile icon="/sprites/pistol.png" label="Pistol" note="Free — never lost" />
           <KitTile icon="/sprites/ammo.png" label={`${FREE_KIT.AMMO_LIGHT} light ammo`} note="Pick up more" />
@@ -88,11 +88,11 @@ export function GearStrip({
         {signedIn && !guest && stash && (
           <p className="font-body text-sm text-white/75">
             {stash.starterClaimed ? (
-              <button type="button" onClick={onEdit} className="min-h-9 rounded-lg px-1 font-semibold text-zooa-lime underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime">
+              <button type="button" onClick={onEdit} className="relative min-h-9 rounded-lg px-1 font-semibold text-zooa-lime underline-offset-4 before:absolute before:-inset-y-1 before:inset-x-0 before:content-[''] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime">
                 Set up your loadout
               </button>
             ) : (
-              <button type="button" onClick={onStarter} className="min-h-9 rounded-lg px-1 font-semibold text-zooa-lime underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime">
+              <button type="button" onClick={onStarter} className="relative min-h-9 rounded-lg px-1 font-semibold text-zooa-lime underline-offset-4 before:absolute before:-inset-y-1 before:inset-x-0 before:content-[''] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime">
                 Free starter kit waiting — claim it
               </button>
             )}
@@ -135,7 +135,7 @@ export function GearStrip({
           type="button"
           onClick={onEdit}
           className={clsx(
-            "inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1.5 text-zooa-lime underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime",
+            "relative inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1.5 text-zooa-lime underline-offset-4 before:absolute before:-inset-y-1 before:inset-x-0 before:content-[''] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime",
           )}
         >
           Edit

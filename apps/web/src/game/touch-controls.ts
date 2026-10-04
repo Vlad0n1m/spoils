@@ -14,6 +14,7 @@
 
 import type { InputController, TouchAction } from "./input";
 import { MINIMAP_MARGIN, minimapSize } from "./minimap";
+import { zoneToastY } from "./fullmap";
 
 /** Stick travel in CSS px for full deflection. */
 export const STICK_RADIUS = 56;
@@ -22,13 +23,7 @@ export const AIM_FROM = 0.2;
 export const FIRE_AT = 0.55;
 
 /** Phones and tablets (coarse primary pointer); ?touch=1 forces it on a desktop, ?touch=0 off. */
-export function shouldUseTouch(): boolean {
-  if (typeof window === "undefined") return false;
-  const q = new URLSearchParams(window.location.search).get("touch");
-  if (q === "1") return true;
-  if (q === "0") return false;
-  return window.matchMedia?.("(pointer: coarse)").matches ?? false;
-}
+export { shouldUseTouch } from "./touch-mode";
 
 /** Aim stick deflection (stick units, 0..1 past the centre) → aim angle and trigger. */
 export function aimFromStick(x: number, y: number): { angle: number | null; fire: boolean } {
@@ -99,36 +94,54 @@ const GAP = 8;
 const STEP = 4;
 
 /**
- * Screen areas the React HUD (components/hud.tsx) and the canvas HUD (minimap.ts, boss-hud.ts,
- * the zone toast of fullmap.ts) draw into, in CSS px of the game mount. Sizes mirror the HUD's
- * Tailwind classes at their largest content; keep them in sync when the HUD layout changes.
+ * Where the thumbs land to start the floating sticks: the bottom-left and bottom-right corners.
+ * No button may sit there, or a thumb that goes down to move or aim taps a medkit instead.
+ */
+export function thumbZone(w: number, h: number): { w: number; h: number } {
+  return { w: Math.round(Math.max(136, Math.min(200, 0.19 * w))), h: Math.round(Math.max(140, Math.min(210, 0.4 * h))) };
+}
+
+/**
+ * Screen areas the touch HUD (components/hud.tsx with `touch`) and the canvas HUD (minimap.ts,
+ * boss-hud.ts, the zone toast of fullmap.ts) draw into, plus the two thumb zones, in CSS px of the
+ * game mount. Sizes mirror the HUD's Tailwind classes at their largest content; keep them in sync
+ * when the touch HUD layout changes.
  */
 export function hudReservedRects(w: number, h: number): HudArea[] {
-  const md = w >= 768;
   const r: HudArea[] = [];
   // Top centre: phase timer / wipe countdown, extract compass, wipe warning, boss toast (the
-  // top-3 stack), the boss bar (bossBarY ≤ 118) and the zone toast (h × 0.16).
-  const topW = Math.min(w - 24, 420);
-  r.push({ id: "top", x: (w - topW) / 2, y: 0, w: topW, h: 222 });
+  // top-3 stack in its touch size, ≤ 21.5 rem wide) and the boss bar (bossBarY ≤ 118, 340 px).
+  const topW = Math.min(w - 24, 352);
+  r.push({ id: "top", x: (w - topW) / 2, y: 0, w: topW, h: 200 });
   // Top right: minimap.
   const mm = minimapSize(w, h);
   r.push({ id: "minimap", x: w - mm - MINIMAP_MARGIN - 6, y: 0, w: mm + MINIMAP_MARGIN + 6, h: MINIMAP_MARGIN + mm + 6 });
-  // Bottom centre: the move / vitals / weapons / meds bar (~44.5 rem wide at md+, ~40 rem below,
-  // 6.5 rem cards).
-  const barW = Math.min(w - 24, md ? 712 : 640) + 12;
-  const barH = 12 + 112 + 6;
+  // Top left: the menu and audio chips (2 × 44 px from left-3 / top-3) and the ping badge.
+  r.push({ id: "chips", x: 0, y: 0, w: 200, h: 62 });
+  // Bottom centre: the touch bar (12.5 rem vitals, two 5.5 rem weapon cards, the carry panel up to
+  // 5 rem, gap-2) at bottom-2; 5.25 rem cards, the active one lifted 6 px.
+  const barW = Math.min(w - 24, 480) + 12;
+  const barH = 8 + 84 + 6 + 4;
   r.push({ id: "bar", x: (w - barW) / 2, y: h - barH, w: barW, h: barH });
-  // Bottom left: ping badge.
-  r.push({ id: "ping", x: 0, y: h - 44, w: 100, h: 44 });
-  // Bottom right (md+ only): the controls / leave-raid chip and the audio button above it.
-  if (md) r.push({ id: "chips", x: w - 64, y: h - 108, w: 64, h: 108 });
-  // Soft: shown now and then. Top left: kill feed, up to 5 rows, max-w min(22rem, 40vw).
-  r.push({ id: "killfeed", soft: true, x: 0, y: 0, w: 12 + Math.min(352, 0.4 * w) + 6, h: 12 + 5 * 34 + 6 });
-  // Interact hint + heal / reload progress stacked above the bar.
-  r.push({ id: "hint", soft: true, x: w / 2 - 210, y: h - barH - 96, w: 420, h: 96 });
-  // Extract ring + caption, bottom: clamp(13rem, 30vh, 17rem).
-  const ringBottom = Math.max(208, Math.min(272, 0.3 * h));
-  r.push({ id: "ring", soft: true, x: w / 2 - 200, y: h - ringBottom - 176, w: 400, h: 176 });
+  // The thumbs' corners.
+  const tz = thumbZone(w, h);
+  r.push({ id: "thumb-left", x: 0, y: h - tz.h, w: tz.w, h: tz.h });
+  r.push({ id: "thumb-right", x: w - tz.w, y: h - tz.h, w: tz.w, h: tz.h });
+  // Soft: shown now and then. Top left, under the chips: kill feed, up to 5 rows, max-w min(22rem, 40vw).
+  // Only the first rows are kept clear: the feed is short-lived and paints over the buttons anyway.
+  r.push({ id: "killfeed", soft: true, x: 0, y: 62, w: 12 + Math.min(352, 0.4 * w) + 6, h: 2 * 34 + 6 });
+  // The zone toast (fullmap.ts ZoneToast, a few seconds when entering a zone) under the boss bar.
+  r.push({ id: "zone", soft: true, x: (w - topW) / 2, y: zoneToastY(h) - 8, w: topW, h: 112 });
+  // Interact hint + heal / reload progress (w-64) stacked above the bar.
+  r.push({ id: "hint", soft: true, x: w / 2 - 150, y: h - barH - 96, w: 300, h: 96 });
+  // Extract ring + caption: bottom clamp(13rem, 30vh, 17rem); a 6 rem ring from top-[6.75rem] when
+  // ≤ 500 px tall.
+  if (h <= 500) {
+    r.push({ id: "ring", soft: true, x: w / 2 - 170, y: 104, w: 340, h: 140 });
+  } else {
+    const ringBottom = Math.max(208, Math.min(272, 0.3 * h));
+    r.push({ id: "ring", soft: true, x: w / 2 - 200, y: h - ringBottom - 176, w: 400, h: 176 });
+  }
   return r;
 }
 
@@ -136,9 +149,10 @@ export function rectsOverlap(a: Rect, b: Rect, gap = 0): boolean {
   return a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
 }
 
-/** Where each side's buttons gather: the thumb's resting area above the bottom HUD. */
+/** Where each side's buttons gather: right above that side's thumb zone. */
 function anchorOf(side: "left" | "right", w: number, h: number): { x: number; y: number } {
-  return { x: side === "right" ? w - 48 : 48, y: h - 150 };
+  const tz = thumbZone(w, h);
+  return { x: side === "right" ? w - tz.w / 2 : tz.w / 2, y: h - tz.h };
 }
 
 /**

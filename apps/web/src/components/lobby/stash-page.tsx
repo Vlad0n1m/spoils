@@ -60,7 +60,10 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
             value={formatMinor(stash.balance).replace(` ${stash.market.currency}`, "")}
             tone="text-zooa-lime"
             extra={
-              <Link href="/wallet" className="font-body text-xs text-white/55 underline-offset-4 hover:text-white hover:underline">
+              <Link
+                href="/wallet"
+                className="font-body relative text-xs text-white/55 underline-offset-4 before:absolute before:-inset-x-2 before:-inset-y-3.5 before:content-[''] hover:text-white hover:underline"
+              >
                 Top up
               </Link>
             }
@@ -145,7 +148,10 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
           <img src="/sprites/ammo.png" alt="" className="h-12 w-12 shrink-0 object-contain" draggable={false} />
           <div className="min-w-0">
             <h2 className="toon-text-thin text-xl tracking-wide text-white">Need ammo or meds?</h2>
-            <Link href={panelHref({ panel: "shop", tab: "traders" })} className="font-body mt-1 inline-block text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline">
+            <Link
+              href={panelHref({ panel: "shop", tab: "traders" })}
+              className="font-body mt-1 inline-flex min-h-11 items-center text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline"
+            >
               Buy them for CR in Shop · Traders →
             </Link>
           </div>

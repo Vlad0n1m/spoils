@@ -76,7 +76,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
             id="market-sort"
             value={sort}
             onChange={(e) => setSort(e.target.value as typeof sort)}
-            className="ml-1 rounded-full border-2 border-black bg-white px-3 py-1.5 text-xs text-black"
+            className="ml-1 rounded-full border-2 border-black bg-white px-3 py-1.5 text-xs text-black [@media(pointer:coarse)]:min-h-11"
           >
             {SORTS.map((s) => (
               <option key={s.id} value={s.id}>
@@ -131,10 +131,10 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
                   <span className="text-xs uppercase tracking-wider text-white/40">Sign in</span>
                 ) : confirm === l.id ? (
                   <div className="flex gap-1.5">
-                    <button type="button" onClick={() => buy(l)} disabled={busy !== null} className="toon-btn min-h-9 px-3 text-sm">
+                    <button type="button" onClick={() => buy(l)} disabled={busy !== null} className="toon-btn min-h-9 px-3 text-sm [@media(pointer:coarse)]:min-h-11">
                       <span className="optical-center">{busy === l.id ? "…" : "Confirm"}</span>
                     </button>
-                    <button type="button" onClick={() => setConfirm(null)} className="toon-btn-ghost min-h-9 px-3 text-sm">
+                    <button type="button" onClick={() => setConfirm(null)} className="toon-btn-ghost min-h-9 px-3 text-sm [@media(pointer:coarse)]:min-h-11">
                       <span className="optical-center">✕</span>
                     </button>
                   </div>
@@ -144,7 +144,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
                     onClick={() => setConfirm(l.id)}
                     disabled={short || busy !== null}
                     title={short ? "Not enough balance" : undefined}
-                    className="toon-btn min-h-9 px-4 text-sm"
+                    className="toon-btn min-h-9 px-4 text-sm [@media(pointer:coarse)]:min-h-11"
                   >
                     <span className="optical-center">Buy</span>
                   </button>
@@ -165,7 +165,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
       onClick={onClick}
       aria-pressed={active}
       className={clsx(
-        "rounded-full border-2 border-black px-3 py-1.5 text-xs tracking-wide transition",
+        "rounded-full border-2 border-black px-3 py-1.5 text-xs tracking-wide transition [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-4",
         active ? "bg-zooa-lime text-black shadow-[0_2px_0_#000]" : "bg-black/30 text-white/75 hover:text-white",
       )}
     >

@@ -23,7 +23,7 @@ export function MenuTopBar({ onCredits }: { onCredits: () => void }) {
 
   return (
     <header className="relative z-20 border-b-[3px] border-black bg-[#0d1119]/85 backdrop-blur">
-      <div className="flex h-14 items-center gap-2 px-3 md:h-16 md:gap-3 md:px-5">
+      <div className="flex h-14 items-center gap-2 px-3 md:h-16 md:gap-3 md:px-5 [@media(max-height:500px)]:h-14">
         <Link
           href="/"
           className="toon-text-thin hidden shrink-0 text-2xl tracking-wide text-zooa-lime focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/60 sm:block md:text-3xl"
