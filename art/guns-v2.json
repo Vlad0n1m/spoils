@@ -1,0 +1,88 @@
+{
+  "about": "Weapons v2 art (docs/WEAPONS_V2.md): four guns, a frag grenade, four ammo icons, a crossbow bolt projectile and the explosion effect. Generate with `node art/raw/guns-v2/gen.mjs [ids…]`, post-process (inventory icons, explosion sheet, contact sheet) with `uv run --with pillow art/raw/guns-v2/post.py`.",
+  "style": "Game sprite in exactly the art style of the first reference image (bright stylized cartoon like ZombsRoyale, flat colors, soft shading, thick dark outlines, chunky readable shapes).",
+  "gunStyle": "Match the outline thickness, shading and level of detail of the second reference image (an existing weapon sprite of the same game), but draw a different weapon. A generic fictional design, not a copy of any real-world model, no markings.",
+  "gunView": "Seen from above, gun lying flat so its side profile silhouette is visible, pointing right, the whole gun horizontal.",
+  "view": "Seen STRICTLY from directly above (bird's-eye, 90 degrees top-down, NOT 3/4 or isometric view).",
+  "isolate": "Centered, single isolated object filling about 70% of the frame, on a perfectly flat solid pure magenta background (#FF00FF), no gradient, no ground texture, no cast shadow, no text, no letters, no logos. Do not use any pink, magenta or purple colors on the object.",
+  "ref": "art/style-test/1-cartoon.png",
+  "gunRef": "art/raw/rifle.png",
+  "items": [
+    {
+      "id": "smg",
+      "gun": true,
+      "size": 224,
+      "prompt": "A compact submachine gun: short barrel with a small muzzle, a straight box magazine sticking down in front of the trigger guard, a slim pistol grip, a folded skeleton wire stock, matte black metal with a dark tan polymer handguard."
+    },
+    {
+      "id": "lmg",
+      "gun": true,
+      "size": 320,
+      "prompt": "A light machine gun, long and heavy: a thick barrel with a perforated cooling shroud and a flash hider, a folded bipod under the front, a carry handle on top, a square ammo belt box hanging under the receiver with a short brass belt feeding in, a solid stock, dark gunmetal with olive drab furniture."
+    },
+    {
+      "id": "revolver",
+      "gun": true,
+      "size": 192,
+      "prompt": "A big six-shot revolver: long round barrel with a top rib and a front sight, a chunky fluted cylinder, a hammer, a curved warm brown wooden grip, polished steel metal."
+    },
+    {
+      "id": "crossbow",
+      "gun": true,
+      "size": 288,
+      "view": "Seen STRICTLY from directly above, pointing right: the stock runs left to right, and the two curved bow limbs spread up and down at the front end, perpendicular to the stock.",
+      "prompt": "A modern hunting crossbow: two thick recurved limbs with small cam wheels at the tips, a taut string pulled back to the trigger, a loaded bolt with bright green fletching resting on the rail, a small scope on top, a dark walnut wooden stock and black metal parts."
+    },
+    {
+      "id": "grenade",
+      "size": 128,
+      "view": "Seen from above at a slight angle so the round body and the lever are both visible.",
+      "prompt": "A round olive-green fragmentation hand grenade with a segmented pineapple-like body, a gray metal spoon lever along its side and a steel pull ring with its pin on top."
+    },
+    {
+      "id": "ammo_light",
+      "size": 128,
+      "view": "Seen from above at a slight angle.",
+      "prompt": "A small open tan cardboard box of short brass pistol cartridges with a yellow stripe on the box, about a dozen cartridges standing upright inside, two loose cartridges lying beside it."
+    },
+    {
+      "id": "ammo_shell",
+      "size": 128,
+      "view": "Seen from above at a slight angle.",
+      "prompt": "Four fat red plastic shotgun shells with shiny brass bases lying side by side in a neat fan."
+    },
+    {
+      "id": "ammo_heavy",
+      "size": 128,
+      "view": "Seen from above at a slight angle.",
+      "prompt": "Three long brass rifle cartridges with dark steel pointed tips, held together side by side on a black metal stripper clip."
+    },
+    {
+      "id": "ammo_bolt",
+      "size": 128,
+      "view": "Seen from above at a slight angle.",
+      "prompt": "A bundle of four crossbow bolts tied together with a brown leather strap: dark shafts, short steel tips and bright green plastic fletching, lying diagonally."
+    },
+    {
+      "id": "bolt",
+      "size": 128,
+      "view": "Seen from directly above, pointing right, perfectly horizontal.",
+      "prompt": "A single crossbow bolt in flight: a thin dark carbon shaft, a sharp steel broadhead tip on the right, three bright green fletching vanes on the left end. Long and thin."
+    },
+    {
+      "id": "explosion",
+      "size": 256,
+      "prompt": "A cartoon explosion burst seen from directly above: a round fiery blast with a bright yellow-white hot core, big orange and red flame tongues radiating outward in an uneven star shape, a thick dark brown outline, a few small dark debris chunks flying out."
+    },
+    {
+      "id": "smoke",
+      "size": 256,
+      "prompt": "A round lumpy cartoon smoke cloud seen from directly above, made of several overlapping puffs, dark gray and charcoal with lighter gray highlights on top, a thick dark outline."
+    }
+  ],
+  "derived": {
+    "icons": "icon_<gun>.png for all eight guns: the world sprite rotated 30° (muzzle up-right) and fitted into a 128 px square for the inventory grid (post.py).",
+    "explosion_sheet": "explosion_sheet.png: 8 frames of 128 px in one row (flash, blast growing, blast to smoke, smoke fading), built from explosion.png and smoke.png (post.py).",
+    "contact": "docs/weapons-v2-art.png (post.py)."
+  }
+}
