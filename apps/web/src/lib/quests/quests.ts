@@ -27,14 +27,16 @@ import {
   questDef,
   questResetAt,
   rollQuest,
-  type CosmeticKind,
+  FOUNDER_BADGE,
   type EquippedCosmetics,
+  type WearableKind,
   type QuestExitFacts,
   type QuestId,
   type QuestSlotDto,
   type QuestsDto,
 } from "@extract/shared";
 import type { Db, Tx } from "../inventory/db";
+import { grantedOf } from "../pass/pass";
 
 type SlotRow = {
   slot: number;
@@ -127,22 +129,22 @@ function slotDto(r: SlotRow, day: string): QuestSlotDto {
   };
 }
 
-type UserRow = { xp: number; title: string | null; name_color: string | null; badge_frame: string | null };
+type UserRow = { xp: number; title: string | null; name_color: string | null; badge_frame: string | null; skin: string | null };
 
 /** Locks the users row for key share (the lock order of this module); null for an unknown user. */
 async function lockUser(tx: Tx, userId: string, mode: "share" | "update"): Promise<UserRow | null> {
   const r =
     mode === "update"
-      ? await tx.execute<UserRow>(sql`select xp, title, name_color, badge_frame from users where id = ${userId} for update`)
-      : await tx.execute<UserRow>(sql`select xp, title, name_color, badge_frame from users where id = ${userId} for key share`);
+      ? await tx.execute<UserRow>(sql`select xp, title, name_color, badge_frame, skin from users where id = ${userId} for update`)
+      : await tx.execute<UserRow>(sql`select xp, title, name_color, badge_frame, skin from users where id = ${userId} for key share`);
   return r.rows[0] ?? null;
 }
 
 /** Equipped ids that still exist and are still owned (a retired cosmetic reads as none). */
-function equippedOf(u: UserRow, level: number, marks: number): EquippedCosmetics {
-  const ok = (id: string | null, kind: CosmeticKind) =>
-    id && cosmeticDef(id)?.kind === kind && cosmeticUnlocked(id, level, marks) ? id : null;
-  return { title: ok(u.title, "title"), color: ok(u.name_color, "color"), frame: ok(u.badge_frame, "frame") };
+function equippedOf(u: UserRow, level: number, marks: number, granted: ReadonlySet<string>): EquippedCosmetics {
+  const ok = (id: string | null, kind: WearableKind) =>
+    id && cosmeticDef(id)?.kind === kind && cosmeticUnlocked(id, level, marks, granted) ? id : null;
+  return { title: ok(u.title, "title"), color: ok(u.name_color, "color"), frame: ok(u.badge_frame, "frame"), skin: ok(u.skin, "skin") };
 }
 
 /**
@@ -151,7 +153,7 @@ function equippedOf(u: UserRow, level: number, marks: number): EquippedCosmetics
  */
 export async function getQuests(db: Db, userId: string, now = new Date()): Promise<QuestsDto | null> {
   const day = questDay(now.getTime());
-  const ur = await db.execute<UserRow>(sql`select xp, title, name_color, badge_frame from users where id = ${userId}`);
+  const ur = await db.execute<UserRow>(sql`select xp, title, name_color, badge_frame, skin from users where id = ${userId}`);
   const user = ur.rows[0] ?? null;
   if (!user) return null;
   const cur = await db.execute<SlotRow>(sql`select ${SLOT_COLS} from quest_slots where user_id = ${userId} order by slot`);
@@ -165,6 +167,7 @@ export async function getQuests(db: Db, userId: string, now = new Date()): Promi
   const xpToday = await questXpOn(db, userId, day);
   const marks = await questMarks(db, userId);
   const level = levelForXp(Number(user.xp));
+  const granted = await grantedOf(db, userId);
   return {
     serverTime: now.getTime(),
     day,
@@ -175,7 +178,8 @@ export async function getQuests(db: Db, userId: string, now = new Date()): Promi
     xpMax: QUEST.DAILY_XP_MAX,
     marks,
     level,
-    equipped: equippedOf(user, level, marks),
+    equipped: equippedOf(user, level, marks, granted),
+    granted: [...granted],
   };
 }
 
@@ -216,7 +220,7 @@ export async function rerollQuest(db: Db, userId: string, slot: number, now = ne
   });
 }
 
-const COSMETIC_COL: Readonly<Record<CosmeticKind, string>> = { title: "title", color: "name_color", frame: "badge_frame" };
+const COSMETIC_COL: Readonly<Record<WearableKind, string>> = { title: "title", color: "name_color", frame: "badge_frame", skin: "skin" };
 
 /**
  * POST /api/quests/equip: wear cosmetic `id` of `kind`, or take it off (`id` null). The id must be
@@ -225,7 +229,7 @@ const COSMETIC_COL: Readonly<Record<CosmeticKind, string>> = { title: "title", c
 export async function equipCosmetic(
   db: Db,
   userId: string,
-  kind: CosmeticKind,
+  kind: WearableKind,
   id: string | null,
 ): Promise<QuestResult<{ equipped: EquippedCosmetics }>> {
   return db.transaction(async (tx) => {
@@ -233,10 +237,11 @@ export async function equipCosmetic(
     if (!user) return { ok: false, code: "no_user" } as const;
     const marks = await questMarks(tx, userId);
     const level = levelForXp(Number(user.xp));
+    const granted = await grantedOf(tx, userId);
     if (id !== null) {
       const def = cosmeticDef(id);
       if (!def || def.kind !== kind) return { ok: false, code: "bad_cosmetic" } as const;
-      if (!cosmeticUnlocked(id, level, marks)) return { ok: false, code: "locked" } as const;
+      if (!cosmeticUnlocked(id, level, marks, granted)) return { ok: false, code: "locked" } as const;
     }
     const col = sql.raw(COSMETIC_COL[kind]);
     await tx.execute(sql`update users set ${col} = ${id} where id = ${userId}`);
@@ -245,8 +250,9 @@ export async function equipCosmetic(
       title: kind === "title" ? id : user.title,
       name_color: kind === "color" ? id : user.name_color,
       badge_frame: kind === "frame" ? id : user.badge_frame,
+      skin: kind === "skin" ? id : user.skin,
     };
-    return { ok: true, equipped: equippedOf(next, level, marks) } as const;
+    return { ok: true, equipped: equippedOf(next, level, marks, granted) } as const;
   });
 }
 
@@ -306,24 +312,30 @@ export async function advanceQuestsForExit(
 }
 
 /**
- * Equipped cosmetics of up to 100 registered players by nickname (leaderboard rows). Players with
- * nothing equipped are left out; ids are checked against the tables, not re-checked for unlocks
- * (equipCosmetic did that, and unlocks never go away).
+ * Equipped cosmetics of up to 100 registered players by nickname (leaderboard rows), plus the
+ * Founder badge (Alpha Pass tier 10, owned = shown). Players with nothing to show are left out;
+ * ids are checked against the tables, not re-checked for unlocks (equipCosmetic did that, and
+ * unlocks never go away).
  */
-export async function cosmeticBadges(db: Db, nicknames: readonly string[]): Promise<Record<string, Partial<EquippedCosmetics>>> {
+export async function cosmeticBadges(
+  db: Db,
+  nicknames: readonly string[],
+): Promise<Record<string, Partial<EquippedCosmetics> & { badge?: string }>> {
   const names = [...new Set(nicknames)].slice(0, 100);
   if (names.length === 0) return {};
-  const r = await db.execute<{ nickname: string; title: string | null; name_color: string | null; badge_frame: string | null }>(sql`
-    select nickname, title, name_color, badge_frame from users
-    where nickname in (${sql.join(names.map((n) => sql`${n}`), sql`, `)})
-      and (title is not null or name_color is not null or badge_frame is not null)`);
-  const out: Record<string, Partial<EquippedCosmetics>> = {};
+  const r = await db.execute<{ nickname: string; title: string | null; name_color: string | null; badge_frame: string | null; founder: boolean }>(sql`
+    select u.nickname, u.title, u.name_color, u.badge_frame,
+      exists (select 1 from pass_unlocks p where p.user_id = u.id and p.reward_id = ${FOUNDER_BADGE}) as founder
+    from users u
+    where u.nickname in (${sql.join(names.map((n) => sql`${n}`), sql`, `)})`);
+  const out: Record<string, Partial<EquippedCosmetics> & { badge?: string }> = {};
   for (const u of r.rows) {
-    const b: Partial<EquippedCosmetics> = {};
+    const b: Partial<EquippedCosmetics> & { badge?: string } = {};
     if (u.title && cosmeticDef(u.title)?.kind === "title") b.title = u.title;
     if (u.name_color && cosmeticDef(u.name_color)?.kind === "color") b.color = u.name_color;
     if (u.badge_frame && cosmeticDef(u.badge_frame)?.kind === "frame") b.frame = u.badge_frame;
-    if (b.title || b.color || b.frame) out[u.nickname] = b;
+    if (u.founder) b.badge = FOUNDER_BADGE;
+    if (b.title || b.color || b.frame || b.badge) out[u.nickname] = b;
   }
   return out;
 }

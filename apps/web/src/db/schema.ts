@@ -101,6 +101,8 @@ export const users = pgTable(
     title: text("title"),
     nameColor: text("name_color"),
     badgeFrame: text("badge_frame"),
+    /** Equipped character skin (Alpha Pass, migration 011), checked like the others. */
+    skin: text("skin"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -1015,6 +1017,105 @@ export const questLog = pgTable(
 
 export type QuestSlotRow = typeof questSlots.$inferSelect;
 export type QuestLogRow = typeof questLog.$inferSelect;
+
+// ---------------------------------------------------------------------------- Alpha Pass (migration 011)
+// PERMANENT: the alpha item wipe never touches these tables (docs/GAME_DESIGN.md §18e).
+
+/** One row per AP award: (user, source, task, period) is unique, so an award never pays twice. */
+export const passApLog = pgTable(
+  "pass_ap_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** daily | weekly | tester */
+    source: text("source").notNull(),
+    /** Daily: "d<slot>", weekly: "w<slot>:<quest id>", tester: the tester task id. */
+    task: text("task").notNull(),
+    /** Daily: the UTC day, weekly: the week's Monday, tester: "once". */
+    period: text("period").notNull(),
+    ap: integer("ap").notNull(),
+    /** Entry id of the exit, the bug report id, "survey". */
+    ref: text("ref"),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    once: uniqueIndex("pass_ap_log_once_idx").on(t.userId, t.source, t.task, t.period),
+    source: check("pass_ap_log_source", sql`${t.source} in ('daily', 'weekly', 'tester')`),
+    apPositive: check("pass_ap_log_ap_positive", sql`${t.ap} > 0`),
+  }),
+);
+
+/** The week's PASS.WEEKLY_SLOTS weekly tasks per player (a new week re-rolls every slot). */
+export const passWeekly = pgTable(
+  "pass_weekly",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    slot: smallint("slot").notNull(),
+    week: date("week").notNull(),
+    questId: text("quest_id").notNull(),
+    need: integer("need").notNull(),
+    progress: integer("progress").notNull().default(0),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.slot] }),
+    slotRange: check("pass_weekly_slot_range", sql`${t.slot} >= 0 and ${t.slot} < 3`),
+    progressRange: check("pass_weekly_progress_range", sql`${t.progress} >= 0 and ${t.progress} <= ${t.need}`),
+  }),
+);
+
+/** Granted cosmetics: claimed pass tiers, the alpha trophy, the invite reward. Never removed. */
+export const passUnlocks = pgTable(
+  "pass_unlocks",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    rewardId: text("reward_id").notNull(),
+    source: text("source").notNull(),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.rewardId] }),
+    source: check("pass_unlocks_source", sql`${t.source} in ('pass', 'trophy', 'invite')`),
+  }),
+);
+
+/** Bug reports from the Pass; an admin accepts one in /admin (the "Report a bug" tester task). */
+export const bugReports = pgTable(
+  "bug_reports",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    context: text("context"),
+    status: text("status").$type<"open" | "accepted" | "rejected">().notNull().default("open"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewedBy: uuid("reviewed_by"),
+  },
+  (t) => ({
+    statusIdx: index("bug_reports_status_idx").on(t.status, t.createdAt),
+    userIdx: index("bug_reports_user_idx").on(t.userId),
+    status: check("bug_reports_status", sql`${t.status} in ('open', 'accepted', 'rejected')`),
+  }),
+);
+
+/** The in-menu alpha survey: one answer set per player. */
+export const alphaSurvey = pgTable("alpha_survey", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  answers: jsonb("answers").$type<Record<string, string>>().notNull(),
+  at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 // ---------------------------------------------------------------------------- admin replays
 

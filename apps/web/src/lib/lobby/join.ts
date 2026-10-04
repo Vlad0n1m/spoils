@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   PARTY,
   WORLD,
+  cosmeticDef,
   isSlotKey,
   worldCycleAt,
   worldCycleOf,
@@ -54,7 +55,7 @@ export async function lockAndIssueTicket(
   db: Db,
   c: Caller,
   entries: LoadoutEntry[] | undefined,
-  world: { matchId: string; entryId: string; partyId?: string; dropId?: string; dropSize?: number },
+  world: { matchId: string; entryId: string; partyId?: string; dropId?: string; dropSize?: number; tutorial?: boolean; skin?: string },
 ): Promise<JoinResult> {
   if (c.kind === "anon") return { ok: false, status: 401, error: "unauthenticated", message: "Sign in first." };
   if (c.kind === "guest") {
@@ -237,9 +238,11 @@ export async function worldJoin(
     else plan = { ...plan, drop: null };
   }
 
+  const alpha = c.kind === "user" ? await alphaJoinExtras(db, c.userId, Boolean(plan?.drop)) : {};
   const r = await lockAndIssueTicket(db, c, entries, {
     matchId: shard.match_id,
     entryId: randomUUID(),
+    ...alpha,
     // dropSize: the game server holds this many seats for the drop (not PARTY.MAX_SIZE).
     ...(plan ? { partyId: plan.partyId, ...(plan.drop ? { dropId: plan.drop.dropId, dropSize: dropSizeOf(plan.drop.members.length) } : {}) } : {}),
   });
@@ -274,6 +277,25 @@ export async function worldJoin(
       ...(party ? { party } : {}),
     },
   };
+}
+
+/**
+ * Alpha extras of a registered join (signed into the ticket): `tutorial` for a player with no settled
+ * exit yet who drops solo (a party drop lands next to the party instead), and the equipped skin when
+ * the player owns it (pass_unlocks).
+ */
+async function alphaJoinExtras(db: Db, userId: string, inPartyDrop: boolean): Promise<{ tutorial?: boolean; skin?: string }> {
+  const r = await db.execute<{ skin: string | null; owned: boolean; first: boolean }>(sql`
+    select u.skin,
+      exists (select 1 from pass_unlocks p where p.user_id = u.id and p.reward_id = u.skin) as owned,
+      not exists (select 1 from raid_exits x where x.user_id = u.id) as first
+    from users u where u.id = ${userId}`);
+  const row = r.rows[0];
+  if (!row) return {};
+  const out: { tutorial?: boolean; skin?: string } = {};
+  if (row.first && !inPartyDrop) out.tutorial = true;
+  if (row.skin && row.owned && cosmeticDef(row.skin)?.kind === "skin") out.skin = row.skin;
+  return out;
 }
 
 /** The entries of a loadout row in the lobby's LoadoutEntry shape ([] when missing). */

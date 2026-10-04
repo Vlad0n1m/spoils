@@ -10,7 +10,7 @@ import {
   nextMarkReward,
   unlockedCosmetics,
   xpToNext,
-  type CosmeticKind,
+  type WearableKind,
   type QuestSlotDto,
   type QuestsDto,
 } from "@extract/shared";
@@ -242,10 +242,11 @@ function TaskCard({ slot: s, canSwap }: { slot: QuestSlotDto; canSwap: boolean }
 
 // ---------------------------------------------------------------------------- Rewards
 
-const WEAR: ReadonlyArray<{ kind: CosmeticKind; label: string }> = [
+const WEAR: ReadonlyArray<{ kind: WearableKind; label: string }> = [
   { kind: "title", label: "Title" },
   { kind: "color", label: "Name colour" },
   { kind: "frame", label: "Badge frame" },
+  { kind: "skin", label: "Skin" },
 ];
 
 function RewardsTab() {
@@ -263,7 +264,7 @@ function RewardsTab() {
     toGo = p.need - p.into;
     for (let l = p.level + 1; l < next.level; l++) toGo += xpToNext(l);
   }
-  const owned = new Set(unlockedCosmetics(level, data.marks));
+  const owned = new Set(unlockedCosmetics(level, data.marks, data.granted ?? []));
   const nick = user?.nickname ?? "You";
 
   return (
@@ -384,11 +385,11 @@ function RewardLine({ item, reached }: { item: RewardItem; reached: boolean }) {
   );
 }
 
-function WearRow({ kind, label, owned, data }: { kind: CosmeticKind; label: string; owned: ReadonlySet<string>; data: QuestsDto }) {
+function WearRow({ kind, label, owned, data }: { kind: WearableKind; label: string; owned: ReadonlySet<string>; data: QuestsDto }) {
   const { equip } = useQuests();
   const { toast } = useLobby();
   const [busy, setBusy] = useState<string | null>(null);
-  const current = data.equipped[kind];
+  const current = data.equipped[kind] ?? null;
   const ids = [...owned].filter((id) => cosmeticDef(id)?.kind === kind);
 
   const pick = async (id: string | null) => {

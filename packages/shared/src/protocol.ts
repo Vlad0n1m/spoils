@@ -21,6 +21,11 @@ export interface BattleJoinOptions {
   ticket: unknown;
   /** mapHash(map) computed by the client; the server logs / rejects a mismatch (generator drift). */
   mapHash: string;
+  /**
+   * The client runs touch controls (phones). Self-declared; the server only echoes it into the exit
+   * report (PlayerExitReport.touch) for the Alpha Pass "phone" tester task, a cosmetic.
+   */
+  touch?: boolean;
 }
 
 /**
