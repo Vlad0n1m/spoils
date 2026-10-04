@@ -7,11 +7,11 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { ContainerSpot } from "@extract/shared";
+import type { ContainerSpot, LootTier } from "@extract/shared";
 import { TUTORIAL_BACK_PX, TUTORIAL_POST_MAX_PX, TUTORIAL_POST_MIN_PX, pickTutorialSpawn } from "./spawn.js";
 import { enter, npcOpts, testMap, testPost, worldMatch } from "./test-utils.js";
 
-const crate = (x: number, y: number, tier = 1): ContainerSpot => ({ x, y, kind: "crate", tier, zone: null });
+const crate = (x: number, y: number, tier: LootTier = 1): ContainerSpot => ({ x, y, kind: "crate", tier, zone: null });
 
 function world(containers: ContainerSpot[], posts: ReturnType<typeof testPost>[], sizes?: number[]) {
   const o = npcOpts(posts);
