@@ -11,9 +11,9 @@ import type { Match } from "./match.js";
 import type { PlayerRuntime } from "./types.js";
 
 /** Add one counted action of line `k` (`count` = the entry's count of that line after it). */
-export function creditRaidXp(m: Match, rt: PlayerRuntime, k: RaidXpKey, count: number): void {
+export function creditRaidXp(m: Match, rt: PlayerRuntime, k: RaidXpKey, count: number, hot = false): void {
   if (rt.isNpc || rt.guest) return;
-  const xp = raidXpGain(k, count);
+  const xp = raidXpGain(k, count, hot);
   if (xp > 0) rt.self.raidXp = Math.min(0xffff, rt.self.raidXp + xp);
   m.emit({ type: "xp", to: rt.rosterIndex, msg: { k, xp, n: count } });
 }

@@ -6,6 +6,7 @@ import {
   type ReplayBossState,
   type ReplayChunkData,
   type ReplayEvent,
+  type ReplayWorldEv,
   type ReplayKind,
   type ReplaySpawn,
   type KillWeapon,
@@ -313,8 +314,8 @@ export interface Death extends Leave {
 /** Events listed in the side panel (shots and hits are only drawn). */
 export type NotableEvent = Exclude<ReplayEvent, { type: "shot" } | { type: "hit" }>;
 
-export type EventCat = "kill" | "exit" | "spawn" | "boss" | "loot" | "wipe";
-export const EVENT_CATS: readonly EventCat[] = ["kill", "exit", "spawn", "boss", "loot", "wipe"];
+export type EventCat = "kill" | "exit" | "spawn" | "boss" | "loot" | "world" | "wipe";
+export const EVENT_CATS: readonly EventCat[] = ["kill", "exit", "spawn", "boss", "loot", "world", "wipe"];
 
 /** A human's run on this shard: one runtime (a player who dies and enters again has two). */
 export interface PlayerRun {
@@ -500,6 +501,8 @@ export function eventCat(e: NotableEvent): EventCat | null {
     case "chest":
     case "loot":
       return "loot";
+    case "wev":
+      return "world";
     case "wipe":
       return "wipe";
   }
@@ -516,6 +519,7 @@ export function eventInvolves(e: ReplayEvent, rs: ReadonlySet<number>): boolean 
       return rs.has(e.src) || rs.has(e.target);
     case "loot":
       return rs.has(e.r) || (e.target === "corpse" && rs.has(e.id));
+    case "wev":
     case "wipe":
       return true;
     default:
@@ -549,6 +553,15 @@ export const BOSS_STATE_LABEL: Record<ReplayBossState, string> = {
   cover: "в укрытии",
 };
 
+/** WEV records (world-events.ts) in the events list. */
+const WEV_TEXT: Readonly<Record<ReplayWorldEv, (zone: string) => string>> = {
+  drop_announce: (z) => `Сброс припасов объявлен: ${z}`,
+  drop_land: (z) => `Сброс припасов приземлился: ${z}`,
+  hot_announce: (z) => `Горячая зона объявлена: ${z}`,
+  hot_start: (z) => `Горячая зона началась: ${z}`,
+  hot_end: (z) => `Горячая зона закончилась: ${z}`,
+};
+
 const weaponName = (w: KillWeapon | ""): string => (w === "grenade" ? "граната" : w ? (WEAPONS[w]?.name ?? w) : "");
 
 /** One line of the events list. `names(r)` = ReplayModel.name; `extractName(id)` = the map's extract name. */
@@ -574,6 +587,8 @@ export function describeEvent(e: NotableEvent, names: (r: number) => string, ext
       return e.target === "corpse" ? `${names(e.r)} обыскивает тело: ${names(e.id)}` : `${names(e.r)} обыскивает контейнер #${e.id}`;
     case "boss":
       return `${names(e.r)}: ${BOSS_STATE_LABEL[e.state]}`;
+    case "wev":
+      return WEV_TEXT[e.ev](e.zone || "карта");
     case "wipe":
       return "Вайп: карта закрылась";
   }
@@ -581,6 +596,7 @@ export function describeEvent(e: NotableEvent, names: (r: number) => string, ext
 
 /** Where the camera looks for an event (null = no position: spawn / boss / wipe without a known row). */
 export function eventFocus(e: NotableEvent, leaves: readonly Leave[]): { x: number; y: number } | null {
+  if (e.type === "wev") return { x: e.x, y: e.y };
   if (e.type === "kill" || e.type === "exit") {
     const r = e.type === "kill" ? e.victim : e.r;
     const l = leaves.find((x) => x.r === r && x.t >= e.t - REPLAY.FRAME_MS && x.t <= e.t + MAX_LERP_GAP_MS);

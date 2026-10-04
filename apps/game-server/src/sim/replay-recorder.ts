@@ -3,7 +3,7 @@
  * hands it the tick's drained sim events after Match.step, and it writes
  *   - a SPAWN for every new runtime (humans with userId / nickname / entry / party; NPCs by kind),
  *   - the replay-relevant events (shots, hits, kills, human exits, containers opened, searches that
- *     got ready, the wipe),
+ *     got ready, supply drops and hot zones (WEV, world-events.ts), the wipe),
  *   - a frame of every runtime every REPLAY.FRAME_MS of cycle clock (the first of a chunk a KEY frame,
  *     then only the rows that changed), and the event boss brain state when it changes,
  * into one ReplayEncoder. About every REPLAY.CHUNK_MS (or at REPLAY.SEAL_RAW_BYTES, the wipe, or the
@@ -265,6 +265,9 @@ export class ReplayRecorder {
         if (rt) enc.exit(t, rt.rosterIndex, ev.report.exit, ev.report.exit === "extract" ? this.extractAt(rt) : "");
         return false;
       }
+      case "wev":
+        enc.wev(t, ev.ev, ev.n, ev.x, ev.y, ev.r, ev.zone);
+        return false;
       case "ended":
         enc.wipe(t);
         return true;

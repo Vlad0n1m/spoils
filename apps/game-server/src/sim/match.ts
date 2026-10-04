@@ -115,6 +115,7 @@ import type { Bullet, EntryInit, LoadoutMap, MatchEvent, PlayerRuntime, RosterEn
 import { VisionSystem, followAim } from "./vision.js";
 import { mapRuntime, warmMap, type MapRuntime } from "./nav.js";
 import { PathPlanner } from "./planner.js";
+import { WorldEvents, type WorldEventsOverride } from "./world-events.js";
 
 // ---------------------------------------------------------------- map boot (WP-M2 owns this section)
 
@@ -240,6 +241,13 @@ export interface MatchOptions {
    * lack of humans. Only the event boss's spot spawns (boss + guards). Absent = legacy roster match.
    */
   world?: WorldOptions;
+  /**
+   * WORLD v6 map events (world-events.ts: supply drops, hot zones, combat signals). Default: on in
+   * world mode unless emptyWorld (rule tests place their own world).
+   */
+  worldEvents?: boolean;
+  /** Tests / the dev visual check: these drop / hot-zone timings instead of the seeded schedule. */
+  worldEventsOverride?: WorldEventsOverride;
 }
 
 /** MatchOptions.world. */
@@ -293,6 +301,8 @@ export class Match {
   readonly npcs: NpcSystem;
   /** @deprecated v5 has no player-bots: always empty (pre-v5 benches still read it). */
   readonly bots: ReadonlyArray<{ rt: PlayerRuntime; role: string }> = [];
+  /** WORLD v6 supply drops, hot zones and combat signals (inactive outside world mode). */
+  readonly worldEvents: WorldEvents;
   /** Exit reports of every participant (humans are also emitted as `exit` events), in exit order. */
   readonly exitReports: PlayerExitReport[] = [];
 
@@ -380,6 +390,7 @@ export class Match {
       this.state.bossState = spot ? 1 : 0;
     }
     this.containers = new ContainerSystem(this);
+    this.worldEvents = new WorldEvents(this, !!this.world && (opts.worldEvents ?? !opts.emptyWorld), opts.worldEventsOverride);
     this.npcs = new NpcSystem(this);
     if (opts.containerLoot && this.mode === "live") this.containers.allocatePool(opts.containerLoot);
 
@@ -405,6 +416,8 @@ export class Match {
 
   emit(e: MatchEvent): void {
     this.events.push(e);
+    // Combat signals listen to raw sounds (the field is unset while the constructor runs).
+    if (e.type === "sound") (this.worldEvents as WorldEvents | undefined)?.onSound(e.src, e.kind, e.x, e.y, e.variant);
   }
 
   drainEvents(): MatchEvent[] {
@@ -1006,6 +1019,7 @@ export class Match {
     this.vision.update(this);
     this.aoi.update(this);
     deliverSounds(this);
+    if (this.world) this.worldEvents.step();
     this.updateCounters();
     for (const rt of this.ordered) syncPublic(rt);
     this.releaseHeldExits();
@@ -1486,3 +1500,4 @@ export function shuffle<T>(rng: Rng, arr: T[]): T[] {
   }
   return arr;
 }
+

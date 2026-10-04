@@ -26,6 +26,8 @@
  * - nade / boom (Weapons v2 grenades) → the recipient they were built for (grenade.ts applied the
  *   rules: the full flight only to those who see the thrower, a resting copy to those who see it).
  * - xp (in-raid XP estimate, xp.ts) → the earner only.
+ * - fight (WORLD v6 combat signals, world-events.ts) → the listener it was built for: [sector, band]
+ *   of a 512 px fight cell's centre, never a position or an id.
  * Raw `sound` events are the sim's input to deliverSounds and are never forwarded.
  */
 
@@ -231,6 +233,10 @@ export function buildBatches(
         break;
       case "boom":
         if (recipients.includes(ev.to)) (batchOf(out, ev.to).booms ??= []).push(ev.msg);
+        break;
+      case "fight":
+        // Already per listener and quantized (world-events.ts): fight cell sector + band only.
+        if (recipients.includes(ev.to)) (batchOf(out, ev.to).fight ??= []).push(...ev.msg);
         break;
       case "xp":
         // Personal: only the earner (dead / extracted included: a bullet in flight can still kill).

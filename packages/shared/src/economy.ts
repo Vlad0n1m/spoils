@@ -1123,6 +1123,9 @@ export const SEED_KIT = {
  * (extract, haul, containers, marauders, guards) are soft-capped per UTC day; boss and ranked PvP
  * kills are not. PVP_PAIR_PER_DAY: ranked kills per (killer, victim) pair per 24 h (D24).
  */
+/** WORLD v6 hot zones (world-events.ts HOT.XP_MULT): container XP multiple inside an active hot zone. */
+export const HOT_ZONE_XP_MULT = 1.5;
+
 export const XP = {
   EXTRACT_BASE: 100,
   EXTRACT_PER_MIN: 10,
@@ -1187,6 +1190,8 @@ export interface XpInput {
   haulCr: number;
   /** RaidStats.containersSearched. */
   containers: number;
+  /** RaidStats.hotContainers: of those, searched inside an active hot zone (× HOT_ZONE_XP_MULT). Default 0. */
+  hotContainers?: number;
   /** npcKillCount(report) − guardKills. */
   marauders: number;
   guards: number;
@@ -1223,7 +1228,9 @@ export function xpForExit(i: XpInput): { total: number; grind: number; lines: Xp
   const haulCr = cnt(i.haulCr);
   const haul = qualifies ? Math.min(XP.HAUL_MAX, Math.floor(haulCr / XP.HAUL_CR_PER_XP)) : 0;
   const nCont = i.exit === "mia" ? 0 : Math.min(XP.CONTAINER_MAX, cnt(i.containers));
-  const containers = XP.CONTAINER * nCont;
+  // WORLD v6 hot zones: the hot ones among the counted containers pay × HOT_ZONE_XP_MULT.
+  const nHot = Math.min(nCont, cnt(i.hotContainers ?? 0));
+  const containers = XP.CONTAINER * nCont + Math.floor(XP.CONTAINER * (HOT_ZONE_XP_MULT - 1) * nHot);
   const nNpc = cnt(i.marauders), nGuard = cnt(i.guards), nBoss = cnt(i.bosses), nPvp = cnt(i.rankedPvp);
   const npc = XP.NPC * nNpc;
   const guard = XP.GUARD * nGuard;
@@ -1265,10 +1272,10 @@ export type RaidXpKey = "containers" | "npc" | "guard" | "boss" | "pvp";
  * the ranked-PvP checks the web makes and the MIA rule (no container XP) apply only at settlement,
  * so the outcome screen's settled XP is authoritative and can differ.
  */
-export function raidXpGain(key: RaidXpKey, count: number): number {
+export function raidXpGain(key: RaidXpKey, count: number, hot = false): number {
   switch (key) {
     case "containers":
-      return count >= 1 && count <= XP.CONTAINER_MAX ? XP.CONTAINER : 0;
+      return count >= 1 && count <= XP.CONTAINER_MAX ? XP.CONTAINER + (hot ? Math.floor(XP.CONTAINER * (HOT_ZONE_XP_MULT - 1) + 1e-9) : 0) : 0;
     case "npc":
       return XP.NPC;
     case "guard":

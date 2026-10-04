@@ -274,6 +274,11 @@ export interface EventsMsg {
   booms?: BoomMsg[];
   /** In-raid XP the recipient just earned (personal: only ever sent to the earner). */
   xp?: XpMsg[];
+  /**
+   * WORLD v6 combat signals (world-events.ts): fights within FIGHT.RADIUS of the recipient, stride 2
+   * [sector, band], computed from the fight cell's centre (never a shooter's position or id).
+   */
+  fight?: number[];
 }
 
 /**

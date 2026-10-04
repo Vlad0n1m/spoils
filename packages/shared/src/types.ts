@@ -98,6 +98,11 @@ export interface RaidStats {
   npcKills?: number;
   /** The guards among npcKills (XP_GUARD instead of XP_NPC). Optional for older servers (then 0). */
   guardKills?: number;
+  /**
+   * WORLD v6: the containersSearched (within XP.CONTAINER_MAX) searched inside an active hot zone;
+   * their container XP pays × HOT.XP_MULT. Optional for older servers (then 0).
+   */
+  hotContainers?: number;
 }
 
 /** Sent once per human as soon as they leave the map. */

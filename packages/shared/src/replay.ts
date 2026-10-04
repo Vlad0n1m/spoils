@@ -42,8 +42,8 @@ import type { KillWeapon, WeaponId } from "./items.js";
 import type { ExitType } from "./types.js";
 
 export const REPLAY = {
-  /** Format version (chunk header byte, ReplayChunkUpload.v). 2 = Weapons v2 weapon codes. */
-  VERSION: 2,
+  /** Format version (chunk header byte, ReplayChunkUpload.v). 2 = Weapons v2 weapon codes, 3 = world events (WEV). */
+  VERSION: 3,
   /** Oldest chunk version the decoder still reads (stored replays live 14 days). */
   MIN_VERSION: 1,
   /** One frame of every runtime this often (cycle clock). */
@@ -89,6 +89,8 @@ export const REPLAY_REC = {
   LOOT: 22,
   BOSS: 23,
   WIPE: 24,
+  /** v3: a world map event (supply drop / hot zone, world-events.ts). */
+  WEV: 25,
   END: 127,
 } as const;
 
@@ -117,6 +119,9 @@ export const REPLAY_EXITS: readonly ExitType[] = ["extract", "dead", "timeout", 
 /** Boss brain states (game server NpcFsmState). */
 export const REPLAY_BOSS_STATES = ["idle", "suspicious", "combat", "search", "return", "cover"] as const;
 export type ReplayBossState = (typeof REPLAY_BOSS_STATES)[number];
+/** World map events (v3 WEV records). */
+export const REPLAY_WEVS = ["drop_announce", "drop_land", "hot_announce", "hot_start", "hot_end"] as const;
+export type ReplayWorldEv = (typeof REPLAY_WEVS)[number];
 /** "None" code of a u8 enum and a u16 roster reference. */
 const NO_CODE = 0xff;
 const NO_REF = 0xffff;
@@ -181,6 +186,11 @@ export type ReplayEvent =
   | { t: number; type: "chest"; r: number; idx: number }
   | { t: number; type: "loot"; r: number; target: "container" | "corpse"; id: number }
   | { t: number; type: "boss"; r: number; state: ReplayBossState }
+  /**
+   * v3: a supply drop announced (x / y / r = the zone circle) or landed (x / y = the crate), a hot
+   * zone announced / started / ended (x / y = the POI centre, r = 0); n = the event's number.
+   */
+  | { t: number; type: "wev"; ev: ReplayWorldEv; n: number; x: number; y: number; r: number; zone: string }
   | { t: number; type: "wipe" };
 
 export interface ReplayChunkData {
@@ -546,6 +556,18 @@ export class ReplayEncoder {
     this.events++;
   }
 
+  wev(t: number, ev: ReplayWorldEv, n: number, x: number, y: number, r: number, zone: string): void {
+    this.rec(REPLAY_REC.WEV, t, 10);
+    const c = REPLAY_WEVS.indexOf(ev);
+    this.u8(c < 0 ? NO_CODE : c);
+    this.u8(Math.max(0, Math.min(255, Math.round(n))));
+    this.u16(qPos(x));
+    this.u16(qPos(y));
+    this.u16(Math.max(0, Math.min(0xffff, Math.round(r))));
+    this.str(zone);
+    this.events++;
+  }
+
   wipe(t: number): void {
     this.rec(REPLAY_REC.WIPE, t, 0);
     this.events++;
@@ -598,6 +620,8 @@ function writeEvent(enc: ReplayEncoder, e: ReplayEvent): void {
       return enc.loot(e.t, e.r, e.target, e.id);
     case "boss":
       return enc.boss(e.t, e.r, e.state);
+    case "wev":
+      return enc.wev(e.t, e.ev, e.n, e.x, e.y, e.r, e.zone);
     case "wipe":
       return enc.wipe(e.t);
   }
@@ -880,6 +904,15 @@ export function decodeReplayChunk(bytes: Uint8Array): ReplayChunkData {
       case REPLAY_REC.BOSS: {
         const r = rd.u16();
         events.push({ t, type: "boss", r, state: enumAt(REPLAY_BOSS_STATES, rd.u8(), "boss state") });
+        break;
+      }
+      case REPLAY_REC.WEV: {
+        const ev = enumAt(REPLAY_WEVS, rd.u8(), "world event");
+        const n = rd.u8();
+        const x = rd.u16() * REPLAY.POS_UNIT_PX;
+        const y = rd.u16() * REPLAY.POS_UNIT_PX;
+        const r = rd.u16();
+        events.push({ t, type: "wev", ev, n, x, y, r, zone: rd.str() });
         break;
       }
       case REPLAY_REC.WIPE:

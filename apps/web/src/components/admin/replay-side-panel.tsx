@@ -21,6 +21,7 @@ export const CAT_LABEL: Record<EventCat, string> = {
   spawn: "Входы",
   boss: "Босс",
   loot: "Лут",
+  world: "События карты",
   wipe: "Вайп",
 };
 
