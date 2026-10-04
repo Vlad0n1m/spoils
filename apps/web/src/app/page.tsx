@@ -147,7 +147,7 @@ const HOW: { sprite: string; title: string; body: string }[] = [
   {
     sprite: "pistol",
     title: "Drop in any time",
-    body: `${BRAND.mapName} is always live: one map, wiped every ${CYCLE_MIN} minutes. Jump in whenever you like with the free kit — pistol, light ammo, a bandage.`,
+    body: `${BRAND.mapName} is always live: one map, wiped every ${CYCLE_MIN} minutes. Jump in whenever you like with the basic gear — pistol, light ammo, a bandage.`,
   },
   {
     sprite: "chest_epic",

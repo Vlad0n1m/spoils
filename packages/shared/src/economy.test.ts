@@ -6,7 +6,8 @@ import {
   CONSUMABLES_CR,
   CONTAINER,
   CR,
-  GIVEAWAY_KIT,
+  SEED_KIT,
+  STARTER_KIT,
   MARKET,
   POOL,
   armorPct,
@@ -192,8 +193,12 @@ test("tables reference real item defs with valid quantities", () => {
     assert.ok(d && (d.cat === "ammo" || d.cat === "med" || d.cat === "throwable"), id);
     assert.ok(o.qty >= 1 && o.cr > 0);
   }
-  for (const group of [GIVEAWAY_KIT.weapon, GIVEAWAY_KIT.armor, GIVEAWAY_KIT.backpack]) {
+  for (const group of [SEED_KIT.weapon, SEED_KIT.armor, SEED_KIT.backpack, STARTER_KIT.weapons, STARTER_KIT.armor]) {
     for (const e of group) assert.ok(itemDef(e.def)?.unique, e.def);
+  }
+  for (const s of STARTER_KIT.stacks) {
+    const d = itemDef(s.def);
+    assert.ok(d && !d.unique && (d.cat === "ammo" || d.cat === "med") && s.qty >= 1, s.def);
   }
   for (const o of BOUND_OFFERS) assert.ok(itemDef(o.def)?.unique, o.def);
   // One entry per LootTier 0..4.

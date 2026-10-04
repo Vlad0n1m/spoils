@@ -29,7 +29,7 @@ export function SignInSheet({ onClose, onGuest }: { onClose: () => void; onGuest
           Ready to drop?
         </h2>
         <p className="font-body mx-auto mt-3 max-w-[40ch] text-base text-white/75">
-          Guests drop with the free kit and keep nothing. Register to keep your raider, stash, XP and rank.
+          Guests drop with the basic gear and keep nothing. Register to keep your raider, stash, XP and rank.
         </p>
         <div className="mt-6 flex flex-col gap-3">
           {guestPlayUiEnabled && (

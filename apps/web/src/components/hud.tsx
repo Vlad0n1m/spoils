@@ -813,7 +813,7 @@ function WeaponSlotCard({
         // Inline because Tailwind rings are box-shadows too and would be overwritten by the glow.
         boxShadow: active ? `0 0 0 3px #CCFF00, 0 6px 0 #000, 0 0 24px ${color}aa` : undefined,
       }}
-      title={`${def.name} — ${rarityName(slot.rarity)}${slot.free ? " (free kit)" : ""}`}
+      title={`${def.name} — ${rarityName(slot.rarity)}${slot.free ? " (basic gear)" : ""}`}
     >
       <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>
       <span

@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
-  GIVEAWAY_KIT,
+  SEED_KIT,
   MARKET,
   itemDef,
   pickWeighted,
@@ -54,11 +54,11 @@ function rollPiece(i: number, rng: Rng): { def: string; rarity: number } {
   const slot = i % 3;
   if (slot === 0) {
     if (rng() < 0.12) return { def: rng() < 0.5 ? "sniper" : "rifle", rarity: rng() < 0.3 ? 3 : 2 };
-    const w = pickWeighted(rng, GIVEAWAY_KIT.weapon);
+    const w = pickWeighted(rng, SEED_KIT.weapon);
     return { def: w.def, rarity: w.rarity };
   }
   if (slot === 1) {
-    const a = rng() < 0.08 ? { def: "armor_3" } : pickWeighted(rng, GIVEAWAY_KIT.armor);
+    const a = rng() < 0.08 ? { def: "armor_3" } : pickWeighted(rng, SEED_KIT.armor);
     return { def: a.def, rarity: itemDef(a.def)?.rarity ?? 0 };
   }
   const lv = rng() < 0.15 ? 2 : 1;

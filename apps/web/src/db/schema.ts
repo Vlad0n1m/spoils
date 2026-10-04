@@ -81,7 +81,7 @@ export const users = pgTable(
     level: integer("level").notNull().default(1),
     /** Raids with a settled exit report (registered users only). */
     matchesPlayed: integer("matches_played").notNull().default(0),
-    /** Set once by claimStarter: the giveaway kit is one per account. */
+    /** First starter kit (old free-kit claims kept as they were); stamped once by buyStarterKit, gates nothing. */
     starterClaimedAt: timestamp("starter_claimed_at", { withTimezone: true }),
     /**
      * Self-custody Solana wallet the player proved they own (Sign-In with Solana, lib/wallet/link.ts).
@@ -364,7 +364,7 @@ export const items = pgTable(
     match: index("items_match_idx").on(t.matchId),
     loadout: index("items_loadout_idx").on(t.loadoutId),
     pool: index("items_state_def_idx").on(t.state, t.defId, t.rarity),
-    /** Tradable giveaway kits issued (lib/inventory/starter.ts tradableKitsIssued; migration 010). */
+    /** Tradable giveaway items (migration 010). Unused since the 1 000-kit cap was dropped (04.10); kept to avoid a schema diff. */
     giveawayTradable: index("items_giveaway_tradable_idx")
       .on(t.id)
       .where(sql`origin = 'giveaway' and bound = false`),

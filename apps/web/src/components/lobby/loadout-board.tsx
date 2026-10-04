@@ -238,14 +238,12 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
             emptyHint={
               <>
                 Your stash is empty.{" "}
-                {!stash.starterClaimed && (
-                  <Link
-                    href={panelHref({ panel: "inventory", tab: "stash" })}
-                    className="inline-flex min-h-11 items-center text-zooa-lime underline-offset-4 hover:underline"
-                  >
-                    Claim the starter kit
-                  </Link>
-                )}
+                <Link
+                  href={panelHref({ panel: "inventory", tab: "stash" })}
+                  className="inline-flex min-h-11 items-center text-zooa-lime underline-offset-4 hover:underline"
+                >
+                  Buy a starter kit
+                </Link>
               </>
             }
           />
@@ -327,7 +325,7 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
         </dl>
         <p className="font-body text-xs leading-relaxed text-white/55">
           {entries.length === 0
-            ? `Empty loadout = free kit: pistol, ${FREE_KIT.AMMO_LIGHT} light ammo and a bandage. Nothing to lose, but no lost-pool loot in containers.`
+            ? `Empty loadout = basic gear: pistol, ${FREE_KIT.AMMO_LIGHT} light ammo and a bandage. Nothing to lose, but no lost-pool loot in containers.`
             : "Die and each item has a 50% chance to break into the lost pool; the rest stays in your body for whoever finds it. Extract to keep everything."}
         </p>
         <div className="mt-auto flex flex-col gap-2">

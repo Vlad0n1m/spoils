@@ -1,111 +1,96 @@
+import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
-import { GIVEAWAY, GIVEAWAY_KIT, itemDef, mulberry32, pickWeighted, type Rng } from "@extract/shared";
+import { STARTER_KIT, itemDef, mulberry32, pickWeighted, type Rng } from "@extract/shared";
 import { itemEvents, items, moneyLedger } from "../../db/schema";
-import { credit } from "../economy/ledger";
 import { giveawayLockRaids } from "../economy/config";
 import { PARAM, pausedParam } from "../economy/params";
 import type { Db, Tx } from "./db";
 import { addStack } from "./transition";
 
-/** Fungibles that come with the kit so the first raid is playable (ammo matches the weapon). */
-const STARTER_STACKS: Record<string, Array<{ def: string; qty: number }>> = {
-  rifle: [{ def: "ammo_light", qty: 90 }],
-  shotgun: [{ def: "ammo_shell", qty: 30 }],
-  common: [
-    { def: "bandage", qty: 3 },
-    { def: "medkit", qty: 1 },
-  ],
-};
-
 export interface StarterRoll {
-  weapon: { def: string; rarity: number };
-  armor: { def: string; rarity: number };
-  backpack: { def: string; rarity: number };
+  /** Every unique of the kit: the pistols, then the armor. */
+  uniques: Array<{ def: string; rarity: number }>;
   stacks: Array<{ def: string; qty: number }>;
 }
 
-/** Pure kit roll from GIVEAWAY_KIT weights (testable with a seeded rng). */
+/** Pure kit roll from STARTER_KIT (testable with a seeded rng): fixed pistols, rolled armor. */
 export function rollStarterKit(rng: Rng): StarterRoll {
-  const w = pickWeighted(rng, GIVEAWAY_KIT.weapon);
-  const a = pickWeighted(rng, GIVEAWAY_KIT.armor);
-  const b = pickWeighted(rng, GIVEAWAY_KIT.backpack);
+  const a = pickWeighted(rng, STARTER_KIT.armor);
   return {
-    weapon: { def: w.def, rarity: w.rarity },
-    armor: { def: a.def, rarity: itemDef(a.def)?.rarity ?? 0 },
-    backpack: { def: b.def, rarity: itemDef(b.def)?.rarity ?? 0 },
-    stacks: [...(STARTER_STACKS[w.def] ?? []), ...STARTER_STACKS.common!],
+    uniques: [
+      ...STARTER_KIT.weapons.map((w) => ({ def: w.def, rarity: w.rarity })),
+      { def: a.def, rarity: itemDef(a.def)?.rarity ?? 0 },
+    ],
+    stacks: STARTER_KIT.stacks.map((s) => ({ def: s.def, qty: s.qty })),
   };
 }
 
 export type StarterResult =
-  | { status: "claimed"; itemIds: string[]; kit: StarterRoll; credits: number; bound: boolean; paidMinor: string }
-  | { status: "already" }
+  | { status: "bought"; purchaseId: string; itemIds: string[]; kit: StarterRoll; paidMinor: string; boughtToday: number }
   | { status: "no_user" }
-  | { status: "sold_out" }
-  /** The admin paused the paid kit (economy_params kit_sale_paused); the free kit is unaffected. */
+  /** The admin paused kit sales (economy_params kit_sale_paused). */
   | { status: "sale_paused" }
+  | { status: "daily_limit"; dailyMax: number }
   | { status: "insufficient_funds"; priceMinor: string };
 
 /** House account of the market money journal (lib/market/market.ts HOUSE_ACCOUNT). */
 const HOUSE = "house";
 
-/** Tradable giveaway kits issued so far (3 non-bound giveaway items per kit; items are never deleted). */
-async function tradableKitsIssued(tx: Tx): Promise<number> {
-  const r = await tx.execute<{ n: number }>(sql`select count(*)::int as n from items where origin = 'giveaway' and bound = false`);
-  return Math.floor(Number(r.rows[0]?.n ?? 0) / 3);
+/** Start of the UTC day of `now`. */
+function utcDayStart(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+/** Kits this user bought since the start of the UTC day (money_ledger kit_buy rows; account+at index). */
+export async function kitsBoughtToday(db: Db | Tx, userId: string, now = new Date()): Promise<number> {
+  const r = await db.execute<{ n: number }>(
+    sql`select count(*)::int as n from money_ledger where account = ${userId} and reason = 'kit_buy' and at >= ${utcDayStart(now).toISOString()}`,
+  );
+  return Number(r.rows[0]?.n ?? 0);
 }
 
 /**
- * POST /api/stash/starter: one giveaway kit per account (economy memo §15.6). The claim stamp
- * `starter_claimed_at` is set by a guarded UPDATE … WHERE starter_claimed_at IS NULL, so two
- * concurrent clicks give one kit. Plus GIVEAWAY_KIT.cr credits.
- *
- * `paid: false` (default): the kit is BOUND and free: playable, never listable, destroyed instead of
- * entering the lost pool, 0 risk units. `paid: true`: the kit is TRADABLE (`giveaway` origin,
- * lock_raids 10 / demo 1, then listable) for GIVEAWAY.KIT_PRICE_MINOR from the market balance to the
- * house, while fewer than GIVEAWAY.KITS tradable kits exist (a transaction-scoped advisory lock keeps
- * the cap exact). Sold out or short of money → nothing is claimed, so the player can pick again.
+ * POST /api/stash/starter: buy one starter kit (design §19, Vlad 04.10: always paid). The price goes
+ * from the market balance to the house in one money_ledger pair (kit_buy / kit_sale, refId = the
+ * purchase id) — treasury revenue; nothing ever flows back. Up to STARTER_KIT.DAILY_MAX kits per
+ * account per UTC day, counted under the user's row lock so concurrent clicks cannot exceed it.
+ * The uniques are tradable `giveaway` items with the trade lock (lock_raids 10 / demo 1); no CR.
+ * users.starter_claimed_at is stamped on the first kit only (kept for stats; it gates nothing).
  */
-export async function claimStarter(
+export async function buyStarterKit(
   db: Db,
   userId: string,
-  opts: { paid?: boolean; rng?: Rng; lockRaids?: number; kitCap?: number; priceMinor?: bigint } = {},
+  opts: { rng?: Rng; lockRaids?: number; priceMinor?: bigint; dailyMax?: number; now?: Date } = {},
 ): Promise<StarterResult> {
-  const price = opts.priceMinor ?? BigInt(GIVEAWAY.KIT_PRICE_MINOR);
-  // Admin stop-crane (/admin/params): nothing is claimed, so the player can still take the free kit.
-  if (opts.paid && (await pausedParam(db, PARAM.KIT_SALE_PAUSED))) return { status: "sale_paused" };
+  const price = opts.priceMinor ?? BigInt(STARTER_KIT.PRICE_MINOR);
+  const dailyMax = opts.dailyMax ?? STARTER_KIT.DAILY_MAX;
+  const now = opts.now ?? new Date();
+  // Admin stop-crane (/admin/params): nothing is charged or granted.
+  if (await pausedParam(db, PARAM.KIT_SALE_PAUSED)) return { status: "sale_paused" };
   return db.transaction(async (tx) => {
-    const u = await tx.execute<{ balance_cents: string; claimed: boolean }>(
-      sql`select balance_cents, starter_claimed_at is not null as claimed from users where id = ${userId} for update`,
-    );
+    const u = await tx.execute<{ balance_cents: string }>(sql`select balance_cents from users where id = ${userId} for update`);
     const user = u.rows[0];
     if (!user) return { status: "no_user" } as const;
-    if (user.claimed) return { status: "already" } as const;
+    const today = await kitsBoughtToday(tx, userId, now);
+    if (today >= dailyMax) return { status: "daily_limit", dailyMax } as const;
+    if (BigInt(user.balance_cents) < price) return { status: "insufficient_funds", priceMinor: price.toString() } as const;
 
-    const bound = !opts.paid;
-    if (opts.paid) {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('giveaway_kits'))`);
-      if ((await tradableKitsIssued(tx)) >= (opts.kitCap ?? GIVEAWAY.KITS)) return { status: "sold_out" } as const;
-      if (BigInt(user.balance_cents) < price) return { status: "insufficient_funds", priceMinor: price.toString() } as const;
-    }
-    const stamp = await tx.execute(
-      sql`update users set starter_claimed_at = now() where id = ${userId} and starter_claimed_at is null`,
-    );
-    if ((stamp.rowCount ?? 0) !== 1) return { status: "already" } as const;
-    if (opts.paid && price > 0n) {
+    const purchaseId = randomUUID();
+    if (price > 0n) {
       await tx.execute(sql`update users set balance_cents = balance_cents - ${price} where id = ${userId}`);
       await tx.insert(moneyLedger).values([
-        { account: userId, deltaMinor: -price, reason: "kit_buy", refId: "starter" },
-        { account: HOUSE, deltaMinor: price, reason: "kit_sale", refId: userId },
+        { account: userId, deltaMinor: -price, reason: "kit_buy", refId: purchaseId, at: now },
+        { account: HOUSE, deltaMinor: price, reason: "kit_sale", refId: purchaseId, at: now },
       ]);
     }
+    await tx.execute(sql`update users set starter_claimed_at = ${now.toISOString()} where id = ${userId} and starter_claimed_at is null`);
 
     const kit = rollStarterKit(opts.rng ?? mulberry32((Math.random() * 2 ** 32) >>> 0));
-    const lockRaids = bound ? 0 : (opts.lockRaids ?? giveawayLockRaids());
+    const lockRaids = opts.lockRaids ?? giveawayLockRaids();
     const rows = await tx
       .insert(items)
       .values(
-        [kit.weapon, kit.armor, kit.backpack].map((k) => ({
+        kit.uniques.map((k) => ({
           defId: k.def,
           rarity: k.rarity,
           durability: 100,
@@ -114,15 +99,21 @@ export async function claimStarter(
           ownerId: userId,
           origin: "giveaway" as const,
           lockRaids,
-          bound,
+          bound: false,
         })),
       )
       .returning({ id: items.id });
     await tx.insert(itemEvents).values(
-      rows.map((r) => ({ itemId: r.id, toState: "in_stash" as const, toOwner: userId, reason: "grant", refId: "starter" })),
+      rows.map((r) => ({ itemId: r.id, toState: "in_stash" as const, toOwner: userId, reason: "grant", refId: `kit:${purchaseId}` })),
     );
     for (const s of kit.stacks) await addStack(tx, userId, s.def, s.qty);
-    const c = await credit(tx, userId, GIVEAWAY_KIT.cr, "giveaway", "starter");
-    return { status: "claimed", itemIds: rows.map((r) => r.id), kit, credits: c.ok ? c.balance : 0, bound, paidMinor: (opts.paid ? price : 0n).toString() } as const;
+    return {
+      status: "bought",
+      purchaseId,
+      itemIds: rows.map((r) => r.id),
+      kit,
+      paidMinor: price.toString(),
+      boughtToday: today + 1,
+    } as const;
   });
 }

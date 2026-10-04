@@ -35,7 +35,7 @@ const STEPS: { title: string; body: string; icon: string }[] = [
   {
     title: "Drop in",
     icon: "/sprites/pistol.png",
-    body: `${BRAND.mapName} is always on. Drop in any time: the map wipes every ${CYCLE_MIN} minutes and entry closes ${CLOSE_MIN} minutes before the wipe. You drop with your loadout or the free kit (a pistol, light ammo and a bandage; the free pistol never breaks and never drops). ${PLAYER.MAX_HP} HP.`,
+    body: `${BRAND.mapName} is always on. Drop in any time: the map wipes every ${CYCLE_MIN} minutes and entry closes ${CLOSE_MIN} minutes before the wipe. You drop with your loadout or the basic gear (a pistol, light ammo and a bandage; that pistol never breaks and never drops). ${PLAYER.MAX_HP} HP.`,
   },
   {
     title: "Search",
@@ -138,7 +138,7 @@ export function RulesSection() {
         <p>
           Gear you bring is at risk: die and each item has a {BREAK_PCT}% chance to break; the rest stays on your body. Lost
           gear goes to the lost pool and comes back onto the map — in containers and on marauders — when raiders drop in
-          with real gear. A free kit risks nothing and brings nothing back.
+          with real gear. Basic gear risks nothing and brings nothing back.
         </p>
         <p className="mt-2">
           Items left on the ground vanish after {GROUND_MIN} min, bodies after {CORPSE_MIN} min — valuables go to the treasury.

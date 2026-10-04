@@ -78,12 +78,12 @@ describe("derivePlayState", () => {
     const one = derivePlayState(input({ stash: { loaded: true, inRaid: false, atRisk: 1, starterClaimed: true } }));
     assert.deepEqual(one, { kind: "ready", sub: "1 item at risk · wipe in 40:00", tone: "lime" });
     const empty = derivePlayState(input({ stash: { loaded: true, inRaid: false, atRisk: 0, starterClaimed: false } }));
-    assert.deepEqual(empty, { kind: "ready", sub: "Free kit · nothing at risk · wipe in 40:00", tone: "lime" });
+    assert.deepEqual(empty, { kind: "ready", sub: "Basic gear · nothing at risk · wipe in 40:00", tone: "lime" });
   });
 
-  it("ready for a guest: free kit, loot isn't kept (no stash needed)", () => {
+  it("ready for a guest: basic gear, loot isn't kept (no stash needed)", () => {
     const s = derivePlayState(input({ session: { loading: false, kind: "guest" }, stash: null }));
-    assert.deepEqual(s, { kind: "ready", sub: "Free kit · loot isn't kept · wipe in 40:00", tone: "lime" });
+    assert.deepEqual(s, { kind: "ready", sub: "Basic gear · loot isn't kept · wipe in 40:00", tone: "lime" });
   });
 
   it("ready turns amber when the wipe is under 15 minutes away", () => {
@@ -180,8 +180,8 @@ describe("derivePlayState", () => {
   });
 
   it("riskLine wording", () => {
-    assert.equal(riskLine("guest", 3), "Free kit · loot isn't kept");
-    assert.equal(riskLine("user", 0), "Free kit · nothing at risk");
+    assert.equal(riskLine("guest", 3), "Basic gear · loot isn't kept");
+    assert.equal(riskLine("user", 0), "Basic gear · nothing at risk");
     assert.equal(riskLine("user", 2), "2 items at risk");
   });
 });

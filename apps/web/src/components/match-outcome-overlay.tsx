@@ -183,7 +183,7 @@ function ResultCard({
                 title={outcome.guest ? "Brought out (not kept as guest)" : "To your stash"}
                 items={receipt.kept}
                 tone={outcome.guest ? "dim" : "normal"}
-                empty="No gear this time — the free kit never counts. Search bodies and crates for weapons and armor."
+                empty="No gear this time — the basic gear never counts. Search bodies and crates for weapons and armor."
               />
               <SellReceipt receipt={receipt} guest={outcome.guest} onCoin={onCoin} />
               <DogTagRow names={receipt.dogTags} />
@@ -194,7 +194,7 @@ function ResultCard({
             <>
               {outcome.dropped.length === 0 && outcome.lost.length === 0 ? (
                 <p className="font-body text-base leading-relaxed text-white/70">
-                  You only carried the free kit, so nothing was lost.
+                  You only carried the basic gear, so nothing was lost.
                 </p>
               ) : (
                 <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
@@ -209,7 +209,7 @@ function ResultCard({
               )}
               <p className="font-body rounded-xl border-2 border-black/60 bg-black/30 px-3 py-2 text-sm leading-relaxed text-white/70">
                 On death each weapon, armor and backpack has a {Math.round(BREAK_CHANCE_ON_DEATH * 100)}% chance to
-                break. Everything else stays in your body, along with your dog tag. The free kit never drops.
+                break. Everything else stays in your body, along with your dog tag. The basic gear never drops.
               </p>
             </>
           )}
@@ -219,7 +219,7 @@ function ResultCard({
               title="Lost on the map"
               items={outcome.lost}
               tone="dim"
-              empty="You only carried the free kit, so nothing was lost."
+              empty="You only carried the basic gear, so nothing was lost."
             />
           )}
           <XpBlock outcome={outcome} enteredAtMs={enteredAtMs} />

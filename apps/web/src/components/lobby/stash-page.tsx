@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { GIVEAWAY, GIVEAWAY_KIT, itemDef, levelForXp, xpToNext } from "@extract/shared";
+import { STARTER_KIT, itemDef, levelForXp, xpToNext } from "@extract/shared";
 import type { StashItemDto, StashResponse } from "@/lib/lobby/api-types";
 import { describeItem, fmtCr } from "@/lib/items-ui";
 import { formatMinor } from "@/lib/market/config";
@@ -13,34 +13,32 @@ import { ListDialog } from "./list-dialog";
 import { api, type Resource } from "./use-lobby";
 
 /**
- * Stash tab (inventory memo "stash-page"): wallet (CR + market balance), level, the starter-kit
- * claim, every unique with rarity / durability / state, ammo and med stacks, an item drawer with
+ * Stash tab (inventory memo "stash-page"): wallet (CR + market balance), level, the paid starter
+ * kit (design §19), every unique with rarity / durability / state, ammo and med stacks, an item drawer with
  * the Sell action. The junker moved to Shop · Traders (WORLD v6); a link points there.
  */
 export function StashPage({ res }: { res: Resource<StashResponse> }) {
   const stash = res.data!;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selling, setSelling] = useState<StashItemDto | null>(null);
-  const [claiming, setClaiming] = useState<"free" | "paid" | null>(null);
+  const [buying, setBuying] = useState(false);
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
   const selected = stash.uniques.find((u) => u.id === selectedId) ?? null;
 
-  const claim = async (paid: boolean) => {
-    setClaiming(paid ? "paid" : "free");
+  const buyKit = async () => {
+    setBuying(true);
     setNote(null);
     try {
-      const r = await api<{ bound?: boolean }>("/api/stash/starter", { method: "POST", body: { paid } });
+      await api("/api/stash/starter", { method: "POST", body: {} });
       await res.reload();
       setNote({
         ok: true,
-        text: r?.bound
-          ? "Starter kit added to your stash (bound: yours to use, not to sell). Equip it in the Loadout tab."
-          : "Tradable starter kit added to your stash. It unlocks for the market after you extract with it. Equip it in the Loadout tab.",
+        text: "Starter kit added to your stash. Equip it in the Loadout tab. Its gear can be sold once you've extracted with it.",
       });
     } catch (e) {
-      setNote({ ok: false, text: e instanceof Error ? e.message : "Claim failed" });
+      setNote({ ok: false, text: e instanceof Error ? e.message : "Purchase failed" });
     } finally {
-      setClaiming(null);
+      setBuying(false);
     }
   };
 
@@ -80,38 +78,7 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
           <Stat label="Raids" value={String(stash.matchesPlayed)} />
         </section>
 
-        {!stash.starterClaimed && (
-          <section className="toon-panel relative overflow-hidden bg-zooa-lime p-5 text-black">
-            <div className="flex flex-wrap items-center gap-4">
-              <div className="flex -space-x-3">
-                {["rifle", "armor_1", "backpack_1"].map((def) => (
-                  <span key={def} className="grid h-14 w-14 place-items-center rounded-2xl border-[3px] border-black bg-white shadow-[0_3px_0_#000]">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={describeItem({ def }).icon} alt="" className="h-10 w-10 object-contain" draggable={false} />
-                  </span>
-                ))}
-              </div>
-              <div className="min-w-0 flex-1">
-                <h2 className="text-2xl tracking-wide">Claim your starter kit</h2>
-                <p className="font-body text-sm">
-                  A weapon, armor, a backpack, ammo, meds and {fmtCr(GIVEAWAY_KIT.cr)}. Free kit: yours to use, not to sell. Tradable
-                  kit ({formatMinor(GIVEAWAY.KIT_PRICE_MINOR)}, while the giveaway lasts): the same gear, sellable on the market
-                  after you extract with it. One kit per account.
-                </p>
-              </div>
-              <div className="flex w-full flex-wrap gap-3">
-                <button type="button" onClick={() => claim(false)} disabled={claiming !== null} className="toon-btn-ghost min-h-12 px-6 text-lg">
-                  <span className="optical-center">{claiming === "free" ? "Claiming…" : "Free kit"}</span>
-                </button>
-                <button type="button" onClick={() => claim(true)} disabled={claiming !== null} className="toon-btn-ghost min-h-12 px-6 text-lg">
-                  <span className="optical-center">
-                    {claiming === "paid" ? "Buying…" : `Tradable · ${formatMinor(GIVEAWAY.KIT_PRICE_MINOR)}`}
-                  </span>
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
+        <StarterKitCard stash={stash} buying={buying} onBuy={buyKit} />
         {note && (
           <p role="status" className={note.ok ? "font-body -mt-2 text-sm text-zooa-lime" : "font-body -mt-2 text-sm text-rose-300"}>
             {note.text}
@@ -133,7 +100,7 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
               stacks={stash.stacks}
               selectedId={selectedId}
               onPickUnique={(u) => setSelectedId(u.id === selectedId ? null : u.id)}
-              emptyHint="Your stash is empty. Claim the starter kit, buy gear on the Market, or extract with loot."
+              emptyHint="Your stash is empty. Buy a starter kit, buy gear on the Market, or extract with loot."
             />
           </div>
         </section>
@@ -174,6 +141,74 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
         />
       )}
     </div>
+  );
+}
+
+const KIT_ICONS = ["pistol", "armor_1", "ammo_light", "bandage", "medkit"] as const;
+const KIT_TEXT = (() => {
+  const n = STARTER_KIT.weapons.length;
+  const qty = (def: string) => STARTER_KIT.stacks.find((x) => x.def === def)?.qty ?? 0;
+  return `${n} pistols, armor (Lv 1, sometimes Lv 2), ${qty("ammo_light")} light ammo, ${qty("bandage")} bandages and a medkit.`;
+})();
+
+/**
+ * The paid starter kit (design §19): always for sale, up to STARTER_KIT.DAILY_MAX a day. A big lime card
+ * while the stash holds no weapon, else a slim row; disabled when paused, at the daily cap or short of money.
+ */
+function StarterKitCard({ stash, buying, onBuy }: { stash: StashResponse; buying: boolean; onBuy: () => void }) {
+  const price = formatMinor(stash.kit.priceMinor);
+  const left = Math.max(0, stash.kit.dailyMax - stash.kit.boughtToday);
+  const short = BigInt(stash.balance) < BigInt(stash.kit.priceMinor);
+  const blocked = stash.kit.paused ? "Sales are paused for a moment." : left === 0 ? "Daily limit reached — back tomorrow." : null;
+  const noWeapon = !stash.uniques.some((u) => u.state !== "listed" && itemDef(u.def)?.cat === "weapon");
+  const button = (
+    <button type="button" onClick={onBuy} disabled={buying || blocked !== null} className="toon-btn-ghost min-h-12 px-6 text-lg">
+      <span className="optical-center">{buying ? "Buying…" : `Buy starter kit · ${price}`}</span>
+    </button>
+  );
+  const status = blocked ?? (short ? (
+    <>
+      Not enough in your wallet.{" "}
+      <Link href="/wallet" className="font-semibold underline underline-offset-4">
+        Top up
+      </Link>
+    </>
+  ) : `${left} of ${stash.kit.dailyMax} left today.`);
+  if (!noWeapon) {
+    return (
+      <section className="toon-panel flex flex-wrap items-center gap-4 bg-[#161b28]/95 p-5">
+        <div className="min-w-0 flex-1">
+          <h2 className="toon-text-thin text-xl tracking-wide text-white">Starter kit</h2>
+          <p className="font-body mt-1 text-sm text-white/70">{KIT_TEXT} <span className="text-white/55">{status}</span></p>
+        </div>
+        {button}
+      </section>
+    );
+  }
+  return (
+    <section className="toon-panel relative overflow-hidden bg-zooa-lime p-5 text-black">
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="flex -space-x-3">
+          {KIT_ICONS.map((def) => (
+            <span key={def} className="grid h-14 w-14 place-items-center rounded-2xl border-[3px] border-black bg-white shadow-[0_3px_0_#000]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={describeItem({ def }).icon} alt="" className="h-10 w-10 object-contain" draggable={false} />
+            </span>
+          ))}
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-2xl tracking-wide">Starter kit</h2>
+          <p className="font-body text-sm">
+            {KIT_TEXT} Lost on death like any gear; sellable on the market once you&apos;ve extracted with it. No kit? You
+            still drop with the basic gear.
+          </p>
+        </div>
+        <div className="flex w-full flex-wrap items-center gap-3">
+          {button}
+          <p className="font-body text-sm">{status}</p>
+        </div>
+      </div>
+    </section>
   );
 }
 
