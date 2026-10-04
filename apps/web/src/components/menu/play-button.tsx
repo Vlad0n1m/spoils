@@ -108,7 +108,7 @@ export function PlayButton({ onFixInventory, className }: { onFixInventory: () =
       {state.kind === "error" && (
         <p
           role="alert"
-          className="font-body mb-3 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-2xl border-[3px] border-black bg-rose-500 px-3 py-1.5 text-center text-sm font-bold text-white shadow-[0_3px_0_#000] short:mb-2 short:py-1 short:text-xs"
+          className="font-body mb-3 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-2xl border-[3px] border-black bg-rose-400 px-3 py-1.5 text-center text-sm font-bold text-black shadow-[0_3px_0_#000] short:mb-2 short:py-1 short:text-xs"
         >
           <span>{state.message}</span>
           {state.fix === "inventory" && (

@@ -29,7 +29,7 @@ function LevelsInfo() {
       <h3 id="info-levels" className="toon-text-thin text-xl tracking-wide text-white">
         Levels and daily tasks
       </h3>
-      <ul className="font-body list-disc space-y-1 pl-5 text-sm leading-relaxed text-white/75">
+      <ul className="font-body list-disc space-y-2.5 pl-5 text-sm leading-snug text-white/75">
         <li>
           Every registered raider gets {QUEST.SLOTS} daily tasks. Each pays {QUEST.XP} XP, up to {QUEST.DAILY_XP_MAX} a day, on top of
           the daily raid XP limit. New tasks at 00:00 UTC; unfinished ones carry over. One free swap a day.

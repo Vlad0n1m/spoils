@@ -95,7 +95,7 @@ function Post({ post, latest }: { post: NewsPost; latest: boolean }) {
 
       <div className="mt-4 rounded-xl border-[3px] border-black bg-black/25 p-3 md:p-4">
         <p className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">IN SHORT</p>
-        <ul className="font-body mt-2 list-disc space-y-1.5 pl-5 text-[0.95rem] leading-relaxed text-white/80 marker:text-zooa-lime">
+        <ul className="font-body mt-2 list-disc space-y-3 pl-5 text-[0.95rem] leading-snug text-white/80 marker:text-zooa-lime">
           {post.body.map((b) => (
             <li key={b}>{b}</li>
           ))}
@@ -105,7 +105,7 @@ function Post({ post, latest }: { post: NewsPost; latest: boolean }) {
       {post.sections?.map((s) => (
         <section key={s.heading} className="mt-5">
           <h3 className="toon-text-thin text-lg tracking-wide text-zooa-lime md:text-xl">{s.heading}</h3>
-          <ul className="font-body mt-2 list-disc space-y-1.5 pl-5 text-[0.95rem] leading-relaxed text-white/75 marker:text-white/40">
+          <ul className="font-body mt-2 list-disc space-y-3 pl-5 text-[0.95rem] leading-snug text-white/75 marker:text-white/60">
             {s.items.map((it) => (
               <li key={it}>
                 <Inline text={it} />

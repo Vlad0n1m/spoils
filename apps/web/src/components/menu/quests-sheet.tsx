@@ -137,7 +137,7 @@ function TodayTab({ onRewards }: { onRewards: () => void }) {
           </p>
         </button>
       </div>
-      <ul className="font-body list-disc space-y-1 pl-5 text-xs lg:text-[0.8125rem] leading-relaxed text-white/75">
+      <ul className="font-body list-disc space-y-2.5 pl-5 text-xs lg:text-[0.8125rem] leading-snug text-white/75">
         <li>Tasks count only in raids: an extract after 8+ minutes on the map, containers and bodies once each, real kills.</li>
         <li>Unfinished tasks carry over with their progress. One free swap a day.</li>
         <li>Each task pays {QUEST.XP} XP, up to {QUEST.DAILY_XP_MAX} a day, on top of the daily raid XP limit. No CR, no items.</li>
