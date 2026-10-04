@@ -80,7 +80,7 @@ export function TraderJunker({
         </span>
         <div className="min-w-0">
           <h2 className="toon-text-thin text-2xl tracking-wide text-amber-300">Junker</h2>
-          <p className="font-body text-sm text-white/65">
+          <p className="font-body text-sm text-white/75">
             “Ammo, bandages, the good stuff. I buy your junk too.” Demand today{" "}
             <span className="font-semibold tabular-nums text-white">×{autosellMult.toFixed(2)}</span>
           </p>
@@ -96,9 +96,9 @@ export function TraderJunker({
               <ItemCard def={def} qty={o.qty} size="sm" />
               <div className="min-w-0 flex-1">
                 <p className="text-sm tracking-wide text-white">
-                  {itemDef(def)?.name ?? def} <span className="text-white/45">× {o.qty}</span>
+                  {itemDef(def)?.name ?? def} <span className="text-white/70">× {o.qty}</span>
                 </p>
-                <p className="font-body text-xs text-white/50">In stash: {stacks[def] ?? 0}</p>
+                <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">In stash: {stacks[def] ?? 0}</p>
               </div>
               <div className="ml-auto flex items-center gap-2">
               <div className="flex items-center gap-1" aria-label="Packs">
@@ -133,8 +133,8 @@ export function TraderJunker({
           );
         })}
       </ul>
-      <h3 className="mt-5 text-sm uppercase tracking-[0.18em] text-white/60">Bound gear</h3>
-      <p className="font-body mt-1 text-xs text-white/50">
+      <h3 className="mt-5 text-sm uppercase tracking-[0.12em] text-white/75">Bound gear</h3>
+      <p className="font-body mt-1 text-xs lg:text-[0.8125rem] text-white/70">
         For CR. Bound gear can&apos;t be sold or traded and is destroyed when lost.
       </p>
       <ul className="mt-2 divide-y-2 divide-black/40">
@@ -146,7 +146,7 @@ export function TraderJunker({
               <ItemCard def={o.def} qty={1} size="sm" />
               <div className="min-w-0 flex-1">
                 <p className="text-sm tracking-wide text-white">{itemDef(o.def)?.name ?? o.def}</p>
-                <p className="font-body text-xs text-white/50">{locked ? `Unlocks at level ${(o.traderLevel - 1) * 5}` : "Bound"}</p>
+                <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">{locked ? `Unlocks at level ${(o.traderLevel - 1) * 5}` : "Bound · can't be sold"}</p>
               </div>
               <button
                 type="button"

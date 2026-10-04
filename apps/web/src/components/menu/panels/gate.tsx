@@ -16,7 +16,7 @@ export function Gate({ loading, guest, next }: { loading: boolean; guest: boolea
         <p className="font-body mx-auto mt-3 max-w-[44ch] text-base text-white/75">
           {guest
             ? "Guest raids use the free kit and loot isn't kept. Register to get a stash, a starter kit, a loadout and a rank."
-            : "Your stash, loadout, traders and market lots live on your account."}
+            : "Your stash, loadout, traders and market listings live on your account."}
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link href={`/auth/register?next=${back}`} className="toon-btn min-h-12 px-6 text-lg">

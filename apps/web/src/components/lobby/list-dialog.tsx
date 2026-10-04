@@ -83,13 +83,13 @@ export function ListDialog({
             <h2 id={`${id}-t`} className="toon-text-thin truncate text-2xl tracking-wide text-white">
               Sell {d.name}
             </h2>
-            <p className="text-xs uppercase tracking-wider" style={{ color: d.color }}>
+            <p className="text-xs lg:text-[0.8125rem] uppercase tracking-wider" style={{ color: d.color }}>
               {d.rarityName} · {Math.round(item.dur)}% durability
             </p>
           </div>
         </div>
 
-        <label htmlFor={`${id}-p`} className="mt-6 block text-xs uppercase tracking-[0.18em] text-white/60">
+        <label htmlFor={`${id}-p`} className="mt-6 block text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/75">
           Price ({market.currency})
         </label>
         <div className="mt-2 flex items-center gap-2">
@@ -108,20 +108,20 @@ export function ListDialog({
         {text && !price && <p className="font-body mt-1 text-sm text-rose-300">Enter an amount like 12.50 (max {market.decimals} decimals).</p>}
 
         <dl className="font-body mt-5 grid grid-cols-[1fr_auto] gap-y-1.5 rounded-2xl border-2 border-black bg-black/30 p-4 text-sm">
-          <dt className="text-white/60">Buyer pays</dt>
+          <dt className="text-white/75">Buyer pays</dt>
           <dd className="text-right tabular-nums text-white">{price ? formatMinor(price) : "—"}</dd>
-          <dt className="text-white/60">Market fee ({(market.feeBps / 100).toFixed(market.feeBps % 100 ? 1 : 0)}%)</dt>
+          <dt className="text-white/75">Market fee ({(market.feeBps / 100).toFixed(market.feeBps % 100 ? 1 : 0)}%)</dt>
           <dd className="text-right tabular-nums text-white/80">{br ? `− ${formatMinor(br.fee)}` : "—"}</dd>
           <dt className="font-semibold text-white">You receive</dt>
           <dd className="text-right font-semibold tabular-nums text-zooa-lime">{br ? formatMinor(br.net) : "—"}</dd>
-          <dt className="mt-2 text-white/60">Listing fee (not refunded)</dt>
+          <dt className="mt-2 text-white/75">Listing fee (not refunded)</dt>
           <dd className={canAffordFee ? "mt-2 text-right tabular-nums text-amber-300" : "mt-2 text-right tabular-nums text-rose-300"}>{fmtCr(feeCr)}</dd>
         </dl>
 
         {template && (
-          <div className="font-body mt-4 text-sm text-white/65">
+          <div className="font-body mt-4 text-sm text-white/75">
             <p>
-              <span className="text-white/45">{templateLabel(template)}: </span>
+              <span className="text-white/70">{templateLabel(template)}: </span>
               {hist?.index ? (
                 <>
                   index <span className="tabular-nums text-white">{formatMinor(hist.index)}</span>
@@ -139,7 +139,7 @@ export function ListDialog({
               )}
             </p>
             {hist && hist.trades.length > 0 && (
-              <p className="mt-1 text-white/50">
+              <p className="mt-1 text-white/70">
                 Last sales: {hist.trades.slice(0, 5).map((t) => `${formatMinor(t.price)} (${Math.round(t.dur)}%)`).join(" · ")}
               </p>
             )}

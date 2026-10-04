@@ -121,7 +121,7 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
   return (
     <div className="flex flex-col gap-4">
       {board === "level" ? (
-        <p className="font-body text-sm text-white/65">Total XP, all time.</p>
+        <p className="font-body text-sm text-white/75">Total XP, all time.</p>
       ) : (
         <div role="group" aria-label="Period" className="flex gap-1.5">
           {LB_PERIODS.map((p) => (
@@ -179,7 +179,7 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
                     {r.nickname}
                   </span>
                   {title && (
-                    <span className={clsx("font-body block truncate text-[0.65rem] font-bold uppercase tracking-wider", mine ? "text-black/65" : "text-white/55")}>
+                    <span className={clsx("font-body block truncate text-xs lg:text-[0.8125rem] font-bold uppercase tracking-wider", mine ? "text-black/65" : "text-white/70")}>
                       {title}
                     </span>
                   )}

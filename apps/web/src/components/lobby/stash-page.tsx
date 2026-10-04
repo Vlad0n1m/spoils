@@ -62,7 +62,7 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
             extra={
               <Link
                 href="/wallet"
-                className="font-body relative text-xs text-white/55 underline-offset-4 before:absolute before:-inset-x-2 before:-inset-y-3.5 before:content-[''] hover:text-white hover:underline"
+                className="font-body relative text-xs lg:text-[0.8125rem] text-white/70 underline-offset-4 before:absolute before:-inset-x-2 before:-inset-y-3.5 before:content-[''] hover:text-white hover:underline"
               >
                 Top up
               </Link>
@@ -121,7 +121,7 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
         <section className="toon-panel bg-[#161b28]/95 p-5">
           <header className="flex items-baseline justify-between">
             <h2 className="toon-text-thin text-2xl tracking-wide text-white">Stash</h2>
-            <p className="font-body text-xs text-white/55">
+            <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">
               {/* Every tile the grid shows: the uniques plus one per ammo/med stack. */}
               {stash.uniques.length + Object.keys(stash.stacks).length}{" "}
               {stash.uniques.length + Object.keys(stash.stacks).length === 1 ? "item" : "items"}
@@ -168,7 +168,7 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
           onClose={() => setSelling(null)}
           onListed={async () => {
             setSelling(null);
-            setNote({ ok: true, text: "Listed. Manage your lots in the Market tab." });
+            setNote({ ok: true, text: "Listed. Manage your listings in Shop · Market." });
             await res.reload();
           }}
         />
@@ -180,7 +180,7 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
 function Stat({ label, value, tone = "text-white", extra }: { label: string; value: string; tone?: string; extra?: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <p className="text-[0.65rem] uppercase tracking-[0.2em] text-white/50">{label}</p>
+      <p className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">{label}</p>
       <p className={`toon-text-thin mt-1.5 truncate text-2xl tabular-nums tracking-wide ${tone}`}>{value}</p>
       {extra && <div className="mt-1.5">{extra}</div>}
     </div>
@@ -203,7 +203,7 @@ function ItemDrawer({ item, stash, onSell }: { item: StashItemDto | null; stash:
     return (
       <section className="toon-panel bg-[#161b28]/95 p-5">
         <h2 className="toon-text-thin text-2xl tracking-wide text-white">Item</h2>
-        <p className="font-body mt-3 text-sm text-white/55">Pick an item in your stash to see details or put it up for sale.</p>
+        <p className="font-body mt-3 text-sm text-white/70">Pick an item in your stash to see details or put it up for sale.</p>
       </section>
     );
   }
@@ -217,21 +217,21 @@ function ItemDrawer({ item, stash, onSell }: { item: StashItemDto | null; stash:
         <ItemCard def={item.def} rarity={item.rarity} dur={item.dur} size="lg" badge={b?.text} badgeTone={b?.tone} />
         <div className="min-w-0">
           <h2 className="toon-text-thin truncate text-2xl tracking-wide text-white">{d.name}</h2>
-          <p className="text-xs uppercase tracking-wider" style={{ color: d.color }}>
+          <p className="text-xs lg:text-[0.8125rem] uppercase tracking-wider" style={{ color: d.color }}>
             {d.rarityName} {def?.cat}
           </p>
         </div>
       </div>
       <dl className="font-body mt-4 grid grid-cols-2 gap-y-1.5 text-sm">
-        <dt className="text-white/55">Durability</dt>
+        <dt className="text-white/70">Durability</dt>
         <dd className="text-right tabular-nums text-white">
-          {Math.round(item.dur)}% <span className="text-white/40">/ {Math.round(item.maxDur)}</span>
+          {Math.round(item.dur)}% <span className="text-white/70">/ {Math.round(item.maxDur)}</span>
         </dd>
-        <dt className="text-white/55">Origin</dt>
+        <dt className="text-white/70">Origin</dt>
         <dd className="text-right capitalize text-white">{item.origin}</dd>
         {item.lockRaids > 0 && (
           <>
-            <dt className="text-white/55">Trade lock</dt>
+            <dt className="text-white/70">Trade lock</dt>
             <dd className="text-right tabular-nums text-white">{item.lockRaids} raids</dd>
           </>
         )}
@@ -240,7 +240,7 @@ function ItemDrawer({ item, stash, onSell }: { item: StashItemDto | null; stash:
         <button type="button" onClick={() => onSell(item)} disabled={blocker !== null} className="toon-btn min-h-12 text-lg">
           <span className="optical-center">Sell on market</span>
         </button>
-        {blocker && <p className="font-body text-sm text-white/60">{blocker}</p>}
+        {blocker && <p className="font-body text-sm text-white/75">{blocker}</p>}
         {item.state === "in_stash" && (
           <Link href={panelHref({ panel: "inventory", tab: "loadout" })} className="toon-btn-ghost min-h-11 text-sm">
             <span className="optical-center">Equip in loadout</span>

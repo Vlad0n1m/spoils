@@ -145,7 +145,7 @@ export function AudioSettingsButton({ className, align = "right", direction = "d
                     <label htmlFor={id} className="font-body">
                       {row.label}
                     </label>
-                    <span className="mono text-xs tabular-nums text-white/70">{pct}%</span>
+                    <span className="mono text-xs lg:text-[0.8125rem] tabular-nums text-white/70">{pct}%</span>
                   </div>
                   <input
                     id={id}
@@ -180,7 +180,7 @@ export function AudioSettingsButton({ className, align = "right", direction = "d
                   />
                   <span className="flex flex-col">
                     <span className="font-body">{row.label}</span>
-                    <span className="font-body text-xs text-white/55">{row.hint}</span>
+                    <span className="font-body text-xs lg:text-[0.8125rem] text-white/70">{row.hint}</span>
                   </span>
                 </label>
               );

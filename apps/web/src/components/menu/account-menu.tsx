@@ -81,7 +81,7 @@ export function AccountMenu() {
           {user ? (
             <div className="border-b-2 border-black/40 px-3 pb-3 pt-2">
               <p className="truncate text-base tracking-wide text-white">{user.nickname}</p>
-              <p className="font-body mt-1 truncate text-xs text-white/60">{sessionKind === "guest" ? "Guest · loot isn't kept" : user.email}</p>
+              <p className="font-body mt-1 truncate text-xs lg:text-[0.8125rem] text-white/75">{sessionKind === "guest" ? "Guest · loot isn't kept" : user.email}</p>
             </div>
           ) : (
             <p className="font-body px-3 pb-3 pt-2 text-sm text-white/70">Not signed in</p>

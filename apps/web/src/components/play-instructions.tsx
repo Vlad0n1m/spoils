@@ -80,7 +80,7 @@ export function PlayerInstructions() {
             <span className="relative grid h-14 w-14 shrink-0 place-items-center rounded-2xl border-[3px] border-black bg-white/[0.07] shadow-[0_3px_0_#000]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={s.icon} alt="" className="h-11 w-11 object-contain" draggable={false} />
-              <span className="toon-key absolute -left-2 -top-2 h-5 min-w-5 bg-zooa-lime text-[0.65rem]">{i + 1}</span>
+              <span className="toon-key absolute -left-2 -top-2 h-5 min-w-5 bg-zooa-lime text-xs">{i + 1}</span>
             </span>
             <div className="min-w-0">
               <h3 className="text-lg tracking-wide text-white">{s.title}</h3>
@@ -218,7 +218,7 @@ function TouchControlsBlock() {
         {TOUCH_KEYS.map(([k, what]) => (
           <li key={k} className="flex min-h-10 items-center justify-between gap-3 py-1.5">
             <span>{what}</span>
-            <span className="toon-key shrink-0 px-1.5 font-sans text-[0.7rem]">{k}</span>
+            <span className="toon-key shrink-0 px-1.5 font-sans text-xs">{k}</span>
           </li>
         ))}
       </ul>
@@ -239,7 +239,7 @@ export function ControlsSection() {
               <span>{what}</span>
               <span className="flex shrink-0 gap-1">
                 {keys.map((k) => (
-                  <kbd key={k} className="toon-key px-1.5 font-sans text-[0.7rem]">
+                  <kbd key={k} className="toon-key px-1.5 font-sans text-xs">
                     {k}
                   </kbd>
                 ))}
@@ -253,7 +253,7 @@ export function ControlsSection() {
           {MENU_KEYS.map(([k, what]) => (
             <li key={k} className="flex min-h-10 items-center justify-between gap-3 py-1.5">
               <span>{what}</span>
-              <kbd className="toon-key px-1.5 font-sans text-[0.7rem]">{k}</kbd>
+              <kbd className="toon-key px-1.5 font-sans text-xs">{k}</kbd>
             </li>
           ))}
         </ul>

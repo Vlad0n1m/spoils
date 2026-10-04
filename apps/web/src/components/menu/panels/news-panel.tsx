@@ -77,10 +77,10 @@ function Feed() {
     <ul className="flex flex-col gap-2">
       {events.map((e) => (
         <li key={e.id} className="flex items-start gap-3 rounded-2xl border-[3px] border-black bg-[#161b28]/95 p-3 shadow-[0_3px_0_#000]">
-          <span className={clsx("mt-0.5 shrink-0 rounded-md border-2 border-black px-1.5 py-1 text-[0.6rem] tracking-[0.15em]", TAG[e.kind].tone)}>{TAG[e.kind].label}</span>
+          <span className={clsx("mt-0.5 shrink-0 rounded-md border-2 border-black px-1.5 py-1 text-xs lg:text-[0.8125rem] tracking-[0.15em]", TAG[e.kind].tone)}>{TAG[e.kind].label}</span>
           <div className="min-w-0">
             <p className="font-body text-sm font-semibold text-white">{eventText(e)}</p>
-            <p className="font-body mt-0.5 text-xs text-white/60">
+            <p className="font-body mt-0.5 text-xs lg:text-[0.8125rem] text-white/75">
               {mapLabel(e.mapNumber)} · {fmtLocalHm(e.at)} · {timeAgo(e.at)}
             </p>
           </div>
@@ -95,7 +95,7 @@ function PatchNotes() {
     <div className="flex flex-col gap-4">
       {NEWS_POSTS.map((p) => (
         <article key={p.id} className="toon-panel bg-[#161b28]/95 p-4 md:p-5">
-          <p className="flex items-center gap-2 text-[0.65rem] tracking-[0.18em] text-white/60">
+          <p className="flex items-center gap-2 text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/75">
             <span className="rounded-md border-2 border-black bg-zooa-lime px-1.5 py-0.5 text-black">{p.tag.toUpperCase()}</span>
             {p.date}
           </p>

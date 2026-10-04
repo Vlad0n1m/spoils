@@ -222,7 +222,7 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
       <section className="toon-panel bg-[#161b28]/95 p-5 lg:col-span-5">
         <header className="flex items-baseline justify-between gap-3">
           <h2 className="toon-text-thin text-2xl tracking-wide text-white">Stash</h2>
-          <p className="font-body text-xs text-white/55">
+          <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">
             <span className="[@media(hover:none)]:hidden">Click to equip</span>
             <span className="hidden [@media(hover:none)]:inline">Tap to equip</span>
           </p>
@@ -261,18 +261,18 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
           {EQUIP_KEYS.map((k) => (
             <div key={k} className="flex flex-col items-center gap-1.5">
               {slot(k, "md")}
-              <span className="text-[0.6rem] uppercase tracking-wider text-white/45">{SLOT_LABEL[k]}</span>
+              <span className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">{SLOT_LABEL[k]}</span>
             </div>
           ))}
         </div>
-        <h3 className="mt-6 text-xs uppercase tracking-[0.18em] text-white/55">Pockets</h3>
+        <h3 className="mt-6 text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">Pockets</h3>
         <div className="mt-2 grid grid-cols-4 justify-items-center gap-2">
           {Array.from({ length: POCKET_SLOTS }, (_, i) => (
             <div key={i}>{slot(`p${i}`, "sm")}</div>
           ))}
         </div>
-        <h3 className="mt-6 text-xs uppercase tracking-[0.18em] text-white/55">
-          Backpack <span className="tabular-nums text-white/40">{cap > 0 ? `${entries.filter((e) => /^b\d/.test(e.key)).length}/${cap}` : "— none"}</span>
+        <h3 className="mt-6 text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">
+          Backpack <span className="tabular-nums text-white/70">{cap > 0 ? `${entries.filter((e) => /^b\d/.test(e.key)).length}/${cap}` : "— none"}</span>
         </h3>
         {cap > 0 ? (
           <div className="mt-2 grid grid-cols-4 justify-items-center gap-2">
@@ -281,7 +281,7 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
             ))}
           </div>
         ) : (
-          <p className="font-body mt-2 text-sm text-white/50">Equip a backpack for more slots. Loot you find goes into pockets and the pack.</p>
+          <p className="font-body mt-2 text-sm text-white/70">Equip a backpack for more slots. Loot you find goes into pockets and the pack.</p>
         )}
         {toast && (
           <p role="status" className="font-body absolute inset-x-5 bottom-4 rounded-xl border-2 border-black bg-amber-300 px-3 py-2 text-sm font-semibold text-black shadow-[0_3px_0_#000]">
@@ -314,15 +314,15 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
           </p>
         )}
         <dl className="font-body grid grid-cols-2 gap-y-2 text-sm">
-          <dt className="text-white/55">Gear at risk</dt>
+          <dt className="text-white/70">Gear at risk</dt>
           <dd className="text-right tabular-nums text-white">
             {atRisk} {atRisk === 1 ? "item" : "items"}
           </dd>
-          <dt className="text-white/55">Ammo</dt>
+          <dt className="text-white/70">Ammo</dt>
           <dd className="text-right tabular-nums text-white">{entries.filter((e) => itemDef(e.def)?.cat === "ammo").reduce((s, e) => s + e.qty, 0)}</dd>
-          <dt className="text-white/55">Meds</dt>
+          <dt className="text-white/70">Meds</dt>
           <dd className="text-right tabular-nums text-white">{entries.filter((e) => itemDef(e.def)?.cat === "med").reduce((s, e) => s + e.qty, 0)}</dd>
-          <dt className="text-white/55">Grenades</dt>
+          <dt className="text-white/70">Grenades</dt>
           <dd className="text-right tabular-nums text-white">{entries.filter((e) => itemDef(e.def)?.cat === "throwable").reduce((s, e) => s + e.qty, 0)}</dd>
         </dl>
         <p className="font-body text-xs leading-relaxed text-white/55">
@@ -371,8 +371,8 @@ function SaveBadge({ state }: { state: SaveState }) {
   return (
     <span
       className={clsx(
-        "font-body text-xs",
-        state === "saving" && "text-white/55",
+        "font-body text-xs lg:text-[0.8125rem]",
+        state === "saving" && "text-white/70",
         state === "saved" && "text-zooa-lime",
         state === "error" && "text-rose-300",
       )}

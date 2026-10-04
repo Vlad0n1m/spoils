@@ -64,14 +64,14 @@ export function ItemCard({
         {/* eslint-disable-next-line @next/next/no-img-element -- tiny static sprites */}
         <img src={d.icon} alt="" draggable={false} className={clsx("pointer-events-none select-none object-contain drop-shadow-[0_2px_0_rgba(0,0,0,0.5)]", img)} />
         {qty !== undefined && qty > 1 && (
-          <span className="absolute -bottom-1.5 -right-1.5 rounded-md border-2 border-black bg-white px-1 text-[0.7rem] tabular-nums text-black">
+          <span className="absolute -bottom-1.5 -right-1.5 rounded-md border-2 border-black bg-white px-1 text-xs font-bold tabular-nums text-black">
             {qty}
           </span>
         )}
         {badge && (
           <span
             className={clsx(
-              "absolute -left-1.5 -top-2 max-w-[115%] truncate rounded-md border-2 border-black px-1 py-0.5 text-[0.55rem] uppercase tracking-wider",
+              "absolute -left-1.5 -top-2 max-w-[115%] truncate rounded-md border-2 border-black px-1 py-0.5 text-[0.7rem] font-bold uppercase leading-none tracking-normal",
               badgeTone === "lime" && "bg-zooa-lime text-black",
               badgeTone === "amber" && "bg-amber-300 text-black",
               badgeTone === "sky" && "bg-sky-300 text-black",
@@ -93,8 +93,8 @@ export function ItemCard({
       </span>
       {showName && (
         <span className="block max-w-[6rem] text-center">
-          <span className="block truncate text-[0.7rem] tracking-wide text-white">{d.name}</span>
-          <span className="block text-[0.6rem] uppercase tracking-wider" style={{ color: d.color }}>
+          <span className="block truncate text-xs tracking-wide text-white">{d.name}</span>
+          <span className="block text-xs font-semibold" style={{ color: d.color }}>
             {d.rarityName}
           </span>
         </span>
@@ -110,7 +110,7 @@ export function EmptySlot({ label, size = "md", onClick, active = false }: { lab
     <span
       onClick={onClick}
       className={clsx(
-        "grid place-items-center rounded-xl border-[3px] border-dashed border-white/25 bg-black/25 text-center text-[0.6rem] uppercase tracking-wider text-white/40",
+        "grid place-items-center rounded-xl border-[3px] border-dashed border-white/25 bg-black/25 px-0.5 text-center font-body text-xs font-semibold leading-tight text-white/70",
         box,
         active && "border-zooa-lime/70 text-zooa-lime/80",
       )}

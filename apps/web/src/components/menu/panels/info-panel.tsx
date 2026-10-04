@@ -42,7 +42,7 @@ function LevelsInfo() {
       </ul>
       <div className="overflow-hidden rounded-2xl border-[3px] border-black">
         <table className="font-body w-full text-left text-sm">
-          <thead className="bg-black/40 text-xs uppercase tracking-wider text-white/55">
+          <thead className="bg-black/40 text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">
             <tr>
               <th scope="col" className="px-3 py-2">
                 Level

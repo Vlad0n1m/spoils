@@ -52,9 +52,9 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
   // Next map's boss: tall desktop screens only (the card stays compact elsewhere).
   const nextLine =
     next === undefined ? null : next === null ? (
-      <p className="font-body hidden text-xs font-semibold text-white/55 [@media(min-width:1024px)_and_(min-height:760px)]:block">Next map: no boss</p>
+      <p className="font-body hidden text-xs lg:text-[0.8125rem] font-semibold text-white/70 [@media(min-width:1024px)_and_(min-height:760px)]:block">Next map: no boss</p>
     ) : (
-      <p className="font-body hidden text-xs font-semibold text-rose-200 [@media(min-width:1024px)_and_(min-height:760px)]:block">
+      <p className="font-body hidden text-xs lg:text-[0.8125rem] font-semibold text-rose-200 [@media(min-width:1024px)_and_(min-height:760px)]:block">
         Next map: <span className="uppercase tracking-wide">{next.name}</span> at the {next.zoneName}
       </p>
     );
@@ -62,7 +62,7 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
   if (!boss) {
     return (
       <div className="flex flex-col gap-1 border-t-2 border-black/40 pt-1.5">
-        <p className="font-body text-xs font-semibold text-white/55">No boss this map · about 1 map in 3</p>
+        <p className="font-body text-xs lg:text-[0.8125rem] font-semibold text-white/70">No boss this map · about 1 map in 3</p>
         {nextLine}
       </div>
     );
@@ -73,7 +73,7 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2 rounded-xl border-[3px] border-black bg-zinc-600/90 px-2 py-1 shadow-[0_3px_0_#000]">
           <BossFace down small />
-          <p className="font-body min-w-0 text-xs font-bold leading-tight text-white">
+          <p className="font-body min-w-0 text-xs lg:text-[0.8125rem] font-bold leading-tight text-white">
             {boss.name} is down{boss.killedBy ? <> — by <span className="text-zooa-lime">{boss.killedBy}</span></> : null}
           </p>
         </div>
@@ -94,8 +94,8 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
         <span className={clsx("contents", drop > 0 && "[&>*]:animate-shake-once motion-reduce:[&>*]:animate-none")}>
           <BossFace small />
           <span className="min-w-0">
-            <span className="block text-[0.65rem] leading-none tracking-[0.18em] text-black/75">
-              BOSS EVENT · T{boss.tier} · {boss.guards} {boss.guards === 1 ? "GUARD" : "GUARDS"}
+            <span className="block text-xs lg:text-[0.8125rem] leading-none tracking-[0.12em] text-black/75">
+              BOSS EVENT · TIER {boss.tier} · {boss.guards} {boss.guards === 1 ? "GUARD" : "GUARDS"}
             </span>
             <span className="menu-label mt-1 block truncate text-sm leading-none tracking-wide text-white [text-shadow:none]">
               {boss.name} · {boss.zoneName}

@@ -99,7 +99,7 @@ export const SideButton = forwardRef<
         </span>
       )}
       {hotkey && !locked && (
-        <span className="toon-key absolute left-1 top-1 h-5 min-w-5 text-[0.6rem] opacity-80 [@media(hover:none)]:hidden short:hidden" aria-hidden>
+        <span className="toon-key absolute left-1 top-1 h-5 min-w-5 text-xs opacity-80 [@media(hover:none)]:hidden short:hidden" aria-hidden>
           {hotkey}
         </span>
       )}

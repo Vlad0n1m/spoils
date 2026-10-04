@@ -60,7 +60,7 @@ export async function OnChainBlock() {
 
       {programId && (
         <div className="font-body mt-4 rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
-          <p className="text-xs uppercase tracking-wider text-white/45">Program</p>
+          <p className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">Program</p>
           <p className="mt-1 break-all font-mono text-[0.8rem] text-white/85">{programId}</p>
           <a
             href={explorerUrl("address", programId, cluster)}
@@ -75,7 +75,7 @@ export async function OnChainBlock() {
 
       <table className="font-body mt-4 w-full text-sm">
         <thead>
-          <tr className="text-left text-xs uppercase tracking-wider text-white/45">
+          <tr className="text-left text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">
             <th className="py-2 font-normal">Recorded</th>
             <th className="py-2 text-right font-normal">On chain</th>
           </tr>
@@ -87,12 +87,12 @@ export async function OnChainBlock() {
               <tr key={k.kind}>
                 <td className="py-2.5 pr-4 align-top">
                   <span className="text-white">{k.label}</span>
-                  <span className="block text-xs leading-relaxed text-white/45">{k.what}</span>
+                  <span className="block text-xs lg:text-[0.8125rem] leading-relaxed text-white/70">{k.what}</span>
                 </td>
                 <td className="py-2.5 text-right align-top tabular-nums">
                   <span className="text-lg text-white">{c ? c.sent : "—"}</span>
-                  {c && c.queued > 0 && <span className="block text-xs text-white/45">{c.queued} queued</span>}
-                  {c && c.failed > 0 && <span className="block text-xs text-rose-300/70">{c.failed} not recorded</span>}
+                  {c && c.queued > 0 && <span className="block text-xs lg:text-[0.8125rem] text-white/70">{c.queued} queued</span>}
+                  {c && c.failed > 0 && <span className="block text-xs lg:text-[0.8125rem] text-rose-300/70">{c.failed} not recorded</span>}
                 </td>
               </tr>
             );
@@ -101,7 +101,7 @@ export async function OnChainBlock() {
       </table>
 
       <div className="font-body mt-4">
-        <p className="text-xs uppercase tracking-wider text-white/45">Latest transactions</p>
+        <p className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">Latest transactions</p>
         {summary && summary.recent.length > 0 ? (
           <ul className="mt-2 space-y-1.5 text-sm">
             {summary.recent.map((r) => (
@@ -115,12 +115,12 @@ export async function OnChainBlock() {
                 >
                   {r.txSig.slice(0, 8)}…{r.txSig.slice(-8)} ↗
                 </a>
-                <span className="text-xs text-white/40">{r.sentAt.toUTCString()}</span>
+                <span className="text-xs lg:text-[0.8125rem] text-white/70">{r.sentAt.toUTCString()}</span>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="mt-2 text-sm text-white/50">No transactions yet.</p>
+          <p className="mt-2 text-sm text-white/70">No transactions yet.</p>
         )}
       </div>
     </section>

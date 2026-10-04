@@ -29,7 +29,7 @@ export function ShopPanel({ tab }: { tab: string }) {
       {/* self-start + sticky: the card keeps its height and the balance stays in view while the long
           trader list scrolls, instead of stretching into an empty column. */}
       <section className="toon-panel flex flex-col gap-3 bg-[#161b28]/95 p-5 lg:sticky lg:top-0 lg:col-span-4 lg:self-start">
-        <p className="text-[0.65rem] uppercase tracking-[0.2em] text-white/55">Credits</p>
+        <p className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">Credits</p>
         <p className="toon-text-thin text-4xl tabular-nums tracking-wide text-amber-300">{fmtCr(s.credits)}</p>
         <p className="font-body text-sm leading-relaxed text-white/75">
           Earn CR by bringing junk out of a raid: it sells automatically when you extract. Spend it here on ammo, meds and
@@ -38,9 +38,9 @@ export function ShopPanel({ tab }: { tab: string }) {
         <p className="font-body rounded-xl border-2 border-black bg-amber-300 px-3 py-2 text-sm font-bold text-black">
           Credits never convert to SOL.
         </p>
-        <p className="font-body text-xs leading-relaxed text-white/60">
-          Bound gear is yours to use but never to sell, and it is destroyed instead of entering the lost pool. Higher trader
-          tiers unlock with your level.
+        <p className="font-body text-xs lg:text-[0.8125rem] leading-relaxed text-white/75">
+          Bound gear is yours to use but can&apos;t be sold or traded, and it is gone for good if you lose it in a raid. Better
+          trader gear unlocks as you level up.
         </p>
       </section>
       <div className="lg:col-span-8">
