@@ -189,6 +189,13 @@ export function buildBatches(
             (batchOf(out, r).hits ??= []).push({ t: "", s: ev.msg.s, x: Math.round(ev.area.x * 10) / 10, y: Math.round(ev.area.y * 10) / 10, d: 0, ar: false });
             continue;
           }
+          if (!seesTarget) {
+            // A bullet of ours hit someone we do not see (bush, sight-blocking fence, past the night
+            // range): "hit confirmed" without the target's id, HP loss or armor (security audit). The
+            // point stays: it is where our own tracer visibly stops anyway.
+            (batchOf(out, r).hits ??= []).push({ t: "", s: ev.msg.s, x: ev.msg.x, y: ev.msg.y, d: 0, ar: false });
+            continue;
+          }
           const knowsShooter = ev.src >= 0 && (r === ev.src || vision.sees(r, ev.src));
           let msg = knowsShooter || ev.msg.s === "" ? ev.msg : { ...ev.msg, s: "" };
           if (isTarget && ev.fa !== undefined) msg = { ...msg, fa: quantizeFa(ev.fa) };

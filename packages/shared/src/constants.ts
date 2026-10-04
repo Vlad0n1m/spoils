@@ -78,6 +78,12 @@ export const WORLD = {
   NEXT_BOSS_REVEAL_MS: 10 * 60_000,
   /** Humans on one map (shard). A full map answers world_full. */
   CAPACITY: 24,
+  /**
+   * A living human without a client (never attached after admission, or disconnected) holds one of
+   * the CAPACITY seats only this long (security audit: idle bodies of throwaway accounts locked the
+   * world for a whole cycle). The body stays on the map and its owner can always rejoin it.
+   */
+  IDLE_SEAT_MS: 90_000,
   /** v6 launches with one shard; overflow shards are later. */
   MAX_SHARDS: 1,
   /** Vision is allocated for this many runtimes (humans + NPCs, never reused) per shard. */

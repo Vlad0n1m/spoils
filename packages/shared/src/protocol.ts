@@ -36,6 +36,10 @@ export const CLOSE_CODES = {
   WIPED: 4105,
   /** WORLD v6: this connection has no runtime on this map (entry gone / settled). */
   NOT_IN_WORLD: 4109,
+  /** The client sent far more frames than any honest client (battle-room.ts frame budget); it may rejoin. */
+  FLOODED: 4110,
+  /** This client's state patch could not be encoded whole (rooms/view-patches.ts); it rejoins with a fresh state. */
+  RESYNC: 4111,
 } as const;
 
 /**
@@ -178,8 +182,9 @@ export interface ShotMsg {
 
 export interface HitMsg {
   /**
-   * Target sessionId. "" on the thrower's copy of a grenade hit on someone they do not see: then
-   * x/y is the blast centre and d is 0, a "hit confirmed" without the target's spot or HP loss.
+   * Target sessionId. "" on the shooter's copy of a hit on someone they do not see, a "hit
+   * confirmed" with d 0 and ar false: for a grenade x/y is the blast centre, for a bullet the point
+   * where the shooter's own tracer stops.
    */
   t: string;
   /** Shooter sessionId ("" if the target cannot see the shooter). */

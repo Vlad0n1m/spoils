@@ -14,6 +14,7 @@ const { Server } = await import("@colyseus/core");
 const { WebSocketTransport } = await import("@colyseus/ws-transport");
 const { monitor } = await import("@colyseus/monitor");
 const { defineRooms } = await import("./rooms/define.js");
+const { guardMatchmakeBodies } = await import("./net/http-guard.js");
 const { announceBoot, BOOT_RETRY_MS } = await import("./net/web-api.js");
 const { worldDirectory } = await import("./world/directory.js");
 
@@ -34,6 +35,8 @@ const httpServer = createServer(app);
 const gameServer = new Server({
   transport: new WebSocketTransport({ server: httpServer }),
 });
+// Colyseus buffers whole /matchmake bodies before any check: cap them (net/http-guard.ts).
+guardMatchmakeBodies(httpServer);
 
 // WORLD v6: one room type (the world shard), clients may only joinById (D4).
 defineRooms(gameServer);

@@ -73,8 +73,8 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
       if (!killer.isNpc) m.emit({ type: "outcome", to: killer.rosterIndex, msg: killer.outcome });
     }
   }
-  const { lost, dropped } = buildCorpse(m, rt);
   const by = killer && killer !== rt ? killer : null;
+  const { lost, dropped } = buildCorpse(m, rt, by);
   m.emit({
     type: "kill",
     src: by?.rosterIndex ?? -1,
@@ -134,12 +134,12 @@ export function deathSplit(
  * tag become the corpse. Returns the broken uniques (`lost`) and the surviving uniques (`dropped`,
  * for the outcome screen: "left in your body").
  */
-export function buildCorpse(m: Match, rt: PlayerRuntime): { lost: ItemLike[]; dropped: ItemLike[] } {
+export function buildCorpse(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | null = null): { lost: ItemLike[]; dropped: ItemLike[] } {
   const noBreak = NPC.NO_BREAK && rt.isNpc;
   const { lost, dropped, remains } = deathSplit(carriedItems(rt).map((c) => c.item), m.rng, noBreak);
   clearSlots(rt);
   // Guests drop no tag (WORLD v6 D22, DOG_TAG.GUEST_TAG).
   if (!rt.isNpc && (!rt.guest || DOG_TAG.GUEST_TAG)) remains.push(makeItem("junk_dogtag", { label: rt.nickname, lvl: rt.level, ref: rt.selfKey }));
-  m.containers.addCorpse(rt, remains);
+  m.containers.addCorpse(rt, remains, killer);
   return { lost, dropped };
 }

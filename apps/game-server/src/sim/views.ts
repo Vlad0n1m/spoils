@@ -20,8 +20,19 @@ import type { AoiEntity } from "./aoi.js";
 import { offMap } from "./audience.js";
 import type { Match } from "./match.js";
 
+/**
+ * AOI entities (ground items, corpses) added to one view per tick (security audit "StateView patch
+ * overflow"): a ring crossing into thousands of items used to add them all in one tick, and the
+ * view's patch outgrew the encoder buffer. The rest wait in a per-viewer backlog (insertion order)
+ * and follow in the next ticks; removals apply at once and also cancel a pending add. About 60 B per
+ * add, so one tick's adds stay near 12 KB per view. An honest ring crossing adds well under this.
+ */
+export const VIEW_ADDS_PER_TICK = 200;
+
 export class ViewSync {
   private readonly views = new Map<number, StateView>();
+  /** Viewer → AOI entities still to add (VIEW_ADDS_PER_TICK). */
+  private readonly backlog = new Map<number, Set<AoiEntity>>();
 
   constructor(private readonly m: Match) {}
 
@@ -35,10 +46,12 @@ export class ViewSync {
     view.add(rt.self);
     view.add(rt.pub);
     this.views.set(rosterIndex, view);
+    this.backlog.delete(rosterIndex);
     this.syncPlayers(rosterIndex, view);
     // A player who already left the map gets no world around their body (no spectating).
     if (!offMap(this.m, rosterIndex)) {
-      for (const e of this.m.aoi.ring(this.m, rosterIndex, rt.pub.x, rt.pub.y)) if (this.live(e) && !view.has(e)) view.add(e);
+      for (const e of this.m.aoi.ring(this.m, rosterIndex, rt.pub.x, rt.pub.y)) if (this.live(e) && !view.has(e)) this.queue(rosterIndex, e);
+      this.drain(rosterIndex, view);
     }
     // A reconnect in the middle of a ready search session: the old view held the loot entry and no
     // new `view add` will come (the player is already in the target's ready set).
@@ -50,6 +63,12 @@ export class ViewSync {
   detach(rosterIndex: number, view?: StateView): void {
     if (view && this.views.get(rosterIndex) !== view) return;
     this.views.delete(rosterIndex);
+    this.backlog.delete(rosterIndex);
+  }
+
+  /** AOI adds still waiting for viewer i (tests, perf logs). */
+  pendingAdds(rosterIndex: number): number {
+    return this.backlog.get(rosterIndex)?.size ?? 0;
   }
 
   viewOf(rosterIndex: number): StateView | undefined {
@@ -64,9 +83,42 @@ export class ViewSync {
     for (const d of this.m.aoi.drainDiffs()) {
       const view = this.views.get(d.viewer);
       if (!view) continue;
-      for (const e of d.remove) if (view.has(e)) view.remove(e);
-      for (const e of d.add) if (this.live(e) && !view.has(e)) view.add(e);
+      const pending = this.backlog.get(d.viewer);
+      for (const e of d.remove) {
+        pending?.delete(e);
+        if (view.has(e)) view.remove(e);
+      }
+      for (const e of d.add) if (this.live(e) && !view.has(e)) this.queue(d.viewer, e);
     }
+    for (const i of [...this.backlog.keys()]) {
+      const view = this.views.get(i);
+      if (view) this.drain(i, view);
+      else this.backlog.delete(i);
+    }
+  }
+
+  private queue(i: number, e: AoiEntity): void {
+    let q = this.backlog.get(i);
+    if (!q) {
+      q = new Set();
+      this.backlog.set(i, q);
+    }
+    q.add(e);
+  }
+
+  /** Up to VIEW_ADDS_PER_TICK pending adds of viewer i, oldest first (still live and allowed). */
+  private drain(i: number, view: StateView): void {
+    const q = this.backlog.get(i);
+    if (!q) return;
+    let budget = VIEW_ADDS_PER_TICK;
+    for (const e of q) {
+      if (budget <= 0) break;
+      q.delete(e);
+      if (!this.live(e) || view.has(e) || !this.m.aoi.allowed(e, i)) continue;
+      view.add(e);
+      budget--;
+    }
+    if (q.size === 0) this.backlog.delete(i);
   }
 
   /** Apply a sim `view` event (loot entry of a search session). */

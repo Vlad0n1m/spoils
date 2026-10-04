@@ -54,6 +54,7 @@ import {
   hasLineOfSight,
   healSpeedMult,
   isBagKey,
+  ITEM_FLAG,
   isSlotKey,
   itemDef,
   junkCredits,
@@ -103,7 +104,7 @@ import { hasLiveGrenade, stepGrenades, throwGrenade, type LiveGrenade, type Thro
 import { ContainerSystem, closeSearch, invTakeAllOp, invTakeOp, stepSearches } from "./containers.js";
 import { envNow, initEnvironment, type EnvRuntime } from "./environment.js";
 import { stepExtraction, timeoutPlayer } from "./extraction.js";
-import { GroundStore, autoPickup, dropSpot, groundUniques, nearestGroundItem, pickupGround, spawnGroundItem } from "./inventory.js";
+import { GROUND_DROPS_PER_USER, GroundStore, autoPickup, dropSpot, findDropPile, groundUniques, mergeIntoPile, nearestGroundItem, pickupGround, spawnGroundItem } from "./inventory.js";
 import { Ledger, cloneItem, isTrackedUnique, makeItem, toPlain, toSettled } from "./items.js";
 import { NpcSystem, type NpcSpawn } from "./npc.js";
 import { leftoverPool, poolTargetCount, poolTick, receiveBossFill, receiveEntryPool, takeUnplaced, type UnplacedPoolItem } from "./pool-place.js";
@@ -573,6 +574,7 @@ export class Match {
     if (e.snapshot) this.loadLoadout(rt, e.snapshot);
     giveFreeKit(rt);
     syncPublic(rt);
+    rt.idleSince = this.now();
     this.runtimes.set(id, rt);
     this.ordered.push(rt);
     this.byUser.set(e.userId, rt);
@@ -594,10 +596,27 @@ export class Match {
     return this.byEntry.get(entryId);
   }
 
-  /** Living human runtimes, connected or not (admission capacity, D3). */
+  /** Living human runtimes, connected or not (logs, harness). */
   humansOnMap(): number {
     let n = 0;
     for (const rt of this.ordered) if (!rt.isNpc && rt.pub.alive) n++;
+    return n;
+  }
+
+  /**
+   * Living humans that hold one of the WORLD.CAPACITY seats (admission, D3): connected ones, plus
+   * those without a client for less than WORLD.IDLE_SEAT_MS (just admitted, or a short disconnect).
+   * A body idle for longer stays on the map (and its owner can rejoin it at any time) but no longer
+   * blocks admission: otherwise a few throwaway accounts that join and never connect, or connect and
+   * drop, would lock everyone else out of the shard for the whole cycle (security audit).
+   */
+  seatHolders(): number {
+    const now = this.now();
+    let n = 0;
+    for (const rt of this.ordered) {
+      if (rt.isNpc || !rt.pub.alive) continue;
+      if (rt.connected || rt.idleSince < 0 || now - rt.idleSince < WORLD.IDLE_SEAT_MS) n++;
+    }
     return n;
   }
 
@@ -730,6 +749,7 @@ export class Match {
       this.runtimes.set(sessionId, rt);
     }
     rt.connected = true;
+    rt.idleSince = -1;
     rt.queue.length = 0;
     rt.pendingThrow = null;
     rt.lastQueuedSeq = -1;
@@ -744,6 +764,7 @@ export class Match {
     const rt = this.runtimes.get(sessionId);
     if (!rt) return;
     rt.connected = false;
+    if (!rt.isNpc) rt.idleSince = this.now();
     rt.queue.length = 0;
     rt.pendingThrow = null;
     rt.triggerHeld = false;
@@ -888,18 +909,36 @@ export class Match {
     const rt = this.actor(id);
     if (!rt) return "dead";
     if (!takeOpToken(rt, this.clock)) return this.invErr(rt, "rate");
+    // Bounded ground (security audit): past GROUND_DROPS_PER_USER only a drop that joins one of the
+    // user's own piles is accepted (FREE items vanish and never count).
+    const src = isSlotKey(msg.key) ? rt.self.slots.get(msg.key) : undefined;
+    if (src && !(src.flags & ITEM_FLAG.FREE) && this.ground.dropsOf(rt) >= GROUND_DROPS_PER_USER && !findDropPile(this, rt, src, msg.qty ?? src.qty)) {
+      return this.invErr(rt, "ground_full", msg.key);
+    }
     const r = removeForDrop(rt, msg);
     if ("code" in r) return this.invErr(rt, r.code, msg.key);
     if (r.touchedActive) cancelReload(rt);
     if (r.item) {
-      const at = dropSpot(this, rt.pub.x, rt.pub.y, Math.floor(this.rng() * 12));
-      spawnGroundItem(this, r.item, at.x, at.y, rt);
+      const n = Math.floor(this.rng() * 12);
+      // A fungible drop joins the dropper's own pile nearby instead of becoming one more entity.
+      const pile = findDropPile(this, rt, r.item, r.item.qty);
+      if (pile) {
+        mergeIntoPile(this, pile, r.item.qty, rt);
+      } else {
+        const at = dropSpot(this, rt.pub.x, rt.pub.y, n);
+        spawnGroundItem(this, r.item, at.x, at.y, rt);
+      }
     }
     syncPublic(rt);
     return null;
   }
 
   private invErr(rt: PlayerRuntime, code: InvErrCode, key?: string): InvErrCode {
+    // A flood of INV_* past the op bucket gets one "rate" reply per second, not one per message.
+    if (code === "rate") {
+      if (this.clock - rt.rateErrAt < 1000) return code;
+      rt.rateErrAt = this.clock;
+    }
     if (!rt.isNpc) this.emit({ type: "invErr", to: rt.rosterIndex, msg: key === undefined ? { code } : { code, key } });
     return code;
   }
@@ -1272,6 +1311,8 @@ function newRuntime(
     dormant: false,
     viewCap: NPC.VIEW_RANGE_CAP,
     connected: false,
+    idleSince: -1,
+    rateErrAt: -Infinity,
     loadoutId: snap?.loadoutId ?? "",
     level: snap?.level ?? 0,
     pub: p,

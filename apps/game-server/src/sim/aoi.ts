@@ -14,9 +14,10 @@
  * The room applies the drained diffs to the StateViews (views.ts).
  *
  * Restrictions (disclosure.ts): a ground item a player just dropped ("spawn") or picked up
- * ("ghost") is, until the change is published, shown in its new state only to "knowers" — its
- * actors and the viewers that see one of them (sticky) — and in its old state to everyone else
- * (absent / still lying there). Restricted entities are few and reconciled every tick.
+ * ("ghost"), and a new corpse ("spawn", actors = victim and killer), is, until the change is
+ * published, shown in its new state only to "knowers" — its actors and the viewers that see one of
+ * them (sticky) — and in its old state to everyone else (absent / still lying there). Restricted
+ * entities are few (drops are capped per user, inventory.ts) and reconciled every tick.
  */
 
 import { VISION, aoiCell, type Corpse, type GroundItem } from "@extract/shared";
@@ -62,14 +63,18 @@ export class AoiSystem {
   /** Entities whose restriction just ended: reconciled once more so everyone gets the new state. */
   private readonly released = new Set<AoiEntity>();
 
-  /** Show `e` in its new state only to knowers until unrestrict (a second actor adds up). */
-  restrict(e: AoiEntity, kind: RestrictKind, actor: PlayerRuntime): void {
+  /**
+   * Show `e` in its new state only to knowers until unrestrict (a second actor adds up). `knowers`
+   * seeds viewers that already know (a new corpse: those who saw the victim alive last tick).
+   */
+  restrict(e: AoiEntity, kind: RestrictKind, actor: PlayerRuntime, knowers: Iterable<number> = []): void {
     const r = this.restricted.get(e);
     if (r) {
       r.actors.add(actor);
+      for (const k of knowers) r.knowers.add(k);
       return;
     }
-    this.restricted.set(e, { kind, actors: new Set([actor]), knowers: new Set() });
+    this.restricted.set(e, { kind, actors: new Set([actor]), knowers: new Set(knowers) });
   }
 
   unrestrict(e: AoiEntity): void {

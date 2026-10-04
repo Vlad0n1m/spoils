@@ -520,3 +520,45 @@ test("party drop admission: a signed dropSize holds exactly that many seats (a p
     await assert.rejects(h.dir.admit(ticket(s.matchId)), /world_full/);
     h.dir.stop();
   }));
+
+test("admission: bodies without a client hold a seat only WORLD.IDLE_SEAT_MS; a short disconnect keeps it, rejoin always works (security audit)", () =>
+  quiet(async () => {
+    const h = harness(WC.openAt + 60_000);
+    await h.dir.start();
+    const s = h.dir.shardOfCycle(K)!;
+    const m = s.room.match as Match;
+    // Throwaway accounts fill the shard and never open a WebSocket.
+    const idle: JoinTicket[] = [];
+    while (m.seatHolders() < WORLD.CAPACITY) {
+      const t = ticket(s.matchId);
+      await h.dir.admit(t);
+      idle.push(t);
+    }
+    assert.equal(m.humansOnMap(), WORLD.CAPACITY);
+    await assert.rejects(h.dir.admit(ticket(s.matchId)), /world_full/, "full while the seats are fresh");
+    await h.time.advance(WORLD.IDLE_SEAT_MS - 1_000);
+    await assert.rejects(h.dir.admit(ticket(s.matchId)), /world_full/, "still inside the idle window");
+    await h.time.advance(1_000);
+    assert.equal(m.seatHolders(), 0, "never-attached bodies no longer hold seats");
+    assert.equal(m.humansOnMap(), WORLD.CAPACITY, "their bodies stay on the map");
+    // Honest players get in again; one of them plays (attached), one drops briefly.
+    const a = ticket(s.matchId);
+    const b = ticket(s.matchId);
+    await h.dir.admit(a);
+    await h.dir.admit(b);
+    m.attachHuman(a.userId, "sa");
+    m.attachHuman(b.userId, "sb");
+    m.detach("sb");
+    assert.equal(m.seatHolders(), 2, "a fresh disconnect keeps its seat");
+    await h.time.advance(WORLD.IDLE_SEAT_MS);
+    assert.equal(m.seatHolders(), 1, "only the connected player still holds a seat");
+    // The owner of an idle body can always come back to it (rejoin: no capacity check, no web call).
+    const enters = h.enters.length;
+    while (m.seatHolders() < WORLD.CAPACITY) await h.dir.admit(ticket(s.matchId));
+    await h.dir.admit(ticket(s.matchId, idle[0]!.userId));
+    await h.dir.admit(ticket(s.matchId, b.userId));
+    assert.equal(h.enters.length, enters + WORLD.CAPACITY - 1, "rejoins made no raids/enter");
+    assert.ok(m.attachHuman(idle[0]!.userId, "back"), "the idle body is attachable again");
+    assert.equal(m.seatHolders(), WORLD.CAPACITY + 1, "a rejoin may go past CAPACITY (never refused)");
+    h.dir.stop();
+  }));

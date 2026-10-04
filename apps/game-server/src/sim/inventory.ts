@@ -30,6 +30,30 @@ export interface GroundRt {
   n: number;
   schema: GroundItem;
   item: ItemLike;
+  /** dropKey of the human whose action put it there ("" = world spawn / NPC). */
+  by: string;
+}
+
+/**
+ * Separate ground items one user's actions may have on a map at once (security audit: thousands of
+ * single-round drops overflowed every client's state patch and grew the tick cost without bound).
+ * INV_DROP past it is refused ("ground_full") unless the drop merges into one of the user's piles.
+ */
+export const GROUND_DROPS_PER_USER = 40;
+/** A fungible drop merges into the dropper's own pile of the same stack this close (and in sight). */
+export const GROUND_MERGE_PX = 160;
+
+/** Whose drops count together: the user (all their entries on this map), else the runtime. */
+export function dropKey(rt: PlayerRuntime): string {
+  return rt.userId ?? `r${rt.rosterIndex}`;
+}
+
+/** Same fungible stack (everything but qty equal, no uid). */
+function sameStack(a: ItemLike, b: ItemLike): boolean {
+  return (
+    a.def === b.def && !a.uid && !b.uid && a.rarity === b.rarity && a.dur === b.dur && (a.mag ?? 0) === (b.mag ?? 0) &&
+    a.flags === b.flags && (a.label ?? "") === (b.label ?? "") && (a.lvl ?? 0) === (b.lvl ?? 0) && (a.ref ?? "") === (b.ref ?? "")
+  );
 }
 
 /** Ground bookkeeping owned by the Match (one per match). */
@@ -45,6 +69,8 @@ export class GroundStore {
    */
   private readonly expQueue: GroundRt[] = [];
   private expHead = 0;
+  /** Live ground items per dropKey (GroundRt.by). */
+  private readonly dropCount = new Map<string, number>();
 
   constructor(width: number, height: number) {
     this.grid = new UniformGrid(width, height, 256);
@@ -63,7 +89,9 @@ export class GroundStore {
     g.y = y;
     g.qty = item.qty;
     g.rarity = item.rarity;
-    const rt: GroundRt = { n, schema: g, item: toPlain(item) };
+    const by = actor && !actor.isNpc ? dropKey(actor) : "";
+    const rt: GroundRt = { n, schema: g, item: toPlain(item), by };
+    if (by) this.dropCount.set(by, (this.dropCount.get(by) ?? 0) + 1);
     // WORLD v6 (A6): what a player drops / spills vanishes GROUND_EXPIRE_MS after it hit the ground
     // (a pick-up and re-drop is a new ground item with a new timer). Map floor loot never expires.
     if (m.world && actor) {
@@ -91,6 +119,11 @@ export class GroundStore {
     this.byId.delete(id);
     this.byN.delete(rt.n);
     this.grid.delete(rt.n);
+    if (rt.by) {
+      const left = (this.dropCount.get(rt.by) ?? 1) - 1;
+      if (left > 0) this.dropCount.set(rt.by, left);
+      else this.dropCount.delete(rt.by);
+    }
     const g = rt.schema;
     // A drop nobody else was shown yet (only the dropper's viewers hold it): just delete it.
     if (!actor || m.aoi.restrictedAs(g) === "spawn") {
@@ -114,6 +147,11 @@ export class GroundStore {
     };
     if (actor) m.disclosure.defer(`q${g.id}`, g.x, g.y, [actor], publish);
     else publish();
+  }
+
+  /** Live ground items put there by `rt`'s user (GROUND_DROPS_PER_USER). */
+  dropsOf(rt: PlayerRuntime): number {
+    return this.dropCount.get(dropKey(rt)) ?? 0;
   }
 
   /** Items whose centre is within `r` of (x, y). */
@@ -151,6 +189,32 @@ export class GroundStore {
     }
     return out;
   }
+}
+
+/**
+ * A pile of `rt`'s own on the ground that `qty` units of the fungible `item` can join: same stack,
+ * within GROUND_MERGE_PX and in sight, and still at most one full stack afterwards (so picking it up
+ * works exactly like picking up a stack). Null for uniques. The pile keeps its expiry timer.
+ */
+export function findDropPile(m: Match, rt: PlayerRuntime, item: ItemLike, qty: number): GroundRt | null {
+  const d = itemDef(item.def);
+  if (!d || d.unique || item.uid || !(qty > 0)) return null;
+  const key = dropKey(rt);
+  const p = rt.pub;
+  for (const g of m.ground.near(p.x, p.y, GROUND_MERGE_PX)) {
+    if (g.by !== key || !sameStack(g.item, item) || g.item.qty + qty > d.stack) continue;
+    if (!hasLineOfSight(m.idx, p.x, p.y, g.schema.x, g.schema.y, SOLID.MOVE)) continue;
+    return g;
+  }
+  return null;
+}
+
+/**
+ * Add `qty` to a pile from findDropPile. A pile still shown only to those who see the dropper
+ * (restricted "spawn") changes for them at once; a public one only once the dropper left (disclosure.ts).
+ */
+export function mergeIntoPile(m: Match, g: GroundRt, qty: number, actor: PlayerRuntime): void {
+  m.ground.setQty(m, g, g.item.qty + qty, m.aoi.restrictedAs(g.schema) === "spawn" ? undefined : actor);
 }
 
 /** `actor` = the player who put it there (see GroundStore.add); none for world spawns. */
