@@ -2,7 +2,7 @@ import type { ChainEventRow } from "../../db/schema";
 import type { Db } from "../inventory/db";
 import { toRecordArgs } from "./events";
 import type { RecordArgs } from "./program";
-import { claimDue, markRetry, markSent, releaseClaim, rememberTx } from "./queue";
+import { claimDue, markBlocked, markRetry, markSent, releaseClaim, rememberTx } from "./queue";
 
 /**
  * The chain_events worker (cron /api/cron/chain-events). Per due row:
@@ -10,15 +10,20 @@ import { claimDue, markRetry, markSent, releaseClaim, rememberTx } from "./queue
  *      transaction that landed late is marked sent instead of being recorded twice;
  *   2. otherwise sign a fresh record transaction, store its signature, send it and wait (bounded)
  *      for confirmation.
- * Transport trouble (dead RPC, timeouts) only reschedules the row with backoff; program rejections
- * fail it after MAX_REJECTED_ATTEMPTS. Nothing here throws to the caller per row.
+ * Transport trouble (dead RPC, timeouts, a lagging node) only reschedules the row with backoff;
+ * program rejections fail it after MAX_REJECTED_ATTEMPTS rejections (other attempts never count).
+ * A fee payer the cluster refuses (no SOL for the fee or its rent-exempt minimum) is an operator
+ * problem: the row goes back uncounted and the pass stops, handing the rest back too. Nothing here
+ * throws to the caller per row.
  */
 
 /** Outcome of sending a prepared transaction. */
 export type SendOutcome =
   | { status: "confirmed" }
-  /** Preflight or the program refused it: nothing was recorded. */
+  /** The program refused it (an instruction error): nothing was recorded. */
   | { status: "rejected"; error: string }
+  /** The cluster refused the fee payer or found no program (operator problem): nothing was sent. */
+  | { status: "blocked"; error: string }
   /** Its blockhash expired before it landed: safe to sign a new one. */
   | { status: "expired" }
   /** Sent, but confirmation is unknown (timeout, RPC error): check the signature next time. */
@@ -64,6 +69,8 @@ export interface WorkerResult {
   failed: number;
   released: number;
   signatures: string[];
+  /** Why the pass stopped early (a "blocked" send), else null. */
+  stopped: string | null;
 }
 
 export const DEFAULT_BATCH = 10;
@@ -73,26 +80,31 @@ export async function runChainWorker(db: Db, sender: ChainSender, o: WorkerOptio
   const started = clock().getTime();
   const budget = o.budgetMs ?? 20_000;
   const rows = await claimDue(db, o.limit ?? DEFAULT_BATCH, clock());
-  const res: WorkerResult = { claimed: rows.length, sent: 0, retried: 0, failed: 0, released: 0, signatures: [] };
+  const res: WorkerResult = { claimed: rows.length, sent: 0, retried: 0, failed: 0, released: 0, signatures: [], stopped: null };
   for (const row of rows) {
-    if (clock().getTime() - started > budget) {
+    if (res.stopped !== null || clock().getTime() - started > budget) {
       await releaseClaim(db, row.id, clock()).catch(() => undefined);
       res.released++;
       continue;
     }
-    let out: "sent" | "queued" | "failed";
+    let out: RowOutcome;
     try {
       out = await processRow(db, sender, row, o, clock, res.signatures);
     } catch (e) {
       // Only the DB writes above can land here; the lease frees the row if even this fails.
       out = await markRetry(db, row, { error: cleanError(e), now: clock(), keepTx: true }).catch(() => "queued" as const);
     }
-    if (out === "sent") res.sent++;
+    if (typeof out === "object") {
+      res.stopped = out.blocked;
+      res.released++;
+    } else if (out === "sent") res.sent++;
     else if (out === "failed") res.failed++;
     else res.retried++;
   }
   return res;
 }
+
+type RowOutcome = "sent" | "queued" | "failed" | { blocked: string };
 
 async function processRow(
   db: Db,
@@ -101,7 +113,7 @@ async function processRow(
   o: WorkerOptions,
   clock: () => Date,
   sigs: string[],
-): Promise<"sent" | "queued" | "failed"> {
+): Promise<RowOutcome> {
   let args: RecordArgs;
   try {
     args = toRecordArgs(row.kind, row.payload, o.salt);
@@ -148,6 +160,10 @@ async function processRow(
       return "sent";
     case "rejected":
       return markRetry(db, row, { error: sent.error, now: clock(), rejected: true });
+    case "blocked":
+      // Preflight refused it, so it never reached the cluster: drop the signature, do not count it.
+      await markBlocked(db, row.id, sent.error, clock());
+      return { blocked: sent.error };
     case "expired":
       return markRetry(db, row, { error: "blockhash expired before confirmation", now: clock() });
     case "unknown":

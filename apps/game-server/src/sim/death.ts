@@ -90,7 +90,11 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
   if (m.world && p.role === NPC_ROLE.BOSS && m.state.bossState === 1) {
     m.state.bossState = 2;
     const kind = m.npcs.info(rt)?.kind;
-    if (kind) m.emit({ type: "world", kind: "boss_killed", boss: kind, by: by && !by.isNpc ? by.nickname : "" });
+    if (kind) {
+      const human = by && !by.isNpc ? by : null;
+      // byUserId only for a registered raider: a guest's userId is a throwaway session id.
+      m.emit({ type: "world", kind: "boss_killed", boss: kind, by: human ? human.nickname : "", byUserId: human && !human.guest && human.userId ? human.userId : null });
+    }
   }
   syncPublic(rt);
   m.finishPlayer(rt, "dead", { lost, dropped });

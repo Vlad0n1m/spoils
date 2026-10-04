@@ -7,17 +7,21 @@
  *   $T programs/scripts/chain-admin.ts init               initialize(authority.json) as the upgrade authority
  *   $T programs/scripts/chain-admin.ts fund-authority 0.2 devnet SOL deploy.json → authority.json (fees)
  *   $T programs/scripts/chain-admin.ts send-test-events   queue one event of each kind in the TEST
- *                                                         database (extract_test) and send them with
- *                                                         the real worker
+ *                                                         database (extract_test) and send only those
+ *                                                         with the real worker (other queued test rows
+ *                                                         are parked as failed first)
+ *   DATABASE_URL=... $T programs/scripts/chain-admin.ts requeue-failed [id ...]
+ *                                                         put failed chain_events rows (all, or these
+ *                                                         ids) back in the queue of THAT database
  * Options: --url <rpc> (default https://api.devnet.solana.com).
  */
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { balanceSol, chainStatus, initializeConfig, topUp } from "../../apps/web/src/lib/chain/admin";
+import { balanceSol, chainStatus, initializeConfig, requeueFailedAt, topUp } from "../../apps/web/src/lib/chain/admin";
 import { chainHashSalt, explorerUrl, parseSecretKey } from "../../apps/web/src/lib/chain/config";
 import { bossKillEvent, matchEvent, rareExtractEvent } from "../../apps/web/src/lib/chain/events";
 import { configPda } from "../../apps/web/src/lib/chain/program";
-import { enqueueChainEvents } from "../../apps/web/src/lib/chain/queue";
+import { enqueueChainEvents, parkQueued } from "../../apps/web/src/lib/chain/queue";
 import { chainConnection, createWeb3Sender } from "../../apps/web/src/lib/chain/sender";
 import { runChainWorker } from "../../apps/web/src/lib/chain/worker";
 import { closeTestDb, openTestDb } from "../../apps/web/src/lib/inventory/test-db";
@@ -25,7 +29,7 @@ import { closeTestDb, openTestDb } from "../../apps/web/src/lib/inventory/test-d
 const args = process.argv.slice(2);
 const urlFlag = args.indexOf("--url");
 const RPC = urlFlag >= 0 ? args[urlFlag + 1]! : "https://api.devnet.solana.com";
-const [cmd, arg] = args.filter((_, i) => urlFlag < 0 || (i !== urlFlag && i !== urlFlag + 1));
+const [cmd, arg, ...rest] = args.filter((_, i) => urlFlag < 0 || (i !== urlFlag && i !== urlFlag + 1));
 
 function key(name: "deploy" | "authority" | "program") {
   const kp = parseSecretKey(readFileSync(new URL(`../.keys/${name}.json`, import.meta.url), "utf8"));
@@ -34,11 +38,12 @@ function key(name: "deploy" | "authority" | "program") {
 }
 
 const conn = chainConnection(RPC, 20_000);
-const programId = key("program").publicKey;
+/** Read on use, so requeue-failed also runs where programs/.keys/ does not exist (a server). */
+const programIdOf = () => key("program").publicKey;
 const tx = (sig: string) => `${sig}\n    ${explorerUrl("tx", sig)}`;
 
 async function status() {
-  const s = await chainStatus(conn, programId);
+  const s = await chainStatus(conn, programIdOf());
   const deploy = key("deploy").publicKey;
   const authority = key("authority").publicKey;
   console.log(`program    ${s.programId} deployed=${s.programDeployed}\n    ${explorerUrl("address", s.programId)}`);
@@ -52,6 +57,7 @@ async function status() {
 }
 
 async function init() {
+  const programId = programIdOf();
   const s = await chainStatus(conn, programId);
   if (!s.programDeployed) throw new Error("program is not deployed on this cluster");
   if (s.state) {
@@ -71,6 +77,10 @@ async function fund() {
 async function sendTestEvents() {
   const { db, pool } = openTestDb();
   try {
+    // The worker sends every due row: rows other tests or dev runs left in extract_test must not go
+    // to the public program with the sample events.
+    const parked = await parkQueued(db, "parked by send-test-events (not sent)");
+    if (parked) console.log(`parked ${parked} leftover queued row(s) in extract_test`);
     const cycleId = Math.floor(Date.now() / (45 * 60_000));
     const matchId = randomUUID();
     const owner = randomUUID();
@@ -105,7 +115,7 @@ async function sendTestEvents() {
     );
     console.log(`queued ${n} test events in extract_test (cycle ${cycleId})`);
     const salt = chainHashSalt({ NODE_ENV: "development" })!;
-    const sender = createWeb3Sender({ rpcUrl: RPC, authority: key("authority"), programId, confirmTimeoutMs: 30_000 });
+    const sender = createWeb3Sender({ rpcUrl: RPC, authority: key("authority"), programId: programIdOf(), confirmTimeoutMs: 30_000 });
     const r = await runChainWorker(db, sender, { salt, limit: 10, budgetMs: 120_000 });
     console.log(`worker: claimed=${r.claimed} sent=${r.sent} retried=${r.retried} failed=${r.failed}`);
     for (const s of r.signatures) console.log(`  ${tx(s)}`);
@@ -114,7 +124,22 @@ async function sendTestEvents() {
   }
 }
 
-const run: Record<string, () => Promise<void>> = { status, init, "fund-authority": fund, "send-test-events": sendTestEvents };
+async function requeue() {
+  const url = process.env.DATABASE_URL?.trim();
+  if (!url) throw new Error("set DATABASE_URL to the database whose failed rows should be requeued");
+  const ids = [arg, ...rest].filter((x): x is string => !!x).map(Number);
+  if (ids.some((i) => !Number.isSafeInteger(i) || i <= 0)) throw new Error("ids must be positive integers");
+  const n = await requeueFailedAt(url, ids);
+  console.log(`requeued ${n} failed row(s) in ${new URL(url).pathname.replace(/^\//, "")}`);
+}
+
+const run: Record<string, () => Promise<void>> = {
+  status,
+  init,
+  "fund-authority": fund,
+  "send-test-events": sendTestEvents,
+  "requeue-failed": requeue,
+};
 const f = cmd ? run[cmd] : undefined;
 if (!f) {
   console.error(`usage: chain-admin.ts ${Object.keys(run).join(" | ")} [--url <rpc>]`);

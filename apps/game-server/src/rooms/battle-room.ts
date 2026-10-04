@@ -348,6 +348,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
             kind: ev.kind,
             boss: ev.boss,
             by: ev.by.slice(0, 64),
+            ...(ev.byUserId ? { byUserId: ev.byUserId } : {}),
             atMs: Math.min(WORLD.CYCLE_MS, this.match.clock),
           });
           break;

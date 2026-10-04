@@ -18,10 +18,13 @@ import type { RecordArgs } from "./program";
  *
  * Hashes (hex in payloads, 32 raw bytes on chain):
  *   match_hash     sha256(canonicalJson(MatchEndReport)): keys sorted, undefined dropped
- *   killer_hash    sha256(salt + ":" + "user:<userId>")  or  ("guest:<nickname>") for a guest killer
+ *   killer_hash    sha256(salt + ":boss_kill:" + "user:<userId>")  or  "guest:<nickname>" for a
+ *                  guest killer; 32 zero bytes when no raider killed the boss
  *   owner_hash     sha256(salt + ":" + "user:<userId>")
  *   item_def_hash  sha256(def id), e.g. sha256("rifle"): public, anyone can map it back
  * The salt (CHAIN_HASH_SALT) stays on the server, so nobody can test a user id against a hash.
+ * killer_hash and owner_hash of the same user differ on purpose: the lobby names every boss killer
+ * publicly, and one shared hash would hand anyone that player's whole rare-extract history.
  */
 
 /** Rare extract threshold: epic and above (RARITY_NAMES: common, rare, epic, legendary). */
@@ -41,7 +44,7 @@ export interface BossKillPayload {
   matchId: string;
   cycleId: number;
   boss: BossKind;
-  /** "user:<userId>" (registered) or "guest:<nickname>". */
+  /** "user:<userId>" (registered), "guest:<nickname>" or NO_KILLER (an NPC or nobody). */
   killer: string;
 }
 export interface RareExtractPayload {
@@ -94,6 +97,14 @@ export function itemDefHash(def: string): Buffer {
   return sha256(def);
 }
 
+/** BossKillPayload.killer of a boss no raider killed (an NPC, or none reported). */
+export const NO_KILLER = "none";
+
+/** killer_hash: domain-separated from owner_hash (see the header); zero bytes for NO_KILLER. */
+export function killerHash(salt: string, killer: string): Buffer {
+  return killer === NO_KILLER ? Buffer.alloc(32) : sha256(`${salt}:boss_kill:${killer}`);
+}
+
 export function userRef(userId: string): string {
   return `user:${userId}`;
 }
@@ -123,7 +134,11 @@ export function matchEvent(report: MatchEndReport, mode: string): ChainEvent | n
   };
 }
 
-/** world/event boss_killed; killerUserId = the registered user with that nickname, else a guest. */
+/**
+ * world/event boss_killed. killerUserId = the registered raider of this shard who killed it (queue.ts
+ * resolves it from the report's byUserId and the shard's own entries), else a guest by nickname, or
+ * NO_KILLER when no raider killed it (`by` empty).
+ */
 export function bossKillEvent(ev: WorldEventReport, killerUserId: string | null): ChainEvent | null {
   if (!(BOSS_KINDS as readonly string[]).includes(ev.boss) || !Number.isInteger(ev.cycleId) || ev.cycleId < 0) return null;
   return {
@@ -133,7 +148,7 @@ export function bossKillEvent(ev: WorldEventReport, killerUserId: string | null)
       matchId: ev.matchId,
       cycleId: ev.cycleId,
       boss: ev.boss,
-      killer: killerUserId ? userRef(killerUserId) : `guest:${ev.by}`,
+      killer: killerUserId ? userRef(killerUserId) : ev.by ? `guest:${ev.by}` : NO_KILLER,
     },
   };
 }
@@ -207,7 +222,7 @@ export function toRecordArgs(kind: string, payload: unknown, salt: string): Reco
         kind: "boss_kill",
         cycleId: BigInt(p.cycleId),
         bossKind: BOSS_KINDS.indexOf(p.boss as BossKind),
-        killerHash: saltedHash(salt, p.killer),
+        killerHash: killerHash(salt, p.killer),
       };
     }
     case "rare_extract": {

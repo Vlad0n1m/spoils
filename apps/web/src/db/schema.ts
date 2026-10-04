@@ -745,6 +745,8 @@ export const chainEvents = pgTable(
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
     status: text("status").$type<"queued" | "sent" | "failed">().notNull().default("queued"),
     attempts: integer("attempts").notNull().default(0),
+    /** Program rejections only (queue.ts MAX_REJECTED_ATTEMPTS); attempts counts every claim. */
+    rejections: integer("rejections").notNull().default(0),
     nextAt: timestamp("next_at", { withTimezone: true }).defaultNow().notNull(),
     txSig: text("tx_sig"),
     txValidUntil: bigint("tx_valid_until", { mode: "number" }),

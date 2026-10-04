@@ -2,6 +2,8 @@
 .DS_Store
 .env
 .env.*.local
+# iDos edition env file under its older name (the stack reads .env.idos.local, ignored above).
+.env.idos
 .env.local
 .next
 .turbo

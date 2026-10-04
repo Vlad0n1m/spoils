@@ -49,7 +49,7 @@ export async function resetDb(db: Db): Promise<void> {
   await db.execute(sql`truncate table
     users, items, item_events, stash_stacks, loadouts, loadout_drafts, raids, raid_exits, raid_entries, pvp_kills,
     credit_ledger, dog_tag_payouts, economy_params, economy_daily, listings, trades, money_ledger,
-    match_results, deposits, withdrawals
+    match_results, deposits, withdrawals, chain_events
     restart identity cascade`);
 }
 

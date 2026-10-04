@@ -13,6 +13,7 @@ create table if not exists chain_events (
   payload jsonb not null,
   status text not null default 'queued',
   attempts integer not null default 0,
+  rejections integer not null default 0,
   next_at timestamptz not null default now(),
   tx_sig text,
   tx_valid_until bigint,
@@ -20,6 +21,8 @@ create table if not exists chain_events (
   created_at timestamptz not null default now(),
   sent_at timestamptz
 );
+-- Program rejections only (added after the first version of this file: re-running it adds the column).
+alter table chain_events add column if not exists rejections integer not null default 0;
 create unique index if not exists chain_events_dedupe_idx on chain_events (dedupe_key);
 create index if not exists chain_events_status_next_idx on chain_events (status, next_at);
 create index if not exists chain_events_sent_at_idx on chain_events (sent_at);

@@ -373,7 +373,7 @@ test("T11 boss bag: stowed on the event boss 60 s after its last hit; the event 
   const ev = m.drainEvents();
   assert.equal(m.state.bossState, 2);
   assert.equal(m.bossAlive(), false);
-  assert.ok(ev.some((e) => e.type === "world" && e.kind === "boss_killed" && e.boss === "foreman" && e.by === "UA"));
+  assert.ok(ev.some((e) => e.type === "world" && e.kind === "boss_killed" && e.boss === "foreman" && e.by === "UA" && e.byUserId === "ua"));
   assert.equal(a.stats.bossKills, 1);
 
   enter(m, "ub", { bossFill: [poolItem("uid-bf-2", "rifle", 2)] });

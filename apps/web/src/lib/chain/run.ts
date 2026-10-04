@@ -12,11 +12,18 @@ export type ChainCronResult =
 
 /** Lamports one record transaction costs the signer (one signature, no priority fee). */
 export const FEE_LAMPORTS = 5_000;
+/**
+ * Rent-exempt minimum of a 0-byte system account (128 bytes of account overhead × 3,480 lamports per
+ * byte-year × 2 years; the same on every cluster). The runtime refuses a fee that would leave the fee
+ * payer between 0 and this floor ("insufficient funds for rent"), so this much must stay untouched.
+ */
+export const RENT_EXEMPT_MIN_LAMPORTS = 890_880;
 
 /**
  * Why the cluster cannot take records right now (null = ready): program not deployed, Config not
- * initialized or owned by another key, or the signer cannot pay a full batch of fees. These are
- * operator problems, so the worker claims nothing and every event stays queued.
+ * initialized or owned by another key, or the signer cannot pay a full batch of fees on top of its
+ * rent-exempt minimum. These are operator problems, so the worker claims nothing and every event
+ * stays queued.
  */
 export function readinessProblem(s: {
   programDeployed: boolean;
@@ -28,8 +35,8 @@ export function readinessProblem(s: {
   if (!s.programDeployed) return "program is not deployed on this cluster";
   if (!s.config) return "program Config is not initialized";
   if (!s.config.authority.equals(s.signer)) return `Config authority is ${s.config.authority.toBase58()}, not this signer`;
-  const need = FEE_LAMPORTS * Math.max(1, s.batch);
-  if (s.lamports < need) return `signer holds ${s.lamports} lamports, needs ${need} for a batch of fees`;
+  const need = RENT_EXEMPT_MIN_LAMPORTS + FEE_LAMPORTS * Math.max(1, s.batch);
+  if (s.lamports < need) return `signer holds ${s.lamports} lamports, needs ${need} (rent-exempt minimum plus a batch of fees)`;
   return null;
 }
 

@@ -1,5 +1,3 @@
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
@@ -8,8 +6,9 @@ import bs58 from "bs58";
  * signer key the worker sends nothing and events simply stay queued.
  *
  *   CHAIN_AUTHORITY_SECRET  server record signer, base58 secret key or a solana-keygen JSON array.
- *                           Outside production the gitignored programs/.keys/authority.json is used
- *                           when the variable is unset.
+ *                           Required everywhere (no dev fallback): the only signer the Config
+ *                           accepts is the production one, so a dev machine must never pick it up
+ *                           on its own and put dev rows on the public program.
  *   CHAIN_HASH_SALT         secret salt of the user hashes put on chain (dev: a fixed dev salt).
  *   CHAIN_PROGRAM_ID        spoils_events program id (default: the devnet deployment below).
  *   CHAIN_RPC_URL           RPC of the program's cluster; falls back to SOLANA_RPC_URL, then devnet.
@@ -56,45 +55,16 @@ export function parseSecretKey(raw: string): Keypair | null {
   return null;
 }
 
-/** Where the dev fallback key may sit: the web runs from apps/web, scripts and tests from the repo root. */
-export function devKeyCandidates(cwd = process.cwd()): string[] {
-  const rel = path.join("programs", ".keys", "authority.json");
-  return [path.join(cwd, rel), path.join(cwd, "..", "..", rel)];
-}
-
-export type AuthoritySource = "env" | "dev-file";
-
 /**
- * The record signer: CHAIN_AUTHORITY_SECRET, else (not in production) the gitignored dev key file.
- * Returns null when nothing usable is configured; a malformed secret is reported by name only.
+ * The record signer from CHAIN_AUTHORITY_SECRET (in every environment; there is no key-file
+ * fallback). Returns null when it is unset or malformed; a malformed secret is reported by name only.
  */
-export function loadChainAuthority(
-  env: EnvSource = process.env,
-  readFile: (p: string) => string | null = readIfExists,
-  cwd = process.cwd(),
-): { keypair: Keypair; source: AuthoritySource } | null {
+export function loadChainAuthority(env: EnvSource = process.env): { keypair: Keypair; source: "env" } | null {
   const raw = val(env.CHAIN_AUTHORITY_SECRET);
-  if (raw) {
-    const kp = parseSecretKey(raw);
-    if (!kp) console.error("[chain] CHAIN_AUTHORITY_SECRET is not a base58 secret key or a JSON byte array");
-    return kp ? { keypair: kp, source: "env" } : null;
-  }
-  if (isProd(env)) return null;
-  for (const p of devKeyCandidates(cwd)) {
-    const text = readFile(p);
-    if (text === null) continue;
-    const kp = parseSecretKey(text);
-    if (kp) return { keypair: kp, source: "dev-file" };
-  }
-  return null;
-}
-
-function readIfExists(p: string): string | null {
-  try {
-    return existsSync(p) ? readFileSync(p, "utf8") : null;
-  } catch {
-    return null;
-  }
+  if (!raw) return null;
+  const kp = parseSecretKey(raw);
+  if (!kp) console.error("[chain] CHAIN_AUTHORITY_SECRET is not a base58 secret key or a JSON byte array");
+  return kp ? { keypair: kp, source: "env" } : null;
 }
 
 export function explorerUrl(kind: "address" | "tx", id: string, cluster = chainCluster()): string {

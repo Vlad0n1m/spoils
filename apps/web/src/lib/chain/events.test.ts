@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import type { MatchEndReport, SettledItem, WorldEventReport } from "@extract/shared";
 import {
+  NO_KILLER,
   RARE_EXTRACT_MIN_RARITY,
   bossKillEvent,
   canonicalJson,
@@ -20,6 +21,7 @@ import {
   type BossKillPayload,
   type MatchPayload,
 } from "./events";
+import { worldEventReportSchema } from "../inventory/report-schemas";
 
 const UID = "7f1c2d3e-4b5a-4c6d-8e9f-0a1b2c3d4e5f";
 const SALT = "test-salt";
@@ -95,7 +97,15 @@ describe("event builders", () => {
       payload: { matchId: "m1", cycleId: 9, boss: "warden", killer: `user:${UID}` },
     });
     assert.equal((bossKillEvent(ev, null)!.payload as BossKillPayload).killer, "guest:ann");
+    assert.equal((bossKillEvent({ ...ev, by: "" }, null)!.payload as BossKillPayload).killer, NO_KILLER, "no raider killed it");
     assert.equal(bossKillEvent({ ...ev, boss: "dragon" as never }, null), null);
+  });
+
+  test("the world/event report carries the registered killer's user id (uuid only, optional)", () => {
+    const base = { matchId: UID, cycleId: 9, kind: "boss_killed", boss: "warden", by: "ann", atMs: 5 };
+    assert.equal(worldEventReportSchema.safeParse(base).success, true, "older game server");
+    assert.equal(worldEventReportSchema.safeParse({ ...base, byUserId: UID }).success, true);
+    assert.equal(worldEventReportSchema.safeParse({ ...base, byUserId: "ann" }).success, false);
   });
 
   test("rare junk: epic and legendary defs, one line per def, dog tags never", () => {
@@ -128,7 +138,7 @@ describe("payload → instruction arguments", () => {
     assert.equal(b.kind, "boss_kill");
     if (b.kind === "boss_kill") {
       assert.equal(b.bossKind, 1, "BOSS_KINDS index");
-      assert.deepEqual(Buffer.from(b.killerHash), sha(`${SALT}:user:${UID}`));
+      assert.deepEqual(Buffer.from(b.killerHash), sha(`${SALT}:boss_kill:user:${UID}`));
     }
     const r = toRecordArgs("rare_extract", { entryId: "e", matchId: "m", cycleId: 9, ownerId: UID, def: "rifle", rarity: 3, itemId: "i", qty: 1 }, SALT);
     assert.equal(r.kind, "rare_extract");
@@ -141,6 +151,17 @@ describe("payload → instruction arguments", () => {
       const bytes = Buffer.concat(Object.values(a).filter((v): v is Uint8Array => v instanceof Uint8Array));
       assert.equal(bytes.includes(Buffer.from(UID)), false);
     }
+    // The lobby names every boss killer publicly: the same user's killer_hash must not equal their
+    // owner_hash, or anyone could attach that player's rare-extract history to the nickname.
+    if (b.kind === "boss_kill" && r.kind === "rare_extract") assert.notDeepEqual(Buffer.from(b.killerHash), Buffer.from(r.ownerHash));
+    assert.deepEqual(Buffer.from(saltedHash(SALT, `user:${UID}`)), sha(`${SALT}:user:${UID}`));
+  });
+
+  test("a boss no raider killed is recorded with a zero killer hash", () => {
+    const n = toRecordArgs("boss_kill", { matchId: "m1", cycleId: 9, boss: "warden", killer: NO_KILLER }, SALT);
+    assert.ok(n.kind === "boss_kill" && Buffer.from(n.killerHash).equals(Buffer.alloc(32)));
+    const g = toRecordArgs("boss_kill", { matchId: "m1", cycleId: 9, boss: "warden", killer: "guest:none" }, SALT);
+    assert.ok(g.kind === "boss_kill" && !Buffer.from(g.killerHash).equals(Buffer.alloc(32)), "a guest named none is still hashed");
   });
 
   test("payloads that do not fit throw (the worker fails them permanently)", () => {

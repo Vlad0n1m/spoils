@@ -41,6 +41,9 @@ export async function OnChainBlock() {
   }
   const cluster = chainCluster();
   const clusterName = cluster === "mainnet-beta" ? "Solana mainnet" : `Solana ${cluster}`;
+  // Claim "written" only once a record actually landed: before the program is live (or while the
+  // worker is not configured) results only wait in the queue.
+  const recording = !!summary && summary.recent.length > 0;
 
   return (
     <section className="toon-panel mt-6 bg-[#161b28]/95 p-5" aria-labelledby="on-chain-title">
@@ -48,9 +51,11 @@ export async function OnChainBlock() {
         On-chain
       </h2>
       <p className="font-body mt-3 max-w-[70ch] text-sm leading-relaxed text-white/70">
-        Game results are written to a public program on {clusterName}, so anyone can check them. The game server signs and
-        pays for every record; players never sign anything and never pay a fee for it. No account ids, nicknames or emails
-        go on chain: raiders appear only as salted hashes.
+        {recording
+          ? `Game results are written to a public program on ${clusterName}, so anyone can check them.`
+          : `Game results are queued for a public program on ${clusterName}. Recording starts once the program is live; nothing is on chain yet.`}{" "}
+        The game server signs and pays for every record; players never sign anything and never pay a fee for it. No
+        account ids, nicknames or emails go on chain: raiders appear only as salted hashes.
       </p>
 
       {programId && (
@@ -87,6 +92,7 @@ export async function OnChainBlock() {
                 <td className="py-2.5 text-right align-top tabular-nums">
                   <span className="text-lg text-white">{c ? c.sent : "—"}</span>
                   {c && c.queued > 0 && <span className="block text-xs text-white/45">{c.queued} queued</span>}
+                  {c && c.failed > 0 && <span className="block text-xs text-rose-300/70">{c.failed} not recorded</span>}
                 </td>
               </tr>
             );

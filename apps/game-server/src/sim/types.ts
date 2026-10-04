@@ -217,8 +217,11 @@ export type MatchEvent =
   /** A human left the map: POST /api/raids/exit. */
   | { type: "exit"; report: PlayerExitReport }
   | { type: "invErr"; to: number; msg: InvErrMsg }
-  /** WORLD v6: the event boss died (POST /api/world/event). `by` = killer nickname, "" if not a human. */
-  | { type: "world"; kind: "boss_killed"; boss: BossKind; by: string }
+  /**
+   * WORLD v6: the event boss died (POST /api/world/event). `by` = killer nickname, "" if not a human;
+   * byUserId = the killer's userId when a registered (non-guest) human, else null.
+   */
+  | { type: "world"; kind: "boss_killed"; boss: BossKind; by: string; byUserId: string | null }
   | { type: "ended"; report: MatchEndReport; summary: MatchSummaryMsg };
 
 /** Accepted loadouts by userId (legacy roster mode; world entries come through addHuman). */

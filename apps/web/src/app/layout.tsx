@@ -3,6 +3,7 @@ import { Luckiest_Guy, Nunito, Press_Start_2P } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 import { BRAND } from "@/lib/brand";
+import { SITE_URL } from "@/lib/site-url";
 
 const luckiestGuy = Luckiest_Guy({
   weight: "400",
@@ -33,6 +34,8 @@ export const metadata: Metadata = {
   description: "Top-down extraction shooter — drop in, loot up, get out alive",
   // Installable fullscreen landscape app (the Android TWA build packs this manifest).
   manifest: "/manifest.webmanifest",
+  // Absolute og:url / og:image only when NEXT_PUBLIC_SITE_URL names the public origin (lib/site-url.ts).
+  ...(SITE_URL ? { metadataBase: SITE_URL } : {}),
 };
 
 /** Phones: no pinch / double-tap zoom (no tap delay on the touch controls), content under the notch. */
@@ -42,7 +45,7 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: "cover",
-  themeColor: "#0b0f14",
+  themeColor: "#08070B",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
