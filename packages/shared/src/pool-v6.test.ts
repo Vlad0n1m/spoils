@@ -82,8 +82,11 @@ test("T4 shard cap = min(24, 4 + ceil(0.5 × riskUsers)) − shardReleased", () 
   assert.equal(rel({ riskUsers: 3, shardReleased: 5 }).n, 1);
   assert.equal(rel({ riskUsers: 3, shardReleased: 9 }).cap, 0);
   assert.equal(rel({ riskUsers: 3, shardReleased: 9 }).n, 0);
-  // Pool size bounds too.
-  assert.equal(rel({ poolSize: 2 }).n, 2);
+  // Pool size bounds too: never below POOL.MIN_RESERVE (04.10).
+  assert.equal(POOL.MIN_RESERVE, 150);
+  assert.equal(rel({ poolSize: POOL.MIN_RESERVE + 2 }).n, 2);
+  assert.equal(rel({ poolSize: POOL.MIN_RESERVE }).n, 0);
+  assert.equal(rel({ poolSize: 2 }).n, 0);
   assert.equal(rel({ poolSize: 0 }).n, 0);
 });
 

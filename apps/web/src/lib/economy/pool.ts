@@ -280,7 +280,7 @@ export async function releaseForEntry(tx: Tx, a: ReleaseForEntryArgs): Promise<R
   const riskUsers =
     Number(shardRow?.risk_users ?? 0) + (a.riskUnits >= 1 && Number(otherRiskUser.rows[0]?.n ?? 0) === 0 ? 1 : 0);
   const { size } = await poolCounts(tx);
-  const k = (await readReleaseParams(tx)).k;
+  const { k, minReserve } = await readReleaseParams(tx);
   const plan = poolReleaseForEntry({
     poolSize: size,
     entryRisk: a.riskUnits,
@@ -293,6 +293,7 @@ export async function releaseForEntry(tx: Tx, a: ReleaseForEntryArgs): Promise<R
     entryCloseMs: WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS,
     targets: a.targets,
     k,
+    minReserve,
   });
   const maxTier = Math.max(Number(userRow?.max_tier ?? 0), a.maxTier);
   const items = await takeFromPool(tx, { matchId: a.matchId, entryId: a.entryId, n: plan.n, maxTier, reason: "alloc", bestFirst: false });
@@ -377,8 +378,10 @@ export interface AllocPick {
 export interface ReleaseParams {
   k: number;
   max: number;
+  /** World v6 per-entry release floor (POOL.MIN_RESERVE). */
+  minReserve: number;
 }
-export const DEFAULT_RELEASE: ReleaseParams = { k: POOL.RISK_K, max: POOL.MAX_PER_MATCH };
+export const DEFAULT_RELEASE: ReleaseParams = { k: POOL.RISK_K, max: POOL.MAX_PER_MATCH, minReserve: POOL.MIN_RESERVE };
 
 /**
  * poolReleasePlanV4 with the knobs from economy_params (identical to the shared function at
@@ -402,11 +405,13 @@ export function releasePlan(
   return { total: risk + boss, risk, boss };
 }
 
-/** Reads the release knobs, clamped to sane ranges (k 0..2, max 0..16). */
+/** Reads the release knobs, clamped to sane ranges (k 0..2, max 0..16, min reserve 0..1000). */
 export async function readReleaseParams(tx: Tx): Promise<ReleaseParams> {
   const k = await getNumberParam(tx, PARAM.POOL_RISK_K);
   const max = await getNumberParam(tx, PARAM.POOL_MAX_PER_MATCH);
+  const reserve = await getNumberParam(tx, PARAM.POOL_MIN_RESERVE);
   return {
+    minReserve: Number.isFinite(reserve) ? Math.max(0, Math.min(1000, Math.floor(reserve))) : POOL.MIN_RESERVE,
     k: Number.isFinite(k) ? Math.max(0, Math.min(2, k)) : POOL.RISK_K,
     max: Number.isFinite(max) ? Math.max(0, Math.min(16, Math.floor(max))) : POOL.MAX_PER_MATCH,
   };

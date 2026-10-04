@@ -19,6 +19,7 @@ import { addStack } from "./transition";
 import { lockLoadout } from "./loadout";
 import { applyExit } from "./raids";
 import { enterRaid, openShard, recordWorldEvent } from "./world";
+import { PARAM, setParam } from "../economy/params";
 import { closeTestDb, lockTestDb, makeItem, makeUser, openTestDb, resetDb } from "./test-db";
 
 const { db, pool } = openTestDb();
@@ -271,6 +272,23 @@ describe("raids/enter", () => {
     const r = await enterRaid(db, entryReq(s.matchId, u, lock.ok ? lock.loadoutId : ""));
     assert.equal(r.pool.length, 2);
     for (const it of r.pool) assert.equal(uniqueTierScore(it.def, it.rarity), 0);
+  });
+
+  test("pool floor (POOL.MIN_RESERVE, pool_min_reserve): the release never takes the pool below the reserve", async () => {
+    await bulkPool(61);
+    await setParam(db, PARAM.POOL_MIN_RESERVE, 60);
+    const s = shardReq();
+    await openShard(db, s);
+    const u = await makeUser(db);
+    const a1 = await makeItem(db, { def: "armor_1", ownerId: u });
+    const b1 = await makeItem(db, { def: "backpack_1", ownerId: u });
+    const lock = await lockLoadout(db, u, [
+      { key: "armor", itemId: a1, def: "armor_1", qty: 1 },
+      { key: "bp", itemId: b1, def: "backpack_1", qty: 1 },
+    ]);
+    assert.ok(lock.ok);
+    const r = await enterRaid(db, entryReq(s.matchId, u, lock.ok ? lock.loadoutId : ""));
+    assert.equal(r.pool.length, 1, "2 risk units, but only 1 item above the reserve of 60");
   });
 
   test("boss bag (D19): filled once, only when the shard's risk reaches the slots", async () => {

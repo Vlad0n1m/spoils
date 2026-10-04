@@ -108,6 +108,8 @@ export const EDITABLE_PARAMS: readonly ParamSpec[] = [
 /** Shown read-only: internal state, or a knob the live World v6 code does not read. */
 const READ_ONLY_NOTES: Record<string, string> = {
   [PARAM.TAX_ACC]: "Дробный остаток 1 % налога в казну (takeTreasuryTax). Внутренний счётчик, руками не трогать.",
+  [PARAM.POOL_MIN_RESERVE]:
+    "Нижний предел пула: выдача на вход не опускает пул ниже этого числа вещей (POOL.MIN_RESERVE = 150, §25 дизайна). Меньше — пул выбирается быстрее; 0 — без предела.",
   [PARAM.SEEDED_AT]: "Когда последний раз засевали экономику (seed-economy).",
   [PARAM.DAILY_RAN_ON]: "UTC-день последнего запуска economy-daily (регулятор запускается раз в сутки).",
   [PARAM.POOL_MAX_PER_MATCH]:

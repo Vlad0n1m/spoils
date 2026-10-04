@@ -743,30 +743,30 @@ describe("economy daily", () => {
 
   test("free-kit-only accounts (alt farms) never count as veterans: their hoards do not steer autosell", async () => {
     const now = new Date("2026-10-03T03:00:00Z");
-    await veterans(60, 500, now);
-    await veterans(300, 50_000, now, false);
+    await veterans(60, 2_000, now);
+    await veterans(300, 50, now, false);
     const r = await runEconomyDaily(db, now);
     assert.equal(r.veterans.sample, 60);
-    assert.equal(r.autosell.to, 1.03, "the geared veterans are poor: junk pays more");
+    assert.equal(r.autosell.to, 0.95, "the geared veterans are rich: junk pays less (the poor basic-gear alts do not pull the median down)");
   });
 
   test("steers autosell once per UTC day from the veterans' median CR; small samples change nothing", async () => {
     const now = new Date("2026-10-03T03:00:00Z");
-    await veterans(10, 500, now);
+    await veterans(10, 2_000, now);
     await bulkPool(12);
     const small = await runEconomyDaily(db, now);
     assert.equal(small.status, "applied");
     assert.deepEqual(small.autosell, { from: 1, to: 1 }, "10 veterans < MIN_SAMPLE");
     assert.deepEqual(small.pool, { size: 12, top: 3, rare: 3 });
 
-    await veterans(50, 500, now);
+    await veterans(50, 2_000, now);
     const again = await runEconomyDaily(db, new Date("2026-10-03T23:00:00Z"));
     assert.equal(again.status, "already", "same UTC day");
     const next = await runEconomyDaily(db, new Date("2026-10-04T03:00:00Z"));
     assert.equal(next.status, "applied");
     assert.equal(next.veterans.sample, 60);
-    assert.equal(next.autosell.to, 1.03, "poor veterans: junk pays 3 % more");
-    assert.equal(await getNumberParam(db, PARAM.AUTOSELL_MULT), 1.03);
+    assert.equal(next.autosell.to, 0.95, "rich veterans: junk pays 5 % less");
+    assert.equal(await getNumberParam(db, PARAM.AUTOSELL_MULT), 0.95);
     const snap = await db.execute<{ n: number }>(sql`select count(*)::int as n from economy_daily`);
     assert.equal(Number(snap.rows[0]!.n), 2);
   });
