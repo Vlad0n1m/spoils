@@ -33,16 +33,19 @@ const FONT = "ui-rounded, 'Trebuchet MS', system-ui, sans-serif";
 const SCAN_MS = 150;
 /** Width of the screen bar (CSS px, before the small-screen clamp). */
 const BAR_W = 340;
+/** Bar width on short screens (< 480 px tall, landscape phones). */
+const BAR_W_SHORT = 260;
 const BAR_H = 12;
 /** "FOREMAN DOWN" banner on the bar after a known boss dies. */
 const DOWN_MS = 3500;
 
 /**
  * Screen bar top: below the React HUD's top-centre timer, above the zone toast (16% of h). On a
- * short landscape phone (< 480 px) also below the extract compass, which ends at ~100 px there.
+ * short landscape phone (< 480 px) also below the compact extract compass, which ends at ~70 px
+ * there (the touch top stack is scaled to 80 %, hud.tsx).
  */
 export function bossBarY(screenH: number): number {
-  if (screenH < 480) return 108;
+  if (screenH < 480) return 96;
   return Math.round(Math.max(64, Math.min(118, screenH * 0.095)));
 }
 
@@ -83,7 +86,8 @@ class BossBar {
   }
 
   layout(screenW: number, screenH: number) {
-    const w = Math.round(Math.max(180, Math.min(BAR_W, screenW * 0.42)));
+    // Short phones: a narrower bar (BAR_W_SHORT), so it covers less of the world.
+    const w = Math.round(Math.max(180, Math.min(screenH < 480 ? BAR_W_SHORT : BAR_W, screenW * 0.42)));
     if (w !== this.w) {
       this.w = w;
       this.fillKey = -1;

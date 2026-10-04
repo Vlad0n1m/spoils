@@ -82,6 +82,7 @@ import { PerfOverlay, TouchControls, shouldUseTouch } from "./touch-controls";
 import { TouchCrosshair, setCanvasCrosshair, touchCrosshairDistance } from "./crosshair";
 import { Minimap, type MinimapExtract } from "./minimap";
 import { PartyTracker, type PartyMateView } from "./party";
+import { autoFireTarget, isPartyMate, type AutoFireCandidate } from "./auto-fire";
 import { canStartHeal, decayFactor, inputCancelsHeal, moveFnFor, Predictor, readServerMove } from "./prediction";
 import { DelayQueue, shotCentre } from "./shots";
 import type { CameraView, GameContext, GameLayers, GameSystem, SystemCommand } from "./systems";
@@ -239,6 +240,8 @@ export class GameRenderer implements GameRendererApi {
   private readonly party = new PartyTracker();
   /** This frame's smoothed mates (GameContext.partyMates, minimap). */
   private partyNow: readonly PartyMateView[] = [];
+  /** Every players-map id that has been a party mate this raid (phone auto-fire never targets them). */
+  private readonly mateIds = new Set<string>();
 
   // Netcode
   private predictor: Predictor | null = null;
@@ -413,6 +416,8 @@ export class GameRenderer implements GameRendererApi {
       this.touch.attach();
       // Fingers now belong to the sticks: finger events on the canvas no longer aim or fire.
       this.input.setTouchSticks(true);
+      // The aim stick only aims; the trigger pulls itself while the aim line is on an enemy.
+      this.input.setTouchAutoFire((angle) => this.autoFireLock(angle) !== null);
       setTouchSticksActive(true);
       // Screen layer, above the fog; added before the systems so the full map covers it.
       this.touchCrosshair = new TouchCrosshair();
@@ -486,6 +491,7 @@ export class GameRenderer implements GameRendererApi {
     this.remoteFx.clear();
     this.party.clear();
     this.partyNow = [];
+    this.mateIds.clear();
 
     // Textures first, while the GL renderer still exists: destroying them after app.destroy() threw
     // "Cannot read properties of null (reading 'gc')" from GlTextureSystem on every raid exit.
@@ -1260,6 +1266,7 @@ export class GameRenderer implements GameRendererApi {
     }
 
     this.partyNow = this.party.mates(now);
+    for (const m of this.partyNow) if (m.id) this.mateIds.add(m.id);
     if (this.minimap) {
       this.minimap.layout(w, h);
       this.minimap.update(
@@ -1429,8 +1436,38 @@ export class GameRenderer implements GameRendererApi {
     const sx = self ? w / 2 + (self.x - this.camX) * this.zoom : w / 2;
     const sy = self ? h / 2 + (self.y - this.camY) * this.zoom : h / 2;
     const dist = touchCrosshairDistance(rangeWorld, this.zoom, sx, sy, this.aim, w, h);
-    ch.update(dt, aiming, sx, sy, this.aim, dist);
+    // Red while the aim line is on an enemy (what auto-fire shoots at).
+    ch.update(dt, aiming, sx, sy, this.aim, dist, aiming && this.autoFireLock(this.aim) !== null);
     if (facing) feedAimPointer(sx + Math.cos(this.aim) * dist, sy + Math.sin(this.aim) * dist);
+  }
+
+  /**
+   * Phones: the enemy the aim line along `angle` is on (auto-fire.ts), from the predicted position
+   * (what the next input moves from) with the active weapon's range, over the entities the client
+   * draws right now (faded in by the fog). Null = do not fire.
+   */
+  private autoFireLock(angle: number): AutoFireCandidate | null {
+    const me = this.me();
+    if (!me?.alive || !(me.weapon in WEAPONS)) return null;
+    const range = WEAPONS[me.weapon as WeaponId].range;
+    const p = this.predictor;
+    const o = p?.isInitialized ? { x: p.x, y: p.y } : this.selfRender;
+    if (!o) return null;
+    const out: AutoFireCandidate[] = [];
+    for (const [id, e] of this.players) {
+      if (id === this.selfId) continue;
+      const v = e.view;
+      const pl = e.state;
+      out.push({
+        id,
+        x: v.x,
+        y: v.y,
+        alive: pl.alive && !e.removing,
+        visible: v.alpha > 0.5,
+        mate: isPartyMate(id, v.x, v.y, pl.role ?? 0, this.mateIds, this.partyNow),
+      });
+    }
+    return autoFireTarget(this.idx, o.x, o.y, angle, range, out);
   }
 
   /** Forward a UI command to the first system that handles it. */

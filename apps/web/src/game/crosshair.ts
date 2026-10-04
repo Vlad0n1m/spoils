@@ -8,7 +8,8 @@
  *   drawn on the canvas itself (the full map) owns the mouse.
  * - Phone: a reticle on the aim line of the right stick at the effective aim distance (the active
  *   weapon's range, kept on screen), with a faint line from the player. It lives in the screen
- *   layer above the fog (UI, always visible) and fades out when the stick is released.
+ *   layer above the fog (UI, always visible) and fades out when the stick is released. It turns red
+ *   while the aim line is on an enemy, i.e. while auto-fire shoots (auto-fire.ts).
  */
 
 import { Container, Graphics } from "pixi.js";
@@ -34,6 +35,8 @@ export const TOUCH_CROSSHAIR = {
   LINE_FROM_PX: 26,
   LINE_GAP_PX: 18,
   LINE_ALPHA: 0.35,
+  /** Reticle + line tint while auto-fire is locked on an enemy (auto-fire.ts). */
+  LOCK_TINT: 0xff3b3b,
 } as const;
 
 /**
@@ -109,10 +112,15 @@ export class TouchCrosshair {
   }
 
   /**
-   * Per frame. `show` while the aim stick aims; the last angle / distance are kept while it fades
+   * Per frame. `show` while the aim stick aims, `locked` while auto-fire is on a target (red); the last angle / distance are kept while it fades
    * out (following the player). Returns the reticle's screen position, or null when hidden.
    */
-  update(dtMs: number, show: boolean, sx: number, sy: number, angle: number, distPx: number): { x: number; y: number } | null {
+  update(dtMs: number, show: boolean, sx: number, sy: number, angle: number, distPx: number, locked = false): { x: number; y: number } | null {
+    const tint = locked ? TOUCH_CROSSHAIR.LOCK_TINT : 0xffffff;
+    if (this.reticle.tint !== tint) {
+      this.reticle.tint = tint;
+      this.line.tint = tint;
+    }
     if (show) {
       this.angle = angle;
       this.dist = distPx;

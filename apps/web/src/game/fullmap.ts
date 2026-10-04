@@ -181,7 +181,7 @@ export function toastAlpha(t: number, holdMs: number = TOAST.HOLD_MS): number {
  * the React HUD's timer + compass and the boss bar (bossBarY), which sit higher than 16% there.
  */
 export function zoneToastY(screenH: number): number {
-  return screenH < 480 ? 132 : Math.round(screenH * 0.16);
+  return screenH < 480 ? 116 : Math.round(screenH * 0.16);
 }
 
 export class ZoneToast {
@@ -245,6 +245,8 @@ export class ZoneToast {
 
   layout(screenW: number, screenH: number) {
     this.root.position.set(screenW / 2, zoneToastY(screenH));
+    // Short landscape phones: 80 %, like the rest of the compact touch HUD.
+    this.root.scale.set(screenH < 480 ? 0.8 : 1);
   }
 
   frame(nowMs: number) {

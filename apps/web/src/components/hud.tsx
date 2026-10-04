@@ -89,7 +89,9 @@ export const Hud = memo(function Hud({
   const inPlay = useHud(store, isInPlay);
   // Touch (game/touch-controls.ts mounts sticks + buttons): a compact bottom bar between the two
   // thumb zones, the menu / audio chips top left instead of in the right thumb's corner, USE
-  // instead of the F keycap. hudReservedRects() in touch-controls.ts mirrors this layout.
+  // instead of the F keycap. The top stack, the bottom bar and the kill feed are drawn at TOUCH_HUD_SCALE
+  // (80 % / 78 % / 85 %) so a landscape phone shows more of the world. hudReservedRects() in
+  // touch-controls.ts mirrors this layout.
   const touch = useTouchMode();
   // Touch: the full map (MAP button) fills a short screen; the bar and compass would cover it.
   const mapOpen = useHud(store, mapOpenSlice) && touch;
@@ -102,7 +104,12 @@ export const Hud = memo(function Hud({
 
       <KillFeed store={store} selfNickname={selfNickname} touch={touch} />
 
-      <div className="absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center gap-2">
+      <div
+        className={clsx(
+          "absolute left-1/2 flex -translate-x-1/2 flex-col items-center gap-2",
+          touch ? "top-1.5 origin-top scale-[0.8]" : "top-3",
+        )}
+      >
         <PhaseTimer store={store} touch={touch} />
         {inPlay && !mapOpen && <ExtractCompass store={store} earnsXp={earnsXp} />}
         {inPlay && <WipeBanner store={store} touch={touch} />}
@@ -115,7 +122,7 @@ export const Hud = memo(function Hud({
           <div
             className={clsx(
               "absolute left-1/2 flex w-max max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col items-center gap-2",
-              touch ? "bottom-2" : "bottom-3",
+              touch ? "bottom-1 origin-bottom scale-[0.78]" : "bottom-3",
               mapOpen && "hidden",
             )}
           >
@@ -351,7 +358,13 @@ function KillFeed({ store, selfNickname, touch }: { store: HudStore; selfNicknam
   if (fresh.length === 0) return null;
   return (
     // Touch: below the menu / audio chips of the top-left corner.
-    <ol className={clsx("absolute left-3 flex max-w-[min(22rem,40vw)] flex-col gap-1.5", touch ? "top-[4.25rem]" : "top-3")} aria-label="Kill feed">
+    <ol
+      className={clsx(
+        "absolute left-3 flex max-w-[min(22rem,40vw)] flex-col gap-1.5",
+        touch ? "left-2 top-[3.25rem] origin-top-left scale-[0.85]" : "top-3",
+      )}
+      aria-label="Kill feed"
+    >
       {fresh.map((e) => {
         // NPC MODEL v5: NPC names come by role ("Marauder ✕ Vlad", personal "You ✕ Marauder").
         const n = killFeedNames(e, selfNickname);
@@ -908,7 +921,7 @@ function PingBadge({ store, touch }: { store: HudStore; touch: boolean }) {
       className={clsx(
         "absolute flex items-center gap-1.5 rounded-full bg-black/55 px-2 py-1 text-[0.65rem] tabular-nums text-white/75",
         // Touch: next to the menu / audio chips (the bottom-left corner is the move stick's).
-        touch ? "left-[7.25rem] top-6" : "bottom-3 left-3",
+        touch ? "left-[6.25rem] top-[1.125rem] bg-black/40 px-1.5 py-0.5" : "bottom-3 left-3",
       )}
       title="Round-trip time to the game server"
     >
@@ -1020,7 +1033,7 @@ function ControlsHelp({ onLeave }: { onLeave: () => void }) {
 
 const TOUCH_CONTROLS: Array<[string, string]> = [
   ["Left stick", "Move · push less to walk quietly"],
-  ["Right stick", "Aim · push past the ring to shoot"],
+  ["Right stick", "Aim · fires by itself while the aim is on an enemy (red reticle)"],
   ["ROLL", "Dodge roll"],
   ["USE", "Search / pick up"],
   ["RELOAD · SWAP", "Reload · switch weapon"],
@@ -1031,7 +1044,7 @@ const TOUCH_CONTROLS: Array<[string, string]> = [
 ];
 
 /**
- * Touch HUD menu, top-left (the bottom corners belong to the sticks): a 44 px menu button with the
+ * Touch HUD menu, top-left (the bottom corners belong to the sticks): a 40 px menu button with the
  * touch legend and "Leave raid" (two taps), and the audio settings next to it. Shown at every
  * width, so phones narrower than 768 px can leave a raid too.
  */
@@ -1039,7 +1052,7 @@ function TouchMenu({ onLeave }: { onLeave: () => void }) {
   const [open, setOpen] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
   return (
-    <div className="pointer-events-none absolute left-3 top-3 flex items-start gap-2">
+    <div className="pointer-events-none absolute left-2 top-2 flex items-start gap-2">
       <div className="relative">
         <button
           type="button"
@@ -1050,7 +1063,7 @@ function TouchMenu({ onLeave }: { onLeave: () => void }) {
           aria-expanded={open}
           aria-controls="hud-touch-menu"
           aria-label={open ? "Close menu" : "Menu: controls and leave raid"}
-          className="toon-chip pointer-events-auto grid h-11 w-11 place-items-center text-white active:translate-y-[2px]"
+          className="toon-chip pointer-events-auto grid h-10 w-10 place-items-center text-white active:translate-y-[2px]"
         >
           {open ? (
             <svg viewBox="0 0 20 20" className="h-5 w-5" aria-hidden>
@@ -1065,7 +1078,7 @@ function TouchMenu({ onLeave }: { onLeave: () => void }) {
         {open && (
           <div
             id="hud-touch-menu"
-            className="toon-panel pointer-events-auto absolute left-0 top-[3.25rem] z-10 max-h-[calc(100dvh-5rem)] w-72 overflow-y-auto overscroll-contain p-3"
+            className="toon-panel pointer-events-auto absolute left-0 top-12 z-10 max-h-[calc(100dvh-5rem)] w-72 overflow-y-auto overscroll-contain p-3"
           >
             <ul className="space-y-1.5">
               {TOUCH_CONTROLS.map(([k, v]) => (
@@ -1091,7 +1104,7 @@ function TouchMenu({ onLeave }: { onLeave: () => void }) {
           </div>
         )}
       </div>
-      <AudioSettingsButton direction="down" align="left" large />
+      <AudioSettingsButton direction="down" align="left" />
     </div>
   );
 }

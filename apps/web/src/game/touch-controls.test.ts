@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   AIM_FROM,
-  FIRE_AT,
+  BUTTON_DISC,
   GRENADE_DRAG_EDGE_PX,
   GRENADE_DRAG_FROM,
   GRENADE_DRAG_MIN_SPAN,
@@ -21,6 +21,7 @@ import {
   hudReservedRects,
   layoutTouchButtons,
   rectsOverlap,
+  stickRest,
   stickVector,
   thumbZone,
 } from "./touch-controls";
@@ -40,14 +41,30 @@ const SCREENS: Array<[number, number]> = [
 ];
 
 describe("touch sticks", () => {
-  it("aims from AIM_FROM and fires from FIRE_AT", () => {
-    assert.deepEqual(aimFromStick(0, 0), { angle: null, fire: false });
-    assert.deepEqual(aimFromStick(AIM_FROM * 0.9, 0), { angle: null, fire: false });
+  it("the aim stick aims from AIM_FROM and never fires by itself (auto-fire.ts does)", () => {
+    assert.equal(aimFromStick(0, 0), null);
+    assert.equal(aimFromStick(AIM_FROM * 0.9, 0), null);
     const a = aimFromStick(0, AIM_FROM + 0.01);
-    assert.ok(a.angle !== null && Math.abs(a.angle - Math.PI / 2) < 1e-9);
-    assert.equal(a.fire, false);
-    assert.equal(aimFromStick(-(FIRE_AT + 0.01), 0).fire, true);
-    assert.deepEqual(aimFromStick(NaN, 0), { angle: null, fire: false });
+    assert.ok(a !== null && Math.abs(a - Math.PI / 2) < 1e-9);
+    assert.ok(Math.abs(aimFromStick(-1, 0)! - Math.PI) < 1e-9, "full deflection only aims");
+    assert.equal(aimFromStick(NaN, 0), null);
+  });
+
+  it("both sticks rest in their thumb corners, clear of the screen edges and of every button", () => {
+    for (const [w, h] of SCREENS) {
+      const tz = thumbZone(w, h);
+      const buttons = [...layoutTouchButtons(w, h).values()];
+      for (const side of ["left", "right"] as const) {
+        const r = stickRest(side, w, h);
+        const ring = { x: r.x - STICK_RADIUS, y: r.y - STICK_RADIUS, w: 2 * STICK_RADIUS, h: 2 * STICK_RADIUS };
+        assert.ok(ring.x >= 0 && ring.y >= 0 && ring.x + ring.w <= w && ring.y + ring.h <= h, `${w}×${h} ${side}: ring on screen`);
+        assert.ok(r.y >= h - tz.h, `${w}×${h} ${side}: in the thumb zone's rows`);
+        assert.ok(side === "left" ? r.x <= tz.w : r.x >= w - tz.w, `${w}×${h} ${side}: in its corner`);
+        for (const b of buttons) assert.ok(!rectsOverlap(ring, b), `${w}×${h} ${side}: a button covers the resting stick`);
+        const bar = hudReservedRects(w, h).find((a) => a.id === "bar")!;
+        assert.ok(!rectsOverlap(ring, bar), `${w}×${h} ${side}: the resting stick under the bottom bar`);
+      }
+    }
   });
 
   it("clamps the finger offset to the stick radius", () => {
@@ -97,7 +114,9 @@ describe("touch button layout", () => {
       const placed = [...rects.entries()];
       for (const [id, r] of placed) {
         const spec = TOUCH_BUTTONS.find((b) => b.id === id)!;
-        assert.ok(r.w >= TOUCH_MIN_SIZE && r.w === r.h, `${id} size ${r.w}`);
+        // Hit area ≥ 40 px (44 on Seeker-class screens, below), the visible disc smaller.
+        assert.ok(r.w >= TOUCH_MIN_SIZE && TOUCH_MIN_SIZE >= 40 && r.w === r.h, `${id} size ${r.w}`);
+        assert.ok(r.w * BUTTON_DISC < r.w && r.w * BUTTON_DISC >= 32, `${id} disc ${r.w * BUTTON_DISC}`);
         assert.ok(r.x >= 0 && r.y >= 0 && r.x + r.w <= w && r.y + r.h <= h, `${id} on screen`);
         if (spec.side === "right") assert.ok(r.x >= w / 2, `${id} right half`);
         else assert.ok(r.x + r.w <= w / 2, `${id} left half`);
@@ -121,6 +140,7 @@ describe("touch button layout", () => {
       for (const spec of TOUCH_BUTTONS) {
         const r = rects.get(spec.id)!;
         if (w === 915) assert.equal(r.w, spec.size, `${spec.id} at its preferred size`);
+        assert.ok(r.w >= 44, `${w}×${h}: ${spec.id} hit area ${r.w} ≥ 44 px`);
         for (const a of hud) assert.ok(!rectsOverlap(r, a), `${w}×${h}: ${spec.id} covers ${a.id}`);
       }
     }
@@ -129,8 +149,10 @@ describe("touch button layout", () => {
   it("the wipe / boss stack at the top centre is never covered", () => {
     for (const [w, h] of SCREENS) {
       const top = hudReservedRects(w, h).find((a) => a.id === "top")!;
-      // The touch HUD's top stack is ≤ 21.5 rem wide (compact timer, wipe banner and boss toast).
-      assert.ok(top.w >= Math.min(w - 24, 344) && top.h >= 190, "reserves the timer, wipe banner and boss toast");
+      // The touch HUD's top stack is ≤ 21.5 rem wide and ~190 px tall (timer, compass, wipe banner,
+      // boss toast), drawn at 80 %; the boss bar (canvas) hangs below it on short screens.
+      assert.ok(top.w >= Math.min(w - 24, 344) * 0.8 && top.h >= 190 * 0.8, "reserves the timer, wipe banner and boss toast");
+      assert.ok(top.h >= bossBarY(h) + 12, "and the boss bar");
       for (const r of layoutTouchButtons(w, h).values()) assert.ok(!rectsOverlap(r, top));
     }
   });
@@ -149,9 +171,10 @@ describe("touch button layout", () => {
     }
   });
 
-  it("short screens: boss bar and zone toast sit below the timer + compass (≈100 px)", () => {
+  it("short screens: boss bar and zone toast sit below the compact timer + compass (≈70 px)", () => {
     for (const h of [360, 390, 412]) {
-      assert.ok(bossBarY(h) >= 104, `boss bar ${bossBarY(h)}`);
+      // top-1.5 + 80 % of (timer 36 + gap 8 + compass 36) ≈ 70 px; the bar's name label is ~22 px above it.
+      assert.ok(bossBarY(h) - 22 >= 6 + 0.8 * 80, `boss bar ${bossBarY(h)}`);
       assert.ok(zoneToastY(h) >= bossBarY(h) + 20, `zone toast ${zoneToastY(h)}`);
     }
   });
