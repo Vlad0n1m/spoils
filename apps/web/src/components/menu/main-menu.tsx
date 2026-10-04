@@ -333,7 +333,14 @@ function MenuScreen({
 
   return (
     <PlayController onBattle={startBattle} onSignIn={() => setSignIn(true)} retry={retry}>
-      <div className={clsx("relative h-[100dvh] overflow-hidden bg-[#090b08] text-white", hidden && "hidden")}>
+      {/* The padding keeps the menu out of a landscape phone's camera cutout (viewport-fit=cover); the
+          backdrop is absolute and still fills the screen. */}
+      <div
+        className={clsx(
+          "relative h-[100dvh] overflow-hidden bg-[#090b08] pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)] text-white",
+          hidden && "hidden",
+        )}
+      >
         <LobbyBackdrop />
         <div className="relative z-10 flex h-full flex-col" inert={blocked}>
           <MenuTopBar onCredits={() => openPanel("shop", "traders")} />
@@ -393,7 +400,7 @@ function MenuScreen({
           </div>
 
           {showCard && (
-            <div className="fixed inset-x-2 bottom-[calc(10.5rem+env(safe-area-inset-bottom))] z-30 max-h-[55vh] overflow-y-auto md:inset-x-auto md:bottom-36 md:left-[7.5rem] md:w-72 lg:hidden [@media(max-height:500px)]:inset-x-auto [@media(max-height:500px)]:bottom-[4.75rem] [@media(max-height:500px)]:left-[6.5rem] [@media(max-height:500px)]:max-h-[calc(100dvh-8.75rem)] [@media(max-height:500px)]:w-72">
+            <div className="fixed inset-x-2 bottom-[calc(10.5rem+env(safe-area-inset-bottom))] z-30 max-h-[55vh] overflow-y-auto md:inset-x-auto md:bottom-36 md:left-[7.5rem] md:w-72 lg:hidden [@media(max-height:500px)]:inset-x-auto [@media(max-height:500px)]:bottom-[4.75rem] [@media(max-height:500px)]:left-[calc(6.5rem+env(safe-area-inset-left,0px))] [@media(max-height:500px)]:max-h-[calc(100dvh-8.75rem)] [@media(max-height:500px)]:w-72">
               <LastRaidCard raid={lastRaid} onDismiss={dismissCard} />
             </div>
           )}

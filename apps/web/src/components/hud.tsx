@@ -92,7 +92,9 @@ export const Hud = memo(function Hud({
   const mapOpen = useHud(store, mapOpenSlice) && touch;
 
   return (
-    <div className="pointer-events-none absolute inset-0 select-none text-white">
+    // Same safe-area box as the game mount (battle-screen.tsx), so hudReservedRects() in
+    // touch-controls.ts, which measures from the mount, still mirrors this layout.
+    <div className="pointer-events-none absolute inset-y-0 left-[env(safe-area-inset-left,0px)] right-[env(safe-area-inset-right,0px)] select-none text-white">
       {inPlay && <LowHpVignette store={store} />}
 
       <KillFeed store={store} selfNickname={selfNickname} touch={touch} />

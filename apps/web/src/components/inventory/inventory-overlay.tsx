@@ -9,7 +9,7 @@
  * - click: quick action — equip/unequip weapons, armor, backpacks; use a med; move a stack
  *   pocket ↔ backpack; take a loot item (auto-place)
  * - drag onto a slot: targeted move / swap / targeted take; drag onto the dimmed backdrop: drop
- * - right-click or Delete/G on a focused own item: drop on the ground
+ * - right-click (mouse / pen, not a touch long press) or Delete/G on a focused own item: drop on the ground
  * - arrow keys: move focus between tiles; T take all; Esc close (bindInventoryHotkeys)
  *
  * `InventoryOverlay` binds to an InventoryClient; `InventoryView` is the pure, props-only part
@@ -170,7 +170,9 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
         dropBad={isOver && !ok}
         dragging={dragging?.source.from === "self" && dragging.source.key === key}
         onClick={it ? () => clickOwn(key) : () => undefined}
-        onContextMenu={it ? () => actions.drop(key) : undefined}
+        // Right-click drops; never on touch, where Android fires contextmenu on the long press that
+        // starts a drag (drop there is dragging onto the dark area).
+        onContextMenu={it && !touch ? () => actions.drop(key) : undefined}
         {...drag.bind(src)}
       />
     );
@@ -208,7 +210,8 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
 
       {/* Landscape phones (≤ 500 px tall): inventory (24 rem) and the search panel (20 rem) side by
           side from ~732 px wide, so the loot is on screen next to the bag; narrower, the loot comes first. */}
-      <div className="relative flex flex-wrap items-start justify-center gap-4 [@media(max-height:500px)]:gap-3">
+      {/* The margins keep the panels out of a landscape phone's camera cutout (viewport-fit=cover). */}
+      <div className="relative ml-[env(safe-area-inset-left,0px)] mr-[env(safe-area-inset-right,0px)] flex flex-wrap items-start justify-center gap-4 [@media(max-height:500px)]:gap-3">
         <section aria-label="Inventory" className="toon-panel w-[min(92vw,25rem)] bg-[#1d2333]/95 p-4 [@media(max-height:500px)]:w-[24rem] [@media(max-height:500px)]:p-3">
           <header className="flex items-center justify-between">
             <h2 className="toon-text text-2xl tracking-wide text-white">Inventory</h2>

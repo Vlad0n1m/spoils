@@ -7,9 +7,10 @@
  * outcome receipt and (later) the lobby board.
  */
 
-import { memo, type CSSProperties, type ReactNode } from "react";
+import { memo, useRef, type CSSProperties, type ReactNode } from "react";
 import clsx from "clsx";
 import { WEAPONS, itemDef } from "@extract/shared";
+import { isTouchContextMenu } from "@/hooks/use-item-drag";
 import { describeItem, durInfo, isBroken, isFree, isWeaponId, slotLabel } from "@/lib/items-ui";
 
 export interface InvSlotItem {
@@ -57,6 +58,7 @@ export interface InvSlotProps {
   className?: string;
   onClick?: () => void;
   onDoubleClick?: () => void;
+  /** Right-click (mouse or pen); never a touch long press, which starts a drag instead. */
   onContextMenu?: () => void;
   onPointerDown?: (e: React.PointerEvent<HTMLElement>) => void;
   onClickCapture?: (e: React.MouseEvent<HTMLElement>) => void;
@@ -73,6 +75,8 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
   const state: InvSlotState = props.state ?? (item ? "item" : "empty");
   const sz = SIZE[size];
   const interactive = !!(props.onClick || props.onPointerDown);
+  /** pointerType of the last press on this tile: a touch long press must not run onContextMenu. */
+  const lastDown = useRef<string | null>(null);
 
   const desc = item ? describeItem(item) : null;
   const broken = item ? isBroken(item) : false;
@@ -121,11 +125,19 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
           props.onContextMenu
             ? (e: React.MouseEvent) => {
                 e.preventDefault();
+                if (isTouchContextMenu(e.nativeEvent as { pointerType?: unknown }, lastDown.current)) return;
                 props.onContextMenu!();
               }
             : undefined
         }
-        onPointerDown={props.onPointerDown}
+        onPointerDown={
+          props.onContextMenu
+            ? (e: React.PointerEvent<HTMLElement>) => {
+                lastDown.current = e.pointerType;
+                props.onPointerDown?.(e);
+              }
+            : props.onPointerDown
+        }
         onClickCapture={props.onClickCapture}
         className={clsx(
           "relative grid shrink-0 touch-none select-none place-items-center border-[3px] border-black shadow-[0_3px_0_#000] outline-none transition-[transform,filter,box-shadow] duration-100",

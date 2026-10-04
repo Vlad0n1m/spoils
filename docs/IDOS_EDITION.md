@@ -178,6 +178,8 @@ idosgames-title-bootstrap; скелет `get_host_scaffold`), docs.idosgames.com
    - `IDOS_BUILD=1` (без него команда ниже остановится с ошибкой — защита от запуска с основным `.env`);
    - `NEXT_PUBLIC_GAME_SERVER_URL=wss://game-idos.<домен>`;
    - `GAME_SERVER_ID=idos-world-1` (или любое имя, но не как в основном стеке);
+   - `SIWS_ALLOWED_HOSTS=idos.<домен>` — единственный домен, который может стоять в сообщении входа
+     через кошелёк (без него привязка кошелька работает только на localhost);
    - `IDOS_FRAME_ANCESTORS`, как только известен адрес тайтла: полный список, например
      `https://idosgames.com https://www.idosgames.com https://<titleid>.idos.games` (без него игра
      откроется только во фрейме прямо на idosgames.com, не внутри оболочки тайтла).

@@ -86,7 +86,8 @@ export function Panel({
         aria-modal="true"
         aria-labelledby={`${id}-title`}
         className={clsx(
-          "toon-panel absolute inset-0 flex flex-col overflow-hidden rounded-none bg-[#121722]/[0.97] animate-sheet-up motion-reduce:animate-none md:rounded-2xl",
+          // pl/pr: out of a landscape phone's camera cutout (viewport-fit=cover; 0 elsewhere).
+          "toon-panel absolute inset-0 flex flex-col overflow-hidden rounded-none bg-[#121722]/[0.97] pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)] animate-sheet-up motion-reduce:animate-none md:rounded-2xl",
           VARIANT[variant],
         )}
       >

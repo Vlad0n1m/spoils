@@ -160,7 +160,9 @@ docker compose logs -f web game-server cron
 
 - TLS and the public entry: `deploy/nginx/spoils.conf` (`SPOILS_DOMAIN` → web, `game.SPOILS_DOMAIN` → game server
   WebSocket). Build the web with `NEXT_PUBLIC_GAME_SERVER_URL=wss://game.SPOILS_DOMAIN`: `NEXT_PUBLIC_*` values are baked
-  in at build time, so rebuild the `web` image after changing them.
+  in at build time, so rebuild the `web` image after changing them. Install `deploy/nginx/catch-all.conf` once per host
+  (unknown Host names never reach the web) and set `SIWS_ALLOWED_HOSTS=SPOILS_DOMAIN` (wallet linking signs in to that
+  domain only; unset, it works on localhost only).
 - An existing database from before World v6: apply `apps/web/migrations/002_world_v6.sql` (idempotent) first, then the
   `migrate` service pushes the rest.
 - Order: the web first, then the game server. Restart the game server right after a wipe (a minute past 00:00,
@@ -218,6 +220,7 @@ The web manifest, the page theme colour, the TWA and the webshell all use `#0807
 - `GAME_SERVER_ID`
 - `GAME_SERVER_HMAC_SECRET`
 - `SESSION_SECRET`
+- `SIWS_ALLOWED_HOSTS` — публичный домен игры (для издания iDos — его поддомен в `.env.idos.local`); без него привязка кошелька работает только на localhost
 - `DATABASE_URL` (вне docker; в docker — `POSTGRES_PASSWORD`)
 - Ключи Solana: `HOT_WALLET_SECRET_B58`, `SOLANA_RPC_URL`, `SOLANA_CLUSTER`, `NEXT_PUBLIC_SOLANA_RPC_URL`, `NEXT_PUBLIC_SOLANA_CLUSTER`
 - Запись результатов в Solana (раздел On-chain): `CHAIN_AUTHORITY_SECRET` (содержимое `programs/.keys/authority.json`) и `CHAIN_HASH_SALT` (например, `openssl rand -hex 32`; после запуска не менять)

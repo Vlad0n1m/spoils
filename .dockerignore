@@ -4,9 +4,11 @@
 .git
 .gitignore
 **/*.md
-.env
-.env.*
-!.env.example
+# Env files at any depth (next.config.mjs also loads apps/web/.env, and Next's standalone output
+# would copy one into the image): secrets come from env_file at run time, never from the image.
+**/.env
+**/.env.*
+!**/.env.example
 **/coverage
 **/.turbo
 .DS_Store
