@@ -149,7 +149,7 @@ global Solana CLI config may point at mainnet.
 | `migrate` | One-shot `drizzle-kit push` of the schema, then exits |
 | `web` | Next.js standalone server on `127.0.0.1:3000`. Before `server.js` it runs `deploy/web-preflight.mjs`: in production it refuses to start without `CRON_SECRET` (16+ chars), `DATABASE_URL`, `SESSION_SECRET` or `GAME_SERVER_HMAC_SECRET` |
 | `game-server` | Colyseus on `127.0.0.1:2567`, one always-live world. Refuses to boot in production without `GAME_SERVER_ID`, `WEB_API_BASE_URL` or `GAME_SERVER_HMAC_SECRET` |
-| `cron` | `deploy/cron/scheduler.mjs` (plain Node, no deps) calls the web cron routes with `Authorization: Bearer $CRON_SECRET`, like Vercel Cron does: `void-raids` every 5 min (and once at start), `watch-deposits` every 10 min (a no-op while deposits are disabled), `economy-daily` at 00:05 UTC, `chain-events` every minute, `replays-retention` at 03:30 UTC (admin replays older than 14 days). Schedule: `deploy/cron/schedule.json` |
+| `cron` | `deploy/cron/scheduler.mjs` (plain Node, no deps) calls the web cron routes with `Authorization: Bearer $CRON_SECRET`, like Vercel Cron does: `void-raids` every 5 min (and once at start), `watch-deposits` every 10 min (a no-op while deposits are disabled), `economy-daily` at 00:05 UTC, `chain-events` every minute, `replays-retention` at 03:30 UTC (admin replays older than 14 days), `invariants` at 02:40 UTC (read-only nightly invariant check). Schedule: `deploy/cron/schedule.json` |
 
 ```bash
 cp .env.example .env        # fill it: see the list below; never commit it
@@ -201,6 +201,7 @@ docker compose logs -f web game-server cron
   | `POST /api/admin/replays/ingest` | the game server (HMAC) |
   | `GET /api/admin/replays`, `GET /api/admin/replays/:matchId`, `GET /api/admin/replays/:matchId/chunks?from&to`, `/api/admin/**` | admins only (404 otherwise) |
   | `GET /api/cron/replays-retention` | cron (Bearer `CRON_SECRET`), daily 03:30 UTC |
+  | `GET /api/cron/invariants` | cron (Bearer `CRON_SECRET`), daily 02:40 UTC |
 - Order: the web first, then the game server. Restart the game server right after a wipe (a minute past 00:00,
   00:45, 01:30… UTC): a restart in the middle of a map voids it, gear goes back to its owners, and the server opens
   a fresh copy of the current map.
@@ -291,6 +292,17 @@ The web manifest, the page theme colour, the TWA and the webshell all use `#0807
 босса заполняется отдельно), `market_paused` (1 — рынок игроков не принимает лоты и не продаёт, ответ 503, снять свой
 лот можно) и `kit_sale_paused` (1 — торгуемый стартовый набор не продаётся, бесплатный выдаётся). `pool_max_per_match`
 показан только для чтения: World v6 его не читает. Денежные числа из админки не меняются.
+
+Сверка инвариантов (B6): `/admin/invariants` и строка статуса наверху `/admin`. Крон `invariants` каждую ночь в
+02:40 UTC в одном снимке базы (read only, repeatable read) проверяет: каждая вещь в одном месте и её колонки совпадают
+с состоянием; ни одна вещь не лежит одновременно на складе и в рейде; состояние и владелец вещи совпадают с последней
+записью `item_events`, а число вещей по состояниям — с журналом; `credits = 1000 + Σ credit_ledger` и
+`balance_cents = Σ money_ledger` у каждого игрока; покупки, продажи, комиссии и наборы сходятся в ноль; казна (`house`)
+только получает, выводов SOL нет; нет отрицательных балансов; выдачи пула сходятся с журналом. Результат с числом
+расхождений и до 10 примеров id пишется в `invariant_runs` (миграция `012_invariants.sql`), при расхождении — строка
+`[invariants] FAILED …` в логах и POST на `ALERT_WEBHOOK_URL` (Slack или Discord, необязательно). Кнопка «Проверить
+сейчас» запускает то же вручную. На существующей базе:
+`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/web/migrations/012_invariants.sql`.
 
 Повторы: `/admin/replays` — список шард-циклов, открыть карту. Пробел — пуск/пауза, ←/→ — 5 с (Shift — 30 с), 1/2/3 —
 скорость, F — следовать, 0 — вся карта, +/− — масштаб, Esc — снова все. Клик по точке — следовать за ней, клик по

@@ -1,10 +1,11 @@
 {
-  "$comment": "Read by deploy/cron/scheduler.mjs. Times are UTC. everyMinutes runs on minute boundaries divisible by it; dailyAt runs once a day at HH:MM. Mirrors apps/web/vercel.json except watch-deposits (a no-op stub while deposits are disabled; set everyMinutes to 1 when crediting goes live). chain-events sends queued game results to Solana (README On-chain). replays-retention deletes admin replays older than 14 days.",
+  "$comment": "Read by deploy/cron/scheduler.mjs. Times are UTC. everyMinutes runs on minute boundaries divisible by it; dailyAt runs once a day at HH:MM. Mirrors apps/web/vercel.json except watch-deposits (a no-op stub while deposits are disabled; set everyMinutes to 1 when crediting goes live). chain-events sends queued game results to Solana (README On-chain). replays-retention deletes admin replays older than 14 days. invariants runs the read-only nightly invariant check (B6) and alerts on a mismatch.",
   "jobs": [
     { "path": "/api/cron/void-raids", "everyMinutes": 5, "timeoutMs": 30000 },
     { "path": "/api/cron/watch-deposits", "everyMinutes": 10, "timeoutMs": 10000 },
     { "path": "/api/cron/economy-daily", "dailyAt": "00:05", "timeoutMs": 30000 },
     { "path": "/api/cron/chain-events", "everyMinutes": 1, "timeoutMs": 35000 },
-    { "path": "/api/cron/replays-retention", "dailyAt": "03:30", "timeoutMs": 60000 }
+    { "path": "/api/cron/replays-retention", "dailyAt": "03:30", "timeoutMs": 60000 },
+    { "path": "/api/cron/invariants", "dailyAt": "02:40", "timeoutMs": 60000 }
   ]
 }

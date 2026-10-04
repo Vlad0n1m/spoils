@@ -1,4 +1,7 @@
+import Link from "next/link";
 import { db } from "@/db/client";
+import type { InvariantRunRow } from "@/db/schema";
+import { latestInvariantRuns } from "@/lib/admin/invariants";
 import { adminMetrics } from "@/lib/admin/metrics";
 import { requireAdminPage } from "@/lib/admin/server";
 import type { AdminKpi, AdminMetrics, KpiStatus } from "@/lib/admin/types";
@@ -56,6 +59,12 @@ export default async function AdminMetricsPage() {
   } catch (e) {
     console.error("[admin] metrics failed", e);
   }
+  let inv: InvariantRunRow | null | undefined;
+  try {
+    inv = (await latestInvariantRuns(db, 1))[0] ?? null;
+  } catch (e) {
+    console.error("[admin] invariant runs failed", e);
+  }
   if (!m) {
     return <p className="rounded-xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-200">Метрики не загрузились, см. логи сервера.</p>;
   }
@@ -74,6 +83,8 @@ export default async function AdminMetricsPage() {
           Окно: 7 UTC-дней с {shortDay(days[0]!)} · обновлено {utcText(m.generatedAt)} · JSON: <code>/api/admin/metrics</code>
         </p>
       </div>
+
+      <InvariantBanner run={inv} />
 
       <section aria-label="Сейчас" className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Tile
@@ -294,5 +305,32 @@ function KpiTable({ kpis }: { kpis: AdminKpi[] }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** Latest nightly invariant check (B6), linking to /admin/invariants. */
+function InvariantBanner({ run }: { run: InvariantRunRow | null | undefined }) {
+  const tone =
+    run === undefined || run === null
+      ? "border-white/10 bg-[#141925] text-white/70"
+      : run.ok
+        ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-100"
+        : "border-red-400/40 bg-red-500/15 text-red-100";
+  const text =
+    run === undefined
+      ? "Сверка инвариантов: не загрузилась"
+      : run === null
+        ? "Сверка инвариантов: прогонов ещё не было"
+        : run.ok
+          ? `Сверка инвариантов: всё сходится · ${utcText(run.startedAt.getTime())}`
+          : `Сверка инвариантов: не сошлось ${run.failed} (${run.checks
+              .filter((c) => c.status !== "ok")
+              .map((c) => c.key)
+              .join(", ")}) · ${utcText(run.startedAt.getTime())}`;
+  return (
+    <Link href="/admin/invariants" className={`flex min-h-[44px] items-center justify-between gap-3 rounded-xl border px-4 py-2 text-sm font-semibold ${tone}`}>
+      <span>{text}</span>
+      <span aria-hidden className="opacity-60">→</span>
+    </Link>
   );
 }
