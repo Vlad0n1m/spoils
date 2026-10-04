@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
+import Link from "next/link";
 import type { WorldEventDto, WorldEventsDto } from "@extract/shared";
 import { NEWS_POSTS } from "@/content/news";
 import { fmtLocalHm } from "@/lib/lobby/world-clock";
@@ -106,6 +107,9 @@ function PatchNotes() {
           </ul>
         </article>
       ))}
+      <Link href="/news" className="font-body self-end text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline">
+        All patch notes →
+      </Link>
     </div>
   );
 }
