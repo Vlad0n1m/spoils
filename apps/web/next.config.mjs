@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
+import { editionHeaders, editionPublicEnv, isIdosBuildEnv, parseFrameAncestors } from "./src/lib/edition-frame.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
@@ -9,6 +10,26 @@ loadEnv({ path: path.join(repoRoot, ".env") });
 loadEnv({ path: path.join(repoRoot, ".env.local"), override: true });
 loadEnv({ path: path.join(here, ".env"), override: true });
 loadEnv({ path: path.join(here, ".env.local"), override: true });
+
+/**
+ * iDos Games edition (IDOS_BUILD=1, docs/IDOS_EDITION.md): inlines NEXT_PUBLIC_IDOS_BUILD=1 and sends
+ * CSP frame-ancestors (IDOS_FRAME_ANCESTORS or the iDos defaults). Off by default: the main build's
+ * config gets neither `env` nor `headers`. Both are fixed at build time.
+ */
+const idosBuild = isIdosBuildEnv(process.env);
+if (idosBuild) {
+  const { rejected, usedDefault } = parseFrameAncestors(process.env.IDOS_FRAME_ANCESTORS);
+  if (rejected.length > 0) console.warn(`IDOS_FRAME_ANCESTORS: ignored ${rejected.length} invalid source(s): ${rejected.join(" ")}`);
+  if (usedDefault && process.env.IDOS_FRAME_ANCESTORS?.trim()) console.warn("IDOS_FRAME_ANCESTORS: no valid source left, using the iDos defaults");
+}
+const idosEdition = idosBuild
+  ? {
+      env: editionPublicEnv(process.env),
+      async headers() {
+        return editionHeaders(process.env);
+      },
+    }
+  : {};
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -23,6 +44,7 @@ const nextConfig = {
       bodySizeLimit: "1mb",
     },
   },
+  ...idosEdition,
 };
 
 export default nextConfig;

@@ -5,6 +5,8 @@ import Link from "next/link";
 import clsx from "clsx";
 import { useLobby } from "@/lib/lobby/lobby-context";
 import { AccountWalletEntry } from "@/components/wallet/account-wallet-entry";
+import { BRAND } from "@/lib/brand";
+import { useIdosFramed } from "./use-idos-frame";
 
 const item =
   "font-body flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold text-white/85 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime";
@@ -14,6 +16,8 @@ const item =
  * wallet (short address + copy) or Connect wallet, Wallet, Economy stats, Sign out. Guest: Register
  * to keep your raider, Sign out. Signed out: Sign in, Register.
  * Closes on Escape (focus back to the button) and on an outside click.
+ * iDos Games edition: the edition name heads the menu; inside the iDos frame Connect wallet is hidden
+ * (idosgames.com handles wallets there and blocks wallet access in the frame).
  */
 export function AccountMenu() {
   const { user, sessionKind } = useLobby();
@@ -21,6 +25,7 @@ export function AccountMenu() {
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const id = useId();
+  const idosFramed = useIdosFramed();
 
   useEffect(() => {
     if (!open) return;
@@ -70,6 +75,9 @@ export function AccountMenu() {
           id={id}
           className="toon-panel absolute right-0 top-full z-50 mt-2 w-64 bg-[#161b28] p-2 animate-panel-in motion-reduce:animate-none"
         >
+          {BRAND.edition && (
+            <p className="font-body px-3 pt-1 text-[11px] font-semibold uppercase tracking-wider text-zooa-lime/80">{BRAND.fullName}</p>
+          )}
           {user ? (
             <div className="border-b-2 border-black/40 px-3 pb-3 pt-2">
               <p className="truncate text-base tracking-wide text-white">{user.nickname}</p>
@@ -81,7 +89,7 @@ export function AccountMenu() {
           <nav className="mt-1 flex flex-col" aria-label="Account">
             {sessionKind === "user" && user && (
               <>
-                <AccountWalletEntry userId={user.id} itemClassName={item} />
+                {!idosFramed && <AccountWalletEntry userId={user.id} itemClassName={item} />}
                 <Link href="/wallet" className={item}>
                   Wallet
                 </Link>

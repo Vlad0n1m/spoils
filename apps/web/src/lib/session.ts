@@ -1,5 +1,6 @@
 import { getIronSession, type SessionOptions } from "iron-session";
 import { cookies, headers } from "next/headers";
+import { editionSessionCookie } from "./edition";
 
 export interface AppSession {
   userId?: string;
@@ -46,6 +47,8 @@ async function getSessionOptions(): Promise<SessionOptions> {
       secure: await resolveCookieSecure(),
       maxAge: 60 * 60 * 24 * 7,
       path: "/",
+      // iDos Games edition only (inside the idosgames.com iframe): SameSite=None; Secure; Partitioned.
+      ...editionSessionCookie(),
     },
   };
 }

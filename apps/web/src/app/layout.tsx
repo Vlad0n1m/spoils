@@ -29,7 +29,7 @@ const pixel = Press_Start_2P({
 });
 
 export const metadata: Metadata = {
-  title: BRAND.name,
+  title: BRAND.fullName,
   description: "Top-down extraction shooter — drop in, loot up, get out alive",
   // Installable fullscreen landscape app (the Android TWA build packs this manifest).
   manifest: "/manifest.webmanifest",
