@@ -30,6 +30,7 @@ import {
   index,
   primaryKey,
   check,
+  customType,
 } from "drizzle-orm/pg-core";
 
 export const depositStatusEnum = pgEnum("deposit_status", [
@@ -997,3 +998,66 @@ export const questLog = pgTable(
 
 export type QuestSlotRow = typeof questSlots.$inferSelect;
 export type QuestLogRow = typeof questLog.$inferSelect;
+
+// ---------------------------------------------------------------------------- admin replays
+
+/** Postgres bytea as a Node Buffer (drizzle-orm 0.36 has no built-in bytea column). */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
+
+/**
+ * Admin replays (lib/admin/replay.ts, @extract/shared replay.ts, migration 007): one row per world
+ * shard-cycle (match_id = raids.match_id, deliberately without FK). started_at = the cycle start;
+ * ended_at is set by the final chunk (wipe / room closed); last_ms = cycle clock of the newest chunk
+ * end; entries = human entries on the shard so far; bytes / raw_bytes = stored compressed /
+ * uncompressed totals. The replays-retention cron deletes rows older than REPLAY.RETENTION_DAYS.
+ */
+export const replays = pgTable(
+  "replays",
+  {
+    matchId: uuid("match_id").primaryKey(),
+    cycleId: integer("cycle_id").notNull(),
+    shard: smallint("shard").notNull(),
+    mapId: text("map_id").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    lastMs: integer("last_ms").notNull().default(0),
+    entries: integer("entries").notNull().default(0),
+    chunks: integer("chunks").notNull().default(0),
+    bytes: bigint("bytes", { mode: "number" }).notNull().default(0),
+    rawBytes: bigint("raw_bytes", { mode: "number" }).notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    startedAt: index("replays_started_at_idx").on(t.startedAt),
+    cycle: index("replays_cycle_idx").on(t.cycleId),
+  }),
+);
+
+/** One deflate-raw compressed replay chunk (about a minute of cycle clock); idempotent by (match_id, seq). */
+export const replayChunks = pgTable(
+  "replay_chunks",
+  {
+    matchId: uuid("match_id")
+      .notNull()
+      .references(() => replays.matchId, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    startMs: integer("start_ms").notNull(),
+    endMs: integer("end_ms").notNull(),
+    frames: integer("frames").notNull(),
+    events: integer("events").notNull(),
+    bytes: integer("bytes").notNull(),
+    rawBytes: integer("raw_bytes").notNull(),
+    final: boolean("final").notNull().default(false),
+    data: bytea("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.matchId, t.seq] }),
+  }),
+);
+
+export type ReplayRow = typeof replays.$inferSelect;
+export type ReplayChunkRow = typeof replayChunks.$inferSelect;

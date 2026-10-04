@@ -129,7 +129,9 @@ describe("admin guard", () => {
       if (f.endsWith("route.ts")) {
         const handlers = [...src.matchAll(/export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE)\b[\s\S]*?\n}/g)];
         assert.ok(handlers.length > 0, `${f}: no handlers`);
-        for (const h of handlers) assert.match(h[0], /adminRoute\(|withAdmin\(/, `${f} ${h[1]} must be wrapped in adminRoute`);
+        // The game server's replay ingest is the one server-to-server route here: HMAC-signed, no session.
+        const guard = /[\\/]replays[\\/]ingest[\\/]route\.ts$/.test(f) ? /handleReplayIngest\(/ : /adminRoute\(|withAdmin\(/;
+        for (const h of handlers) assert.match(h[0], guard, `${f} ${h[1]} must be wrapped in adminRoute`);
       } else {
         assert.match(src, /await requireAdminPage\(\)/, `${f} must call requireAdminPage()`);
       }
