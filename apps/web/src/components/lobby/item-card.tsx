@@ -110,7 +110,7 @@ export function EmptySlot({ label, size = "md", onClick, active = false }: { lab
     <span
       onClick={onClick}
       className={clsx(
-        "grid place-items-center rounded-xl border-[3px] border-dashed border-white/25 bg-black/25 px-0.5 text-center font-body text-xs font-semibold leading-tight text-white/70",
+        "grid place-items-center rounded-xl border-[3px] border-dashed border-white/25 bg-black/25 px-0.5 text-center font-body text-xs font-semibold leading-tight text-white/70 lg:text-[0.8125rem]",
         box,
         active && "border-zooa-lime/70 text-zooa-lime/80",
       )}

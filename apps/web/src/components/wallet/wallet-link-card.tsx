@@ -72,7 +72,7 @@ export function WalletLinkCard({ userId }: { userId: string }) {
           Solana wallet
         </h2>
         {clusterLabel && (
-          <span className="font-body rounded-full border border-white/15 bg-white/5 px-2.5 py-0.5 text-xs font-semibold text-white/70">
+          <span className="font-body rounded-full border border-white/15 bg-white/5 px-2.5 py-0.5 text-xs lg:text-[0.8125rem] font-semibold text-white/70">
             {clusterLabel}
           </span>
         )}
@@ -103,7 +103,7 @@ export function WalletLinkCard({ userId }: { userId: string }) {
                   <span className="md:hidden">{shortAddress(link.linked.address)}</span>
                   <span className="hidden break-all md:inline">{link.linked.address}</span>
                 </p>
-                <p className="font-body text-xs text-white/50">Linked {linkedOn(link.linked.linkedAt)}</p>
+                <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">Linked {linkedOn(link.linked.linkedAt)}</p>
               </div>
               <CopyAddressButton address={link.linked.address} />
             </div>

@@ -18,7 +18,7 @@ function PageIntro() {
     <Reveal as="div" delay={0} className="mb-8 md:mb-10">
       <h1 className="font-display text-2xl tracking-wide text-[#c4f07a] md:text-3xl">Wallet</h1>
       <p className="mt-2 max-w-[65ch] font-body text-sm leading-relaxed text-white/75">
-        In-game balance in US dollar cents. On-chain top-ups and cash-out will connect here as custody goes live.
+        Your in-game balance, shown in US dollars. Top-ups and cash-outs from a crypto wallet will appear here when they go live.
       </p>
     </Reveal>
   );
@@ -106,7 +106,7 @@ export function WalletPanel() {
           <p className="mt-2 font-mono text-3xl tabular-nums tracking-tight text-zooa-lime md:text-4xl">
             {formatUsdCents(user.balanceCents)}
           </p>
-          <p className="font-body mt-2 text-xs lg:text-[0.8125rem] text-white/70">Settled to USD cents in the database</p>
+          <p className="font-body mt-2 text-xs lg:text-[0.8125rem] text-white/70">Kept on your account in US dollars</p>
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <button
               type="button"
@@ -142,20 +142,18 @@ export function WalletPanel() {
           <Reveal as="section" delay={140} className={glassMuted}>
             <h2 className="font-display text-base tracking-wide text-[#c4f07a] md:text-lg">Add funds</h2>
             <p className="font-body mt-2 text-sm leading-relaxed text-white/70">
-              Deposits are not live yet. Planned: send crypto from any wallet, credit your in-game balance in US dollars
-              (cents in the database).
+              Deposits are not live yet. Later you will send crypto from any wallet and see it here in US dollars.
             </p>
             <p className="mt-4 rounded-xl border border-white/5 bg-white/[0.04] p-3 font-mono text-xs lg:text-[0.8125rem] break-all text-white/70">
               {user.depositAddress}
             </p>
-            <p className="font-body mt-2 text-xs lg:text-[0.8125rem] text-white/70">Legacy deposit address (read-only for now)</p>
+            <p className="font-body mt-2 text-xs lg:text-[0.8125rem] text-white/70">Old deposit address, not active yet</p>
           </Reveal>
 
           <Reveal as="section" delay={200} className={glassMuted}>
             <h2 className="font-display text-base tracking-wide text-[#c4f07a] md:text-lg">Withdraw</h2>
             <p className="font-body mt-2 text-sm leading-relaxed text-white/70">
-              Withdrawals to a wallet will ship with the updated custody model. For now, the balance is in-game only (USD
-              cents).
+              Withdrawals to a wallet are not live yet. For now the balance stays in the game.
             </p>
           </Reveal>
         </div>

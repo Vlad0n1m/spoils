@@ -116,7 +116,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
               <div className="min-w-0">
                 <p className="truncate text-sm tracking-wide text-white">{d.name}</p>
                 <p className="font-body truncate text-xs lg:text-[0.8125rem] text-white/70">
-                  <span style={{ color: d.color }}>{d.rarityName}</span> · {Math.round(l.item.dur)}% ·{" "}
+                  <span style={{ color: d.color }}>{d.rarityName}</span> · {Math.round(l.item.dur)}% durability ·{" "}
                   {l.isTreasury ? <span className="text-amber-300">Treasury</span> : l.mine ? "you" : l.seller}
                   <span className="hidden sm:inline"> · {timeLeft(l.expiresAt, now)} left</span>
                 </p>
@@ -126,7 +126,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
               </p>
               <div className="max-sm:col-start-3 max-sm:row-start-1">
                 {l.mine ? (
-                  <span className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-sky-300">{pending ? `Live in ${Math.max(1, Math.ceil((l.visibleAt - now) / 1000))}s` : "Your lot"}</span>
+                  <span className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-sky-300">{pending ? `Live in ${Math.max(1, Math.ceil((l.visibleAt - now) / 1000))}s` : "Your listing"}</span>
                 ) : !canBuy ? (
                   <span className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">Sign in</span>
                 ) : confirm === l.id ? (

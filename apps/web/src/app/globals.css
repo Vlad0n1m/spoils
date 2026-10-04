@@ -20,6 +20,15 @@ body * {
 }
 
 /*
+ * Bullet-list items and definition terms take their list's leading (`leading-relaxed` on the <ul>): with the
+ * rule above every wrapped bullet was set solid at line-height 1 and its lines ran into each other.
+ * A list without a leading class still gives 1; a `leading-*` class on the item itself still wins.
+ */
+body :where(ul.list-disc, ol.list-decimal, dl) > :where(li, dt, dd) {
+  line-height: inherit;
+}
+
+/*
  * Luckiest Guy ships with an oversized ascender metric so glyphs
  * hug the top of their line-box and every block feels "top-heavy".
  * text-box-trim trims the unused ascender/descender space so the
