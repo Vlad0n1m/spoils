@@ -18,6 +18,7 @@
  */
 import { bakeAll, bakeOrder, DEFAULT_SAMPLE_RATE } from "./bake";
 import { SFX, SFX_IDS, farVariantOf, type Bus, type SfxDef, type SfxId, type VoiceClass } from "./recipes";
+import { SAMPLE_JITTER, SAMPLE_MANIFEST, loadSamples, type SampleStatus } from "./samples";
 import { getSettings, subscribeSettings, volumeToGain, type AudioSettings } from "./settings";
 import { dbToGain, spatialize, spatializeHidden, type HiddenInput, type SpatialResult, type SpatializeInput } from "./spatial";
 
@@ -133,6 +134,8 @@ export interface PlayOpts {
   /** Seconds from now. */
   delay?: number;
   bus?: Bus;
+  /** "synth" forces the procedural takes even when a recorded sample is installed (/dev/sfx A/B). */
+  source?: "auto" | "synth";
 }
 
 export interface Voice {
@@ -309,6 +312,13 @@ export class AudioEngine {
   context: AudioContext | null = null;
   private graph: Graph | null = null;
   private buffers = new Map<SfxId, AudioBuffer[]>();
+  /** The baked procedural takes; `buffers` holds the sample takes instead once those decoded. */
+  private procBuffers = new Map<SfxId, AudioBuffer[]>();
+  /** Per-play pitch/volume variation of sample-backed sounds. */
+  private sampleJitter = new Map<SfxId, number>();
+  private samples = new Map<SfxId, SampleStatus>();
+  private samplePromise: Promise<void> | null = null;
+  private sampleListeners = new Set<() => void>();
   private voices: VoiceImpl[] = [];
   private loops = new Set<LoopImpl>();
   private lastVariant = new Map<SfxId, number>();
@@ -459,7 +469,10 @@ export class AudioEngine {
           signal,
           ids: bakeOrder(),
           onSound: (id, takes) => {
-            this.buffers.set(id, takes.map((d) => toAudioBuffer(d, sampleRate)));
+            const bufs = takes.map((d) => toAudioBuffer(d, sampleRate));
+            this.procBuffers.set(id, bufs);
+            // A sample that is already installed keeps priority over a (re)baked synth take.
+            if (!this.sampleJitter.has(id)) this.buffers.set(id, bufs);
             this.progress = { ...this.progress, done: this.buffers.size };
             for (const l of this.loops) if (l.id === id) l.tryStart();
             this.emitProgress();
@@ -473,7 +486,11 @@ export class AudioEngine {
             // A failed bake leaves the game silent rather than broken.
             console.warn("[audio] bake failed", e);
           })
-          .finally(resolve);
+          .finally(() => {
+            resolve();
+            // Recorded samples decode after the synth bank: the game is never silent while they load.
+            void this.ensureSamples();
+          });
       };
       const ric = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
       if (ric) ric(start, { timeout: 500 });
@@ -498,6 +515,73 @@ export class AudioEngine {
     for (const l of this.progressListeners) l(this.progress);
   }
 
+  /**
+   * Fetch and decode the recorded samples (idempotent; started automatically after the bake). Each
+   * sound switches to its samples as soon as they decoded; failures keep the procedural takes.
+   */
+  ensureSamples(): Promise<void> {
+    if (this.samplePromise) return this.samplePromise;
+    if (typeof window === "undefined" || typeof OfflineAudioContext === "undefined") return Promise.resolve();
+    const signal = this.bakeAbort?.signal;
+    const sampleRate = this.procBuffers.values().next().value?.[0]?.sampleRate ?? this.context?.sampleRate ?? DEFAULT_SAMPLE_RATE;
+    for (const id of Object.keys(SAMPLE_MANIFEST) as SfxId[]) this.samples.set(id, { state: "pending" });
+    this.emitSamples();
+    this.samplePromise = new Promise<void>((resolve) => {
+      const start = () => {
+        loadSamples({
+          sampleRate,
+          signal,
+          proc: (id) => (this.procBuffers.get(id) ?? []).map((b) => b.getChannelData(0)),
+          install: (id, takes, status) => {
+            if (signal?.aborted) return;
+            this.buffers.set(id, takes.map((d) => toAudioBuffer(d, sampleRate)));
+            this.sampleJitter.set(id, SAMPLE_MANIFEST[id]?.jitter ?? SAMPLE_JITTER);
+            this.lastVariant.delete(id);
+            this.samples.set(id, status);
+            this.emitSamples();
+          },
+          fail: (id, status) => {
+            this.samples.set(id, status);
+            console.warn(`[audio] sample ${id} unavailable, keeping the synth: ${status.state === "failed" ? status.error : ""}`);
+            this.emitSamples();
+          },
+        })
+          .catch((e) => console.warn("[audio] sample load failed", e))
+          .finally(resolve);
+      };
+      const ric = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+      if (ric) ric(start, { timeout: 1500 });
+      else setTimeout(start, 50);
+    });
+    return this.samplePromise;
+  }
+
+  /** Sample load state per sample-backed sound (/dev/sfx). */
+  get sampleStatus(): ReadonlyMap<SfxId, SampleStatus> {
+    return this.samples;
+  }
+
+  isSampled(id: SfxId): boolean {
+    return this.sampleJitter.has(id);
+  }
+
+  onSamples(l: () => void): () => void {
+    this.sampleListeners.add(l);
+    l();
+    return () => {
+      this.sampleListeners.delete(l);
+    };
+  }
+
+  private emitSamples() {
+    for (const l of this.sampleListeners) l();
+  }
+
+  /** The procedural takes, even when samples replaced them (/dev/sfx A/B). */
+  getProcBuffers(id: SfxId): readonly AudioBuffer[] {
+    return this.procBuffers.get(id) ?? [];
+  }
+
   isBaked(id: SfxId): boolean {
     return this.buffers.has(id);
   }
@@ -514,9 +598,12 @@ export class AudioEngine {
     const ctx = this.context;
     const def: SfxDef = SFX[id];
     if (!ctx || ctx.state !== "running" || !def) return null;
-    const takes = this.buffers.get(id);
+    const synth = o.source === "synth";
+    const takes = synth ? this.procBuffers.get(id) : this.buffers.get(id);
     if (!takes || takes.length === 0) return null;
-    const baseGain = dbToGain(def.db + (o.db ?? 0)) * (o.gain ?? 1);
+    // Recorded samples vary pitch and level a little per play (the synth bakes several takes instead).
+    const sj = synth ? 0 : (this.sampleJitter.get(id) ?? 0);
+    const baseGain = dbToGain(def.db + (o.db ?? 0)) * (o.gain ?? 1) * (sj > 0 ? 1 + (Math.random() * 2 - 1) * sj : 1);
     if (!(baseGain >= MIN_VOICE_GAIN)) return null;
     const bus = this._bus(o.bus ?? def.bus);
     if (!bus) return null;
@@ -530,11 +617,11 @@ export class AudioEngine {
     if (adm.kind === "steal") this.voices[adm.index]!.stop(STEAL_FADE_S);
 
     const variant = o.variant !== undefined ? Math.max(0, Math.min(takes.length - 1, o.variant | 0)) : pickVariant(takes.length, this.lastVariant.get(id), Math.random());
-    this.lastVariant.set(id, variant);
+    if (!synth) this.lastVariant.set(id, variant);
 
     const src = ctx.createBufferSource();
     src.buffer = takes[variant]!;
-    src.playbackRate.value = (o.rate ?? 1) * (1 + (Math.random() * 2 - 1) * def.jitter);
+    src.playbackRate.value = (o.rate ?? 1) * (1 + (Math.random() * 2 - 1) * Math.max(def.jitter, sj));
     const f = ctx.createBiquadFilter();
     f.type = "lowpass";
     f.frequency.value = Math.max(20, Math.min(NORMAL_CUTOFF, o.cutoff ?? NORMAL_CUTOFF));

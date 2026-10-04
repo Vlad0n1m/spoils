@@ -7,11 +7,14 @@
  * 0 dBFS), plays any take, drives the mixer settings, toggles ambient beds, and has two positional
  * pads: a visible-source pad (exact dx/dy, walls) and a hidden-source ring (16 sectors × 3 bands).
  * A worst-case offline mix checks that the master compressor keeps a firefight from clipping.
+ * The Samples panel lists every recorded (Kenney CC0) sample, its decode state, and plays it
+ * against the procedural take it replaces or layers onto.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { takeStats, type TakeStats } from "@/game/audio/bake";
 import { AudioEngine, buildMasterChain, type BakeProgress, type LoopHandle } from "@/game/audio/engine";
 import { SFX, SFX_IDS, type SfxDef, type SfxId } from "@/game/audio/recipes";
+import { SAMPLE_IDS, SAMPLE_MANIFEST, type SampleStatus } from "@/game/audio/samples";
 import { useAudioSettings } from "@/game/audio/settings";
 import { FAR_U, NEAR_PX, SECTORS, dbToGain, sectorAngle, spatialize, spatializeHidden, type SpatialResult } from "@/game/audio/spatial";
 
@@ -50,10 +53,15 @@ function SfxBench() {
   const [stats, setStats] = useState<Partial<Record<SfxId, TakeStats[]>>>({});
   const [unlocked, setUnlocked] = useState(false);
   const [voices, setVoices] = useState(0);
+  const [sampleTick, setSampleTick] = useState(0);
+  const statsSampled = useRef(new Set<SfxId>());
 
   useEffect(() => {
     eng.installUnlock();
     void eng.ensureBaked();
+    // Dev bench only: lets a console / automated check read the sample decode state.
+    (window as unknown as { __sfxEngine?: AudioEngine }).__sfxEngine = eng;
+    const offSamples = eng.onSamples(() => setSampleTick((t) => t + 1));
     const off = eng.onBakeProgress(setProgress);
     const iv = window.setInterval(() => {
       setVoices(eng.voiceCount);
@@ -61,6 +69,7 @@ function SfxBench() {
     }, 250);
     return () => {
       off();
+      offSamples();
       window.clearInterval(iv);
     };
   }, [eng]);
@@ -70,7 +79,10 @@ function SfxBench() {
     setStats((prev) => {
       let next = prev;
       for (const id of SFX_IDS) {
-        if (prev[id] || !eng.isBaked(id)) continue;
+        const sampled = eng.isSampled(id);
+        // Recompute once more when a sample replaces the synth takes.
+        if ((prev[id] && sampled === statsSampled.current.has(id)) || !eng.isBaked(id)) continue;
+        if (sampled) statsSampled.current.add(id);
         const loop = !!SFX[id].loop;
         const s = eng.getBuffers(id).map((b) => takeStats(b.getChannelData(0), b.sampleRate, loop));
         next = next === prev ? { ...prev } : next;
@@ -78,7 +90,7 @@ function SfxBench() {
       }
       return next;
     });
-  }, [eng, progress]);
+  }, [eng, progress, sampleTick]);
 
   /** Every play goes through unlock first: the click that plays is also the autoplay gesture. */
   const play = useCallback(
@@ -117,8 +129,75 @@ function SfxBench() {
         <HiddenRing eng={eng} />
       </div>
 
+      <SamplesPanel eng={eng} tick={sampleTick} />
+
       <SoundTable stats={stats} play={play} isBaked={(id) => eng.isBaked(id)} />
     </main>
+  );
+}
+
+function sampleLabel(s: SampleStatus | undefined): { text: string; cls: string } {
+  if (!s || s.state === "pending") return { text: "loading…", cls: "text-amber-300" };
+  if (s.state === "failed") return { text: `synth fallback (${s.error})`, cls: "text-red-400" };
+  return { text: `${s.format} · ${s.takes} take${s.takes > 1 ? "s" : ""} · ${s.ms} ms`, cls: "text-lime-300" };
+}
+
+/** Every sample-backed sound: decode state, and the sample vs the procedural take it replaces/layers. */
+function SamplesPanel({ eng, tick }: { eng: AudioEngine; tick: number }) {
+  void tick;
+  const st = eng.sampleStatus;
+  const ok = SAMPLE_IDS.filter((id) => st.get(id)?.state === "ok").length;
+  const failed = SAMPLE_IDS.filter((id) => st.get(id)?.state === "failed");
+  const playAs = async (id: SfxId, source: "auto" | "synth") => {
+    await eng.unlock();
+    eng.play(id, { source });
+  };
+  return (
+    <section className="mt-6 overflow-x-auto rounded-lg border border-white/10" data-testid="samples-panel">
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 px-3 py-2">
+        <h2 className="text-xs uppercase tracking-widest text-white/50">Samples (Kenney CC0)</h2>
+        <span className={failed.length ? "text-red-400" : ok === SAMPLE_IDS.length ? "text-lime-300" : "text-amber-300"} data-testid="samples-summary">
+          decoded {ok}/{SAMPLE_IDS.length}
+          {failed.length ? ` · fallback: ${failed.join(", ")}` : ""}
+        </span>
+      </div>
+      <table className="w-full min-w-[760px] border-collapse">
+        <thead className="text-left text-xs uppercase tracking-wider text-white/50">
+          <tr className="border-b border-white/10">
+            <th className="px-3 py-2">sound</th>
+            <th className="px-2">mode</th>
+            <th className="px-2">files</th>
+            <th className="px-2">state</th>
+            <th className="px-2">play</th>
+          </tr>
+        </thead>
+        <tbody>
+          {SAMPLE_IDS.map((id) => {
+            const e = SAMPLE_MANIFEST[id]!;
+            const s = st.get(id);
+            const lab = sampleLabel(s);
+            return (
+              <tr key={id} className="border-b border-white/5" data-sample={id} data-state={s?.state ?? "pending"}>
+                <td className="px-3 py-1">{id}</td>
+                <td className="px-2 text-white/60">{e.mode ?? "replace"}</td>
+                <td className="px-2 text-white/60">{e.files.join(" ")}</td>
+                <td className={`px-2 ${lab.cls}`}>{lab.text}</td>
+                <td className="px-2 py-1">
+                  <div className="flex gap-1">
+                    <button className={btn} disabled={s?.state !== "ok"} onClick={() => void playAs(id, "auto")} aria-label={`play ${id} sample`}>
+                      sample
+                    </button>
+                    <button className={btn} disabled={!eng.isBaked(id)} onClick={() => void playAs(id, "synth")} aria-label={`play ${id} synth`}>
+                      synth
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
   );
 }
 
@@ -464,9 +543,7 @@ function HiddenRing({ eng }: { eng: AudioEngine }) {
                 className="cursor-pointer hover:fill-white/70"
                 onClick={() => void hit(s, b)}
               >
-                <title>
-                  sector {s} ({deg(a)}°), band {b}
-                </title>
+                <title>{`sector ${s} (${deg(a)}°), band ${b}`}</title>
               </circle>
             );
           }),

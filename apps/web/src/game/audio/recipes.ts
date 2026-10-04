@@ -854,11 +854,19 @@ export const SFX = {
 
   hit_flesh: sfx(misc.hit_flesh, 0.2, -6, "hits", 4, { variants: 3, jitter: 0.04 }),
   hit_armor: sfx(misc.hit_armor, 0.3, -8, "hits", 4, { variants: 3, jitter: 0.04 }),
+  /** A bullet stopping in a wall or prop (sample-backed; the synth fallback borrows the armor clank). */
+  hit_wall: sfx(misc.hit_armor, 0.3, -14, "hits", 2, { variants: 2, jitter: 0.05 }),
   hitmarker: ui(misc.hitmarker, 0.1, -10),
   kill_confirm: ui(misc.kill_confirm, 0.35, -8),
   body_fall: sfx(misc.body_fall, 0.4, -6, "hits", 2, { variants: 3, jitter: 0.04 }),
 
   chest_open: sfx(misc.chest_open, 0.65, -8, "interact"),
+  /** Toolbox / weapon box / med case / fridge / pc lids, and the safe door (synth fallback: the crate lid). */
+  chest_open_metal: sfx(misc.chest_open, 0.65, -8, "interact"),
+  chest_open_safe: sfx(misc.chest_open, 0.65, -7, "interact"),
+  /** Own inventory: an item came in / went out (sample-backed; synth fallbacks are stand-ins). */
+  item_pickup: sfx(misc.ui_equip, 0.15, -14, "interact", 3),
+  item_drop: sfx(misc.body_fall, 0.4, -18, "interact", 3),
   zipper: sfx(misc.zipper, 1.0, -12, "interact"),
   rustle: sfx(misc.rustle, 0.55, -12, "interact", 1, { variants: 3, jitter: 0.04 }),
   search: sfx(misc.search, 1.0, -12, "interact", 2, { variants: 3, jitter: 0.03 }),
@@ -869,6 +877,8 @@ export const SFX = {
   // 3.3 s: the 230 ms echo of the last sweep rings past the 2.95 s oscillator fade.
   siren: sfx(misc.siren, 3.3, -10, "extract", 3, { jitter: 0 }),
   extract_beep: ui(misc.extract_beep, 0.2, -10),
+  /** Stepping into an open extraction circle (the countdown beeps follow). */
+  extract_start: ui(misc.extract_beep, 0.2, -8),
   extract_success: ui(misc.extract_success, 0.9, -6),
   heartbeat: ui(misc.heartbeat, 0.35, -8),
   // Boss presentation (boss-hud.ts): the alert sting and the boss-turf tension swell.

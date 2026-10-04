@@ -32,18 +32,23 @@ import {
   effectiveSoundRadius,
   envConfigOf,
   envSchedule,
+  getCollisionIndex,
   getWallIndex,
   isIndoor,
+  raycastSolids,
   sampleEnv,
   surfaceAt,
   terrainByteAt,
   type BattleState,
   type BushIndex,
+  type CollisionIndex,
+  type ContainerKind,
   type DecodedSound,
   type EnvConfig,
   type EnvSample,
   type EventsMsg,
   type MapData,
+  type ShotMsg,
   type Strike,
   type WeaponId,
 } from "@extract/shared";
@@ -72,6 +77,12 @@ export const LOW_HP = { threshold: 35, floor: 10, slowMs: 1000, fastMs: 550, max
 export const SELF_SIREN_DB = -6;
 export const SELF_SIREN_REPEAT_MS = 2500;
 export const SEARCH_REPEAT_MS = 1500;
+/** Bullet travel to a wall is audible as a delay, but never longer than this. */
+export const WALL_IMPACT_MAX_DELAY_S = 0.5;
+/** Inventory poll for the pickup / drop sounds. */
+export const INV_POLL_MS = 100;
+/** No drop sound while a reload / heal / throw may be consuming an item (plus this slack). */
+export const CONSUME_QUIET_MS = 600;
 /** Pump / bolt after a shotgun or sniper shot. */
 export const RACK_AFTER_SHOT_S: Partial<Record<WeaponId, number>> = { shotgun: 0.35, sniper: 0.5 };
 
@@ -97,6 +108,38 @@ export function gunSfx(w: string | undefined): SfxId {
     default:
       return "gun_pistol";
   }
+}
+
+/** Container lid by kind: wooden crates and stashes creak, cases and boxes latch, the safe clunks. */
+export function containerOpenSfx(kind: ContainerKind | string | undefined): SfxId {
+  switch (kind) {
+    case "safe":
+      return "chest_open_safe";
+    case "toolbox":
+    case "weapon_box":
+    case "med_case":
+    case "fridge":
+    case "pc":
+      return "chest_open_metal";
+    default:
+      return "chest_open";
+  }
+}
+
+/**
+ * Where a shot's bullet stops in a solid: the middle pellet raycast from the shooter's centre over
+ * the weapon's range (the server raycasts from there too). Null when it flies out of range.
+ */
+export function wallImpact(idx: CollisionIndex, shot: Pick<ShotMsg, "cx" | "cy" | "a">, range: number): { x: number; y: number; dist: number } | null {
+  if (!shot.a.length || !(range > 0)) return null;
+  const a = shot.a[Math.floor(shot.a.length / 2)]!;
+  const dx = Math.cos(a);
+  const dy = Math.sin(a);
+  const t = raycastSolids(idx, shot.cx, shot.cy, shot.cx + dx * range, shot.cy + dy * range);
+  if (!(t >= 0 && t <= 1)) return null;
+  // A hair before the face, so the occlusion ray from the listener does not start inside the wall.
+  const dist = Math.max(0, t * range - 2);
+  return { x: shot.cx + dx * dist, y: shot.cy + dy * dist, dist };
 }
 
 export interface SoundLayer extends Layer {
@@ -306,11 +349,15 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
   private walking = false;
 
   private localShots: number[] = [];
+  private invQty = -1;
+  private nextInvAt = 0;
+  private quietDropsUntil = 0;
   private localRollAt = Number.NEGATIVE_INFINITY;
 
   // Per-batch scratch.
   private readonly played = new Set<string>();
   private readonly hitTargets = new Set<string>();
+  private readonly hitShooters = new Set<string>();
 
   init(ctx: GameContext): void {
     const eng = AudioEngine.get();
@@ -354,6 +401,7 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
     this.walking = ctx.self()?.walking ?? false;
     this.ownSteps(next, pos.x, pos.y, now);
     this.lowHpTick(next, now);
+    this.inventoryTick(ctx, next, now, clock);
     this.channelTick(next, now, clock);
     this.phaseTick(state, ctx, pos.x, pos.y, clock);
   }
@@ -411,6 +459,7 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
         eng.play("weapon_switch", { key: "self", priority: 4 });
         break;
       case "reload":
+        this.quietDropsUntil = Math.max(this.quietDropsUntil, now + c.ms + CONSUME_QUIET_MS);
         this.cancelReload(now);
         for (const cue of reloadCues(c.ms)) {
           const v = eng.play(cue.id, { delay: cue.at, key: "self", priority: 4 });
@@ -421,6 +470,7 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
         this.cancelReload(now);
         break;
       case "heal":
+        this.quietDropsUntil = Math.max(this.quietDropsUntil, now + 8000);
         eng.play(c.kind === "medkit" ? "heal_medkit" : "heal_bandage", { key: "self", priority: 4 });
         break;
       case "roll":
@@ -439,7 +489,8 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
         break;
       case "extractStart":
         this.extracting = true;
-        this.nextBeepAt = now;
+        this.eng!.play("extract_start", { priority: 5 });
+        this.nextBeepAt = now + 350;
         this.nextSirenAt = now;
         break;
       case "extractStop":
@@ -479,6 +530,29 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
     });
     const pan = this.stride.foot === 0 ? -0.06 : 0.06;
     for (const l of layers) this.eng!.play(l.id, { db: l.db, pan, key: "self" });
+  }
+
+  /** Own pickups and drops: the total item count in our slots going up or down. */
+  private inventoryTick(ctx: GameContext, s: SelfSnap, now: number, clock: number): void {
+    if (now < this.nextInvAt) return;
+    this.nextInvAt = now + INV_POLL_MS;
+    const slots = ctx.self()?.slots;
+    if (!slots || !s.alive || s.extractedAt > 0) {
+      this.invQty = -1;
+      return;
+    }
+    qtyAcc = 0;
+    slots.forEach(countQty);
+    const qty = qtyAcc;
+    const prev = this.invQty;
+    this.invQty = qty;
+    if (prev < 0 || qty === prev) return;
+    if (qty > prev) {
+      this.eng!.play("item_pickup", { key: "self", priority: 3 });
+      return;
+    }
+    const consuming = s.reloadUntil > clock || s.healUntil > clock || now < this.quietDropsUntil;
+    if (!consuming) this.eng!.play("item_drop", { key: "self", priority: 3 });
   }
 
   private setDead(dead: boolean): void {
@@ -572,6 +646,7 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
     this.hitTargets.clear();
 
     if (ev.shots) {
+      this.wallImpacts(ev, map, pos.x, pos.y, sid, hear);
       for (const s of ev.shots) {
         if (s.s !== sid) continue; // others' gunshots come from ev.snd
         if (this.consumeLocalShot(now)) continue;
@@ -636,7 +711,7 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
         chestOpens++;
         if (this.played.has(`c${c.idx}`)) continue;
         this.played.add(`c${c.idx}`);
-        eng.playAt("chest_open", {
+        eng.playAt(containerOpenSfx(spot.kind), {
           dx: spot.x - pos.x,
           dy: spot.y - pos.y,
           range: baseSoundRadius(SoundKind.loot) * hear * RANGE_SLACK,
@@ -688,6 +763,39 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
     }
   }
 
+  /**
+   * Bullets that stop in a wall or prop: one impact per shot (the middle pellet), at the spot the
+   * tracer already shows, after the bullet's travel time. Shots that hit a player this tick play
+   * the flesh / armor impact instead.
+   */
+  private wallImpacts(ev: EventsMsg, map: MapData, lx: number, ly: number, sid: string, hear: number): void {
+    const eng = this.eng!;
+    const shots = ev.shots;
+    if (!shots?.length) return;
+    this.hitShooters.clear();
+    if (ev.hits) for (const h of ev.hits) this.hitShooters.add(h.s);
+    const idx = getCollisionIndex(map);
+    const wallIdx = getWallIndex(map);
+    const range = baseSoundRadius(SoundKind.hurt) * hear * RANGE_SLACK;
+    for (const s of shots) {
+      if (s.s && this.hitShooters.has(s.s)) continue;
+      const def = WEAPONS[s.w];
+      if (!def) continue;
+      const p = wallImpact(idx, s, def.range);
+      if (!p) continue;
+      const mine = s.s === sid;
+      const travel = def.bulletSpeed > 0 ? Math.min(WALL_IMPACT_MAX_DELAY_S, p.dist / def.bulletSpeed) : 0;
+      eng.playAt("hit_wall", {
+        dx: p.x - lx,
+        dy: p.y - ly,
+        range,
+        walls: countOccluders(wallIdx, lx, ly, p.x, p.y, 3),
+        delay: travel + (mine ? 0 : REMOTE_SOUND_DELAY_S),
+        key: "wall",
+      });
+    }
+  }
+
   private playOwnShot(w: string): void {
     const eng = this.eng!;
     eng.play(gunSfx(w), { key: "self", priority: 4 });
@@ -722,6 +830,7 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
 
   localThrow(): void {
     if (!this.eng || this.disposed) return;
+    this.quietDropsUntil = Math.max(this.quietDropsUntil, performance.now() + 1500);
     this.eng.play("grenade_pin", { key: "self", priority: 4 });
   }
 
@@ -743,6 +852,12 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
     }
     this.eng = null;
   }
+}
+
+// Allocation-free MapSchema.forEach callback for inventoryTick.
+let qtyAcc = 0;
+function countQty(it: { qty: number }): void {
+  qtyAcc += it.qty > 0 ? it.qty : 1;
 }
 
 /** GameSystem factory for the renderer registry (systems.ts SYSTEM_FACTORIES). */
