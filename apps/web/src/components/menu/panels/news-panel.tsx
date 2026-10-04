@@ -100,7 +100,7 @@ function PatchNotes() {
             {p.date}
           </p>
           <h3 className="toon-text-thin mt-2 text-xl leading-tight tracking-wide text-white">{p.title}</h3>
-          <ul className="font-body mt-3 list-disc space-y-1.5 pl-5 text-[0.95rem] leading-relaxed text-white/80">
+          <ul className="font-body mt-3 list-disc space-y-3 pl-5 text-[0.95rem] leading-snug text-white/80">
             {p.body.map((b) => (
               <li key={b}>{b}</li>
             ))}
