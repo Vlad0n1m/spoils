@@ -11,3 +11,11 @@
 **/.turbo
 .DS_Store
 apps/web/drizzle
+# Not needed by any image (Dockerfiles copy packages/shared, apps/* and deploy/web-preflight.mjs).
+art
+videos
+docs
+# Android TWA project and signing keys must never enter an image.
+twa
+**/*.keystore
+**/*.jks

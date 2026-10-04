@@ -1,0 +1,42 @@
+{
+  "packageId": "app.spoils.twa",
+  "host": "SPOILS_DOMAIN",
+  "name": "SPOILS",
+  "launcherName": "SPOILS",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "themeColor": "#08070B",
+  "themeColorDark": "#08070B",
+  "navigationColor": "#08070B",
+  "navigationColorDark": "#08070B",
+  "navigationDividerColor": "#08070B",
+  "navigationDividerColorDark": "#08070B",
+  "backgroundColor": "#08070B",
+  "enableNotifications": false,
+  "startUrl": "/play",
+  "iconUrl": "https://SPOILS_DOMAIN/icon-512.png",
+  "maskableIconUrl": "https://SPOILS_DOMAIN/icon-512-maskable.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "SPOILS_KEYSTORE_PATH",
+    "alias": "spoils"
+  },
+  "appVersionName": "0.1.0",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://SPOILS_DOMAIN/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": false,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://SPOILS_DOMAIN/",
+  "minSdkVersion": 21,
+  "fingerprints": [],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": []
+}

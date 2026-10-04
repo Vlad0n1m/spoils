@@ -16,10 +16,14 @@ ARG NEXT_PUBLIC_GAME_SERVER_URL=ws://localhost:2567
 ARG NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
 ARG NEXT_PUBLIC_SOLANA_CLUSTER=devnet
 ARG NEXT_PUBLIC_WALLET_DEV_TOPUP=0
+ARG NEXT_PUBLIC_GUEST_PLAY=
+ARG NEXT_PUBLIC_MARKET_CURRENCY=
 ENV NEXT_PUBLIC_GAME_SERVER_URL=$NEXT_PUBLIC_GAME_SERVER_URL
 ENV NEXT_PUBLIC_SOLANA_RPC_URL=$NEXT_PUBLIC_SOLANA_RPC_URL
 ENV NEXT_PUBLIC_SOLANA_CLUSTER=$NEXT_PUBLIC_SOLANA_CLUSTER
 ENV NEXT_PUBLIC_WALLET_DEV_TOPUP=$NEXT_PUBLIC_WALLET_DEV_TOPUP
+ENV NEXT_PUBLIC_GUEST_PLAY=$NEXT_PUBLIC_GUEST_PLAY
+ENV NEXT_PUBLIC_MARKET_CURRENCY=$NEXT_PUBLIC_MARKET_CURRENCY
 # Build-time placeholder; runtime DATABASE_URL comes from Compose / orchestrator.
 ENV DATABASE_URL=postgres://postgres:postgres@localhost:5432/extract
 RUN pnpm --filter @extract/shared build && pnpm --filter web build
@@ -39,6 +43,8 @@ RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 COPY --from=builder --chown=nextjs:nodejs /repo/apps/web/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /repo/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder --chown=nextjs:nodejs /repo/apps/web/public ./apps/web/public
+# Boot check: refuses to start in production without CRON_SECRET & co (names only, never values).
+COPY --chown=nextjs:nodejs deploy/web-preflight.mjs ./deploy/web-preflight.mjs
 USER nextjs
 EXPOSE 3000
-CMD ["node", "apps/web/server.js"]
+CMD ["sh", "-c", "node deploy/web-preflight.mjs && exec node apps/web/server.js"]

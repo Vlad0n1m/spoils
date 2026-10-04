@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { coreEnv } from "@/lib/env";
+import { coreEnv, isCronAuthorized } from "@/lib/env";
 import { expireStaleLocks } from "@/lib/inventory/loadout";
 import { voidStale } from "@/lib/inventory/raids";
 
@@ -13,9 +13,7 @@ export const maxDuration = 30;
  * locks nobody deployed. Both also run lazily on stash reads; this catches users who never return.
  */
 export async function GET(req: Request) {
-  const auth = req.headers.get("authorization");
-  const cronSecret = coreEnv().CRON_SECRET;
-  if (cronSecret && auth !== `Bearer ${cronSecret}`) {
+  if (!isCronAuthorized(req.headers.get("authorization"), coreEnv().CRON_SECRET)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   try {
