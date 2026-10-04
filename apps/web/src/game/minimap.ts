@@ -19,6 +19,7 @@ import { COLORS } from "./assets";
 import { bossSpotShown, minimapBossHint, type EventBossState } from "./boss";
 import { skullContext } from "./boss-icons";
 import { TERRAIN_COLOR, groundKinds } from "./terrain-tiles";
+import { MinimapWorldMarks } from "./world-events-marks";
 
 /** Overview canvas size (px). 24,576 / 1024 = 24 world px per texel. */
 export const OVERVIEW_PX = 1024;
@@ -224,6 +225,8 @@ export class Minimap {
   private readonly mateLayer = new Container();
   private readonly mateMarks: Marker[] = [];
   private readonly me = new Graphics();
+  /** WORLD v6 supply drops, hot zones and fight markers (world-events-marks.ts). */
+  private readonly worldMarks = new MinimapWorldMarks();
   private readonly north: Text;
   private readonly k: number;
   private released = false;
@@ -255,7 +258,7 @@ export class Minimap {
       this.markers.addChild(g);
     }
 
-    this.root.addChild(this.frame, this.view, this.markers, this.mateLayer, this.me, this.north);
+    this.root.addChild(this.frame, this.view, this.worldMarks.root, this.markers, this.mateLayer, this.me, this.north);
     this.root.eventMode = "none";
     this.root.interactiveChildren = false;
   }
@@ -332,6 +335,8 @@ export class Minimap {
       m.g.position.set(p.x, p.y);
       m.g.scale.set(e.status === "open" && allowed && !edge ? 1 + 0.25 * Math.sin(nowMs / 250) : 1);
     }
+
+    this.worldMarks.update(win, BASE, nowMs, self);
 
     const bosses = map.bosses ?? [];
     for (let i = 0; i < this.skulls.length; i++) {

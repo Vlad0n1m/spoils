@@ -24,6 +24,9 @@ import {
   ROLL,
   INPUT_DT_MS,
   SEARCH,
+  DROP,
+  isSupplyDropId,
+  isSupplyDropKey,
   SOLID,
   WEAPONS,
   XP,
@@ -161,6 +164,7 @@ export function searchTitle(key: string, map: Pick<MapData, "containers"> | null
     const spot = map?.containers[Number(key.slice(1))];
     return spot ? containerTitle(spot.kind) : "Container";
   }
+  if (isSupplyDropKey(key)) return "Supply drop";
   if (key.startsWith("k")) {
     // NPC bodies read by role ("Marauder's body"), never as a nickname.
     return bodyTitle(state?.corpses.get(key.slice(1))?.label);
@@ -174,7 +178,7 @@ export function searchOpenMs(key: string, map: Pick<MapData, "containers"> | nul
     const spot = map?.containers[Number(key.slice(1))];
     return spot ? containerOpenMs(spot) : SEARCH.OPEN_MS.tier[1]!;
   }
-  return SEARCH.OPEN_MS.corpse;
+  return isSupplyDropKey(key) ? DROP.OPEN_MS : SEARCH.OPEN_MS.corpse;
 }
 
 export interface HudSelfInput {
@@ -318,7 +322,7 @@ export function interactHint({ state, map, x, y, idx = null, known = null }: Int
     const d = (k.x - x) ** 2 + (k.y - y) ** 2;
     if (d > bestD || !visible(k.x, k.y)) return;
     bestD = d;
-    hint = `F — search ${k.label ? `${k.label}'s body` : "body"}`;
+    hint = isSupplyDropId(id) ? "F — open supply drop" : `F — search ${k.label ? `${k.label}'s body` : "body"}`;
   });
   if (hint) return hint;
 

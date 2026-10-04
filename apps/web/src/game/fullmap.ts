@@ -21,6 +21,7 @@ import { acquireOverview, releaseOverview } from "./minimap";
 import { shouldUseTouch } from "./touch-mode";
 import { BOSS_COLOR, bossSpotShown, liveBossTurf, turfLine, type EventBossState } from "./boss";
 import { skullContext } from "./boss-icons";
+import { FullmapWorldMarks } from "./world-events-marks";
 
 const FONT = "ui-rounded, 'Trebuchet MS', system-ui, sans-serif";
 
@@ -294,6 +295,8 @@ export class FullMapOverlay {
   private readonly labelStyle: (fill: number, size: number) => TextStyleOptions;
   private fontScale = 1;
   private readonly me = new Graphics();
+  /** WORLD v6 fight heat, hot zones and supply drops (world-events-marks.ts). */
+  private readonly worldMarks = new FullmapWorldMarks(FONT);
   private readonly compass = new Container();
   private readonly title: Text;
   private readonly hint: Text;
@@ -348,7 +351,7 @@ export class FullMapOverlay {
     this.hint = new Text({ text: shouldUseTouch() ? "Tap MAP to close" : "M — close", style: { ...labelStyle(0xc9ced6, 13), fontWeight: "700" } });
     this.hint.anchor.set(0.5, 0);
 
-    this.panel.addChild(this.mapSprite, this.zones, this.sideBand, this.labels, this.mateLayer, this.me, this.compass);
+    this.panel.addChild(this.mapSprite, this.zones, this.sideBand, this.worldMarks.root, this.labels, this.mateLayer, this.me, this.compass);
     this.root.addChild(this.backdrop, this.panel, this.title, this.hint);
     this.root.visible = false;
     this.root.eventMode = "none";
@@ -477,6 +480,7 @@ export class FullMapOverlay {
       m.g.visible = shown;
       m.label.visible = shown;
     }
+    this.worldMarks.update(this.map, k, nowMs, this.fontScale);
     this.updateMates(live?.mates ?? [], k);
     this.me.visible = !!self;
     if (self) {

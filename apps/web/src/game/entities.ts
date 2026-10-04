@@ -19,6 +19,7 @@ import {
   ROLL,
   WEAPONS,
   WORLD,
+  isSupplyDropId,
   itemDef,
   type BossSpot,
   type ContainerKind,
@@ -552,6 +553,8 @@ export class CorpseView {
   ) {
     const empty = c.empty || knownEmpty;
     this.root.position.set(c.x, c.y);
+    // WORLD v6 supply crate (Corpse "sd<n>", world-events.ts): a military crate, not a body.
+    if (isSupplyDropId((c as { id?: string }).id ?? "")) return this.syncCrate(c.opened, empty);
     if (this.sprite.texture === Texture.EMPTY) {
       const t = this.icons.get("corpse");
       if (t && t !== Texture.EMPTY) {
@@ -590,6 +593,32 @@ export class CorpseView {
       this.sprite.tint = empty ? 0x5a5a5a : c.opened ? (npc ? 0x7d7a64 : 0xb0b0b0) : base;
       this.name.alpha = empty ? 0.45 : 0.85;
       this.ring.alpha = empty ? 0.25 : 1;
+    }
+  }
+
+  /** Supply crate look: closed / opened weapon box, amber ring and label, dimmed once empty. */
+  private syncCrate(opened: boolean, empty: boolean) {
+    const want = opened || empty ? "box_weapon_box_open" : "box_weapon_box";
+    const t = this.icons.get(want);
+    if (t && t !== Texture.EMPTY && this.sprite.texture !== t) {
+      this.sprite.texture = t;
+      fitWidth(this.sprite, 70);
+    }
+    this.sprite.rotation = 0;
+    if (this.colorKey !== "crate") {
+      this.colorKey = "crate";
+      this.ring.clear();
+      this.ring.ellipse(0, 0, 44, 34).fill({ color: 0xffb020, alpha: 0.2 }).stroke({ width: 3, color: 0xffb020, alpha: 0.85 });
+      this.name.text = "SUPPLY DROP";
+      this.name.style.fill = 0xffc95a;
+      this.labelKey = "crate";
+    }
+    const key = `crate|${opened}|${empty}`;
+    if (key !== this.stateKey) {
+      this.stateKey = key;
+      this.sprite.tint = empty ? 0x6a6a6a : 0xffffff;
+      this.name.alpha = empty ? 0.45 : 0.95;
+      this.ring.alpha = empty ? 0.2 : 1;
     }
   }
 

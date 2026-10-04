@@ -805,7 +805,7 @@ export class GameRenderer implements GameRendererApi {
   private onStatePatch() {
     const state = this.state;
     if (!state || this.stopped) return;
-    this.known.observe(state.loot);
+    this.known.observe(state.loot, state.containerState);
     const now = performance.now();
     if (state.clockMs !== this.clockBase) {
       this.clockBase = state.clockMs;
