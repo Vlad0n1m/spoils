@@ -29,6 +29,8 @@ import type { MatchEvent } from "../sim/types.js";
 import { ViewSync } from "../sim/views.js";
 import { worldNow } from "../world/clock.js";
 import { worldDirectory, type ShardRoom, type WorldCreateOptions } from "../world/directory.js";
+import { startShardReplay } from "../world/replay-upload.js";
+import type { ReplayRecorder } from "../sim/replay-recorder.js";
 import { TickStats, fmtTickSummary, perfLogEnabled } from "./tick-stats.js";
 
 // Process boot (map-boot, WP-M2): this module is imported once by index.ts before the server
@@ -107,6 +109,8 @@ const PARTY_PERIOD_MS = 1000 / PARTY.POS_HZ;
  * by the tick itself (patchRate = null), so a newly visible shooter's Player entry reaches the
  * client in the same tick, before the ShotMsg that references it. Every 1 / PARTY.POS_HZ s the tick
  * also sends S2C.PARTY (sim/party.ts) to each connected party member: their mates' positions only.
+ * The admin replay recorder (sim/replay-recorder.ts) reads each tick's drained events right after
+ * the step; its chunks go to the web off the tick (world/replay-upload.ts).
  */
 export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> implements ShardRoom {
   override autoDispose = false;
@@ -130,6 +134,8 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
   private partyAccMs = 0;
   /** Roster indexes whose client got mates in the last S2C.PARTY round (they get one empty list when that ends). */
   private readonly partyShown = new Set<number>();
+  /** Admin replay of this shard-cycle (world/replay-upload.ts); null when recording is off. */
+  private replay: ReplayRecorder | null = null;
 
   get disposed(): boolean {
     return this.disposedFlag;
@@ -176,6 +182,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
       },
     });
     this.views = new ViewSync(this.match);
+    this.replay = startShardReplay(this.match);
     this.setState(this.match.state);
     this.setMetadata({ matchId: world.matchId, cycleId: world.cycleId });
 
@@ -281,6 +288,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
 
   override onDispose() {
     this.disposedFlag = true;
+    this.replay?.close();
     if (this.match) offExitSettled(this.match.state.matchId);
   }
 
@@ -309,6 +317,8 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     }
     const t1 = this.perf ? performance.now() : 0;
     const events = this.match.drainEvents();
+    // Never throws (a recorder error drops its chunk, not the tick).
+    this.replay?.tick(events);
     this.syncViews(events);
     this.broadcastPatch();
     this.dispatch(events);
