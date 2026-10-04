@@ -110,6 +110,23 @@
       "kind": "cutout",
       "box": [256, 256],
       "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a wooden clipboard with a sheet of paper showing three big green check marks, a red pencil lying across it and a small gold star sticker in the corner."
+    },
+    {
+      "id": "menu_pass",
+      "out": "menu_pass.png",
+      "gen": "1024x1024",
+      "kind": "cutout",
+      "box": [256, 256],
+      "prompt": "Game UI icon, three-quarter view slightly from above, chunky and readable at 64 px: a mint-teal and dark navy military medal on a short striped ribbon, with a big white five-pointed star in the middle of the round medal and a small gold rim."
+    },
+    {
+      "id": "hero_alpha",
+      "out": "hero_alpha.png",
+      "gen": "1024x1536",
+      "kind": "cutout",
+      "box": [512, 768],
+      "refs": ["art/raw/lobby/hero_0.png"],
+      "prompt": "The exact same character as the second reference image: same face, pose, helmet shape, proportions and framing. Now in the Alpha Veteran outfit: a mint-teal field jacket with dark navy collar and cuffs, a mint-teal stripe across the light-gray helmet, dark navy cargo pants, a small round mint-teal shoulder patch with a simple white star (no text), mint-teal fingerless gloves, the same small backpack. NO weapon in the hands."
     }
   ]
 }

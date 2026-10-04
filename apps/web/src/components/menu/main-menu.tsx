@@ -47,6 +47,8 @@ import { PartyPrompts } from "./party-prompts";
 import { PartyStrip } from "./party-strip";
 import { PlayButton, PlayMiniChip } from "./play-button";
 import { PlayController, type BattleStart, type RetryRequest } from "./play-controller";
+import { PassProvider, usePass } from "./pass-context";
+import { CoachMarks } from "./coach-marks";
 import { QuestsProvider, useQuests } from "./quests-context";
 import { QuestsSheet, type QuestsTab } from "./quests-sheet";
 import { SideButton, MENU_ICONS } from "./side-button";
@@ -126,6 +128,7 @@ export function MainMenu({ initialPanel }: { initialPanel: PanelState }) {
     <LobbyProvider active={!battle}>
       <PartyProvider active={!battle}>
         <QuestsProvider active={!battle}>
+          <PassProvider active={!battle}>
           {mounted ? (
             <MenuScreen initialPanel={initialPanel} hidden={Boolean(battle)} onBattle={onBattle} retry={retry} />
           ) : (
@@ -144,6 +147,7 @@ export function MainMenu({ initialPanel }: { initialPanel: PanelState }) {
               onRetry={onRetry}
             />
           )}
+          </PassProvider>
         </QuestsProvider>
       </PartyProvider>
     </LobbyProvider>
@@ -167,6 +171,7 @@ function MenuScreen({
   /** Friends dot: incoming friend requests or party invites. */
   const socialDot = socialDotCount(social) > 0;
   const quests = useQuests();
+  const pass = usePass();
 
   // ---- panels (URL state through the native history API: Next keeps useSearchParams in sync)
   const sp = useSearchParams();
@@ -417,7 +422,7 @@ function MenuScreen({
         )}
       >
         <LobbyBackdrop />
-        <HeroStage armor={armor} />
+        <HeroStage armor={armor} skin={sessionKind === "user" ? (quests.data?.equipped.skin ?? null) : null} />
         <div className="relative z-10 flex h-full flex-col" inert={blocked}>
           <MenuTopBar onCredits={() => openPanel("shop", "traders")} onRewards={() => openQuests("rewards")} />
           <h1 className="sr-only">Main menu</h1>
@@ -437,8 +442,12 @@ function MenuScreen({
               aria-label="Menu"
               className="hidden grid-cols-2 content-start gap-x-3 gap-y-4 land:grid short:gap-x-2 short:gap-y-3 [@media(min-width:1024px)_and_(min-height:800px)]:gap-x-4 [@media(min-width:1024px)_and_(min-height:800px)]:gap-y-5"
             >
-              <SideButton label="Shop" icon={MENU_ICONS.shop} hotkey="B" active={panel.panel === "shop"} onClick={() => openPanel("shop")} />
-              <SideButton label="Gear" ariaLabel="Inventory" icon={MENU_ICONS.inventory} hotkey="I" active={panel.panel === "inventory"} onClick={() => openPanel("inventory")} />
+              <div data-coach="shop">
+                <SideButton label="Shop" icon={MENU_ICONS.shop} hotkey="B" active={panel.panel === "shop"} onClick={() => openPanel("shop")} />
+              </div>
+              <div data-coach="inventory">
+                <SideButton label="Gear" ariaLabel="Inventory" icon={MENU_ICONS.inventory} hotkey="I" active={panel.panel === "inventory"} onClick={() => openPanel("inventory")} />
+              </div>
               <SideButton label="Friends" icon={MENU_ICONS.friends} hotkey="F" dot={socialDot} active={panel.panel === "friends"} onClick={() => openPanel("friends")} />
               <SideButton
                 label="Ranks"
@@ -459,7 +468,15 @@ function MenuScreen({
                 active={questsTab !== null}
                 onClick={() => openQuests("today")}
               />
-              <SideButton label="Guilds" icon={MENU_ICONS.guilds} locked onClick={() => locked("Guilds")} />
+              {/* Alpha: the Pass takes the locked Guilds tile (Guilds stays in the phone's More sheet). */}
+              <SideButton
+                label="Pass"
+                ariaLabel="Alpha Pass"
+                icon={MENU_ICONS.pass}
+                dot={sessionKind === "user" && pass.claimable > 0}
+                active={questsTab === "pass"}
+                onClick={() => openQuests("pass")}
+              />
             </nav>
 
             {/* Portrait: the world card heads the stack (in landscape it lives in the right column). */}
@@ -489,7 +506,9 @@ function MenuScreen({
               <WorldCard className="hidden land:flex" />
               <div className="flex min-w-0 flex-col gap-2">
                 <PartyStrip onInvite={() => openPanel("friends", "friends")} />
-                <PlayButton onFixInventory={() => openPanel("inventory", "loadout")} />
+                <div data-coach="play">
+                  <PlayButton onFixInventory={() => openPanel("inventory", "loadout")} />
+                </div>
               </div>
             </div>
 
@@ -532,6 +551,11 @@ function MenuScreen({
               setMore(false);
               openQuests("today");
             }}
+            onPass={() => {
+              setMore(false);
+              openQuests("pass");
+            }}
+            passDot={sessionKind === "user" && pass.claimable > 0}
             tasksDot={sessionKind === "user" && quests.unseen}
             friendsDot={socialDot}
             onFriends={() => {
@@ -578,6 +602,8 @@ function MenuScreen({
         )}
         {questsTab && <QuestsSheet tab={questsTab} onTab={setQuestsTab} onClose={closeQuests} />}
         <PartyPrompts hidden={hidden || signIn || guest || more || levelUp !== null || questsTab !== null} />
+        {/* First visit: PLAY → Inventory → Shop tips (remembered on this device). */}
+        <CoachMarks paused={hidden || blocked || showCard} />
         <MenuToast />
       </div>
     </PlayController>

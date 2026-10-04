@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
-import type { CosmeticBadgesDto, EquippedCosmetics, LeaderboardBoard, LeaderboardDto, LeaderboardMeDto } from "@extract/shared";
+import type { CosmeticBadgesDto, LeaderboardBoard, LeaderboardDto, LeaderboardMeDto } from "@extract/shared";
 import { useLobby } from "@/lib/lobby/lobby-context";
 import { nameColorHex, titleName } from "@/lib/lobby/levels";
 import { LB_PERIODS, type LbPeriod } from "@/lib/lobby/panels";
 import { LevelBadge } from "../level-badge";
+import { FounderBadge } from "../pass-tab";
 import { fmtInt } from "../xp-bar";
 
 const REFRESH_MS = 30_000;
@@ -41,7 +42,7 @@ function Rank({ rank }: { rank: number }) {
   );
 }
 
-type Badges = Record<string, Partial<EquippedCosmetics>>;
+type Badges = CosmeticBadgesDto["badges"];
 
 /** Equipped titles / name colours / badge frames of the board's players (/api/quests/badges); {} on failure. */
 async function loadBadges(nicks: readonly string[]): Promise<Badges> {
@@ -175,8 +176,11 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
                 <Rank rank={r.rank} />
                 <LevelBadge level={r.level} size="sm" frame={worn?.frame} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-base tracking-wide" style={color ? { color } : undefined}>
-                    {r.nickname}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-base tracking-wide" style={color ? { color } : undefined}>
+                      {r.nickname}
+                    </span>
+                    {worn?.badge && <FounderBadge className="!h-5 !w-5 !text-[0.7rem]" />}
                   </span>
                   {title && (
                     <span className={clsx("font-body block truncate text-xs lg:text-[0.8125rem] font-bold uppercase tracking-wider", mine ? "text-black/65" : "text-white/70")}>

@@ -26,7 +26,7 @@ export function MobileDock({
   moreOpen: boolean;
 }) {
   const cell = (key: string, label: string, icon: MenuIcon, on: boolean, onClick: () => void, dot = false, ariaLabel?: string) => (
-    <li key={key} className="min-w-0 flex-1">
+    <li key={key} className="min-w-0 flex-1" data-coach={key === "inventory" || key === "shop" ? key : undefined}>
       <button
         type="button"
         onClick={onClick}

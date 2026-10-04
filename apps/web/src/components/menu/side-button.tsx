@@ -20,6 +20,8 @@ export const MENU_ICONS = {
   /** Daily tasks and rewards. */
   tasks: { src: "/lobby/menu_quests.png", fallback: "/sprites/crate.png" },
   guilds: { src: "/lobby/menu_guilds.png", fallback: "/sprites/sandbags.png" },
+  /** Alpha Pass (the tasks sheet's Pass tab). */
+  pass: { src: "/lobby/menu_pass.png", fallback: "/sprites/junk_dogtag.png" },
 } as const satisfies Record<string, MenuIcon>;
 
 /** Padlock sticker for locked tiles. */
