@@ -1,6 +1,7 @@
 "use client";
 
 import clsx from "clsx";
+import { WORLD } from "@extract/shared";
 import { BRAND } from "@/lib/brand";
 import { useLobby, useNow } from "@/lib/lobby/lobby-context";
 import { SHORT_RAID_MS } from "@/lib/lobby/play-state";
@@ -8,6 +9,12 @@ import { fmtClockS, fmtLocalHm, secsUntil, worldView } from "@/lib/lobby/world-c
 import { BossBanner } from "./boss-banner";
 
 type Chip = { label: string; tone: string };
+
+/**
+ * How long after the map opens an empty map still reads "loot is untouched": nobody can have carried
+ * anything out before their extract arms.
+ */
+const UNTOUCHED_MS = WORLD.EXTRACT_ARM_MS;
 
 /**
  * World card (WORLD v6 spec §6.4): map name and number, phase chip (OPEN / ENTRY CLOSED / NEW MAP…
@@ -39,8 +46,17 @@ export function WorldCard() {
         : `New map in ${fmtClockS(secsUntil(v.entryOpensAt, now))}`;
   const side = v.phase === "open" ? `wipes at ${fmtLocalHm(v.wipeAt)}` : `opens at ${fmtLocalHm(v.entryOpensAt)}`;
 
+  // "Loot is untouched" only holds early: later an empty map may already have been looted by raiders
+  // who left (the status counts who is on the map now, not who was).
+  const fresh = now - v.openAt < UNTOUCHED_MS;
   const raiders =
-    v.humans === null ? null : v.humans === 0 ? "Map is empty — loot is untouched" : `${v.humans} ${v.humans === 1 ? "raider" : "raiders"} on the map`;
+    v.humans === null
+      ? null
+      : v.humans === 0
+        ? fresh
+          ? "Map is empty — loot is untouched"
+          : "Nobody on the map right now"
+        : `${v.humans} ${v.humans === 1 ? "raider" : "raiders"} on the map`;
 
   return (
     <section

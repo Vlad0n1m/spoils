@@ -307,6 +307,34 @@ describe("raids/enter", () => {
     assert.equal(e4.bossFill.length, 0, "once per shard-cycle");
   });
 
+  test("boss bag never takes the pool's top tier below POOL.TOP_RESERVE (review fix)", async () => {
+    // TOP_RESERVE + 1 top rifles, rare rifles and plenty of commons (pool > BOSS_MIN_POOL).
+    const lost = (defId: string, rarity: number, n: number) =>
+      Array.from({ length: n }, () => ({ defId, rarity, durability: 80, state: "lost_pool" as const, origin: "seed" as const }));
+    await db.insert(items).values([...lost("rifle", 2, POOL.TOP_RESERVE + 1), ...lost("rifle", 1, 10), ...lost("armor_1", 0, POOL.BOSS_MIN_POOL + 10)]);
+    const s = shardReq({ boss: { kind: "commander", zone: "radar" } });
+    await openShard(db, s);
+    // One entrant risking a top rifle and enough units for every slot; no per-entry release (targets 0).
+    const u = await makeUser(db);
+    const top = await makeItem(db, { def: "rifle", rarity: 2, ownerId: u });
+    const armor = await makeItem(db, { def: "armor_2", rarity: 1, ownerId: u });
+    const bp = await makeItem(db, { def: "backpack_2", rarity: 1, ownerId: u });
+    const lock = await lockLoadout(db, u, [
+      { key: "w1", itemId: top, def: "rifle", qty: 1 },
+      { key: "armor", itemId: armor, def: "armor_2", qty: 1 },
+      { key: "bp", itemId: bp, def: "backpack_2", qty: 1 },
+    ]);
+    assert.ok(lock.ok, JSON.stringify(lock));
+    const r = await enterRaid(db, entryReq(s.matchId, u, lock.ok ? lock.loadoutId : "", { targets: 0 }));
+    assert.equal(r.status, "accepted", r.reason);
+    assert.equal(r.pool.length, 0);
+    assert.equal(r.bossFill.length, BOSSES.commander.poolSlots.length);
+    const tops = r.bossFill.filter((it) => uniqueTierScore(it.def, it.rarity) === 2).length;
+    assert.equal(tops, 1, "only the one top item above the reserve");
+    const left = await db.execute<{ n: number }>(sql`select count(*)::int as n from items where state = 'lost_pool' and def_id = 'rifle' and rarity >= 2`);
+    assert.equal(Number(left.rows[0]!.n), POOL.TOP_RESERVE);
+  });
+
   test("demo shards lock nothing and release nothing (the entry still exists)", async () => {
     await bulkPool(60);
     const s = shardReq({ mode: "demo", boss: { kind: "foreman", zone: "elevator" } });

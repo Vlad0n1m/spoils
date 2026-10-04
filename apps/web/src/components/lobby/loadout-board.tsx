@@ -20,6 +20,7 @@ import {
   type StashView,
 } from "@/lib/lobby/loadout-model";
 import { describeItem } from "@/lib/items-ui";
+import { registerDraftFlush, trackDraftSave } from "@/lib/lobby/draft-flush";
 import { panelHref } from "@/lib/lobby/panels";
 import { ItemCard, EmptySlot } from "./item-card";
 import { StashList } from "./stash-list";
@@ -67,24 +68,42 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
     setSave("saving");
     pending.current = entries;
     const t = window.setTimeout(() => {
+      const body = pending.current;
       pending.current = null;
-      api("/api/loadout/draft", { method: "PUT", body: { entries } })
+      if (!body) return; // already sent by a flush (PLAY)
+      trackDraftSave(api("/api/loadout/draft", { method: "PUT", body: { entries: body } }))
         .then(() => setSave("saved"))
         .catch(() => setSave("error"));
     }, SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
   }, [entries, locked]);
+  // PLAY (armed auto-enter, the PLAY chip) first sends an edit still inside the debounce (draft-flush.ts).
+  useEffect(
+    () =>
+      registerDraftFlush(async () => {
+        const body = pending.current;
+        if (!body) return;
+        pending.current = null;
+        await trackDraftSave(api("/api/loadout/draft", { method: "PUT", body: { entries: body } })).then(
+          () => setSave("saved"),
+          () => setSave("error"),
+        );
+      }),
+    [],
+  );
   useEffect(
     () => () => {
       if (!pending.current) return;
       // keepalive lets the request outlive the unmount / navigation.
-      void fetch("/api/loadout/draft", {
-        method: "PUT",
-        credentials: "include",
-        keepalive: true,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ entries: pending.current }),
-      }).catch(() => {});
+      void trackDraftSave(
+        fetch("/api/loadout/draft", {
+          method: "PUT",
+          credentials: "include",
+          keepalive: true,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ entries: pending.current }),
+        }),
+      ).catch(() => {});
     },
     [],
   );
@@ -95,7 +114,7 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
       if (pending.current) {
         const body = { entries: pending.current };
         pending.current = null;
-        await api("/api/loadout/draft", { method: "PUT", body });
+        await trackDraftSave(api("/api/loadout/draft", { method: "PUT", body }));
         setSave("saved");
       }
       setBusy(false);

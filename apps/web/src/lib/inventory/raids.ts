@@ -357,10 +357,14 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
         now,
       });
       const dayStart = utcDayStart(now);
-      const g = await tx.execute<{ grind: number; first: number }>(sql`
+      const g = await tx.execute<{ grind: number; first: number; pvp: number }>(sql`
         select coalesce(sum(xp_grind), 0)::int as grind,
-               count(*) filter (where exit = 'extract' and on_map_ms >= ${XP.MIN_ONMAP_MS})::int as first
+               count(*) filter (where exit = 'extract' and on_map_ms >= ${XP.MIN_ONMAP_MS})::int as first,
+               (select count(*)::int from pvp_kills
+                where killer_id = ${user!.id} and ranked and at >= ${dayStart} and entry_id <> ${entryId}) as pvp
         from raid_exits where user_id = ${user!.id} and at >= ${dayStart} and entry_id <> ${entryId}`);
+      // XP.PVP_DAILY_MAX ranked kills a UTC day pay the pvp line; the Kills board counts every ranked kill.
+      const pvpPaid = Math.min(pvpRanked, Math.max(0, XP.PVP_DAILY_MAX - Number(g.rows[0]?.pvp ?? 0)));
       const r = xpForExit({
         exit: report.exit,
         onMapMs,
@@ -369,7 +373,7 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
         marauders: npcKills - guardKills,
         guards: guardKills,
         bosses: bossKills,
-        rankedPvp: pvpRanked,
+        rankedPvp: pvpPaid,
         grindToday: Number(g.rows[0]?.grind ?? 0),
         firstExtractToday: Number(g.rows[0]?.first ?? 0) === 0,
       });
@@ -435,10 +439,18 @@ async function recordPvpKills(
 ): Promise<number> {
   const ids = [...new Set(a.victims.filter((v) => isUuid(v) && v !== a.killerId))];
   if (ids.length === 0) return 0;
-  const reg = await tx.execute<{ id: string }>(
-    sql`select id from users where id in (${sql.join(ids.map((v) => sql`${v}::uuid`), sql`, `)})`,
+  const reg = await tx.execute<{ id: string; xp: number; created_at: Date | string }>(
+    sql`select id, xp, created_at from users where id in (${sql.join(ids.map((v) => sql`${v}::uuid`), sql`, `)})`,
   );
   const registered = new Set(reg.rows.map((r) => r.id));
+  // Review fix: fresh accounts (no e-mail check) and low levels are never ranked victims, so a pack
+  // of new alts cannot feed a main's PvP XP or the Kills board. Their kills are still recorded.
+  const bornBefore = a.now.getTime() - XP.PVP_VICTIM_MIN_AGE_MS;
+  const rankable = new Set(
+    reg.rows
+      .filter((r) => new Date(r.created_at).getTime() <= bornBefore && levelForXp(Number(r.xp)) >= XP.PVP_VICTIM_MIN_LEVEL)
+      .map((r) => r.id),
+  );
   const since = new Date(a.now.getTime() - 24 * 3600_000);
   let ranked = 0;
   for (const v of a.victims) {
@@ -447,7 +459,7 @@ async function recordPvpKills(
     const prior = await tx.execute<{ n: number }>(sql`
       select count(*)::int as n from pvp_kills
       where killer_id = ${a.killerId} and victim_id = ${v} and ranked and at > ${since}`);
-    const isRanked = Number(prior.rows[0]?.n ?? 0) < XP.PVP_PAIR_PER_DAY;
+    const isRanked = rankable.has(v) && Number(prior.rows[0]?.n ?? 0) < XP.PVP_PAIR_PER_DAY;
     if (isRanked) ranked++;
     await tx.insert(pvpKills).values({
       killerId: a.killerId,
@@ -746,20 +758,44 @@ export async function voidStale(db: Db, now = worldDate()): Promise<string[]> {
   return voided;
 }
 
-type RunningRaid = { status: string; started_at: Date; ends_at: Date; server_id: string; instance_id: string | null };
+type RunningRaid = {
+  status: string;
+  started_at: Date;
+  ends_at: Date;
+  server_id: string;
+  instance_id: string | null;
+  /** World shard row with a newer row of the same (cycle, shard): see SUPERSEDED_SQL. */
+  superseded: boolean;
+};
 
-/** serverId / instanceId of a raids row: the v6 columns, else the legacy start request. */
-const SERVER_ID_SQL = sql`coalesce(server_id, start_request->>'serverId', 'default')`;
-const INSTANCE_ID_SQL = sql`coalesce(instance_id, start_request->>'instanceId')`;
+/** serverId / instanceId of a raids row (alias `r`): the v6 columns, else the legacy start request. */
+const SERVER_ID_SQL = sql`coalesce(r.server_id, r.start_request->>'serverId', 'default')`;
+const INSTANCE_ID_SQL = sql`coalesce(r.instance_id, r.start_request->>'instanceId')`;
+
+/**
+ * A world shard row (alias `r`) is superseded when another instance of the same serverId opened a
+ * newer row of the same (cycle, shard) after it. One game server runs the world (D3, MAX_SHARDS 1)
+ * and a process opens one shard per cycle, so that only happens after a restart: the older row's
+ * process is gone. This holds even when the new process' void-orphans never reached the web, and for
+ * the "default" serverId, whose boots never void anything. /api/world/join only hands out the newest
+ * row too. Two servers with different GAME_SERVER_IDs never supersede each other.
+ */
+const SUPERSEDED_SQL = sql`(r.kind = 'world' and r.cycle_id is not null and exists (
+  select 1 from raids n
+  where n.kind = 'world' and n.cycle_id = r.cycle_id and n.shard = r.shard
+    and n.match_id <> r.match_id and n.started_at > r.started_at
+    and coalesce(n.server_id, 'default') = coalesce(r.server_id, 'default')
+    and n.instance_id is distinct from r.instance_id))`;
 
 /** Void one raid in its own transaction if it is still running and `check` holds under the lock. */
 async function voidIf(db: Db, matchId: string, now: Date, check: (row: RunningRaid) => boolean): Promise<boolean> {
   return db.transaction(async (tx) => {
     const r = await tx.execute<RunningRaid>(sql`
-      select status, started_at, ends_at,
+      select r.status, r.started_at, r.ends_at,
              ${SERVER_ID_SQL} as server_id,
-             ${INSTANCE_ID_SQL} as instance_id
-      from raids where match_id = ${matchId} for update skip locked`);
+             ${INSTANCE_ID_SQL} as instance_id,
+             ${SUPERSEDED_SQL} as superseded
+      from raids r where r.match_id = ${matchId} for update of r skip locked`);
     const row = r.rows[0];
     if (!row || row.status !== "running" || !check(row)) return false;
     await voidRaidTx(tx, matchId, now);
@@ -801,14 +837,20 @@ function orphanedBy(boot: GameServerBoot | null, row: RunningRaid): boolean {
 }
 
 /**
- * Lazy void for one user (lobby load, world join): the raid holding this user's loadout or active
- * entry (free-kit entries of a crashed process too) is voided RAID_USER_VOID_GRACE_MS after its
- * `ends_at`, or at once when its game server is gone (orphanedBy the last boot of that serverId), so
- * the gear comes back without waiting for the global cron. Returns the voided match ids.
+ * Lazy void for one user (lobby load, world join, /api/me/world): the raid holding this user's
+ * loadout or active entry (free-kit entries of a crashed process too) is voided
+ * RAID_USER_VOID_GRACE_MS after its `ends_at`, or at once when its game server is gone (orphanedBy
+ * the last boot of that serverId, or a world shard superseded by a newer row of its cycle), so the
+ * gear comes back without waiting for the global cron and the menu never offers a rejoin into a
+ * room that no longer exists. The checks run without a lock first, so a live shard's row is not
+ * locked on every lobby poll. Returns the voided match ids.
  */
 export async function voidStaleForUser(db: Db, userId: string, now = worldDate()): Promise<string[]> {
-  const cand = await db.execute<{ match_id: string; server_id: string }>(sql`
-    select distinct r.match_id, coalesce(r.server_id, r.start_request->>'serverId', 'default') as server_id
+  const cand = await db.execute<RunningRaid & { match_id: string }>(sql`
+    select r.match_id, r.status, r.started_at, r.ends_at,
+           ${SERVER_ID_SQL} as server_id,
+           ${INSTANCE_ID_SQL} as instance_id,
+           ${SUPERSEDED_SQL} as superseded
     from raids r
     where r.status = 'running' and r.match_id in (
       select l.match_id from loadouts l where l.user_id = ${userId} and l.status = 'in_raid' and l.match_id is not null
@@ -816,9 +858,12 @@ export async function voidStaleForUser(db: Db, userId: string, now = worldDate()
       select e.match_id from raid_entries e where e.user_id = ${userId} and e.status = 'active')`);
   const cutoff = now.getTime() - RAID_USER_VOID_GRACE_MS;
   const voided: string[] = [];
-  for (const { match_id: matchId, server_id: serverId } of cand.rows) {
-    const boot = await lastBoot(db, serverId);
-    const done = await voidIf(db, matchId, now, (row) => new Date(row.ends_at).getTime() < cutoff || orphanedBy(boot, row));
+  for (const c of cand.rows) {
+    const matchId = c.match_id;
+    const boot = await lastBoot(db, c.server_id);
+    const gone = (row: RunningRaid) => row.superseded || new Date(row.ends_at).getTime() < cutoff || orphanedBy(boot, row);
+    if (!gone(c)) continue;
+    const done = await voidIf(db, matchId, now, gone);
     if (done) {
       console.warn(`[raids/void] ${matchId}: voided lazily for user ${userId}`);
       voided.push(matchId);
@@ -860,8 +905,8 @@ export async function voidOrphans(db: Db, boot: GameServerBoot, now = new Date()
     return { status: "applied", voided: [] };
   }
   const cand = await db.execute<{ match_id: string }>(sql`
-    select match_id from raids
-    where status = 'running' and started
+    select r.match_id from raids r
+    where r.status = 'running' and r.started
       and ${SERVER_ID_SQL} = ${boot.serverId}
       and coalesce(${INSTANCE_ID_SQL}, '') <> ${boot.instanceId}`);
   const voided: string[] = [];

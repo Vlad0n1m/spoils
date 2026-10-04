@@ -22,7 +22,7 @@ import { extractPlayer } from "./extraction.js";
 import { makeItem } from "./items.js";
 import { Match } from "./match.js";
 import type { MatchEvent } from "./types.js";
-import { counterUid, enter, giveItem, giveStack, giveWeapon, humans, ids, jump, pl, place, rtOf, run, selfOf, testMap, testMatch, worldMatch, type Timed } from "./test-utils.js";
+import { advance, counterUid, enter, giveItem, giveStack, giveWeapon, humans, ids, jump, pl, place, rtOf, run, selfOf, testMap, testMatch, worldMatch, type Timed } from "./test-utils.js";
 import { killPlayer } from "./death.js";
 
 const CRATE: ContainerSpot = { x: 1100, y: 1500, kind: "crate", tier: 1, zone: null };
@@ -401,4 +401,32 @@ test("T14 own-corpse lock (WORLD v6 D11): a user cannot search the body of their
   place(lm, y!, 1540, 1500);
   killPlayer(lm, rtOf(lm, x!), null, "rifle");
   assert.ok(lm.openSearch(y!, `k${rtOf(lm, x!).rosterIndex}`));
+});
+
+test("containersSearched (XP containers line): counts after the open delay, once per user per container; an F tap cancelled at once and a re-entry count nothing", () => {
+  const spots: ContainerSpot[] = Array.from({ length: 6 }, (_, i) => ({ x: 1000 + i * 120, y: 1500, kind: "crate" as const, tier: 0, zone: null }));
+  const { m, wall } = worldMatch({ map: testMap({ containers: spots }) });
+  jump(m, wall, 60_000);
+  const openOne = (rt: ReturnType<typeof enter>, i: number, hold: boolean) => {
+    const c = spots[i]!;
+    place(m, rt.id, c.x, c.y + 30);
+    assert.ok(m.containers.openKey(rt, `c${i}`), `opened c${i}`);
+    if (hold) advance(m, wall, containerOpenMs(c) + 100);
+    closeSearch(m, rt, hold ? "switch" : "roll");
+  };
+  const a = enter(m, "ua");
+  for (let i = 0; i < spots.length; i++) openOne(a, i, false);
+  assert.equal(a.stats.containersSearched, 0, "F taps cancelled before the open delay are no search");
+  for (let i = 0; i < 3; i++) openOne(a, i, true);
+  openOne(a, 0, true);
+  assert.equal(a.stats.containersSearched, 3, "each container once");
+  extractPlayer(m, a);
+  // The same user's next entry: the three already searched count nothing, the others do.
+  const a2 = enter(m, "ua");
+  for (let i = 0; i < spots.length; i++) openOne(a2, i, true);
+  assert.equal(a2.stats.containersSearched, 3);
+  // Another user counts every container they search.
+  const b = enter(m, "ub");
+  for (let i = 0; i < spots.length; i++) openOne(b, i, true);
+  assert.equal(b.stats.containersSearched, spots.length);
 });

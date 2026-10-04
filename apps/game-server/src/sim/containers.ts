@@ -112,8 +112,11 @@ export interface SearchTarget {
   searchers: Set<PlayerRuntime>;
   /** Searchers whose open delay has passed (their view holds the loot entry). */
   ready: Set<PlayerRuntime>;
-  /** Roster indexes that searched it at least once (RaidStats counters count each target once). */
-  searchedBy: Set<number>;
+  /**
+   * Searchers counted in RaidStats (searcherKey: the userId, so a re-entry of the same user does not
+   * count the same target again). A search counts once its open delay has passed, not on the F press.
+   */
+  searchedBy: Set<string>;
   /** Truth of "fully revealed and nothing left" (the public flag waits for disclosure.ts). */
   emptied: boolean;
 }
@@ -487,11 +490,6 @@ export class ContainerSystem {
     rt.self.searchReadyAt = readyAt;
     t.searchers.add(rt);
     this.active.add(t);
-    if (!t.searchedBy.has(rt.rosterIndex)) {
-      t.searchedBy.add(rt.rosterIndex);
-      if (t.kind === "corpse") rt.stats.corpsesSearched++;
-      else rt.stats.containersSearched++;
-    }
     if (t.kind === "corpse" && this.ownBody(rt, t)) return;
     if (t.corpse && !t.corpse.opened) {
       const c = t.corpse;
@@ -529,6 +527,7 @@ export class ContainerSystem {
         if (!t.ready.has(rt) && m.clock >= rt.search!.readyAt) {
           t.ready.add(rt);
           if (!rt.isNpc) m.emit({ type: "view", to: rt.rosterIndex, op: "add", key: t.key });
+          this.countSearch(rt, t);
         }
         if (m.clock >= rt.nextSearchSoundAt) {
           emitSound(m, rt, SoundKind.search, p.x, p.y);
@@ -537,6 +536,20 @@ export class ContainerSystem {
       }
       this.reveal(t);
     }
+  }
+
+  /**
+   * RaidStats (XP containers line): a target counts for a searcher once its open delay has passed
+   * (an F tap cancelled at once is no search), and once per user per match (a re-entry does not
+   * count the targets this user already searched). An own body never counts.
+   */
+  private countSearch(rt: PlayerRuntime, t: SearchTarget): void {
+    if (rt.isNpc || (t.kind === "corpse" && this.ownBody(rt, t))) return;
+    const who = rt.userId ?? `r${rt.rosterIndex}`;
+    if (t.searchedBy.has(who)) return;
+    t.searchedBy.add(who);
+    if (t.kind === "corpse") rt.stats.corpsesSearched++;
+    else rt.stats.containersSearched++;
   }
 
   /** Reveal loop of one target: runs while at least one searcher is past the open delay. */

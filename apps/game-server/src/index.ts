@@ -14,7 +14,7 @@ const { Server } = await import("@colyseus/core");
 const { WebSocketTransport } = await import("@colyseus/ws-transport");
 const { monitor } = await import("@colyseus/monitor");
 const { defineRooms } = await import("./rooms/define.js");
-const { announceBoot } = await import("./net/web-api.js");
+const { announceBoot, BOOT_RETRY_MS } = await import("./net/web-api.js");
 const { worldDirectory } = await import("./world/directory.js");
 
 // The directory's timers and the web posts never throw by design; anything that still slips
@@ -42,5 +42,7 @@ await gameServer.listen(port);
 console.log(`[game-server] listening on :${port}`);
 // Shards of a previous (crashed) process can never settle: have the web void them first, then open
 // the current cycle's shard (fresh matchId and loot, same boss event) and run the world timers.
-await announceBoot();
+// When the web stays unreachable for the first ≈1 min the announce keeps retrying in the background
+// (the web also voids a shard row lazily once a newer row of its cycle exists).
+await announceBoot(undefined, { retryEveryMs: BOOT_RETRY_MS });
 await worldDirectory.start();

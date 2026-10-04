@@ -90,13 +90,15 @@ test("T4 shard cap = min(24, 4 + ceil(0.5 × riskUsers)) − shardReleased", () 
 test("T4 bossFillPlan gates: shard risk below slots, pool ≤ 150 after the fill, top reserve, once", () => {
   const slots = [2, 1, 1];
   const ok = { slots, shardRiskSum: 3, anyTopRisk: true, poolSize: 400, topInPool: 40, filled: false };
-  assert.deepEqual(bossFillPlan(ok), { n: 3, maxTier: 2 });
-  assert.deepEqual(bossFillPlan({ ...ok, shardRiskSum: 2 }), { n: 0, maxTier: 0 }, "shard risk below the slot count");
-  assert.deepEqual(bossFillPlan({ ...ok, poolSize: 153 }), { n: 0, maxTier: 0 }, "pool − n = 150 is not > 150");
+  assert.deepEqual(bossFillPlan(ok), { n: 3, maxTier: 2, maxTop: 3 });
+  assert.deepEqual(bossFillPlan({ ...ok, shardRiskSum: 2 }), { n: 0, maxTier: 0, maxTop: 0 }, "shard risk below the slot count");
+  assert.deepEqual(bossFillPlan({ ...ok, poolSize: 153 }), { n: 0, maxTier: 0, maxTop: 0 }, "pool − n = 150 is not > 150");
   assert.equal(bossFillPlan({ ...ok, poolSize: 154 }).n, 3);
-  assert.deepEqual(bossFillPlan({ ...ok, topInPool: 20 }), { n: 3, maxTier: 1 }, "top reserve: > 20 top items needed");
-  assert.deepEqual(bossFillPlan({ ...ok, topInPool: 21 }), { n: 3, maxTier: 2 });
-  assert.deepEqual(bossFillPlan({ ...ok, anyTopRisk: false }), { n: 3, maxTier: 1 }, "nobody risked a top item");
-  assert.deepEqual(bossFillPlan({ ...ok, filled: true }), { n: 0, maxTier: 0 }, "once per shard-cycle");
-  assert.deepEqual(bossFillPlan({ ...ok, slots: [] }), { n: 0, maxTier: 0 });
+  assert.deepEqual(bossFillPlan({ ...ok, topInPool: 20 }), { n: 3, maxTier: 1, maxTop: 0 }, "top reserve: > 20 top items needed");
+  // Review fix: the fill never takes the top tier below the reserve (21 top → at most 1 top item).
+  assert.deepEqual(bossFillPlan({ ...ok, topInPool: 21 }), { n: 3, maxTier: 2, maxTop: 1 });
+  assert.deepEqual(bossFillPlan({ ...ok, topInPool: 22 }), { n: 3, maxTier: 2, maxTop: 2 });
+  assert.deepEqual(bossFillPlan({ ...ok, anyTopRisk: false }), { n: 3, maxTier: 1, maxTop: 0 }, "nobody risked a top item");
+  assert.deepEqual(bossFillPlan({ ...ok, filled: true }), { n: 0, maxTier: 0, maxTop: 0 }, "once per shard-cycle");
+  assert.deepEqual(bossFillPlan({ ...ok, slots: [] }), { n: 0, maxTier: 0, maxTop: 0 });
 });

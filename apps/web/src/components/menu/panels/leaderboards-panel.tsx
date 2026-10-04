@@ -50,7 +50,8 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
   const { user, sessionKind, visible } = useLobby();
   const effPeriod: LbPeriod = board === "level" ? "all" : period;
   const [data, setData] = useState<LeaderboardDto | null>(null);
-  const [me, setMe] = useState<LeaderboardMeDto | undefined>(undefined);
+  /** undefined = loading, null = not on this board, "error" = the own-rank request failed. */
+  const [me, setMe] = useState<LeaderboardMeDto | "error" | undefined>(undefined);
   const [error, setError] = useState(false);
   const seq = useRef(0);
 
@@ -61,10 +62,15 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
     try {
       const [res, meRes] = await Promise.all([
         fetch(`/api/leaderboards?${q}`, { credentials: "omit" }),
-        sessionKind === "user" ? fetch(`/api/leaderboards/me?${q}`, { credentials: "include", cache: "no-store" }) : Promise.resolve(null),
+        sessionKind === "user"
+          ? fetch(`/api/leaderboards/me?${q}`, { credentials: "include", cache: "no-store" }).catch(() => "error" as const)
+          : Promise.resolve(null),
       ]);
       const body = (await res.json().catch(() => null)) as LeaderboardDto | null;
-      const meBody = meRes && meRes.ok ? ((await meRes.json().catch(() => null)) as LeaderboardMeDto) : null;
+      // A failed own-rank request is not "not on this board" (that is a 200 with null).
+      let meBody: LeaderboardMeDto | "error" = null;
+      if (meRes === "error" || (meRes && !meRes.ok)) meBody = "error";
+      else if (meRes) meBody = (await meRes.json().catch(() => "error" as const)) as LeaderboardMeDto | "error";
       if (my !== seq.current) return;
       if (!res.ok || !body || !Array.isArray(body.rows)) throw new Error("bad");
       setData(body);
@@ -154,7 +160,13 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
 
       {data && sessionKind === "user" && !meListed && (
         <p className="font-body sticky bottom-0 rounded-xl border-[3px] border-black bg-zooa-lime px-3 py-2.5 text-sm font-bold text-black shadow-[0_3px_0_#000]">
-          {me ? `You · #${fmtInt(me.rank)} · ${valueText(board, me.value)}` : me === null ? "You're not on this board yet." : "Finding your rank…"}
+          {me === "error"
+            ? "Couldn't load your rank."
+            : me
+              ? `You · #${fmtInt(me.rank)} · ${valueText(board, me.value)}`
+              : me === null
+                ? "You're not on this board yet."
+                : "Finding your rank…"}
         </p>
       )}
       {sessionKind === "guest" && (

@@ -562,7 +562,8 @@ export function poolReleaseForEntry(i: EntryReleaseInput): { n: number; budget: 
  * WORLD v6 boss bag (D19), once per shard-cycle. n = slots.length when !filled, Σ max risk of the
  * shard's distinct users (shardRiskSum) ≥ slots.length and poolSize − slots.length > BOSS_MIN_POOL;
  * else 0. maxTier: 2 (top allowed) only when some entrant risked a top item and the pool holds more
- * than TOP_RESERVE top items, else 1 (≤ rare); 0 when nothing is filled.
+ * than TOP_RESERVE top items, else 1 (≤ rare); 0 when nothing is filled. maxTop: how many of the n
+ * may be top items, so the fill never takes the pool's top tier below TOP_RESERVE (the rest ≤ rare).
  */
 export function bossFillPlan(i: {
   slots: readonly number[];
@@ -571,12 +572,15 @@ export function bossFillPlan(i: {
   poolSize: number;
   topInPool: number;
   filled: boolean;
-}): { n: number; maxTier: 0 | 1 | 2 } {
+}): { n: number; maxTier: 0 | 1 | 2; maxTop: number } {
+  const none = { n: 0, maxTier: 0, maxTop: 0 } as const;
   const need = i.slots.length;
-  if (i.filled || need === 0) return { n: 0, maxTier: 0 };
-  if (!(i.shardRiskSum >= need)) return { n: 0, maxTier: 0 };
-  if (!(i.poolSize - need > POOL.BOSS_MIN_POOL)) return { n: 0, maxTier: 0 };
-  return { n: need, maxTier: i.anyTopRisk && i.topInPool > POOL.TOP_RESERVE ? 2 : 1 };
+  if (i.filled || need === 0) return none;
+  if (!(i.shardRiskSum >= need)) return none;
+  if (!(i.poolSize - need > POOL.BOSS_MIN_POOL)) return none;
+  const top = Number.isFinite(i.topInPool) ? Math.floor(i.topInPool) : 0;
+  if (!(i.anyTopRisk && top > POOL.TOP_RESERVE)) return { n: need, maxTier: 1, maxTop: 0 };
+  return { n: need, maxTier: 2, maxTop: Math.min(need, top - POOL.TOP_RESERVE) };
 }
 
 /**
@@ -1045,9 +1049,23 @@ export const XP = {
   BOSS: 400,
   PVP: 80,
   PVP_PAIR_PER_DAY: 2,
+  /**
+   * Ranked PvP (D24, review fix): the victim's account is at least this old and at least
+   * PVP_VICTIM_MIN_LEVEL, so fresh unverified alts are never ranked victims (XP and Kills board).
+   */
+  PVP_VICTIM_MIN_AGE_MS: 72 * 3600_000,
+  PVP_VICTIM_MIN_LEVEL: 5,
+  /** Ranked kills per killer per UTC day that pay the pvp line (the Kills board counts them all). */
+  PVP_DAILY_MAX: 10,
   FIRST_EXTRACT_MAX: 300,
   DAILY_SOFT_CAP: 2_500,
+  /** Above the daily cap the activity lines (containers, marauders, guards) pay this share. */
   DAILY_OVER_MULT: 0.25,
+  /**
+   * Above the daily cap the time lines (extract, haul) pay this share: 0 = a hard cap, so a bot that
+   * only hides and extracts all day stops earning once the day's grind is full (review fix).
+   */
+  DAILY_TIME_OVER_MULT: 0,
 } as const;
 
 export type XpKey = "extract" | "haul" | "containers" | "npc" | "guard" | "boss" | "pvp" | "first_extract" | "daily_cap";
@@ -1095,9 +1113,11 @@ const cnt = (v: number): number => (Number.isFinite(v) ? Math.max(0, Math.floor(
  *   haul    = qualifies ? min(HAUL_MAX, floor(haulCr / HAUL_CR_PER_XP)) : 0
  *   containers = CONTAINER × min(CONTAINER_MAX, containers); npc = NPC × marauders; guard = GUARD × guards
  *   (exit "mia": containers = 0 — D9, a wiped player gets the kill lines only)
- *   raw = extract + haul + containers + npc + guard
- *   room = max(0, DAILY_SOFT_CAP − grindToday); grind = min(raw, room) + floor(max(0, raw − room) × DAILY_OVER_MULT)
- *   subtotal = grind + BOSS × bosses + PVP × rankedPvp
+ *   time = extract + haul; act = containers + npc + guard; raw = time + act
+ *   room = max(0, DAILY_SOFT_CAP − grindToday); the time lines fill the room first (the split that
+ *   pays the player most): timeIn = min(time, room), actIn = min(act, room − timeIn)
+ *   grind = timeIn + actIn + floor((time − timeIn) × DAILY_TIME_OVER_MULT) + floor((act − actIn) × DAILY_OVER_MULT)
+ *   subtotal = grind + BOSS × bosses + PVP × rankedPvp   (rankedPvp: the caller applies PVP_DAILY_MAX)
  *   first = qualifies && firstExtractToday ? min(FIRST_EXTRACT_MAX, subtotal) : 0
  * Lines: every non-zero term in that order; "daily_cap" = grind − raw (negative) when the cap bit.
  * `grind` is what raid_exits.xp_grind stores (counts toward later grindToday).
@@ -1114,9 +1134,14 @@ export function xpForExit(i: XpInput): { total: number; grind: number; lines: Xp
   const nNpc = cnt(i.marauders), nGuard = cnt(i.guards), nBoss = cnt(i.bosses), nPvp = cnt(i.rankedPvp);
   const npc = XP.NPC * nNpc;
   const guard = XP.GUARD * nGuard;
-  const raw = extract + haul + containers + npc + guard;
+  const time = extract + haul;
+  const act = containers + npc + guard;
+  const raw = time + act;
   const room = Math.max(0, XP.DAILY_SOFT_CAP - cnt(i.grindToday));
-  const grind = Math.min(raw, room) + Math.floor(Math.max(0, raw - room) * XP.DAILY_OVER_MULT);
+  const timeIn = Math.min(time, room);
+  const actIn = Math.min(act, room - timeIn);
+  const grind =
+    timeIn + actIn + Math.floor((time - timeIn) * XP.DAILY_TIME_OVER_MULT) + Math.floor((act - actIn) * XP.DAILY_OVER_MULT);
   const boss = XP.BOSS * nBoss;
   const pvp = XP.PVP * nPvp;
   const subtotal = grind + boss + pvp;
