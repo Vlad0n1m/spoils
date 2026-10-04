@@ -281,6 +281,8 @@ export interface EquippedCosmetics {
   title: string | null;
   color: string | null;
   frame: string | null;
+  /** Character skin (Alpha Pass tier 8), null = the default look. */
+  skin: string | null;
 }
 
 /** GET /api/quests (registered players, private, no-store). */
@@ -300,9 +302,12 @@ export interface QuestsDto {
   marks: number;
   level: number;
   equipped: EquippedCosmetics;
+  /** Granted cosmetics owned (Alpha Pass tiers claimed, trophy, invite): wearable next to the level ones. */
+  granted: string[];
 }
 
 /** GET /api/quests/badges?n=<nickname>…: equipped cosmetics of those players (leaderboards). */
 export interface CosmeticBadgesDto {
-  badges: Record<string, Partial<EquippedCosmetics>>;
+  /** `badge`: an owned leaderboard badge (Alpha Pass tier 10 "Founder"); never equipped, always shown. */
+  badges: Record<string, Partial<EquippedCosmetics> & { badge?: string }>;
 }

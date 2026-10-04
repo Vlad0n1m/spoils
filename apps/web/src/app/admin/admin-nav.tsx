@@ -7,6 +7,7 @@ const LINKS = [
   { href: "/admin", label: "Метрики" },
   { href: "/admin/params", label: "Стоп-краны" },
   { href: "/admin/replays", label: "Повторы" },
+  { href: "/admin/testers", label: "Тестеры" },
 ] as const;
 
 /** /admin section tabs (client only for the active state). */

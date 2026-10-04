@@ -112,7 +112,7 @@ test("the first look of a UTC day issues three deterministic tasks; a second loo
   assert.equal(q.xpToday, 0);
   assert.equal(q.xpMax, QUEST.DAILY_XP_MAX);
   assert.equal(q.marks, 0);
-  assert.deepEqual(q.equipped, { title: null, color: null, frame: null });
+  assert.deepEqual(q.equipped, { title: null, color: null, frame: null, skin: null });
   const again = (await getQuests(db, u, new Date(DAY1.getTime() + 3_600_000)))!;
   assert.deepEqual(again.slots, q.slots);
   assert.equal(await getQuests(db, randomUUID(), DAY1), null, "unknown user");
@@ -288,7 +288,7 @@ test("equip: only unlocked rewards of the right kind; marks unlock task rewards"
   const xp5 = [1, 2, 3, 4].reduce((a, l) => a + xpToNext(l), 0);
   await db.update(users).set({ xp: xp5, level: 5 }).where(eq(users.id, u));
   const r = await equipCosmetic(db, u, "title", "t-raider");
-  assert.deepEqual(r, { ok: true, equipped: { title: "t-raider", color: null, frame: null } });
+  assert.deepEqual(r, { ok: true, equipped: { title: "t-raider", color: null, frame: null, skin: null } });
   assert.ok((await equipCosmetic(db, u, "color", "c-lime")).ok);
   assert.ok((await equipCosmetic(db, u, "frame", "f-rope")).ok);
   assert.deepEqual(await equipCosmetic(db, u, "frame", "f-steel"), { ok: false, code: "locked" });
@@ -299,11 +299,11 @@ test("equip: only unlocked rewards of the right kind; marks unlock task rewards"
   }
   assert.ok((await equipCosmetic(db, u, "color", "c-contract")).ok);
   const q = (await getQuests(db, u, DAY1))!;
-  assert.deepEqual(q.equipped, { title: "t-raider", color: "c-contract", frame: "f-rope" });
+  assert.deepEqual(q.equipped, { title: "t-raider", color: "c-contract", frame: "f-rope", skin: null });
   assert.equal(q.level, 5);
   assert.equal(q.marks, 10);
   // Take the title off.
-  assert.deepEqual(await equipCosmetic(db, u, "title", null), { ok: true, equipped: { title: null, color: "c-contract", frame: "f-rope" } });
+  assert.deepEqual(await equipCosmetic(db, u, "title", null), { ok: true, equipped: { title: null, color: "c-contract", frame: "f-rope", skin: null } });
   assert.deepEqual(await equipCosmetic(db, randomUUID(), "title", null), { ok: false, code: "no_user" });
 
   // Leaderboard lookup: only players with something on.

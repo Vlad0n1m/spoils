@@ -76,6 +76,8 @@ export const playerExitReportSchema = z.object({
   victims: z.array(z.string().max(64)).max(256).optional(),
   /** WORLD v6: this entry's pool items never placed → pool, untaxed. */
   unplaced: z.array(settledItemSchema).max(64).optional(),
+  /** Alpha Pass: the entry joined on touch controls (the "phone" tester task). */
+  touch: z.boolean().optional(),
 }) as unknown as z.ZodType<PlayerExitReport>;
 
 export const matchEndReportSchema = z.object({

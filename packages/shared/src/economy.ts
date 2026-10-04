@@ -1297,7 +1297,9 @@ export const STASH_CAPACITY = [20, 35, 55, 80] as const;
  * (quests.ts): a counter, not a currency. The feature unlocks that already exist (market selling,
  * bound traders) are listed by the web next to these (apps/web lib/lobby/levels.ts).
  */
-export type CosmeticKind = "title" | "color" | "frame";
+export type CosmeticKind = "title" | "color" | "frame" | "skin" | "badge";
+/** Kinds a player wears one of (users.title / name_color / badge_frame / skin). A badge is never worn: owning it shows it. */
+export type WearableKind = Exclude<CosmeticKind, "badge">;
 /** How a badge frame is drawn around the level shield (CSS / SVG only, no art). */
 export type FrameStyle = "rope" | "rivets" | "stitch" | "solid" | "double" | "glow";
 export interface CosmeticDef {
@@ -1309,6 +1311,11 @@ export interface CosmeticDef {
   style?: FrameStyle;
   /** The frame pulses (prefers-reduced-motion keeps it still). */
   animated?: boolean;
+  /**
+   * Granted, not reached: Alpha Pass tiers, the alpha top-10 trophy and the invite reward (pass.ts).
+   * Owned only through a pass_unlocks row (migration 011), which the alpha wipe never touches.
+   */
+  grant?: "pass" | "trophy" | "invite";
 }
 
 const COSMETIC_LIST: readonly CosmeticDef[] = [
@@ -1339,6 +1346,20 @@ const COSMETIC_LIST: readonly CosmeticDef[] = [
   { id: "f-spoils", kind: "frame", name: "Spoils", hex: "#ccff00", style: "glow", animated: true },
   { id: "f-contract", kind: "frame", name: "Contract", hex: "#6f9bff", style: "double" },
   { id: "f-fixer", kind: "frame", name: "Fixer", hex: "#6f9bff", style: "glow", animated: true },
+  // Alpha Pass (pass.ts PASS_TIERS): alpha-only, granted when a tier is claimed, permanent.
+  { id: "t-alpha-raider", kind: "title", name: "Alpha Raider", grant: "pass" },
+  { id: "t-field-tester", kind: "title", name: "Field Tester", grant: "pass" },
+  { id: "f-founder", kind: "frame", name: "Founder", hex: "#5cf2c6", style: "double", grant: "pass" },
+  { id: "t-bug-hunter", kind: "title", name: "Bug Hunter", grant: "pass" },
+  { id: "c-alpha-mint", kind: "color", name: "Alpha Mint", hex: "#5cf2c6", grant: "pass" },
+  { id: "t-signal-runner", kind: "title", name: "Signal Runner", grant: "pass" },
+  { id: "f-alpha-signal", kind: "frame", name: "Alpha Signal", hex: "#5cf2c6", style: "glow", animated: true, grant: "pass" },
+  { id: "s-alpha-veteran", kind: "skin", name: "Alpha Veteran", hex: "#5cf2c6", grant: "pass" },
+  { id: "c-alpha-dawn", kind: "color", name: "Alpha Dawn", hex: "#ffb38a", grant: "pass" },
+  { id: "b-founder", kind: "badge", name: "Founder", hex: "#5cf2c6", grant: "pass" },
+  // Alpha trophy (pass.ts ALPHA_TROPHY) and the invite reward (PASS.INVITE_RAIDS).
+  { id: "t-alpha-top10", kind: "title", name: "Alpha Top 10", grant: "trophy" },
+  { id: "t-recruiter", kind: "title", name: "Recruiter", grant: "invite" },
 ];
 
 /** Every cosmetic by id. */
@@ -1377,27 +1398,39 @@ export function cosmeticDef(id: unknown): CosmeticDef | null {
   return typeof id === "string" && Object.prototype.hasOwnProperty.call(COSMETICS, id) ? COSMETICS[id]! : null;
 }
 
-/** Where `id` unlocks: at a level or at a number of marks; null for an id no reward table lists. */
-export function cosmeticUnlock(id: string): { by: "level" | "marks"; at: number } | null {
+/**
+ * Where `id` unlocks: at a level, at a number of marks, or by a grant (pass tier, trophy, invite:
+ * `at` 0); null for an unknown id or one no table lists.
+ */
+export function cosmeticUnlock(id: string): { by: "level" | "marks" | "grant"; at: number } | null {
+  if (cosmeticDef(id)?.grant) return { by: "grant", at: 0 };
   const l = LEVEL_REWARDS.find((r) => r.ids.includes(id));
   if (l) return { by: "level", at: l.level };
   const m = MARK_REWARDS.find((r) => r.ids.includes(id));
   return m ? { by: "marks", at: m.marks } : null;
 }
 
-/** True when a player of `level` with `marks` task marks owns cosmetic `id`. */
-export function cosmeticUnlocked(id: string, level: number, marks: number): boolean {
+/**
+ * True when a player of `level` with `marks` task marks owns cosmetic `id`. Granted cosmetics are
+ * owned only when `granted` (the player's pass_unlocks ids) holds them.
+ */
+export function cosmeticUnlocked(id: string, level: number, marks: number, granted: ReadonlySet<string> = EMPTY_SET): boolean {
   const u = cosmeticDef(id) ? cosmeticUnlock(id) : null;
   if (!u) return false;
+  if (u.by === "grant") return granted.has(id);
   const have = u.by === "level" ? level : marks;
   return Number.isFinite(have) && have >= u.at;
 }
 
-/** Ids a player of `level` with `marks` owns, in table order (levels first). */
-export function unlockedCosmetics(level: number, marks: number): string[] {
+const EMPTY_SET: ReadonlySet<string> = new Set<string>();
+
+/** Ids a player of `level` with `marks` owns, in table order (levels, marks, then grants they hold). */
+export function unlockedCosmetics(level: number, marks: number, granted: Iterable<string> = []): string[] {
+  const g = new Set(granted);
   return [
     ...LEVEL_REWARDS.filter((r) => level >= r.level).flatMap((r) => r.ids),
     ...MARK_REWARDS.filter((r) => marks >= r.marks).flatMap((r) => r.ids),
+    ...COSMETIC_LIST.filter((c) => c.grant && g.has(c.id)).map((c) => c.id),
   ];
 }
 

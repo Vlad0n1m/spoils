@@ -40,6 +40,7 @@ import { applyMove, applyMoves, isUuid, lockItem, lockLoadoutItems, lockMatchIte
 import { worldDate } from "../world/clock";
 import { enqueueMatchSettled, enqueueRareExtracts } from "../chain/queue";
 import { advanceQuestsForExit } from "../quests/quests";
+import { advancePassForExit } from "../pass/pass";
 
 /**
  * The game server keeps retrying an exit report this long (apps/game-server net/web-api.ts
@@ -406,6 +407,8 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
         entryId,
         now,
       );
+      // Alpha Pass (lib/pass): AP for the tasks above, weekly and tester tasks. Cosmetics only, no XP.
+      await advancePassForExit(tx, user!.id, { report, onMapMs, npcKills, guardKills, bossKills, daily: quests.completed }, entryId, now);
       xp = r.total + quests.xp;
       xpLines = quests.completed.length > 0 ? [...r.lines, { key: "quest", qty: quests.completed.length, xp: quests.xp }] : r.lines;
       xpGrind = r.grind;

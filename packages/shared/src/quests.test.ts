@@ -208,7 +208,9 @@ test("task XP never passes QUEST.DAILY_XP_MAX a day", () => {
 test("level reward table (RETENTION.md §3): every cosmetic listed once, ids known, kinds sane", () => {
   const listed = [...LEVEL_REWARDS.flatMap((r) => r.ids), ...MARK_REWARDS.flatMap((r) => r.ids)];
   assert.equal(new Set(listed).size, listed.length, "no id twice");
-  assert.deepEqual(new Set(listed), new Set(Object.keys(COSMETICS)), "every cosmetic has an unlock");
+  const granted = Object.values(COSMETICS).filter((c) => c.grant).map((c) => c.id);
+  assert.deepEqual(new Set([...listed, ...granted]), new Set(Object.keys(COSMETICS)), "every cosmetic has an unlock");
+  assert.ok(listed.every((id) => !granted.includes(id)), "a granted cosmetic is never also reached");
   for (const id of listed) {
     const d = cosmeticDef(id)!;
     assert.ok(d, id);
@@ -240,7 +242,7 @@ test("unlocks by level and by marks", () => {
   assert.equal(cosmeticUnlocked("t-raider", Number.NaN, 0), false);
   assert.deepEqual(unlockedCosmetics(1, 0), []);
   assert.deepEqual(unlockedCosmetics(4, 10), ["t-scavenger", "f-rope", "c-sand", "c-contract"]);
-  assert.equal(unlockedCosmetics(30, 100).length, Object.keys(COSMETICS).length);
+  assert.equal(unlockedCosmetics(30, 100).length, Object.values(COSMETICS).filter((c) => !c.grant).length);
   assert.deepEqual(nextLevelReward(1), { level: 2, ids: ["t-scavenger"] });
   assert.deepEqual(nextLevelReward(10), { level: 12, ids: ["f-steel"] });
   assert.equal(nextLevelReward(30), null);

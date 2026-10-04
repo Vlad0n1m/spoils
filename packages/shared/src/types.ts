@@ -128,6 +128,8 @@ export interface PlayerExitReport {
   victims?: string[];
   /** WORLD v6: this entry's pool items never placed (left before POOL.APPLY_AFTER_MS) → pool, untaxed. */
   unplaced?: SettledItem[];
+  /** The entry joined on touch controls (BattleJoinOptions.touch): the Alpha Pass "phone" tester task. */
+  touch?: boolean;
 }
 
 export interface MatchEndParticipant {
@@ -217,6 +219,13 @@ export interface JoinTicket {
    * exactly this many seats for the drop instead of PARTY.MAX_SIZE. Signed.
    */
   dropSize?: number;
+  /**
+   * Alpha: the player's first raid (no settled exit yet): the game server spawns them near a quiet
+   * T1 spot with a container and a marauder post (spawn.ts pickTutorialSpawn). Signed.
+   */
+  tutorial?: boolean;
+  /** Equipped character skin (economy.ts COSMETICS kind "skin"): drawn as the raider's tint. Signed. */
+  skin?: string;
   sig: string;
 }
 
@@ -229,9 +238,11 @@ export interface JoinTicket {
  */
 export function joinTicketPayload(t: Omit<JoinTicket, "sig">): string {
   const base = `${t.userId}.${t.nickname}.${t.issuedAt}.${t.loadoutId}.${t.matchId ?? ""}.${t.entryId ?? ""}`;
-  if (!t.dropId && !t.partyId) return base;
-  const party = `${base}.${t.dropId ?? ""}.${t.partyId ?? ""}`;
-  return t.dropSize !== undefined ? `${party}.${t.dropSize}` : party;
+  const party = !t.dropId && !t.partyId ? base : `${base}.${t.dropId ?? ""}.${t.partyId ?? ""}`;
+  const sized = t.dropSize !== undefined && (t.dropId || t.partyId) ? `${party}.${t.dropSize}` : party;
+  // Alpha extras: signed only when present, so older tickets keep their exact payload.
+  if (!t.tutorial && !t.skin) return sized;
+  return `${sized}|x.${t.tutorial ? 1 : 0}.${t.skin ?? ""}`;
 }
 
 // ---------------------------------------------------------------- WORLD v6: game server → web (HMAC-signed)

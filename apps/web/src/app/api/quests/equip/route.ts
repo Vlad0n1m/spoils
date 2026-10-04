@@ -1,4 +1,4 @@
-import type { CosmeticKind } from "@extract/shared";
+import type { WearableKind } from "@extract/shared";
 import { db } from "@/db/client";
 import { json, readJson } from "@/lib/lobby/route-helpers";
 import { equipCosmetic } from "@/lib/quests/quests";
@@ -6,11 +6,11 @@ import { questCaller, questError } from "@/lib/quests/route";
 
 export const dynamic = "force-dynamic";
 
-const KINDS: readonly CosmeticKind[] = ["title", "color", "frame"];
+const KINDS: readonly WearableKind[] = ["title", "color", "frame", "skin"];
 
 /**
- * POST /api/quests/equip `{ kind: "title" | "color" | "frame", id: string | null }`: wear an unlocked
- * level or task-mark reward (null takes it off). 200 `{ ok, equipped }`; 403 locked.
+ * POST /api/quests/equip `{ kind: "title" | "color" | "frame" | "skin", id: string | null }`: wear an
+ * unlocked level, task-mark or granted (Alpha Pass) reward (null takes it off). 200 `{ ok, equipped }`; 403 locked.
  */
 export async function POST(req: Request) {
   const who = await questCaller({ limit: true });
@@ -21,7 +21,7 @@ export async function POST(req: Request) {
   const id = body?.id;
   if (id !== null && (typeof id !== "string" || id.length > 40)) return questError("bad_body");
   try {
-    const r = await equipCosmetic(db, who.userId, kind as CosmeticKind, id);
+    const r = await equipCosmetic(db, who.userId, kind as WearableKind, id);
     if (!r.ok) return questError(r.code);
     return json({ ok: true, equipped: r.equipped });
   } catch (e) {

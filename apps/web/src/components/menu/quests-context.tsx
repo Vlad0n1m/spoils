@@ -8,7 +8,7 @@
  * colour, badge frame). A mark reward reached since the last look is toasted once.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { MARK_REWARDS, type CosmeticKind, type EquippedCosmetics, type QuestsDto } from "@extract/shared";
+import { MARK_REWARDS, type WearableKind, type EquippedCosmetics, type QuestsDto } from "@extract/shared";
 import { useLobby } from "@/lib/lobby/lobby-context";
 import { cosmeticLabel } from "@/lib/lobby/levels";
 import { playUi } from "@/game/audio/ui-sounds";
@@ -24,7 +24,7 @@ export interface QuestsValue {
   error: boolean;
   reload: () => Promise<void>;
   reroll: (slot: number) => Promise<QuestActResult>;
-  equip: (kind: CosmeticKind, id: string | null) => Promise<QuestActResult>;
+  equip: (kind: WearableKind, id: string | null) => Promise<QuestActResult>;
   /** Tasks of a UTC day the player has not opened yet (the Tasks button's dot). */
   unseen: boolean;
   markSeen: () => void;
@@ -138,7 +138,7 @@ export function QuestsProvider({ active, children }: { active: boolean; children
   );
 
   const equip = useCallback(
-    async (kind: CosmeticKind, id: string | null): Promise<QuestActResult> => {
+    async (kind: WearableKind, id: string | null): Promise<QuestActResult> => {
       const r = await post("/api/quests/equip", { kind, id });
       const eq = r.json?.equipped as EquippedCosmetics | undefined;
       if (r.ok && eq) setData((d) => (d ? { ...d, equipped: eq } : d));

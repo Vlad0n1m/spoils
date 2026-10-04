@@ -39,7 +39,7 @@ export interface RewardItem {
   hex?: string;
 }
 
-const KIND_WORD: Readonly<Record<CosmeticKind, string>> = { title: "Title", color: "Name colour", frame: "Badge frame" };
+const KIND_WORD: Readonly<Record<CosmeticKind, string>> = { title: "Title", color: "Name colour", frame: "Badge frame", skin: "Skin", badge: "Badge" };
 
 /** "Title: Raider", "Name colour: Lime", "Badge frame: Rope" ("" for an unknown id). */
 export function cosmeticLabel(id: string): string {

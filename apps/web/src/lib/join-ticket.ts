@@ -21,6 +21,10 @@ export function signJoinTicket(who: {
   partyId?: string;
   /** Members of the drop (seats the game server holds), only with dropId. Signed after partyId. */
   dropSize?: number;
+  /** Alpha: the first raid (pickTutorialSpawn on the game server). Signed after the party fields. */
+  tutorial?: boolean;
+  /** Equipped, owned character skin id. Signed with tutorial. */
+  skin?: string;
 }): JoinTicket {
   // loadoutId "" = free kit (guests, empty loadout); it is signed so a ticket cannot be re-pointed
   // at someone else's locked gear. issuedAt is real wall time (ticket freshness, not world logic).
@@ -39,6 +43,8 @@ export function signJoinTicket(who: {
       if (who.dropSize !== undefined) unsigned.dropSize = who.dropSize;
     }
   }
+  if (who.tutorial) unsigned.tutorial = true;
+  if (who.skin) unsigned.skin = who.skin;
   const sig = createHmac("sha256", coreEnv().GAME_SERVER_HMAC_SECRET)
     .update(joinTicketPayload(unsigned))
     .digest("hex");
