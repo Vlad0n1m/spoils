@@ -86,6 +86,8 @@ class HitmarkerSystem implements GameSystem {
   readonly id = "hitmarker";
   private root: Container | null = null;
   private arms: Sprite[] = [];
+  /** Dark outlines under the arms: the X stays crisp on snow, sand and muzzle flashes. */
+  private shadows: Sprite[] = [];
   private readonly pointer = new PointerTracker();
   private bornAt = Number.NEGATIVE_INFINITY;
   private kind: HitmarkerKind = "hit";
@@ -98,6 +100,15 @@ class HitmarkerSystem implements GameSystem {
     root.label = "hitmarker";
     root.eventMode = "none";
     root.visible = false;
+    for (let k = 0; k < 4; k++) {
+      const sh = new Sprite(Texture.WHITE);
+      sh.anchor.set(0, 0.5);
+      sh.rotation = Math.PI / 4 + (k * Math.PI) / 2;
+      sh.tint = 0x000000;
+      sh.alpha = 0.55;
+      this.shadows.push(sh);
+      root.addChild(sh);
+    }
     for (let k = 0; k < 4; k++) {
       const s = new Sprite(Texture.WHITE);
       s.anchor.set(0, 0.5);
@@ -174,6 +185,11 @@ class HitmarkerSystem implements GameSystem {
       s.scale.set(len, w);
       s.position.set(Math.cos(s.rotation) * this.pose.gap, Math.sin(s.rotation) * this.pose.gap);
     }
+    for (const s of this.shadows) {
+      const g = this.pose.gap - 1.5;
+      s.scale.set(len + 3, w + 3);
+      s.position.set(Math.cos(s.rotation) * g, Math.sin(s.rotation) * g);
+    }
   }
 
   dispose(): void {
@@ -181,6 +197,7 @@ class HitmarkerSystem implements GameSystem {
     this.root?.destroy({ children: true });
     this.root = null;
     this.arms = [];
+    this.shadows = [];
   }
 }
 

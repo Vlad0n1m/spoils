@@ -18,6 +18,8 @@ export interface AudioSettings {
   visualize: boolean;
   /** Photosensitivity: cap the lightning flash at a faint tint (weather-fx FLASH_REDUCED_MAX). */
   reduceFlashes: boolean;
+  /** Comfort: no camera shake or kill zoom punch, a softer recoil kick (camera.ts). */
+  reduceShake: boolean;
 }
 
 export const STORAGE_KEY = "extract.audio.v1";
@@ -30,6 +32,7 @@ export const DEFAULT_SETTINGS: Readonly<AudioSettings> = Object.freeze({
   muted: false,
   visualize: true,
   reduceFlashes: false,
+  reduceShake: false,
 });
 
 const unit = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback);
@@ -47,6 +50,7 @@ export function sanitizeSettings(raw: unknown): AudioSettings {
     muted: bool(o.muted, d.muted),
     visualize: bool(o.visualize, d.visualize),
     reduceFlashes: bool(o.reduceFlashes, d.reduceFlashes),
+    reduceShake: bool(o.reduceShake, d.reduceShake),
   };
 }
 

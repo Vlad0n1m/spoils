@@ -15,7 +15,7 @@ import { useAudioSettings, type AudioSettings } from "../game/audio/settings";
 import { useUiSound } from "../game/audio/ui-sounds";
 
 export type VolumeKey = "master" | "sfx" | "ambience" | "ui";
-export type ToggleKey = "muted" | "visualize" | "reduceFlashes";
+export type ToggleKey = "muted" | "visualize" | "reduceFlashes" | "reduceShake";
 
 export const VOLUME_ROWS: ReadonlyArray<{ key: VolumeKey; label: string }> = [
   { key: "master", label: "Master" },
@@ -28,6 +28,7 @@ export const TOGGLE_ROWS: ReadonlyArray<{ key: ToggleKey; label: string; hint: s
   { key: "muted", label: "Mute all", hint: "Silences the game without losing your levels" },
   { key: "visualize", label: "Visualize sounds", hint: "Show footsteps, shots and alarms as a ring around you" },
   { key: "reduceFlashes", label: "Reduce flashes", hint: "Softer lightning for light-sensitive players" },
+  { key: "reduceShake", label: "Reduce screen shake", hint: "No camera shake or kill zoom, softer recoil" },
 ];
 
 /** Slider value 0..1 → whole percent for the label and the range input. */
