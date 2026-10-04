@@ -1181,3 +1181,45 @@ export const replayChunks = pgTable(
 
 export type ReplayRow = typeof replays.$inferSelect;
 export type ReplayChunkRow = typeof replayChunks.$inferSelect;
+
+// ---------------------------------------------------------------------------- invariant check (B6)
+
+/**
+ * One nightly invariant check (lib/admin/invariants.ts, GET /api/cron/invariants, migration 012):
+ * every check's status, failure count and up to 10 sample ids. Read-only checks; this table is the
+ * only thing the run writes. Shown on /admin/invariants.
+ */
+export const invariantRuns = pgTable(
+  "invariant_runs",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** cron | admin | test */
+    trigger: text("trigger").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }).notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    ok: boolean("ok").notNull(),
+    /** Checks that failed or errored. */
+    failed: integer("failed").notNull(),
+    checks: jsonb("checks").$type<InvariantCheckResult[]>().notNull(),
+  },
+  (t) => ({
+    startedAt: index("invariant_runs_started_at_idx").on(t.startedAt),
+  }),
+);
+
+/** One check of an invariant run (stored in invariant_runs.checks). */
+export interface InvariantCheckResult {
+  key: string;
+  title: string;
+  status: "ok" | "fail" | "error";
+  /** Offending rows (0 when ok). */
+  count: number;
+  /** Up to 10 offending ids (item, user, ledger ref …). */
+  sample: string[];
+  /** Totals or the error message. */
+  detail?: string;
+  ms: number;
+}
+
+export type InvariantRunRow = typeof invariantRuns.$inferSelect;
