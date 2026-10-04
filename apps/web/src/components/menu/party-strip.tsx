@@ -99,7 +99,7 @@ export function PartyStrip({ onInvite }: { onInvite: () => void }) {
                     )}
                     {m.nickname}
                   </span>
-                  <span className={clsx("font-body rounded-md border-2 border-black px-1 text-[0.6rem] font-bold leading-4", CHIP_TONE[chip.tone])}>{chip.label}</span>
+                  <span className={clsx("font-body rounded-md border-2 border-black px-1 text-xs lg:text-[0.8125rem] font-bold leading-4", CHIP_TONE[chip.tone])}>{chip.label}</span>
                 </li>
               );
             })}
@@ -143,7 +143,7 @@ export function PartyStrip({ onInvite }: { onInvite: () => void }) {
           </button>
         </div>
       </div>
-      <p className="font-body mt-0.5 text-center text-xs font-semibold text-white/70 [text-shadow:0_1px_0_#000] short:hidden">
+      <p className="font-body mt-0.5 text-center text-xs lg:text-[0.8125rem] font-semibold text-white/70 [text-shadow:0_1px_0_#000] short:hidden">
         {party.isLeader ? `Your party drops in with you · ${rc.ready}/${rc.total} ready` : `${party.leader} leads · ${rc.ready}/${rc.total} ready`}
       </p>
     </section>

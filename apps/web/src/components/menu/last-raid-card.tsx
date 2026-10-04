@@ -51,14 +51,14 @@ export function LastRaidCard({ raid, onDismiss }: { raid: LastRaidDto; onDismiss
     >
       <div className={clsx("h-2.5 border-b-[3px] border-black", exit.bar)} aria-hidden />
       <div className="p-4 [@media(max-height:500px)]:p-3">
-        <p className="text-[0.65rem] tracking-[0.2em] text-white/55">LAST RAID · {mapLabel(raid.mapNumber).toUpperCase()}</p>
+        <p className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">LAST RAID · {mapLabel(raid.mapNumber).toUpperCase()}</p>
         <h2 className="toon-text-thin mt-1.5 text-2xl tracking-wide text-white">{exit.title}</h2>
 
         <details className="group mt-3 [@media(max-height:500px)]:mt-1">
           <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime [&::-webkit-details-marker]:hidden">
             <span className="toon-text-thin text-3xl tabular-nums tracking-wide text-zooa-lime">+{fmtInt(raid.xp)} XP</span>
             {raid.xpLines.length > 0 && (
-              <span className="font-body text-xs font-semibold text-white/65 group-open:hidden">Details</span>
+              <span className="font-body text-xs lg:text-[0.8125rem] font-semibold text-white/75 group-open:hidden">Details</span>
             )}
           </summary>
           {raid.xpLines.length > 0 && (

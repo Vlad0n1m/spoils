@@ -76,7 +76,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
             id="market-sort"
             value={sort}
             onChange={(e) => setSort(e.target.value as typeof sort)}
-            className="ml-1 rounded-full border-2 border-black bg-white px-3 py-1.5 text-xs text-black [@media(pointer:coarse)]:min-h-11"
+            className="ml-1 rounded-full border-2 border-black bg-white px-3 py-1.5 text-xs lg:text-[0.8125rem] text-black [@media(pointer:coarse)]:min-h-11"
           >
             {SORTS.map((s) => (
               <option key={s.id} value={s.id}>
@@ -94,8 +94,8 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
       )}
       {res.error && <p className="font-body mt-4 text-sm text-rose-300">{res.error}</p>}
       {!res.error && rows.length === 0 && (
-        <p className="font-body mt-6 rounded-2xl border-2 border-dashed border-white/15 p-6 text-center text-sm text-white/55">
-          {res.loading ? "Loading lots…" : "No lots in this category yet."}
+        <p className="font-body mt-6 rounded-2xl border-2 border-dashed border-white/15 p-6 text-center text-sm text-white/70">
+          {res.loading ? "Loading listings…" : "Nothing for sale in this category yet."}
         </p>
       )}
 
@@ -115,7 +115,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
               <ItemCard def={l.item.def} rarity={l.item.rarity} dur={l.item.dur} size="sm" />
               <div className="min-w-0">
                 <p className="truncate text-sm tracking-wide text-white">{d.name}</p>
-                <p className="font-body truncate text-xs text-white/55">
+                <p className="font-body truncate text-xs lg:text-[0.8125rem] text-white/70">
                   <span style={{ color: d.color }}>{d.rarityName}</span> · {Math.round(l.item.dur)}% ·{" "}
                   {l.isTreasury ? <span className="text-amber-300">Treasury</span> : l.mine ? "you" : l.seller}
                   <span className="hidden sm:inline"> · {timeLeft(l.expiresAt, now)} left</span>
@@ -126,9 +126,9 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
               </p>
               <div className="max-sm:col-start-3 max-sm:row-start-1">
                 {l.mine ? (
-                  <span className="text-xs uppercase tracking-wider text-sky-300">{pending ? `Live in ${Math.max(1, Math.ceil((l.visibleAt - now) / 1000))}s` : "Your lot"}</span>
+                  <span className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-sky-300">{pending ? `Live in ${Math.max(1, Math.ceil((l.visibleAt - now) / 1000))}s` : "Your lot"}</span>
                 ) : !canBuy ? (
-                  <span className="text-xs uppercase tracking-wider text-white/40">Sign in</span>
+                  <span className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">Sign in</span>
                 ) : confirm === l.id ? (
                   <div className="flex gap-1.5">
                     <button type="button" onClick={() => buy(l)} disabled={busy !== null} className="toon-btn min-h-9 px-3 text-sm [@media(pointer:coarse)]:min-h-11">
@@ -165,7 +165,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
       onClick={onClick}
       aria-pressed={active}
       className={clsx(
-        "rounded-full border-2 border-black px-3 py-1.5 text-xs tracking-wide transition [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-4",
+        "rounded-full border-2 border-black px-3 py-1.5 text-xs lg:text-[0.8125rem] tracking-wide transition [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-4",
         active ? "bg-zooa-lime text-black shadow-[0_2px_0_#000]" : "bg-black/30 text-white/75 hover:text-white",
       )}
     >
@@ -188,14 +188,14 @@ export function RecentTrades({ refreshKey }: { refreshKey: number }) {
     <section className="toon-panel bg-[#161b28]/95 p-5">
       <h2 className="toon-text-thin text-xl tracking-wide text-white">Recent sales</h2>
       {trades.length === 0 ? (
-        <p className="font-body mt-3 text-sm text-white/55">{res.loading ? "Loading…" : "No sales yet — be the first."}</p>
+        <p className="font-body mt-3 text-sm text-white/70">{res.loading ? "Loading…" : "No sales yet — be the first."}</p>
       ) : (
         <ul className="font-body mt-3 flex flex-col gap-1.5 text-sm">
           {trades.slice(0, 10).map((t) => (
             <li key={t.id} className="flex items-center gap-2">
               <ItemCard def={t.def} rarity={t.rarity} size="sm" />
               <span className="min-w-0 flex-1 truncate text-white/80">
-                {templateLabel(t.template)} <span className="text-white/40">{Math.round(t.dur)}%</span>
+                {templateLabel(t.template)} <span className="text-white/70">{Math.round(t.dur)}%</span>
               </span>
               <span className="tabular-nums text-zooa-lime">{formatMinor(t.price)}</span>
             </li>

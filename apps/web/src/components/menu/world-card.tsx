@@ -65,7 +65,7 @@ export function WorldCard({ className }: { className?: string }) {
           <span className={clsx("h-2.5 w-2.5 rounded-full border-2 border-black bg-black/80", v.phase === "open" && !offline && "animate-pulse motion-reduce:animate-none")} aria-hidden />
           <span className="optical-center">{chip.label}</span>
         </span>
-        <span className="text-xs leading-none tracking-wider text-black/70">
+        <span className="text-xs lg:text-[0.8125rem] leading-none tracking-wider text-black/70">
           <span className="optical-center">{mapLabel(v.mapNumber).toUpperCase()}</span>
         </span>
       </div>
@@ -75,7 +75,7 @@ export function WorldCard({ className }: { className?: string }) {
           <span className="optical-center">{BRAND.mapName.toUpperCase()}</span>
         </h2>
         <p role="timer" aria-live="off" className="flex items-baseline gap-2 whitespace-nowrap">
-          <span className="font-body text-xs font-bold uppercase tracking-wider text-white/60">{what}</span>
+          <span className="font-body text-xs lg:text-[0.8125rem] font-bold uppercase tracking-wider text-white/75">{what}</span>
           <span
             className={clsx(
               "menu-label text-[1.7rem] leading-none tabular-nums tracking-wide md:text-[2rem] short:!text-[1.45rem]",
@@ -101,7 +101,7 @@ export function WorldCard({ className }: { className?: string }) {
           <span className="absolute inset-y-0 w-0.5 bg-black" style={{ left: `${v.closeMark * 100}%` }} />
         </div>
 
-        <div className="font-body flex min-h-5 items-center justify-between gap-2 text-xs font-bold text-white/75">
+        <div className="font-body flex min-h-5 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs lg:text-[0.8125rem] font-bold text-white/75">
           {offline ? (
             <span className="flex items-center gap-2">
               Server unreachable
@@ -124,7 +124,7 @@ export function WorldCard({ className }: { className?: string }) {
           ) : (
             <span />
           )}
-          <span className="shrink-0 tabular-nums text-white/55">{side}</span>
+          <span className="shrink-0 tabular-nums text-white/70">{side}</span>
         </div>
 
         <div className="mt-1 empty:hidden">

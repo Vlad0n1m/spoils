@@ -111,7 +111,7 @@ function TodayTab({ onRewards }: { onRewards: () => void }) {
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <p className="font-body text-sm text-white/70">Finish tasks in your raids for bonus XP.</p>
-        <p className="font-body text-xs font-semibold tabular-nums text-white/55">New tasks in {fmtUntil(data.resetAt, now)}</p>
+        <p className="font-body text-xs lg:text-[0.8125rem] font-semibold tabular-nums text-white/70">New tasks in {fmtUntil(data.resetAt, now)}</p>
       </div>
       <ul className="flex flex-col gap-2">
         {data.slots.map((s) => (
@@ -120,9 +120,9 @@ function TodayTab({ onRewards }: { onRewards: () => void }) {
       </ul>
       <div className="grid gap-2 sm:grid-cols-2">
         <div className="rounded-2xl border-[3px] border-black bg-white/[0.05] px-3 py-2.5">
-          <p className="text-[0.65rem] tracking-[0.2em] text-white/55">TASK XP TODAY</p>
+          <p className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">TASK XP TODAY</p>
           <p className="toon-text-thin mt-0.5 text-2xl tabular-nums text-sky-300">
-            {fmtInt(data.xpToday)} <span className="text-base text-white/50">/ {fmtInt(data.xpMax)}</span>
+            {fmtInt(data.xpToday)} <span className="text-base text-white/70">/ {fmtInt(data.xpMax)}</span>
           </p>
         </div>
         <button
@@ -130,14 +130,14 @@ function TodayTab({ onRewards }: { onRewards: () => void }) {
           onClick={onRewards}
           className="rounded-2xl border-[3px] border-black bg-white/[0.05] px-3 py-2.5 text-left hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70"
         >
-          <p className="text-[0.65rem] tracking-[0.2em] text-white/55">TASK MARKS</p>
+          <p className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">TASK MARKS</p>
           <p className="toon-text-thin mt-0.5 text-2xl tabular-nums text-white">{fmtInt(data.marks)}</p>
-          <p className="font-body text-xs text-white/60">
+          <p className="font-body text-xs lg:text-[0.8125rem] text-white/75">
             {nextMark ? `${nextMark.marks} for ${cosmeticLabel(nextMark.ids[0]!)}` : "Every mark reward unlocked"}
           </p>
         </button>
       </div>
-      <ul className="font-body list-disc space-y-1 pl-5 text-xs leading-relaxed text-white/60">
+      <ul className="font-body list-disc space-y-1 pl-5 text-xs lg:text-[0.8125rem] leading-relaxed text-white/75">
         <li>Tasks count only in raids: an extract after 8+ minutes on the map, containers and bodies once each, real kills.</li>
         <li>Unfinished tasks carry over with their progress. One free swap a day.</li>
         <li>Each task pays {QUEST.XP} XP, up to {QUEST.DAILY_XP_MAX} a day, on top of the daily raid XP limit. No CR, no items.</li>
@@ -174,7 +174,7 @@ function TaskCard({ slot: s, canSwap }: { slot: QuestSlotDto; canSwap: boolean }
         <span
           className={clsx(
             "mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border-[3px] border-black text-sm",
-            s.done ? "bg-zooa-lime text-black" : "bg-white/10 text-white/50",
+            s.done ? "bg-zooa-lime text-black" : "bg-white/10 text-white/70",
           )}
           aria-hidden
         >
@@ -182,12 +182,12 @@ function TaskCard({ slot: s, canSwap }: { slot: QuestSlotDto; canSwap: boolean }
         </span>
         <div className="min-w-0 flex-1">
           <p className={clsx("text-base tracking-wide", s.done ? "text-zooa-lime" : "text-white")}>{s.label}</p>
-          <p className="font-body mt-0.5 text-xs leading-snug text-white/55">{s.hint}</p>
-          {s.carried && <p className="font-body mt-1 text-[0.7rem] font-bold uppercase tracking-wider text-amber-300">Carried over</p>}
+          <p className="font-body mt-0.5 text-xs lg:text-[0.8125rem] leading-snug text-white/70">{s.hint}</p>
+          {s.carried && <p className="font-body mt-1 text-xs lg:text-[0.8125rem] font-bold uppercase tracking-wider text-amber-300">Carried over</p>}
         </div>
         <span
           className={clsx(
-            "font-body shrink-0 rounded-full border-2 border-black px-2 py-0.5 text-xs font-bold tabular-nums",
+            "font-body shrink-0 rounded-full border-2 border-black px-2 py-0.5 text-xs lg:text-[0.8125rem] font-bold tabular-nums",
             s.done ? "bg-zooa-lime text-black" : "bg-sky-300 text-black",
           )}
         >
@@ -212,7 +212,7 @@ function TaskCard({ slot: s, canSwap }: { slot: QuestSlotDto; canSwap: boolean }
           <button
             type="button"
             onClick={() => setConfirm(true)}
-            className="font-body min-h-11 shrink-0 rounded-xl border-[3px] border-black bg-white/10 px-3 text-xs font-bold text-white/85 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70"
+            className="font-body min-h-11 shrink-0 rounded-xl border-[3px] border-black bg-white/10 px-3 text-xs lg:text-[0.8125rem] font-bold text-white/85 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70"
           >
             Swap
           </button>
@@ -276,16 +276,16 @@ function RewardsTab() {
             <p className="truncate text-lg tracking-wide" style={{ color: nameColorHex(data.equipped.color) ?? "#fff" }}>
               {nick}
             </p>
-            <p className="font-body truncate text-xs font-semibold uppercase tracking-wider text-white/60">
+            <p className="font-body truncate text-xs lg:text-[0.8125rem] font-semibold uppercase tracking-wider text-white/75">
               {titleName(data.equipped.title) ?? "No title"}
             </p>
           </div>
         </div>
         {next ? (
           <div className="mt-3 border-t-2 border-black/40 pt-2.5">
-            <p className="text-[0.65rem] tracking-[0.2em] text-white/55">
+            <p className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">
               NEXT · LEVEL {next.level}
-              {toGo !== null && <span className="font-body ml-2 tracking-normal text-white/60">{fmtInt(toGo)} XP to go</span>}
+              {toGo !== null && <span className="font-body ml-2 tracking-normal text-white/75">{fmtInt(toGo)} XP to go</span>}
             </p>
             <ul className="mt-1 space-y-0.5">
               {next.items.map((it) => (
@@ -303,12 +303,12 @@ function RewardsTab() {
         {WEAR.map((w) => (
           <WearRow key={w.kind} kind={w.kind} label={w.label} owned={owned} data={data} />
         ))}
-        <p className="font-body text-xs text-white/55">Rewards are earned only by playing — they can&apos;t be bought or traded, and they change nothing in a raid.</p>
+        <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">Rewards are earned only by playing — they can&apos;t be bought or traded, and they change nothing in a raid.</p>
       </section>
 
       {/* All rewards by level */}
       <section>
-        <h3 className="text-xs tracking-[0.2em] text-white/55">BY LEVEL</h3>
+        <h3 className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">BY LEVEL</h3>
         <ol className="mt-2 flex flex-col gap-1.5">
           {rewardTable(sell).map((r) => {
             const reached = level >= r.level;
@@ -333,7 +333,7 @@ function RewardsTab() {
       </section>
 
       <section>
-        <h3 className="text-xs tracking-[0.2em] text-white/55">BY TASK MARKS · YOU HAVE {fmtInt(data.marks)}</h3>
+        <h3 className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">BY TASK MARKS · YOU HAVE {fmtInt(data.marks)}</h3>
         <ol className="mt-2 flex flex-col gap-1.5">
           {markRewardTable().map((r) => {
             const reached = data.marks >= r.marks;
@@ -347,8 +347,8 @@ function RewardsTab() {
               >
                 <span
                   className={clsx(
-                    "grid h-8 min-w-8 shrink-0 place-items-center rounded-full border-[3px] border-black px-1 text-xs tabular-nums",
-                    reached ? "bg-sky-300 text-black" : "bg-white/10 text-white/60",
+                    "grid h-8 min-w-8 shrink-0 place-items-center rounded-full border-[3px] border-black px-1 text-xs lg:text-[0.8125rem] tabular-nums",
+                    reached ? "bg-sky-300 text-black" : "bg-white/10 text-white/75",
                   )}
                 >
                   {r.marks}
@@ -369,13 +369,13 @@ function RewardsTab() {
 
 function RewardLine({ item, reached }: { item: RewardItem; reached: boolean }) {
   return (
-    <li className={clsx("font-body flex items-center gap-2 text-sm", reached ? "text-white/90" : "text-white/50")}>
+    <li className={clsx("font-body flex items-center gap-2 text-sm", reached ? "text-white/90" : "text-white/70")}>
       {item.kind === "color" && item.hex ? (
         <span className="h-3 w-3 shrink-0 rounded-full border-2 border-black" style={{ background: item.hex }} aria-hidden />
       ) : item.kind === "frame" && item.hex ? (
         <span className="h-3 w-3 shrink-0 rounded-sm border-2" style={{ borderColor: item.hex }} aria-hidden />
       ) : (
-        <span className={clsx("w-3 shrink-0 text-center text-xs", reached ? "text-zooa-lime" : "text-white/35")} aria-hidden>
+        <span className={clsx("w-3 shrink-0 text-center text-xs lg:text-[0.8125rem]", reached ? "text-zooa-lime" : "text-white/70")} aria-hidden>
           {reached ? "✓" : "•"}
         </span>
       )}
@@ -408,9 +408,9 @@ function WearRow({ kind, label, owned, data }: { kind: CosmeticKind; label: stri
 
   return (
     <div>
-      <h3 className="text-xs tracking-[0.2em] text-white/55">{label.toUpperCase()}</h3>
+      <h3 className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">{label.toUpperCase()}</h3>
       {ids.length === 0 ? (
-        <p className="font-body mt-1 text-sm text-white/55">Nothing unlocked yet — see the list below.</p>
+        <p className="font-body mt-1 text-sm text-white/70">Nothing unlocked yet — see the list below.</p>
       ) : (
         <div role="group" aria-label={label} className="mt-1.5 flex flex-wrap gap-1.5">
           <button type="button" aria-pressed={current === null} disabled={busy !== null} onClick={() => void pick(null)} className={chip(current === null)}>

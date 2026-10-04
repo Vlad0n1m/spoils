@@ -156,7 +156,7 @@ function Who({ nickname, level, sub, presence }: { nickname: string; level: numb
       <span className="min-w-0">
         <span className="block truncate text-base tracking-wide text-white">{nickname}</span>
         {(sub || presence) && (
-          <span className="font-body flex items-center gap-1.5 text-xs text-white/65">
+          <span className="font-body flex items-center gap-1.5 text-xs lg:text-[0.8125rem] text-white/75">
             {presence && <PresenceDot presence={presence} className="h-2.5 w-2.5 border" />}
             {sub ?? (presence ? PRESENCE_LABEL[presence] : "")}
           </span>
@@ -239,7 +239,7 @@ function FriendsTab({
         </p>
       ) : (
         <>
-          <p className="font-body text-xs text-white/55">
+          <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">
             {data.friends.length}/{data.limits.maxFriends} friends · {data.friends.filter((f) => f.presence !== "offline").length} online
           </p>
           <ul className="flex flex-col gap-1.5">
@@ -315,7 +315,7 @@ function RequestsTab({ data, error, onRetry, run }: { data: FriendsDto | null; e
           Incoming
         </h3>
         {data.incoming.length === 0 ? (
-          <p className="font-body text-sm text-white/60">No requests waiting.</p>
+          <p className="font-body text-sm text-white/75">No requests waiting.</p>
         ) : (
           <ul className="flex flex-col gap-1.5">
             {data.incoming.map((r) => (
@@ -336,10 +336,10 @@ function RequestsTab({ data, error, onRetry, run }: { data: FriendsDto | null; e
       </section>
       <section aria-labelledby="req-out" className="flex flex-col gap-2">
         <h3 id="req-out" className="text-lg tracking-wide text-white">
-          Sent <span className="font-body text-sm font-normal text-white/55">{data.outgoing.length}/{data.limits.maxPending}</span>
+          Sent <span className="font-body text-sm font-normal text-white/70">{data.outgoing.length}/{data.limits.maxPending}</span>
         </h3>
         {data.outgoing.length === 0 ? (
-          <p className="font-body text-sm text-white/60">Nothing sent. Add raiders from the Friends tab.</p>
+          <p className="font-body text-sm text-white/75">Nothing sent. Add raiders from the Friends tab.</p>
         ) : (
           <ul className="flex flex-col gap-1.5">
             {data.outgoing.map((r) => (
@@ -392,7 +392,7 @@ function PartyTab({
               <Row key={i.partyId} className="bg-zooa-lime/10">
                 <span className="font-body min-w-0 flex-1 text-sm text-white">
                   <b className="font-display text-base tracking-wide">{i.from}</b> invited you · {i.size}/{PARTY.MAX_SIZE} ·{" "}
-                  <span className="tabular-nums text-white/65">{fmtClockS(secondsLeft(i.expiresAt, now))}</span>
+                  <span className="tabular-nums text-white/75">{fmtClockS(secondsLeft(i.expiresAt, now))}</span>
                 </span>
                 <span className="flex gap-1.5">
                   <button type="button" disabled={busy} onClick={() => void go("accept", { partyId: i.partyId })} className={BTN_LIME}>
@@ -418,7 +418,7 @@ function PartyTab({
       ) : (
         <section aria-labelledby="party-members" className="flex flex-col gap-2">
           <h3 id="party-members" className="text-lg tracking-wide text-white">
-            Your party <span className="font-body text-sm font-normal text-white/55">{party.members.length}/{party.maxSize}</span>
+            Your party <span className="font-body text-sm font-normal text-white/70">{party.members.length}/{party.maxSize}</span>
           </h3>
           <ul className="flex flex-col gap-1.5">
             {party.members.map((m) => {
@@ -426,7 +426,7 @@ function PartyTab({
               return (
                 <Row key={m.nickname} className={m.you ? "ring-2 ring-zooa-lime/50" : undefined}>
                   <Who nickname={m.you ? `${m.nickname} (you)` : m.nickname} level={m.level} presence={m.presence} />
-                  <span className={clsx("font-body rounded-full border-2 border-black px-2 py-0.5 text-xs font-bold", CHIP_TONE[chip.tone])}>{chip.label}</span>
+                  <span className={clsx("font-body rounded-full border-2 border-black px-2 py-0.5 text-xs lg:text-[0.8125rem] font-bold", CHIP_TONE[chip.tone])}>{chip.label}</span>
                   {party.isLeader && !m.you && (
                     <span className="flex gap-1.5">
                       <button type="button" disabled={busy} onClick={() => void go("lead", { nickname: m.nickname })} className={BTN_WHITE} aria-label={`Make ${m.nickname} the leader`}>
@@ -465,7 +465,7 @@ function PartyTab({
                 className="h-6 w-6 accent-[#CCFF00]"
               />
               <span>
-                Follow leader <span className="font-normal text-white/65">— drop in automatically when {party.leader} presses PLAY</span>
+                Follow leader <span className="font-normal text-white/75">— drop in automatically when {party.leader} presses PLAY</span>
               </span>
             </label>
           )}

@@ -43,7 +43,7 @@ export function SignInSheet({ onClose, onGuest }: { onClose: () => void; onGuest
           <Link href="/auth/login?next=/play" className="toon-btn-ghost min-h-12 text-base">
             <span className="optical-center">Sign in</span>
           </Link>
-          <button type="button" onClick={onClose} className="font-body mt-1 min-h-10 text-sm font-semibold text-white/65 underline-offset-4 hover:text-white hover:underline">
+          <button type="button" onClick={onClose} className="font-body mt-1 min-h-10 text-sm font-semibold text-white/75 underline-offset-4 hover:text-white hover:underline">
             Not now
           </button>
         </div>

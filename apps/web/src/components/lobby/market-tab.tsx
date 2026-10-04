@@ -40,9 +40,9 @@ export function MarketTab({ stash, sessionLoading = false }: { stash: Resource<S
             <section className="toon-panel bg-[#161b28]/95 p-5">
               <div className="flex items-end justify-between gap-3">
                 <div>
-                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-white/50">Wallet</p>
+                  <p className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">Wallet</p>
                   <p className="toon-text-thin mt-1.5 text-3xl tabular-nums tracking-wide text-zooa-lime">{formatMinor(s.balance)}</p>
-                  <p className="font-body mt-1 text-xs text-white/55">
+                  <p className="font-body mt-1 text-xs lg:text-[0.8125rem] text-white/70">
                     {fmtCr(s.credits)} for listing fees · {(s.market.feeBps / 100).toFixed(s.market.feeBps % 100 ? 1 : 0)}% fee on sales
                   </p>
                 </div>
@@ -55,9 +55,9 @@ export function MarketTab({ stash, sessionLoading = false }: { stash: Resource<S
             <section className="toon-panel bg-[#161b28]/95 p-5">
               <h2 className="toon-text-thin text-xl tracking-wide text-white">Sell</h2>
               {!levelOk ? (
-                <p className="font-body mt-3 text-sm text-white/60">Selling unlocks at level {s.market.sellUnlockLevel}. Buying is open to everyone.</p>
+                <p className="font-body mt-3 text-sm text-white/75">Selling unlocks at level {s.market.sellUnlockLevel}. Buying is open to everyone.</p>
               ) : sellable.length === 0 ? (
-                <p className="font-body mt-3 text-sm text-white/60">
+                <p className="font-body mt-3 text-sm text-white/75">
                   Nothing sellable in your stash. Starter-kit items unlock after you extract with them; gear in your loadout is locked.
                 </p>
               ) : (
@@ -76,7 +76,7 @@ export function MarketTab({ stash, sessionLoading = false }: { stash: Resource<S
         ) : sessionLoading || stash ? null : (
           <section className="toon-panel bg-[#161b28]/95 p-5">
             <h2 className="toon-text-thin text-xl tracking-wide text-white">Trade gear</h2>
-            <p className="font-body mt-3 text-sm text-white/65">
+            <p className="font-body mt-3 text-sm text-white/75">
               Register to buy and sell weapons, armor and backpacks with other raiders.
             </p>
             <Link href={`/auth/register?next=${encodeURIComponent(panelHref({ panel: "shop" }))}`} className="toon-btn mt-4 min-h-12 w-full text-lg">

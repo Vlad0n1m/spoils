@@ -52,7 +52,7 @@ export function PartyPrompts({ hidden }: { hidden: boolean }) {
             <span role="status">
               <b className="font-display text-base tracking-wide text-zooa-lime">{drop.leader}</b> is dropping in
             </span>
-            <span className="block text-xs tabular-nums text-white/65">
+            <span className="block text-xs lg:text-[0.8125rem] tabular-nums text-white/75">
               Drop in next to them · <span role="timer">{fmtClockS(drop.secondsLeft)}</span>
             </span>
           </p>
@@ -78,7 +78,7 @@ export function PartyPrompts({ hidden }: { hidden: boolean }) {
         >
           <p className="font-body min-w-0 flex-1 text-sm text-white">
             <b className="font-display text-base tracking-wide text-zooa-lime">{invite.from}</b> invited you to a party
-            <span className="block text-xs tabular-nums text-white/65">
+            <span className="block text-xs lg:text-[0.8125rem] tabular-nums text-white/75">
               {invite.size}/{PARTY.MAX_SIZE} · expires in {fmtClockS(secondsLeft(invite.expiresAt, now))}
             </span>
           </p>

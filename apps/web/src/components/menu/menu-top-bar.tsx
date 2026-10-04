@@ -40,7 +40,7 @@ export function MenuTopBar({ onCredits, onRewards }: { onCredits: () => void; on
         {user?.nickname}
       </span>
       {title && (
-        <span className="font-body hidden max-w-[10rem] truncate text-[0.7rem] font-bold uppercase tracking-wider text-white/65 xl:inline">{title}</span>
+        <span className="font-body hidden max-w-[10rem] truncate text-xs lg:text-[0.8125rem] font-bold uppercase tracking-wider text-white/75 xl:inline">{title}</span>
       )}
     </span>
   );
@@ -75,7 +75,7 @@ export function MenuTopBar({ onCredits, onRewards }: { onCredits: () => void; on
           ) : user ? (
             <div className={clsx(plate, "max-w-[18rem] flex-col items-start gap-1 pl-4")}>
               {nick}
-              <span className="font-body text-xs font-semibold text-white/65">Guest · loot isn&apos;t kept</span>
+              <span className="font-body text-xs lg:text-[0.8125rem] font-semibold text-white/75">Guest · loot isn&apos;t kept</span>
             </div>
           ) : (
             <p className={clsx(plate, "font-body min-h-11 max-w-[22rem] pl-4 text-sm font-semibold text-white/80")}>Sign in to keep your raider, stash and rank</p>

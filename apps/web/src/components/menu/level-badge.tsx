@@ -87,7 +87,7 @@ export function LevelBadge({
         <path d={SHIELD} fill={levelColor(level)} stroke="#000" strokeWidth="3" strokeLinejoin="round" />
         <path d="M20 6 L33 10.5 V16 C26 14 14 14 7 16 V10.5 Z" fill="#fff" opacity="0.28" />
       </svg>
-      <span className={clsx("toon-text-thin relative tabular-nums text-white", framed && size === "sm" ? "text-xs" : text)} aria-hidden>
+      <span className={clsx("toon-text-thin relative tabular-nums text-white", framed && size === "sm" ? "text-xs lg:text-[0.8125rem]" : text)} aria-hidden>
         <span className="optical-center">{level}</span>
       </span>
     </span>

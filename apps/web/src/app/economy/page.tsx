@@ -50,7 +50,7 @@ export default async function EconomyPage() {
     <div className="min-h-[100dvh] bg-[#0b0f14] text-white">
       <TopBar />
       <main className="mx-auto w-full max-w-6xl px-4 py-8 md:px-6 md:py-12">
-        <p className="text-xs uppercase tracking-[0.25em] text-white/50">Open books</p>
+        <p className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.25em] text-white/70">Open books</p>
         <h1 className="toon-text mt-2 text-4xl tracking-wide text-zooa-lime md:text-6xl">Economy</h1>
         <p className="font-body mt-4 max-w-[62ch] text-base leading-relaxed text-white/70">
           Credits (CR) are earned by extracting with junk and spent at the junker and on listing fees; they never convert to
@@ -75,7 +75,7 @@ export default async function EconomyPage() {
               <Panel title="Credits in / out">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-left text-xs uppercase tracking-wider text-white/45">
+                    <tr className="text-left text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">
                       <th className="py-2 font-normal">Flow</th>
                       <th className="py-2 text-right font-normal">24 h</th>
                       <th className="py-2 text-right font-normal">All time</th>
@@ -84,7 +84,7 @@ export default async function EconomyPage() {
                   <tbody className="font-body divide-y divide-white/10">
                     {stats.credits.byReason.length === 0 && (
                       <tr>
-                        <td colSpan={3} className="py-3 text-white/50">
+                        <td colSpan={3} className="py-3 text-white/70">
                           No credit movements yet.
                         </td>
                       </tr>
@@ -97,7 +97,7 @@ export default async function EconomyPage() {
                         <tr key={r.reason}>
                           <td className="py-2.5">
                             <span className="text-white">{meta.label}</span>{" "}
-                            <span className="text-xs text-white/40">{meta.note}</span>
+                            <span className="text-xs lg:text-[0.8125rem] text-white/70">{meta.note}</span>
                           </td>
                           <td className={`py-2.5 text-right tabular-nums ${in24 >= 0 ? "text-zooa-lime" : "text-rose-300"}`}>{signed(in24)}</td>
                           <td className={`py-2.5 text-right tabular-nums ${all >= 0 ? "text-zooa-lime" : "text-rose-300"}`}>{signed(all)}</td>
@@ -113,7 +113,7 @@ export default async function EconomyPage() {
                     </tr>
                   </tfoot>
                 </table>
-                <p className="font-body mt-3 text-xs text-white/45">
+                <p className="font-body mt-3 text-xs lg:text-[0.8125rem] text-white/70">
                   Every account also starts with 1 000 CR. Junk payout multiplier today: ×{stats.autosellMult.toFixed(2)} (steered
                   daily to keep the median balance between 2k and 8k CR).
                 </p>
@@ -126,7 +126,7 @@ export default async function EconomyPage() {
                       <tr key={s.key}>
                         <td className="py-2.5">
                           <span className="text-white">{s.label}</span>
-                          <span className="block text-xs text-white/40">{s.note}</span>
+                          <span className="block text-xs lg:text-[0.8125rem] text-white/70">{s.note}</span>
                         </td>
                         <td className="py-2.5 text-right text-lg tabular-nums text-white">{num(stats.items.byState[s.key] ?? 0)}</td>
                       </tr>
@@ -137,9 +137,9 @@ export default async function EconomyPage() {
 
               <Panel title="Market">
                 <dl className="font-body grid grid-cols-[1fr_auto_auto] gap-x-6 gap-y-2.5 text-sm">
-                  <dt className="text-xs uppercase tracking-wider text-white/45" />
-                  <dd className="text-right text-xs uppercase tracking-wider text-white/45">24 h</dd>
-                  <dd className="text-right text-xs uppercase tracking-wider text-white/45">All time</dd>
+                  <dt className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70" />
+                  <dd className="text-right text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">24 h</dd>
+                  <dd className="text-right text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">All time</dd>
                   <dt className="text-white/70">Trades</dt>
                   <dd className="text-right tabular-nums">{num(stats.market.trades24h)}</dd>
                   <dd className="text-right tabular-nums">{num(stats.market.tradesAll)}</dd>
@@ -175,7 +175,7 @@ export default async function EconomyPage() {
                 <div className="overflow-x-auto">
                   <table className="font-body w-full min-w-[32rem] text-sm">
                     <thead>
-                      <tr className="text-left text-xs uppercase tracking-wider text-white/45">
+                      <tr className="text-left text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">
                         <th className="py-2 font-normal">Day</th>
                         {dailyKeys(stats.daily).map((k) => (
                           <th key={k} className="py-2 text-right font-normal">
@@ -200,7 +200,7 @@ export default async function EconomyPage() {
                 </div>
               </Panel>
             )}
-            <p className="font-body mt-6 text-xs text-white/40">Updated {new Date(stats.generatedAt).toUTCString()}.</p>
+            <p className="font-body mt-6 text-xs lg:text-[0.8125rem] text-white/70">Updated {new Date(stats.generatedAt).toUTCString()}.</p>
           </>
         )}
         <OnChainBlock />
@@ -257,9 +257,9 @@ function HowItWorks({ currency }: { currency: string }) {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {RULES.map((r, i) => (
           <div key={r.title} className="toon-panel bg-[#161b28]/95 p-5">
-            <p className="text-[0.65rem] uppercase tracking-[0.2em] text-white/50">Rule {i + 1}</p>
+            <p className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">Rule {i + 1}</p>
             <h2 className="toon-text-thin mt-2 text-xl tracking-wide text-white">{r.title}</h2>
-            <p className="font-body mt-2 text-sm leading-relaxed text-white/65">{r.body}</p>
+            <p className="font-body mt-2 text-sm leading-relaxed text-white/75">{r.body}</p>
           </div>
         ))}
       </div>
@@ -269,7 +269,7 @@ function HowItWorks({ currency }: { currency: string }) {
             <h3 className={`toon-text-thin text-2xl tracking-wide ${f.tone}`}>{f.name}</h3>
             <div className="font-body mt-3 grid grid-cols-2 gap-4 text-sm">
               <div>
-                <p className="text-xs uppercase tracking-wider text-white/45">Comes from</p>
+                <p className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">Comes from</p>
                 <ul className="mt-1.5 space-y-1 text-white/80">
                   {f.ins.map((x) => (
                     <li key={x}>{x}</li>
@@ -277,7 +277,7 @@ function HowItWorks({ currency }: { currency: string }) {
                 </ul>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wider text-white/45">Goes to</p>
+                <p className="text-xs lg:text-[0.8125rem] uppercase tracking-wider text-white/70">Goes to</p>
                 <ul className="mt-1.5 space-y-1 text-white/80">
                   {f.outs.map((x) => (
                     <li key={x}>{x}</li>
@@ -285,7 +285,7 @@ function HowItWorks({ currency }: { currency: string }) {
                 </ul>
               </div>
             </div>
-            <p className="font-body mt-3 border-t border-white/10 pt-3 text-xs text-white/50">{f.note}</p>
+            <p className="font-body mt-3 border-t border-white/10 pt-3 text-xs lg:text-[0.8125rem] text-white/70">{f.note}</p>
           </div>
         ))}
       </div>
@@ -296,7 +296,7 @@ function HowItWorks({ currency }: { currency: string }) {
 function Tile({ label, value, tone = "text-white" }: { label: string; value: string; tone?: string }) {
   return (
     <div className="toon-panel bg-[#161b28]/95 p-4 md:p-5">
-      <p className="text-[0.65rem] uppercase tracking-[0.2em] text-white/50">{label}</p>
+      <p className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">{label}</p>
       <p className={`toon-text-thin mt-2 truncate text-2xl tabular-nums tracking-wide md:text-3xl ${tone}`}>{value}</p>
     </div>
   );

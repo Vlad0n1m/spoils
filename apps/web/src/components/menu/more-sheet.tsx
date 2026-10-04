@@ -64,7 +64,7 @@ export function MoreSheet({
           </span>
           Friends · party
         </button>
-        <button type="button" aria-disabled="true" className={`${row} text-white/60`} onClick={() => onLocked("Guilds")}>
+        <button type="button" aria-disabled="true" className={`${row} text-white/75`} onClick={() => onLocked("Guilds")}>
           <span className="relative">
             <FallbackImg src={MENU_ICONS.guilds.src} fallback={MENU_ICONS.guilds.fallback} className="h-8 w-8 object-contain opacity-60 grayscale" />
             <LockSticker className="absolute -right-2 -top-2 h-4 w-4" />

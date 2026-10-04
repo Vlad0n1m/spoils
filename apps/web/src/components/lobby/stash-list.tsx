@@ -79,7 +79,7 @@ export function StashList({
             onClick={() => setFilter(f.id)}
             className={clsx(
               // Touch: 44 px tall chips.
-              "rounded-full border-2 border-black px-3 py-1.5 text-xs tracking-wide transition [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-4",
+              "rounded-full border-2 border-black px-3 py-1.5 text-xs lg:text-[0.8125rem] tracking-wide transition [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-4",
               filter === f.id ? "bg-zooa-lime text-black shadow-[0_2px_0_#000]" : "bg-black/30 text-white/75 hover:text-white",
             )}
           >
@@ -88,7 +88,7 @@ export function StashList({
         ))}
       </div>
       {empty ? (
-        <div className="font-body mt-5 rounded-2xl border-2 border-dashed border-white/15 p-5 text-center text-sm text-white/55">
+        <div className="font-body mt-5 rounded-2xl border-2 border-dashed border-white/15 p-5 text-center text-sm text-white/70">
           {emptyHint ?? "Nothing here yet."}
         </div>
       ) : (

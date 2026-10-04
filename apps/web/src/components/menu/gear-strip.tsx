@@ -46,7 +46,7 @@ function Slot({ def, rarity, dur, qty, label }: { def: string; rarity?: number; 
 function EmptySquare({ label }: { label: string }) {
   return (
     <span className={clsx(SLOT, "border-dashed border-white/30 bg-black/35 shadow-none")}>
-      <span className="font-body px-1 text-center text-[0.6rem] font-bold uppercase leading-tight tracking-wider text-white/45">{label}</span>
+      <span className="font-body px-0.5 text-center text-xs font-bold leading-tight text-white/75">{label}</span>
     </span>
   );
 }
@@ -69,7 +69,7 @@ function EditButton({ onClick, label = "Edit" }: { onClick: () => void; label?: 
       <span className="text-sm leading-none tracking-wide short:text-xs">
         <span className="optical-center">{label}</span>
       </span>
-      <span className="toon-key absolute -right-2 -top-2 h-5 min-w-5 text-[0.6rem] [@media(hover:none)]:hidden" aria-hidden>
+      <span className="toon-key absolute -right-2 -top-2 h-5 min-w-5 text-xs [@media(hover:none)]:hidden" aria-hidden>
         I
       </span>
     </button>
@@ -172,7 +172,7 @@ export function GearStrip({
   return (
     <div className="relative">
       {locked && (
-        <span className="menu-label absolute -top-3 left-3 z-10 rounded-lg border-[3px] border-black bg-amber-300 px-2 py-0.5 text-[0.7rem] leading-none tracking-wider text-black [text-shadow:none] [-webkit-text-stroke:0] short:-top-2.5">
+        <span className="menu-label absolute -top-3 left-3 z-10 rounded-lg border-[3px] border-black bg-amber-300 px-2 py-0.5 text-xs leading-none tracking-wider text-black [text-shadow:none] [-webkit-text-stroke:0] short:-top-2.5">
           <span className="optical-center">LOCKED</span>
         </span>
       )}

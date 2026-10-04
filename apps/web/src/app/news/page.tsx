@@ -66,16 +66,16 @@ function Post({ post, latest }: { post: NewsPost; latest: boolean }) {
   const anchor = postAnchor(post.id);
   return (
     <article id={anchor} aria-labelledby={`${anchor}-title`} className="toon-panel scroll-mt-20 bg-[#161b28]/95 p-4 md:p-6">
-      <p className="flex flex-wrap items-center gap-2 text-[0.65rem] tracking-[0.18em] text-white/60">
+      <p className="flex flex-wrap items-center gap-2 text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/75">
         {postTags(post).map((t) => (
           <span key={t} className={`rounded-md border-2 border-black px-1.5 py-0.5 ${TAG_TONE[t] ?? "bg-white/85 text-black"}`}>
             {t.toUpperCase()}
           </span>
         ))}
-        <time dateTime={post.date} className="font-body text-xs font-semibold tracking-normal text-white/65">
+        <time dateTime={post.date} className="font-body text-xs lg:text-[0.8125rem] font-semibold tracking-normal text-white/75">
           {fmtPostDate(post.date)}
         </time>
-        {latest && <span className="font-body text-xs font-semibold tracking-normal text-amber-300">Latest</span>}
+        {latest && <span className="font-body text-xs lg:text-[0.8125rem] font-semibold tracking-normal text-amber-300">Latest</span>}
       </p>
 
       <h2 id={`${anchor}-title`} className="toon-text-thin mt-3 text-2xl leading-tight tracking-wide text-white md:text-3xl">
@@ -94,7 +94,7 @@ function Post({ post, latest }: { post: NewsPost; latest: boolean }) {
       )}
 
       <div className="mt-4 rounded-xl border-[3px] border-black bg-black/25 p-3 md:p-4">
-        <p className="text-xs tracking-[0.2em] text-white/55">IN SHORT</p>
+        <p className="text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/70">IN SHORT</p>
         <ul className="font-body mt-2 list-disc space-y-1.5 pl-5 text-[0.95rem] leading-relaxed text-white/80 marker:text-zooa-lime">
           {post.body.map((b) => (
             <li key={b}>{b}</li>
@@ -128,7 +128,7 @@ export default function NewsPage() {
     <div className="min-h-[100dvh] bg-[#0b0f14] text-white">
       <TopBar />
       <main className="mx-auto w-full max-w-3xl px-4 pb-12 pt-6 md:px-6 md:pt-10">
-        <p className="text-xs uppercase tracking-[0.25em] text-white/50">Patch notes</p>
+        <p className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.25em] text-white/70">Patch notes</p>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
           <h1 className="toon-text text-4xl tracking-wide text-zooa-lime md:text-6xl">News</h1>
           <Link href="/play" className="toon-btn-ghost min-h-11 px-4 text-sm">
@@ -145,7 +145,7 @@ export default function NewsPage() {
             <ul className="font-body flex flex-col gap-1.5 text-sm">
               {posts.map((p) => (
                 <li key={p.id} className="flex gap-3">
-                  <time dateTime={p.date} className="w-24 shrink-0 text-white/50">
+                  <time dateTime={p.date} className="w-24 shrink-0 text-white/70">
                     {fmtPostDate(p.date)}
                   </time>
                   <a href={`#${postAnchor(p.id)}`} className="font-semibold text-white/85 hover:text-zooa-lime">
@@ -167,7 +167,7 @@ export default function NewsPage() {
           </div>
         )}
 
-        <p className="font-body mt-10 flex flex-wrap gap-x-6 gap-y-2 text-sm text-white/60">
+        <p className="font-body mt-10 flex flex-wrap gap-x-6 gap-y-2 text-sm text-white/75">
           <Link href="/" className="hover:text-zooa-lime">
             {BRAND.name} home →
           </Link>
