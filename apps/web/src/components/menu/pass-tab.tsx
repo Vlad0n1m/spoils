@@ -12,6 +12,7 @@ import { useQuests } from "./quests-context";
 import { fmtUntil } from "./quests-sheet";
 import { CardStatus, LockIcon, MINT, ProfilePlate, RailStep, RewardArt, RewardCard, WearButton, type RewardState } from "./reward-art";
 import { fmtInt } from "./xp-bar";
+import { PagerArrow, Paged, Segmented, useCarousel } from "@/components/paged";
 
 /**
  * Alpha Pass screen of the tasks sheet (GAME_DESIGN §18e): a banner with AP, the tier bar and your
@@ -54,6 +55,7 @@ export function PassBody({ data }: { data: PassDto }) {
   const nick = user?.nickname ?? "You";
   const level = quests.data?.level ?? 1;
   const owned = new Set(data.owned);
+  const [view, setView] = useState<"tiers" | "tasks" | "pass">("tiers");
 
   // A claimed reward flies from its card into the plate (skipped under reduced motion).
   const flyFrom = useCallback((item: RewardItem, from: DOMRect) => {
@@ -64,19 +66,40 @@ export function PassBody({ data }: { data: PassDto }) {
     setFly({ item, from, key: Date.now() });
   }, []);
 
+  const claimable = data.tiers.some((t) => t.reached && !t.claimed);
   return (
-    <div className="flex flex-col gap-5">
-      <Header data={data} nick={nick} level={level} plateRef={plate} pop={pop} founder={owned.has(FOUNDER_BADGE)} skinOwned={owned.has(ALPHA_SKIN)} />
-      <Track data={data} nick={nick} level={level} onClaimed={flyFrom} />
-      <ApSources data={data} className="-mt-2 hidden short:flex" />
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Weekly data={data} />
-        <Tester data={data} />
+    <div className="flex min-h-0 flex-1 flex-col gap-3 short:gap-2">
+      {/* Sub-pages instead of one long screen: the tier track, the tasks, the banner with the plate. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
+        <Segmented
+          options={[
+            { id: "tiers", label: "Tiers", dot: claimable },
+            { id: "tasks", label: "Tasks" },
+            { id: "pass", label: "My pass" },
+          ]}
+          value={view}
+          onChange={setView}
+          label="Alpha Pass sections"
+        />
+        {view !== "pass" && <PassStrip data={data} badgeRef={plate} />}
       </div>
-      <p className="font-body text-xs leading-snug text-white/75 lg:text-[0.8125rem]">
-        Alpha Points come only from tasks finished in real raids and tester tasks. Rewards are cosmetic, can&apos;t be bought or traded, and{" "}
-        <span className="font-semibold text-white/90">stay after the alpha wipe</span>.
-      </p>
+      {view === "tiers" ? (
+        <Track data={data} nick={nick} level={level} onClaimed={flyFrom} />
+      ) : view === "tasks" ? (
+        <Paged gap={10} colGap={16} minCol={320} maxCols={2} label="Task pages">
+          <Weekly data={data} />
+          <Tester data={data} />
+          <p className="font-body text-xs leading-snug text-white/75 lg:text-[0.8125rem]">
+            Alpha Points come only from tasks finished in real raids and tester tasks. Rewards are cosmetic, can&apos;t be bought or traded, and{" "}
+            <span className="font-semibold text-white/90">stay after the alpha wipe</span>.
+          </p>
+        </Paged>
+      ) : (
+        <>
+          <Header data={data} nick={nick} level={level} plateRef={plate} pop={pop} founder={owned.has(FOUNDER_BADGE)} skinOwned={owned.has(ALPHA_SKIN)} />
+          <ApSources data={data} className="hidden shrink-0 short:flex" />
+        </>
+      )}
       {fly && (
         <FlyToPlate
           key={fly.key}
@@ -158,6 +181,43 @@ function FlyToPlate({
       <RewardArt item={item} nick={nick} level={level} big />
     </div>,
     document.body,
+  );
+}
+
+/** One row under the switch: tier, AP, the bar to the next tier (the claim fly-in lands on the tier box). */
+function PassStrip({ data, badgeRef }: { data: PassDto; badgeRef: React.Ref<HTMLDivElement> }) {
+  const prev = data.tier > 0 ? data.tiers[data.tier - 1]!.ap : 0;
+  const next = data.next;
+  const pct = next ? Math.min(100, ((data.ap - prev) / Math.max(1, next.ap - prev)) * 100) : 100;
+  return (
+    <div className="flex min-w-[15rem] flex-1 items-center gap-3">
+      <div
+        ref={badgeRef}
+        className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border-[3px] border-black text-xl text-black shadow-[0_3px_0_#000] short:h-9 short:w-9 short:text-lg"
+        style={{ background: `linear-gradient(180deg,#b8ffe9,${MINT})` }}
+        aria-label={`Tier ${data.tier} of 10`}
+      >
+        <span className="optical-center">{data.tier}</span>
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="font-body truncate text-xs font-semibold text-white/85 lg:text-[0.8125rem]">
+          {next ? (
+            <>
+              <span className="tabular-nums">{fmtInt(next.ap - data.ap)} AP</span> to tier {next.tier} ·{" "}
+              <span style={{ color: MINT }}>{next.name}</span>
+            </>
+          ) : (
+            <span style={{ color: MINT }}>Pass complete</span>
+          )}
+        </p>
+        <span className="mt-1 block h-3 overflow-hidden rounded-full border-2 border-black bg-black/60" aria-hidden>
+          <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: `linear-gradient(180deg,#b8ffe9,${MINT})` }} />
+        </span>
+      </div>
+      <p className="toon-text-thin shrink-0 text-2xl tabular-nums text-white short:text-xl">
+        {fmtInt(data.ap)} <span className="text-base text-white/80">AP</span>
+      </p>
+    </div>
   );
 }
 
@@ -318,7 +378,7 @@ function ApSources({ data, className }: { data: PassDto; className?: string }) {
 }
 
 function Track({ data, nick, level, onClaimed }: { data: PassDto; nick: string; level: number; onClaimed: (item: RewardItem, from: DOMRect) => void }) {
-  const track = useRef<HTMLDivElement>(null);
+  const { ref: track, edge, by, handlers } = useCarousel<HTMLDivElement>();
   const focus = useRef<HTMLLIElement>(null);
   const firstOpen = data.tiers.find((t) => t.reached && !t.claimed)?.tier ?? data.next?.tier ?? null;
   useEffect(() => {
@@ -328,13 +388,18 @@ function Track({ data, nick, level, onClaimed }: { data: PassDto; nick: string; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
-    <section aria-label="Tiers">
-      <h3 className="toon-text-thin text-2xl tracking-wide text-white">Rewards</h3>
+    <section aria-label="Tiers" className="flex min-h-0 flex-1 flex-col">
+      <h3 className="sr-only">Rewards</h3>
+      <div className="relative">
+      {/* Big side arrows over the track (hidden at its ends), like a game's reward carousel. */}
+      <PagerArrow dir={-1} disabled={edge.start} onClick={() => by(-1)} className="absolute left-1 top-1/2 z-[3] -translate-y-1/2 shadow-[0_4px_0_#000] disabled:invisible" />
+      <PagerArrow dir={1} disabled={edge.end} onClick={() => by(1)} className="absolute right-1 top-1/2 z-[3] -translate-y-1/2 shadow-[0_4px_0_#000] disabled:invisible" />
       <div
         ref={track}
-        className="rw-track mt-2 overflow-x-auto overscroll-x-contain rounded-2xl border-[3px] border-black bg-[linear-gradient(180deg,rgba(9,12,20,0.55),rgba(20,26,42,0.55))] shadow-[inset_0_3px_0_rgba(0,0,0,0.35)]"
+        {...handlers}
+        className="rw-track mt-2 overflow-hidden [touch-action:pan-y] rounded-2xl short:mt-1.5 border-[3px] border-black bg-[linear-gradient(180deg,rgba(9,12,20,0.55),rgba(20,26,42,0.55))] shadow-[inset_0_3px_0_rgba(0,0,0,0.35)]"
       >
-        <ol className="flex w-max px-2 pb-4 pt-2">
+        <ol className="flex w-max px-2 pb-4 pt-2 short:pb-2 short:pt-1">
           {data.tiers.map((t, i) => (
             <TierCard
               key={t.tier}
@@ -348,6 +413,7 @@ function Track({ data, nick, level, onClaimed }: { data: PassDto; nick: string; 
             />
           ))}
         </ol>
+      </div>
       </div>
     </section>
   );
@@ -448,6 +514,8 @@ function TierCard({
       className="flex flex-col items-stretch"
       aria-label={`Tier ${t.tier}, ${t.name}${t.claimed ? ", claimed" : t.reached ? ", ready to claim" : ", locked"}`}
     >
+      {/* Landscape phones: no rail (the strip above shows the AP bar); the card's ribbon names the tier. */}
+      <div className="short:hidden">
       <RailStep
         progIn={(data.ap - prevAp) / Math.max(1, t.ap - prevAp)}
         progOut={nextTier ? (data.ap - t.ap) / Math.max(1, nextTier.ap - t.ap) : 0}
@@ -470,8 +538,17 @@ function TierCard({
         }
       />
       <p className="font-body mb-2 text-center text-xs font-bold tabular-nums text-white/80">{fmtInt(t.ap)} AP</p>
-      <div className="flex justify-center px-2">
+      </div>
+      <div className="flex justify-center px-2 short:pt-2.5">
         <RewardCard
+          ribbon={
+            <span
+              className="font-body absolute -top-3 left-1/2 z-[2] hidden -translate-x-1/2 whitespace-nowrap rounded-full border-2 border-black px-2 py-0.5 text-[0.7rem] font-bold tabular-nums text-black shadow-[0_2px_0_#000] short:block"
+              style={{ background: t.reached ? MINT : "#e5e7eb" }}
+            >
+              Tier {t.tier} · {fmtInt(t.ap)} AP
+            </span>
+          }
           item={item}
           state={state}
           nick={nick}
@@ -491,12 +568,12 @@ function TierCard({
 function Weekly({ data }: { data: PassDto }) {
   const now = useNow();
   return (
-    <section aria-label="Weekly tasks">
+    <section aria-label="Weekly tasks" className="paged-group">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3">
         <h3 className="toon-text-thin text-2xl tracking-wide text-white">Weekly tasks</h3>
         <p className="font-body text-sm font-semibold tabular-nums text-white/80">New in {fmtUntil(data.weekly.resetAt, now)}</p>
       </div>
-      <ul className="mt-2 flex flex-col gap-2">
+      <ul className="paged-group">
         {data.weekly.slots.map((s, i) => {
           const pct = s.need > 0 ? Math.min(100, (s.progress / s.need) * 100) : 0;
           return (
@@ -557,12 +634,12 @@ function Weekly({ data }: { data: PassDto }) {
 function Tester({ data }: { data: PassDto }) {
   const [open, setOpen] = useState<"bug" | "survey" | null>(null);
   return (
-    <section aria-label="Tester tasks">
+    <section aria-label="Tester tasks" className="paged-group">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3">
         <h3 className="toon-text-thin text-2xl tracking-wide text-white">Tester tasks</h3>
         <p className="font-body text-sm font-semibold text-white/80">Once each</p>
       </div>
-      <ul className="mt-2 flex flex-col gap-2">
+      <ul className="paged-group">
         {data.tester.map((t, i) => (
           <TesterRow key={t.id} t={t} index={i} open={open === t.id} onOpen={() => setOpen(open === t.id ? null : (t.id as "bug" | "survey"))} />
         ))}

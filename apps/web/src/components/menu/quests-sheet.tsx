@@ -13,6 +13,7 @@ import { PassTab } from "./pass-tab";
 import { useQuests } from "./quests-context";
 import { RewardsTab } from "./rewards-tab";
 import { fmtInt } from "./xp-bar";
+import { Paged } from "@/components/paged";
 
 /** "5h 12m", "12m", "<1m" until `at`. */
 export function fmtUntil(at: number, now: number): string {
@@ -89,7 +90,7 @@ function RegisterHint() {
 
 function Skeleton() {
   return (
-    <ul className="flex flex-col gap-2" aria-busy="true" aria-label="Loading">
+    <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden" aria-busy="true" aria-label="Loading">
       {[0, 1, 2].map((i) => (
         <li key={i} className="h-24 animate-pulse rounded-2xl bg-white/[0.06] motion-reduce:animate-none" />
       ))}
@@ -117,12 +118,12 @@ function TodayTab({ onRewards }: { onRewards: () => void }) {
   if (!data) return error ? <LoadError /> : <Skeleton />;
   const nextMark = nextMarkReward(data.marks);
   return (
-    <div className="flex flex-col gap-3">
+    <Paged gap={10} minCol={300} maxCols={2} label="Task pages">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <p className="font-body text-sm text-white/70">Finish tasks in your raids for bonus XP.</p>
         <p className="font-body text-xs lg:text-[0.8125rem] font-semibold tabular-nums text-white/70">New tasks in {fmtUntil(data.resetAt, now)}</p>
       </div>
-      <ul className="flex flex-col gap-2">
+      <ul className="paged-group">
         {data.slots.map((s) => (
           <TaskCard key={s.slot} slot={s} canSwap={data.rerollAvailable} />
         ))}
@@ -146,13 +147,20 @@ function TodayTab({ onRewards }: { onRewards: () => void }) {
           </p>
         </button>
       </div>
-      <ul className="font-body list-disc space-y-2.5 pl-5 text-xs lg:text-[0.8125rem] leading-snug text-white/75">
+      {/* The rules fold away: one tap instead of a block of text to scroll past. */}
+      <details className="font-body group rounded-2xl border-[3px] border-black bg-white/[0.05] px-3 text-xs leading-snug text-white/75 lg:text-[0.8125rem]">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-bold text-white/85 [&::-webkit-details-marker]:hidden">
+          How tasks work
+          <span aria-hidden className="text-base transition-transform group-open:rotate-90">›</span>
+        </summary>
+      <ul className="list-disc space-y-2.5 pb-3 pl-5">
         <li>Tasks count only in raids: an extract after 8+ minutes on the map, containers and bodies once each, real kills.</li>
         <li>Unfinished tasks carry over with their progress. One free swap a day.</li>
         <li>Each task pays {QUEST.XP} XP, up to {QUEST.DAILY_XP_MAX} a day, on top of the daily raid XP limit. No CR, no items.</li>
         <li>Each finished task is a mark toward cosmetic rewards.</li>
       </ul>
-    </div>
+      </details>
+    </Paged>
   );
 }
 

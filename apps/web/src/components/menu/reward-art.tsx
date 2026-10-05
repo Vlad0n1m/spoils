@@ -244,12 +244,12 @@ export function RewardCard({
           (celebrate || state === "claimable") && (celebrate ? "rw-shine" : "rw-shine-loop"),
         )}
       >
-        <p className="font-body relative z-[1] px-2 pt-1.5 text-center text-xs font-bold uppercase tracking-wider text-white/75">{rewardKindWord(item)}</p>
+        <p className={clsx("font-body relative z-[1] px-2 pt-1.5 text-center text-xs font-bold uppercase tracking-wider text-white/75", ribbon && "short:pt-3")}>{rewardKindWord(item)}</p>
         <div
           ref={artRef}
           className={clsx(
             "relative mx-2 mb-1 mt-1 grid place-items-center overflow-hidden rounded-xl border-2 border-black/60 px-1.5",
-            big ? "h-32 short:h-24" : "h-24 short:h-20",
+            big ? "h-32 short:h-20" : "h-24 short:h-16",
             item.kind === "skin" && "px-0",
           )}
           style={{
@@ -277,7 +277,7 @@ export function RewardCard({
       <div className="flex grow flex-col px-2 pb-2">
         <p className={clsx("text-center leading-tight tracking-wide text-white", big ? "text-base" : "text-sm")}>{rewardName(item)}</p>
         {detail && (
-          <p className="font-body mt-0.5 line-clamp-2 text-center text-xs leading-snug text-white/75" title={detail}>
+          <p className="font-body mt-0.5 line-clamp-2 text-center text-xs leading-snug text-white/75 short:line-clamp-1" title={detail}>
             {detail}
           </p>
         )}
@@ -481,7 +481,7 @@ export function RailStep({
     </span>
   );
   return (
-    <div className="relative flex h-14 items-center">
+    <div className="relative flex h-14 items-center short:h-11">
       {bar(l, "l")}
       <span className={clsx("relative z-[1] shrink-0", float && "rw-float")}>{node}</span>
       {bar(r, "r", last)}

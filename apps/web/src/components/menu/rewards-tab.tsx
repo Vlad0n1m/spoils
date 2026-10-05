@@ -5,7 +5,8 @@
  * and the XP bar to the next level, the next reward up front, then a horizontal road of level nodes
  * with a card per reward (drawn: nameplates, your nick in each colour, frames on your shield, trader
  * and market icons) — locked, next (pulsing) or unlocked with Wear — the task-mark road, and the
- * locker with everything owned. Presentation only: levels, marks and owned cosmetics come from
+ * locker with everything owned. No scrolling: the level road, the task-mark road and the locker are
+ * sub-pages behind a switch, and the roads are carousels (‹ ›, swipe, wheel). Presentation only: levels, marks and owned cosmetics come from
  * /api/quests and the stash, wearing goes through quests.equip.
  */
 import { useEffect, useRef, useState } from "react";
@@ -18,13 +19,22 @@ import { LevelBadge } from "./level-badge";
 import { useQuests } from "./quests-context";
 import { CardStatus, LockIcon, ProfilePlate, RailStep, RewardCard, TitlePlate, WearButton, type RewardState } from "./reward-art";
 import { fmtInt } from "./xp-bar";
+import { Paged, Segmented, useCarousel } from "@/components/paged";
 
 const WEARABLE = new Set<string>(["title", "color", "frame", "skin"]);
+
+type View = "level" | "marks" | "locker";
+const VIEWS: ReadonlyArray<{ id: View; label: string }> = [
+  { id: "level", label: "Level road" },
+  { id: "marks", label: "Task marks" },
+  { id: "locker", label: "Locker" },
+];
 
 export function RewardsTab({ loading, error }: { loading: React.ReactNode; error: React.ReactNode }) {
   const { data, error: failed } = useQuests();
   const { stash, user } = useLobby();
   const sell = stash.data?.market.sellUnlockLevel;
+  const [view, setView] = useState<View>("level");
   if (!data) return <>{failed ? error : loading}</>;
   const xp = stash.data?.xp ?? null;
   const p = xp !== null ? levelProgress(xp) : null;
@@ -61,9 +71,68 @@ export function RewardsTab({ loading, error }: { loading: React.ReactNode; error
   const nextMark = marks.find((m) => m.marks > data.marks)?.marks ?? null;
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Plate + XP bar | next reward */}
-      <section className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] short:grid-cols-1">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 short:gap-2">
+      {view === "level" ? (
+      <Road
+        lead={<Segmented options={VIEWS} value={view} onChange={setView} label="Rewards sections" />}
+        title="Level road"
+        sub="Every level reward is yours the moment you reach it."
+        groups={levels.map((g) => ({
+          key: g.level,
+          at: g.level,
+          items: g.items,
+        }))}
+        current={level + (p ? p.into / Math.max(1, p.need) : 0)}
+        node={(at, reached) => <LevelBadge level={at} size="md" className={clsx(!reached && "opacity-60 grayscale")} />}
+        label={(at) => `Level ${at}`}
+        renderCard={(it, at, reached, isNext, i) => (
+          <RewardCard
+            key={it.label}
+            item={it}
+            state={stateOf(it, reached, isNext)}
+            nick={nick}
+            level={level}
+            footer={footerOf(it, reached, `Level ${at}`)}
+            className="rw-card-in"
+            style={{ animationDelay: `${Math.min(i, 12) * 45}ms` }}
+          />
+        )}
+        you={`Lv ${level}`}
+      />
+      ) : view === "marks" ? (
+      <Road
+        lead={<Segmented options={VIEWS} value={view} onChange={setView} label="Rewards sections" />}
+        title="Task marks"
+        sub={`Each finished daily task is a mark. You have ${fmtInt(data.marks)}${nextMark ? ` — ${fmtInt(nextMark - data.marks)} to the next reward` : ""}.`}
+        groups={marks.map((g) => ({
+          key: g.marks,
+          at: g.marks,
+          items: g.items,
+        }))}
+        current={data.marks}
+        node={(at, reached) => (
+          <span
+            className={clsx(
+              "grid h-11 min-w-11 place-items-center rounded-full border-[3px] border-black px-1.5 text-sm tabular-nums shadow-[0_3px_0_#000]",
+              reached ? "bg-sky-300 text-black" : "bg-[#2a3350] text-white/85",
+            )}
+          >
+            <span className="optical-center">{at}</span>
+          </span>
+        )}
+        label={(at) => `${at} marks`}
+        renderCard={(it, at, reached, isNext) => (
+          <RewardCard key={it.label} item={it} state={stateOf(it, reached, isNext)} nick={nick} level={level} footer={footerOf(it, reached, `${at} marks`)} />
+        )}
+        you={`${fmtInt(data.marks)} ✓`}
+      />
+      ) : (
+        <>
+          <Segmented options={VIEWS} value={view} onChange={setView} label="Rewards sections" />
+          {/* Landscape phones: the plate beside the locker instead of above it. */}
+          <div className="flex min-h-0 flex-1 flex-col gap-3 short:grid short:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] short:grid-rows-[minmax(0,1fr)] short:gap-3">
+          {/* Plate + XP bar | next reward */}
+      <section className="grid shrink-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] short:grid-cols-1 short:content-start">
         <ProfilePlate nick={nick} level={level} equipped={data.equipped} founder={(data.granted ?? []).includes("b-founder")}>
           <div className="mt-2">
             <div className="flex items-baseline justify-between gap-2">
@@ -96,63 +165,13 @@ export function RewardsTab({ loading, error }: { loading: React.ReactNode; error
           <NextUp next={next} toGo={toGo} nick={nick} level={level} xpPct={pct} />
         </div>
       </section>
-
-      <Road
-        title="Level road"
-        sub="Every level reward is yours the moment you reach it."
-        groups={levels.map((g) => ({
-          key: g.level,
-          at: g.level,
-          items: g.items,
-        }))}
-        current={level + (p ? p.into / Math.max(1, p.need) : 0)}
-        node={(at, reached) => <LevelBadge level={at} size="md" className={clsx(!reached && "opacity-60 grayscale")} />}
-        label={(at) => `Level ${at}`}
-        renderCard={(it, at, reached, isNext, i) => (
-          <RewardCard
-            key={it.label}
-            item={it}
-            state={stateOf(it, reached, isNext)}
-            nick={nick}
-            level={level}
-            footer={footerOf(it, reached, `Level ${at}`)}
-            className="rw-card-in"
-            style={{ animationDelay: `${Math.min(i, 12) * 45}ms` }}
-          />
-        )}
-        you={`Lv ${level}`}
-      />
-
-      <Road
-        title="Task marks"
-        sub={`Each finished daily task is a mark. You have ${fmtInt(data.marks)}${nextMark ? ` — ${fmtInt(nextMark - data.marks)} to the next reward` : ""}.`}
-        groups={marks.map((g) => ({
-          key: g.marks,
-          at: g.marks,
-          items: g.items,
-        }))}
-        current={data.marks}
-        node={(at, reached) => (
-          <span
-            className={clsx(
-              "grid h-11 min-w-11 place-items-center rounded-full border-[3px] border-black px-1.5 text-sm tabular-nums shadow-[0_3px_0_#000]",
-              reached ? "bg-sky-300 text-black" : "bg-[#2a3350] text-white/85",
-            )}
-          >
-            <span className="optical-center">{at}</span>
-          </span>
-        )}
-        label={(at) => `${at} marks`}
-        renderCard={(it, at, reached, isNext) => (
-          <RewardCard key={it.label} item={it} state={stateOf(it, reached, isNext)} nick={nick} level={level} footer={footerOf(it, reached, `${at} marks`)} />
-        )}
-        you={`${fmtInt(data.marks)} ✓`}
-      />
-
-      <Locker owned={owned} data={data} level={level} nick={nick} />
-      <p className="font-body text-xs leading-snug text-white/75 lg:text-[0.8125rem]">
-        Rewards are earned only by playing — they can&apos;t be bought or traded, and they change nothing in a raid.
-      </p>
+          <Locker owned={owned} data={data} level={level} nick={nick} />
+          </div>
+          <p className="font-body shrink-0 text-xs leading-snug text-white/75 lg:text-[0.8125rem] short:hidden">
+            Rewards are earned only by playing — they can&apos;t be bought or traded, and they change nothing in a raid.
+          </p>
+        </>
+      )}
     </div>
   );
 }
@@ -195,7 +214,7 @@ function NextUp({
           </span>
         )}
       </div>
-      <div className="rw-track -my-1 flex max-w-full gap-3 overflow-x-auto px-2 py-2.5">
+      <div className="-my-1 flex max-w-full gap-3 overflow-hidden px-2 py-2.5">
         {next.items.map((it) => (
           <RewardCard key={it.label} item={it} state="next" nick={nick} level={level} />
         ))}
@@ -206,10 +225,12 @@ function NextUp({
 
 /**
  * A horizontal road: a rail with a node per step (level or marks), filled up to `current`, the
- * reward cards of each step under its node, and a YOU marker. Opens scrolled to the next step;
- * ‹ › scroll it with a mouse, a finger drags it.
+ * reward cards of each step under its node, and a YOU marker. A carousel, not a scroll area: it
+ * opens on the next step and turns a screenful at a time with ‹ ›, a swipe or the wheel. `lead`
+ * (the sub-page switch) heads the row with the arrows.
  */
 function Road({
+  lead,
   title,
   sub,
   groups,
@@ -219,6 +240,7 @@ function Road({
   renderCard,
   you,
 }: {
+  lead?: React.ReactNode;
   title: string;
   sub: string;
   groups: Array<{ key: number; at: number; items: RewardItem[] }>;
@@ -228,9 +250,8 @@ function Road({
   renderCard: (it: RewardItem, at: number, reached: boolean, isNext: boolean, index: number) => React.ReactNode;
   you: string;
 }) {
-  const track = useRef<HTMLDivElement>(null);
+  const { ref: track, edge, by, handlers } = useCarousel<HTMLDivElement>();
   const nextRef = useRef<HTMLLIElement>(null);
-  const [edge, setEdge] = useState({ start: true, end: false });
   const nextAt = groups.find((g) => g.at > current)?.at ?? null;
 
   useEffect(() => {
@@ -239,26 +260,8 @@ function Road({
     // Open with the last unlocked step at the left edge and the next one beside it.
     const prev = n?.previousElementSibling as HTMLElement | null;
     if (el && n) el.scrollLeft = Math.max(0, prev && prev.offsetWidth < el.clientWidth * 0.5 ? prev.offsetLeft - 8 : n.offsetLeft - 48);
-    onScroll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const onScroll = () => {
-    const el = track.current;
-    if (!el) return;
-    setEdge({
-      start: el.scrollLeft < 8,
-      end: el.scrollLeft + el.clientWidth > el.scrollWidth - 8,
-    });
-  };
-  const by = (dir: 1 | -1) => {
-    const el = track.current;
-    if (!el) return;
-    playUi("click");
-    el.scrollBy({
-      left: dir * el.clientWidth * 0.8,
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-    });
-  };
 
   let idx = 0;
   const steps = groups.map((g, i) => {
@@ -271,11 +274,12 @@ function Road({
     };
   });
   return (
-    <section aria-label={title}>
-      <div className="flex items-end justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="toon-text-thin text-2xl tracking-wide text-white">{title}</h3>
-          <p className="font-body text-sm text-white/80">{sub}</p>
+    <section aria-label={title} className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center justify-between gap-3">
+        {lead}
+        <div className="min-w-0 flex-1">
+          <h3 className="sr-only">{title}</h3>
+          <p className="font-body line-clamp-2 text-sm leading-snug text-white/80 short:text-xs">{sub}</p>
         </div>
         <div className="flex shrink-0 gap-2">
           {([-1, 1] as const).map((d) => (
@@ -284,8 +288,8 @@ function Road({
               type="button"
               onClick={() => by(d)}
               disabled={d < 0 ? edge.start : edge.end}
-              aria-label={d < 0 ? "Scroll back" : "Scroll on"}
-              className="menu-chip grid h-11 w-11 place-items-center bg-white text-black disabled:opacity-40"
+              aria-label={d < 0 ? "Earlier rewards" : "Later rewards"}
+              className="menu-chip grid h-11 w-11 place-items-center bg-white text-black disabled:opacity-40 short:h-9 short:w-9"
             >
               <svg viewBox="0 0 20 20" className="h-5 w-5" aria-hidden>
                 <path
@@ -303,17 +307,20 @@ function Road({
       </div>
       <div
         ref={track}
-        onScroll={onScroll}
-        className="rw-track mt-2 overflow-x-auto overscroll-x-contain rounded-2xl border-[3px] border-black bg-[linear-gradient(180deg,rgba(9,12,20,0.55),rgba(20,26,42,0.55))] shadow-[inset_0_3px_0_rgba(0,0,0,0.35)]"
+        {...handlers}
+        className="rw-track mt-2 overflow-hidden [touch-action:pan-y] rounded-2xl short:mt-1.5 border-[3px] border-black bg-[linear-gradient(180deg,rgba(9,12,20,0.55),rgba(20,26,42,0.55))] shadow-[inset_0_3px_0_rgba(0,0,0,0.35)]"
       >
-        <ol className="flex w-max px-2 pb-4 pt-2">
+        <ol className="flex w-max px-2 pb-4 pt-2 short:pb-2 short:pt-1">
           {steps.map(({ g, progIn, progOut }, i) => {
             const reached = current >= g.at;
             const isNext = g.at === nextAt;
             return (
               <li key={g.key} ref={isNext ? nextRef : undefined} className="flex flex-col" aria-label={`${label(g.at)}${reached ? ", unlocked" : ""}`}>
-                <RailStep progIn={progIn} progOut={progOut} node={node(g.at, reached)} you={you} first={i === 0} last={i === steps.length - 1} float={isNext} />
-                <p className={clsx("mb-2 mt-0.5 text-center text-sm tracking-wide", reached ? "text-zooa-lime" : isNext ? "text-white" : "text-white/75")}>
+                {/* Landscape phones: no rail, only the step's name above its cards, so the cards fit the height. */}
+                <div className="short:hidden">
+                  <RailStep progIn={progIn} progOut={progOut} node={node(g.at, reached)} you={you} first={i === 0} last={i === steps.length - 1} float={isNext} />
+                </div>
+                <p className={clsx("mb-2 mt-0.5 text-center text-sm tracking-wide short:mb-1.5 short:mt-0 short:text-xs", reached ? "text-zooa-lime" : isNext ? "text-white" : "text-white/75")}>
                   {reached ? `${label(g.at)} ✓` : label(g.at)}
                 </p>
                 <div className="flex justify-center gap-3 px-2">{g.items.map((it) => renderCard(it, g.at, reached, isNext, idx++))}</div>
@@ -336,14 +343,14 @@ const LOCKER: ReadonlyArray<{ kind: WearableKind; label: string }> = [
 /** Everything owned, by kind, to wear in one tap (level, marks and Alpha Pass rewards). */
 function Locker({ owned, data, level, nick }: { owned: ReadonlySet<string>; data: QuestsDto; level: number; nick: string }) {
   return (
-    <section aria-label="Locker">
-      <h3 className="toon-text-thin text-2xl tracking-wide text-white">Locker</h3>
-      <p className="font-body text-sm text-white/80">Everything you own. Tap to wear it, tap again to take it off.</p>
-      <div className="mt-2 grid gap-3 md:grid-cols-2">
+    <section aria-label="Locker" className="flex min-h-0 flex-1 flex-col">
+      <h3 className="sr-only">Locker</h3>
+      <p className="font-body shrink-0 text-sm text-white/80 short:text-xs">Everything you own. Tap to wear it, tap again to take it off.</p>
+      <Paged className="mt-2" gap={10} colGap={12} minCol={300} maxCols={2} label="Locker pages">
         {LOCKER.map((w) => (
           <LockerRow key={w.kind} kind={w.kind} label={w.label} owned={owned} data={data} level={level} nick={nick} />
         ))}
-      </div>
+      </Paged>
     </section>
   );
 }
