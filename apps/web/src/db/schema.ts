@@ -103,6 +103,12 @@ export const users = pgTable(
     badgeFrame: text("badge_frame"),
     /** Equipped character skin (Alpha Pass, migration 011), checked like the others. */
     skin: text("skin"),
+    /**
+     * iDos Games edition only (app/api/idos/session, migration 013): `{TitleID}/{iDos UserID}` of the
+     * iDos account this user was made for. NULL for every other account, so the main build never
+     * reads or writes it.
+     */
+    idosUserId: text("idos_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -115,6 +121,8 @@ export const users = pgTable(
     depositIdx: uniqueIndex("users_deposit_idx").on(t.depositAddress),
     /** One account per wallet (NULLs do not collide). */
     walletIdx: uniqueIndex("users_wallet_pubkey_idx").on(t.walletPubkey),
+    /** One account per iDos account (NULLs do not collide). */
+    idosIdx: uniqueIndex("users_idos_user_id_idx").on(t.idosUserId),
     /** WORLD v6 level board (xp desc). */
     xpIdx: index("users_xp_idx").on(t.xp.desc().nullsFirst()),
     creditsNonNeg: check("users_credits_non_negative", sql`${t.credits} >= 0`),
