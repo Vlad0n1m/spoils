@@ -12,6 +12,8 @@ import {
   POOL,
   armorPct,
   boundTraderLevel,
+  capBandAtTrader,
+  traderPriceCap,
   armorPoints,
   dogTagPairMult,
   junkSellCr,
@@ -146,6 +148,19 @@ test("market: fee rounds up, trimmed median, price band", () => {
   assert.deepEqual(priceBand(1000n, null), { min: 500n, max: 4000n });
   assert.deepEqual(priceBand(1000n, 700n), { min: 700n, max: 4000n });
   assert.equal(MARKET.LISTING_FEE_CR.length, 4);
+});
+
+test("trader price cap: the bound traders' CR price per def caps the listing band", () => {
+  assert.equal(traderPriceCap("shotgun"), 1500n);
+  assert.equal(traderPriceCap("armor_2"), 2600n);
+  assert.equal(traderPriceCap("pistol"), null, "not sold by a trader");
+  for (const o of BOUND_OFFERS) assert.equal(traderPriceCap(o.def), BigInt(o.cr), o.def);
+
+  assert.deepEqual(capBandAtTrader({ min: 1n, max: null }, 1500n), { min: 1n, max: 1500n });
+  assert.deepEqual(capBandAtTrader({ min: 500n, max: 4000n }, 1500n), { min: 500n, max: 1500n });
+  assert.deepEqual(capBandAtTrader({ min: 500n, max: 1000n }, 1500n), { min: 500n, max: 1000n }, "a lower band max stays");
+  assert.deepEqual(capBandAtTrader({ min: 2000n, max: 8000n }, 1500n), { min: 1500n, max: 1500n }, "the trader price stays allowed");
+  assert.deepEqual(capBandAtTrader({ min: 500n, max: 4000n }, null), { min: 500n, max: 4000n });
 });
 
 test("progression: xpToNext grows, levelForXp inverts it", () => {

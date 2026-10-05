@@ -3,8 +3,10 @@ import { sql } from "drizzle-orm";
 import {
   MARKET,
   MARKET_HARD_FLOOR_MINOR,
+  capBandAtTrader,
   marketFeeMinor,
   priceBand,
+  traderPriceCap,
   templateKey,
   trimmedMedian,
   type ItemCat,
@@ -42,6 +44,8 @@ export type ListErr =
   | "not_tradable"
   | "bad_price"
   | "price_out_of_band"
+  /** Above the bound traders' CR price for that def (traderPriceCap): the game's own shelf is the cap. */
+  | "above_trader_price"
   | "insufficient_credits"
   | "market_paused";
 
@@ -67,7 +71,7 @@ export interface ListOpts {
 
 export type ListResult =
   | { ok: true; listingId: string; feeCr: number; visibleAt: number; credits: number }
-  | { ok: false; code: ListErr; band?: { min: string; max: string | null } };
+  | { ok: false; code: ListErr; band?: { min: string; max: string | null }; traderCap?: string };
 
 class Abort<C extends string> extends Error {
   constructor(readonly code: C) {
@@ -78,7 +82,9 @@ class Abort<C extends string> extends Error {
 /**
  * Puts a stash unique up for sale. Rules: seller level ≥ unlock level, under the active-lot cap,
  * item owned and in_stash, not bound, giveaway lock spent (lock_raids = 0), durability > 0, price
- * inside the band around a valid price index (critique: "price band once the index is valid"),
+ * inside the band around a valid price index (critique: "price band once the index is valid") and
+ * never above the bound traders' CR price for that def (above_trader_price: the game's own shelf
+ * caps the player market, so gear that entered outside the CR loop cannot be flipped above it),
  * CR listing fee paid. The user row is locked first so the cap and the CR fee cannot race.
  */
 export async function createListing(
@@ -115,13 +121,13 @@ export async function createListing(
 
       const index = await priceIndex(tx, template, now);
       const band = priceBand(index, MARKET_HARD_FLOOR_MINOR[clampRarity(it.rarity)]);
-      if (price < band.min || (band.max !== null && price > band.max)) {
-        return {
-          ok: false,
-          code: "price_out_of_band",
-          band: { min: band.min.toString(), max: band.max?.toString() ?? null },
-        } as const;
-      }
+      // "A listing may not exceed the game's own price": a def the bound traders sell is capped at
+      // their CR price, so no lot ever asks more than the shelf (traderPriceCap, anti-arbitrage).
+      const cap = traderPriceCap(it.defId);
+      const allowed = capBandAtTrader(band, cap);
+      const shown = { min: allowed.min.toString(), max: allowed.max?.toString() ?? null };
+      if (cap !== null && price > cap) return { ok: false, code: "above_trader_price", band: shown, traderCap: cap.toString() } as const;
+      if (price < allowed.min || (allowed.max !== null && price > allowed.max)) return { ok: false, code: "price_out_of_band", band: shown } as const;
 
       const listingId = randomUUID();
       const feeCr = listingFeeCr(it.rarity);
@@ -504,10 +510,15 @@ export async function marketHistory(
 }
 
 /** Allowed listing band for a template right now (list dialog hint). */
+/**
+ * The listing band of a template as createListing applies it: the index band, capped at the bound
+ * traders' CR price of the template's def (`traderCap`, null when no trader sells it).
+ */
 export async function bandFor(db: Db, template: string, rarity: number, now = new Date()) {
   const index = await priceIndex(db, template, now);
-  const band = priceBand(index, MARKET_HARD_FLOOR_MINOR[clampRarity(rarity)]);
-  return { index, band };
+  const traderCap = traderPriceCap(defOfTemplate(template));
+  const band = capBandAtTrader(priceBand(index, MARKET_HARD_FLOOR_MINOR[clampRarity(rarity)]), traderCap);
+  return { index, band, traderCap };
 }
 
 function clampRarity(r: number): Rarity {

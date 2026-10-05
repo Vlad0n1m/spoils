@@ -19,7 +19,7 @@ const MESSAGES: Record<string, string> = {
   not_found: "That item is not in your stash.",
   not_in_stash: "That item is not in your stash (equipped, listed or in a raid).",
   bound: "Trader-bound items can't be sold.",
-  trade_locked: "Starter-kit items unlock for trading after you extract with them.",
+  trade_locked: "Starter-kit and shop items unlock for trading after you extract with them (shop crates: 3 raids).",
   broken: "Worn-out items can't be sold.",
   not_tradable: "That item can't be traded.",
   bad_price: "Enter a price above zero.",
@@ -44,10 +44,19 @@ export async function POST(req: Request) {
     const message =
       r.code === "level_locked"
         ? `Selling unlocks at level ${rules.sellUnlockLevel}.`
-        : r.code === "price_out_of_band" && r.band
-          ? `Price must be between ${formatPrice(r.band.min)} and ${r.band.max ? formatPrice(r.band.max) : "∞"} right now.`
-          : (MESSAGES[r.code] ?? r.code);
-    const status = r.code === "no_user" ? 401 : r.code === "market_paused" ? 503 : r.code === "price_out_of_band" || r.code === "bad_price" ? 400 : 409;
+        : r.code === "above_trader_price" && r.traderCap
+          ? `The traders sell this for ${formatPrice(r.traderCap)}: a lot can't ask more than the game's own price.`
+          : r.code === "price_out_of_band" && r.band
+            ? `Price must be between ${formatPrice(r.band.min)} and ${r.band.max ? formatPrice(r.band.max) : "∞"} right now.`
+            : (MESSAGES[r.code] ?? r.code);
+    const status =
+      r.code === "no_user"
+        ? 401
+        : r.code === "market_paused"
+          ? 503
+          : r.code === "price_out_of_band" || r.code === "above_trader_price" || r.code === "bad_price"
+            ? 400
+            : 409;
     return apiError(status, r.code, message);
   }
   return json(r);

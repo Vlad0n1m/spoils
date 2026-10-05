@@ -74,9 +74,9 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
             selectedId={selectedId}
             onPickUnique={(u) => setSelectedId(u.id === selectedId ? null : u.id)}
             emptyHint={
-              EDITION_UI.market
+              EDITION_UI.starterKitSale
                 ? "Your stash is empty. Buy a starter kit, buy gear on the Market, or extract with loot."
-                : "Your stash is empty. Buy gear from the traders or extract with loot."
+                : "Your stash is empty. Buy gear from the traders or on the Market, or extract with loot."
             }
           />
         </div>
@@ -141,10 +141,10 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
         )}
       </div>
 
-      {EDITION_UI.market && money && selling && (
+      {EDITION_UI.market && stash.market && selling && (
         <ListDialog
           item={selling}
-          market={money.market}
+          market={stash.market}
           credits={stash.credits}
           onClose={() => setSelling(null)}
           onListed={async () => {
@@ -246,7 +246,7 @@ export function sellBlocker(u: StashItemDto, level: number, unlockLevel: number)
   if (u.state === "in_raid") return "Locked in your loadout or a raid.";
   if (u.bound) return "Trader-bound items can't be sold.";
   if (u.dur <= 0) return "Worn out — can't be sold.";
-  if (u.lockRaids > 0) return `Starter-kit lock: extract with it ${u.lockRaids} more ${u.lockRaids === 1 ? "time" : "times"} to unlock trading.`;
+  if (u.lockRaids > 0) return `Trade lock: extract with it ${u.lockRaids} more ${u.lockRaids === 1 ? "time" : "times"} to unlock trading.`;
   if (level < unlockLevel) return `Selling unlocks at level ${unlockLevel}.`;
   return null;
 }

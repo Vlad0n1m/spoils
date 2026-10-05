@@ -198,31 +198,35 @@ describe("SOL economy gate (iDos edition)", () => {
     assert.equal(SOL_ECONOMY, true);
   });
 
-  it("hides every SOL piece of the UI in the edition and none in the main build", () => {
+  it("hides every SOL piece of the UI in the edition and none in the main build; the CR market shows in both", () => {
     for (const v of Object.values(editionUi(false))) assert.equal(v, true);
-    for (const v of Object.values(editionUi(true))) assert.equal(v, false);
+    const { market, ...sol } = editionUi(true);
+    for (const v of Object.values(sol)) assert.equal(v, false);
+    assert.equal(market, true, "the player market runs on CR, so the edition keeps it");
     assert.deepEqual(EDITION_UI, editionUi(false));
   });
 
   it("the edition answers 404 on the SOL economy API", () => {
     for (const p of [
-      "/api/market/buy",
-      "/api/market/list",
-      "/api/market/cancel",
-      "/api/market/listings",
-      "/api/market/history",
-      "/api/market",
       "/api/wallet/dev-topup",
       "/api/wallet/link",
       "/api/wallet/link/nonce",
       "/api/withdraw",
       "/api/withdraw/",
       "/api/stash/starter",
-      "/API/Market/Buy",
+      "/API/Wallet/Link",
       "/api/economy/stats",
+      "/api/onchain/kit",
     ]) {
       assert.equal(editionBlock(p, true), "api", p);
       assert.equal(editionBlock(p, false), null, `main build serves ${p}`);
+    }
+  });
+
+  it("the edition serves the CR player market", () => {
+    for (const p of ["/api/market/buy", "/api/market/list", "/api/market/cancel", "/api/market/listings", "/api/market/history"]) {
+      assert.equal(editionBlock(p, true), null, p);
+      assert.equal(editionBlock(p, false), null, p);
     }
   });
 
@@ -253,10 +257,14 @@ describe("SOL economy gate (iDos edition)", () => {
     for (const p of ["/wallet", "/economy"]) assert.equal(editionBlock(p, false), null, p);
   });
 
-  it("the main build answers 404 on the edition-only bridge", () => {
+  it("the main build answers 404 on the edition-only bridge and SPOILS shop", () => {
     assert.equal(editionBlock("/api/idos/session", false), "api");
+    assert.equal(editionBlock("/api/idos/shop", false), "api");
+    assert.equal(editionBlock("/api/idos/shop/buy", false), "api");
+    assert.equal(editionBlock("/api/idos/balance", false), "api");
     assert.equal(editionBlock("/api/idos", false), "api");
     assert.equal(editionBlock("/api/idosx", false), null);
+    for (const p of ["/api/idos/shop", "/api/idos/shop/buy", "/api/idos/balance"]) assert.equal(editionBlock(p, true), null, p);
   });
 
   it("lists only real route prefixes", () => {

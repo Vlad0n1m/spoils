@@ -98,7 +98,10 @@ export interface HistoryResponse {
   daily: PricePoint[];
   /** Trimmed-median price index, null until enough independent trades exist. */
   index: string | null;
+  /** The allowed listing band now (already capped at traderCap). */
   band: { min: string; max: string | null } | null;
+  /** The bound traders' CR price for the template's def: no lot may ask more. Null when no trader sells it. */
+  traderCap?: string | null;
 }
 
 /** Error body of every lobby mutation: `error` is a stable code, `message` is UI text. */

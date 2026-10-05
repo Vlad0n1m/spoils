@@ -43,7 +43,9 @@ function utcDayStart(now: Date): Date {
 
 /**
  * Kits this user bought since the start of the UTC day: money_ledger kit_buy rows (market balance)
- * plus wallet payments in flight or done (onchain_ops kit, lib/onchain).
+ * plus wallet payments in flight or done (onchain_ops kit, lib/onchain) plus kits delivered by the iDos
+ * edition's SPOILS shop (idos_orders starter_kit, lib/idos/shop.ts): one daily cap however the kit
+ * was paid.
  */
 export async function kitsBoughtToday(db: Db | Tx, userId: string, now = new Date()): Promise<number> {
   const since = utcDayStart(now).toISOString();
@@ -52,6 +54,8 @@ export async function kitsBoughtToday(db: Db | Tx, userId: string, now = new Dat
           (select count(*) from money_ledger where account = ${userId} and reason = 'kit_buy' and at >= ${since})
           + (select count(*) from onchain_ops where user_id = ${userId} and action = 'kit'
                and status in ('sent', 'done') and created_at >= ${since})
+          + (select count(*) from idos_orders where user_id = ${userId} and product = 'starter_kit'
+               and status = 'delivered' and created_at >= ${since})
         )::int as n`,
   );
   return Number(r.rows[0]?.n ?? 0);

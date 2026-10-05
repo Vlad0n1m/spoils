@@ -1100,7 +1100,8 @@ export const passUnlocks = pgTable(
   },
   (t) => ({
     pk: primaryKey({ columns: [t.userId, t.rewardId] }),
-    source: check("pass_unlocks_source", sql`${t.source} in ('pass', 'trophy', 'invite')`),
+    // 'donation': the iDos edition's Supporter / Patron titles (lib/idos/shop.ts, migration 017).
+    source: check("pass_unlocks_source", sql`${t.source} in ('pass', 'trophy', 'invite', 'donation')`),
   }),
 );
 
@@ -1277,5 +1278,37 @@ export const onchainOps = pgTable(
     userIdx: index("onchain_ops_user_idx").on(t.userId, t.createdAt),
     statusIdx: index("onchain_ops_status_idx").on(t.status, t.createdAt),
     sigIdx: uniqueIndex("onchain_ops_signature_idx").on(t.signature),
+  }),
+);
+
+// ---------------------------------------------------------------------------- iDos edition SPOILS shop
+
+/**
+ * Orders of the iDos edition's SPOILS shop (lib/idos/shop.ts, migration 017). One row per (user, client
+ * request id), so a retried click finds its order instead of paying twice. pending → paid → delivered;
+ * failed when iDos took nothing; refund_owed when iDos took part of the price (the 100k leg) and the rest
+ * failed: we deliver nothing and owe the player `spoils_paid` back by hand. Amounts are whole SPOILS.
+ */
+export const idosOrders = pgTable(
+  "idos_orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    product: text("product").notNull(),
+    requestId: text("request_id").notNull(),
+    usdCents: integer("usd_cents").notNull(),
+    spoilsQuoted: bigint("spoils_quoted", { mode: "number" }).notNull(),
+    spoilsPaid: bigint("spoils_paid", { mode: "number" }).notNull().default(0),
+    status: text("status").$type<"pending" | "paid" | "delivered" | "failed" | "refund_owed">().notNull().default("pending"),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    once: uniqueIndex("idos_orders_request_idx").on(t.userId, t.requestId),
+    productIdx: index("idos_orders_product_idx").on(t.product, t.status, t.createdAt),
+    status: check("idos_orders_status", sql`${t.status} in ('pending', 'paid', 'delivered', 'failed', 'refund_owed')`),
   }),
 );

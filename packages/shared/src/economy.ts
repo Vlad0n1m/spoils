@@ -464,6 +464,34 @@ export function boundTraderLevel(level: number): 1 | 2 | 3 | 4 {
 export function boundOffer(def: string): BoundOffer | null {
   return BOUND_OFFERS.find((o) => o.def === def) ?? null;
 }
+
+/**
+ * The game's own CR price for `def`: what the bound traders ask for it (the cheapest offer if a def
+ * were ever sold twice), or null when no trader sells it. Rarity-agnostic on purpose: a trader sells
+ * one fixed rarity of a def, and a player lot of that def must never cost more CR than the game's own
+ * shelf (the anti-arbitrage cap of the player market, apps/web lib/market/market.ts). Otherwise gear
+ * that entered the game outside the CR loop (the iDos edition's SPOILS crates) could be resold for
+ * more CR than any raider pays the trader for the same def.
+ */
+export function traderPriceCap(def: string): bigint | null {
+  let best: number | null = null;
+  for (const o of BOUND_OFFERS) if (o.def === def && (best === null || o.cr < best)) best = o.cr;
+  return best === null ? null : BigInt(best);
+}
+
+/**
+ * priceBand with the trader cap applied: max = min(band max, cap). If the band's floor sits above the
+ * cap (a template whose index outgrew the trader), the floor drops to the cap, so exactly one price,
+ * the trader's, stays allowed instead of none. No cap: the band unchanged.
+ */
+export function capBandAtTrader(
+  band: { min: bigint; max: bigint | null },
+  cap: bigint | null,
+): { min: bigint; max: bigint | null } {
+  if (cap === null) return band;
+  const max = band.max === null || band.max > cap ? cap : band.max;
+  return { min: band.min > max ? max : band.min, max };
+}
 /** CUT for v2 — exported but unused. Index: weapon by rarity, armor/backpack by level. */
 export const REPAIR_CR_PER_POINT = { weapon: [4, 8, 14, 24], armor: [0, 1.5, 2.5, 4], backpack: [0, 1, 2, 3] } as const;
 export const REPAIR_MAX_DECAY = 0.1;
@@ -1431,10 +1459,11 @@ export interface CosmeticDef {
   /** The frame pulses (prefers-reduced-motion keeps it still). */
   animated?: boolean;
   /**
-   * Granted, not reached: Alpha Pass tiers, the alpha top-10 trophy and the invite reward (pass.ts).
+   * Granted, not reached: Alpha Pass tiers, the alpha top-10 trophy and the invite reward (pass.ts),
+   * and the iDos edition's donation titles (apps/web lib/idos/shop.ts, "donation").
    * Owned only through a pass_unlocks row (migration 011), which the alpha wipe never touches.
    */
-  grant?: "pass" | "trophy" | "invite";
+  grant?: "pass" | "trophy" | "invite" | "donation";
 }
 
 const COSMETIC_LIST: readonly CosmeticDef[] = [
@@ -1484,6 +1513,11 @@ const COSMETIC_LIST: readonly CosmeticDef[] = [
   { id: "t-foreman-slayer", kind: "title", name: "Foreman Slayer", grant: "trophy" },
   { id: "t-commander-slayer", kind: "title", name: "Commander Slayer", grant: "trophy" },
   { id: "t-warden-slayer", kind: "title", name: "Warden Slayer", grant: "trophy" },
+  // iDos edition SPOILS shop (apps/web lib/idos/shop-rules.ts): a donation to the developers leaves a
+  // thank-you title, once per account (buying again only records the donation). A title only: no
+  // power and nothing tradable, so "no power for money" above still holds.
+  { id: "supporter", kind: "title", name: "Supporter", grant: "donation" },
+  { id: "patron", kind: "title", name: "Patron", grant: "donation" },
 ];
 
 /** Every cosmetic by id. */

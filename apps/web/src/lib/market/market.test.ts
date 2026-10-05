@@ -13,7 +13,7 @@ import { closeTestDb, lockTestDb, makeItem, makeUser, openTestDb, resetDb } from
 import { PARAM, setParam } from "../economy/params";
 import { seedEconomy } from "../economy/seed";
 import { getEconomyStats } from "../lobby/economy-stats";
-import { browseListings, buyListing, cancelListing, createListing, expireListings, marketHistory, myListings } from "./market";
+import { bandFor, browseListings, buyListing, cancelListing, createListing, expireListings, marketHistory, myListings } from "./market";
 import { buyBound, buyConsumables } from "./trader";
 
 const { db, pool } = openTestDb();
@@ -139,7 +139,7 @@ test("buy: CR moves with a 5% fee, item changes owner, trade recorded", async ()
   const rows = await db.select().from(creditLedger).where(eq(creditLedger.refId, listingId));
   assert.deepEqual(rows.map((x) => [x.reason, x.delta]).sort(), [["listing_fee", -MARKET.LISTING_FEE_CR[1]], ["market_buy", -1000], ["market_sale", 950]]);
   // The buyer now owns it and can list it again.
-  assert.ok((await createListing(db, buyer, itemId, 2000n, OPTS)).ok);
+  assert.ok((await createListing(db, buyer, itemId, 1500n, OPTS)).ok);
 });
 
 test("stop-crane market_paused (admin): no new lots, no sales, nothing charged; cancelling still works; 0 reopens", async () => {
@@ -266,17 +266,17 @@ test("price band: once the index is valid, far-off prices are refused", async ()
   for (let s = 0; s < 5; s++) {
     const seller = await user();
     for (let k = 0; k < 2; k++) {
-      const { listingId } = await listed(seller, "rifle", BigInt(950 + s * 20 + k * 10), 1);
+      const { listingId } = await listed(seller, "pistol", BigInt(950 + s * 20 + k * 10), 1);
       const b = await user(10_000n);
       assert.ok((await buyListing(db, b, listingId)).ok);
     }
   }
-  const hist = await marketHistory(db, "weapon:rifle:1");
+  const hist = await marketHistory(db, "weapon:pistol:1");
   assert.ok(hist.index !== null && hist.index >= 950n && hist.index <= 1050n, String(hist.index));
   assert.equal(hist.trades.length, 10);
   assert.equal(hist.daily.reduce((s, d) => s + d.volume, 0), 10);
   const seller = await user();
-  const cheap = await makeItem(db, { def: "rifle", rarity: 1, ownerId: seller });
+  const cheap = await makeItem(db, { def: "pistol", rarity: 1, ownerId: seller });
   const low = await createListing(db, seller, cheap, 100n, OPTS);
   assert.equal(!low.ok && low.code, "price_out_of_band");
   const high = await createListing(db, seller, cheap, 100_000n, OPTS);
@@ -286,6 +286,28 @@ test("price band: once the index is valid, far-off prices are refused", async ()
   const sg = await makeItem(db, { def: "shotgun", rarity: 0, ownerId: seller });
   assert.ok((await createListing(db, seller, sg, 1n, OPTS)).ok);
   assert.ok(buyer);
+});
+
+test("a lot never asks more than the traders' CR price for its def (any rarity); other defs keep the band", async () => {
+  const seller = await user(10_000n, 10);
+  const cap = boundOffer("shotgun")!.cr;
+  for (const rarity of [0, 2]) {
+    const sg = await makeItem(db, { def: "shotgun", rarity, ownerId: seller });
+    const over = await createListing(db, seller, sg, BigInt(cap + 1), OPTS);
+    assert.equal(!over.ok && over.code, "above_trader_price");
+    assert.equal(!over.ok && over.traderCap, String(cap));
+    assert.deepEqual(!over.ok && over.band, { min: "1", max: String(cap) });
+    assert.equal((await itemRow(sg)).state, "in_stash", "nothing listed, no fee");
+    assert.ok((await createListing(db, seller, sg, BigInt(cap), OPTS)).ok, "exactly the trader price is fine");
+  }
+  // The pistol is not sold by the traders: no cap.
+  const p = await makeItem(db, { def: "pistol", rarity: 0, ownerId: seller });
+  assert.ok((await createListing(db, seller, p, 9_000n, OPTS)).ok);
+  // The history band the sell dialog shows is capped the same way.
+  const b = await bandFor(db, "weapon:shotgun:0", 0);
+  assert.equal(b.traderCap, BigInt(cap));
+  assert.equal(b.band.max, BigInt(cap));
+  assert.equal((await bandFor(db, "weapon:pistol:0", 0)).traderCap, null);
 });
 
 test("junker: CR → stacks, idempotent per request id, refuses overdraft", async () => {
@@ -329,7 +351,7 @@ test("economy stats: faucets, sinks, pool, treasury and trades add up", async ()
   await seedEconomy(db, { poolItems: 5, listings: 2, rng: mulberry32(11) });
   const seller = await user();
   const buyer = await user(10_000n);
-  const { listingId } = await listed(seller, "rifle", 2000n, 0);
+  const { listingId } = await listed(seller, "pistol", 2000n, 0);
   assert.ok((await buyListing(db, buyer, listingId)).ok);
   assert.ok((await buyConsumables(db, buyer, "bandage", 1, randomUUID())).ok);
   const s = await getEconomyStats(db);
@@ -341,7 +363,7 @@ test("economy stats: faucets, sinks, pool, treasury and trades add up", async ()
   assert.equal(s.credits.outAll, MARKET.LISTING_FEE_CR[0] + CONSUMABLES_CR.bandage.cr + 100, "listing fee + bandage + burned sale fee");
   assert.equal(s.credits.circulating, 1000 + 10_000 - 100 - MARKET.LISTING_FEE_CR[0] - CONSUMABLES_CR.bandage.cr);
   assert.equal(s.players.registered, 2);
-  assert.equal(s.items.circulating, 3, "bought rifle + 2 treasury lots");
+  assert.equal(s.items.circulating, 3, "bought pistol + 2 treasury lots");
 });
 
 test("migration 014: open SOL-era lots close, items return to stash / treasury, old trades leave the index", async () => {

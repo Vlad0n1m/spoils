@@ -102,6 +102,13 @@ async function main(): Promise<void> {
     }
     // For the lobby's "back to the menu" reloads (apps/web lib/play-url.ts).
     (window as { __SPOILS_PLAY_URL__?: string }).__SPOILS_PLAY_URL__ = playUrl();
+    // The iDos session for the lobby's SPOILS shop (apps/web lib/idos/client-session.ts): it pays from
+    // the player's iDos balance with the current ticket. Getters, because the SDK refreshes its session.
+    (window as { __SPOILS_IDOS__?: unknown }).__SPOILS_IDOS__ = {
+      titleId: titleID,
+      userId: () => client.auth.context?.userID,
+      ticket: () => client.auth.context?.clientSessionTicket,
+    };
     const { mountGame } = await import("./app");
     mountGame(app);
   };

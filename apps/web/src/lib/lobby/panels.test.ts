@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { NO_PANEL, PANEL_HOTKEYS, PANEL_TABS, normalizePanel, panelHref, panelTabsFor, parseLobbyPanel, samePanel } from "./panels";
+import { NO_PANEL, PANEL_HOTKEYS, PANEL_TABS, normalizePanel, panelHref, panelTabsFor, parseLobbyPanel, samePanel, visibleTabs } from "./panels";
 
 describe("parseLobbyPanel", () => {
   it("no params → no panel", () => {
@@ -81,17 +81,25 @@ describe("hotkeys", () => {
   });
 });
 
-describe("iDos edition tabs (no SOL market)", () => {
+describe("iDos edition tabs (CR market + SPOILS shop)", () => {
   const edition = panelTabsFor(true);
-  it("the main build keeps Market first in Shop", () => {
+  it("the main build keeps Market first in Shop and has no SPOILS tab", () => {
     assert.deepEqual(panelTabsFor(false).shop, ["market", "traders"]);
     assert.deepEqual(PANEL_TABS.shop, ["market", "traders"]);
+    assert.deepEqual(normalizePanel("shop", "spoils"), { panel: "shop", tab: "market", period: null });
   });
 
-  it("the edition's Shop is Traders only, and market links land on Traders", () => {
-    assert.deepEqual(edition.shop, ["traders"]);
-    assert.deepEqual(normalizePanel("shop", "market", null, edition), { panel: "shop", tab: "traders", period: null });
-    assert.deepEqual(normalizePanel("shop", null, null, edition), { panel: "shop", tab: "traders", period: null });
+  it("the edition's Shop is Market, Traders and SPOILS; market links stay on Market", () => {
+    assert.deepEqual(edition.shop, ["market", "traders", "spoils"]);
+    assert.deepEqual(normalizePanel("shop", "market", null, edition), { panel: "shop", tab: "market", period: null });
+    assert.deepEqual(normalizePanel("shop", "spoils", null, edition), { panel: "shop", tab: "spoils", period: null });
+    assert.deepEqual(normalizePanel("shop", null, null, edition), { panel: "shop", tab: "market", period: null });
     for (const p of ["inventory", "info", "news", "leaderboards", "friends"] as const) assert.deepEqual(edition[p], PANEL_TABS[p], p);
+  });
+
+  it("the SPOILS tab shows only inside the iDos client", () => {
+    assert.deepEqual(visibleTabs(edition.shop, false), ["market", "traders"]);
+    assert.deepEqual(visibleTabs(edition.shop, true), ["market", "traders", "spoils"]);
+    assert.deepEqual(visibleTabs(PANEL_TABS.inventory, false), PANEL_TABS.inventory);
   });
 });

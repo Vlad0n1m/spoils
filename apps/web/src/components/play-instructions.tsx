@@ -129,15 +129,16 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 export function RulesSection() {
   return (
     <div className="paged-group">
-      {!EDITION_UI.market && (
+      {!SOL_ECONOMY && (
         <Block title="Credits">
           <p>
-            CR is earned from junk you bring out (sold automatically) and spent at the traders on ammo, meds and bound gear.
-            Credits stay in the game: they never turn into money.
+            CR is earned from junk you bring out (sold automatically) and spent at the traders on ammo, meds and bound gear,
+            or on the market, where raiders trade gear for CR (a lot never costs more than the traders ask). Credits stay in
+            the game: they never turn into money.
           </p>
         </Block>
       )}
-      {EDITION_UI.market && (
+      {SOL_ECONOMY && (
       <Block title="Two currencies">
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
           <dt className="font-bold text-amber-300">CR</dt>
