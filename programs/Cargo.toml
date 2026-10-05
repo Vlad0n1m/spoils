@@ -1,6 +1,6 @@
 # Self-contained Anchor workspace (programs/Anchor.toml): nothing here touches the pnpm workspace.
 [workspace]
-members = ["spoils-events"]
+members = ["spoils-events", "spoils-market"]
 resolver = "2"
 
 [profile.release]

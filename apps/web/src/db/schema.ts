@@ -309,6 +309,8 @@ export const itemStateEnum = pgEnum("item_state", [
   "lost_pool",
   "treasury",
   "destroyed",
+  /** Sent to the owner's wallet as a SPOILS Metaplex Core asset (lib/onchain); chain_asset names it. */
+  "onchain",
 ]);
 
 export const itemOriginEnum = pgEnum("item_origin", [
@@ -366,11 +368,17 @@ export const items = pgTable(
     /** Giveaway lock: raids the item must still be extracted in (by anyone) before it can be listed. */
     lockRaids: smallint("lock_raids").notNull().default(0),
     version: integer("version").notNull().default(0),
+    /**
+     * The item's Metaplex Core asset once it was first sent to a wallet (lib/onchain). Kept when the
+     * item comes back into the game (the asset then sits in the game vault and is reused next time).
+     */
+    chainAsset: text("chain_asset"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     ownerState: index("items_owner_state_idx").on(t.ownerId, t.state),
+    chainAsset: uniqueIndex("items_chain_asset_idx").on(t.chainAsset),
     match: index("items_match_idx").on(t.matchId),
     loadout: index("items_loadout_idx").on(t.loadoutId),
     pool: index("items_state_def_idx").on(t.state, t.defId, t.rarity),
@@ -1231,3 +1239,41 @@ export interface InvariantCheckResult {
 }
 
 export type InvariantRunRow = typeof invariantRuns.$inferSelect;
+
+/**
+ * On-chain operations (lib/onchain, migration 015). The server builds every transaction a player
+ * signs and keeps its message here, so /api/onchain/submit only relays exactly what it built:
+ * export (server-signed mint or vault transfer to the player's wallet), import (wallet → vault),
+ * kit (SOL payment to the treasury), list / buy / cancel on the spoils_market escrow. Effects in
+ * the game (item state, kit grant) are applied once, when the op turns `done`.
+ */
+export const onchainOps = pgTable(
+  "onchain_ops",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull(),
+    wallet: text("wallet").notNull(),
+    /** export | import | kit | list | buy | cancel */
+    action: text("action").notNull(),
+    itemId: uuid("item_id"),
+    asset: text("asset"),
+    /** Lamports moved by the op (kit price, listing price), as text. */
+    lamports: text("lamports"),
+    /** Base64 transaction message the signer must sign (exact match at submit). */
+    message: text("message").notNull(),
+    /** prepared → sent → done | failed | expired */
+    status: text("status").notNull().default("prepared"),
+    signature: text("signature"),
+    /** Fully signed transaction (base64) once known, so an unconfirmed send can be re-checked. */
+    signedTx: text("signed_tx"),
+    lastValidBlockHeight: bigint("last_valid_block_height", { mode: "number" }).notNull(),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+  },
+  (t) => ({
+    userIdx: index("onchain_ops_user_idx").on(t.userId, t.createdAt),
+    statusIdx: index("onchain_ops_status_idx").on(t.status, t.createdAt),
+    sigIdx: uniqueIndex("onchain_ops_signature_idx").on(t.signature),
+  }),
+);

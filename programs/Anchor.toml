@@ -11,12 +11,14 @@ skip-lint = false
 
 [programs.devnet]
 spoils_events = "8Jc6sbbLY7PoJ2wms33k9MzYmMBdidH96vX4nLFbqf9B"
+spoils_market = "3eu7K4GkLw1CA74Z4JSadBjsxZHNpaauWTtky6u52eGB"
 
 [programs.localnet]
 spoils_events = "8Jc6sbbLY7PoJ2wms33k9MzYmMBdidH96vX4nLFbqf9B"
+spoils_market = "3eu7K4GkLw1CA74Z4JSadBjsxZHNpaauWTtky6u52eGB"
 
 [workspace]
-members = ["spoils-events"]
+members = ["spoils-events", "spoils-market"]
 
 [registry]
 url = "https://api.apr.dev"
@@ -26,4 +28,4 @@ cluster = "devnet"
 wallet = ".keys/deploy.json"
 
 [scripts]
-test = "cargo test -p spoils-events"
+test = "cargo test -p spoils-events -p spoils-market"

@@ -61,7 +61,7 @@ export async function resetDb(db: Db): Promise<void> {
   await db.execute(sql`truncate table
     users, items, item_events, stash_stacks, loadouts, loadout_drafts, raids, raid_exits, raid_entries, pvp_kills,
     credit_ledger, dog_tag_payouts, economy_params, economy_daily, listings, trades, money_ledger,
-    match_results, deposits, withdrawals, chain_events
+    match_results, deposits, withdrawals, chain_events, onchain_ops
     restart identity cascade`);
   // Tests build pools of a dozen items: the live release floor (POOL.MIN_RESERVE) is off unless a test sets it.
   await db.execute(sql`insert into economy_params (key, value) values ('pool_min_reserve', '0'::jsonb)`);
