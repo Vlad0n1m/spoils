@@ -185,6 +185,10 @@ function StarterKitCard({ stash, buying, onBuy }: { stash: StashResponse & Stash
       Not enough in your wallet.{" "}
       <Link href="/wallet" className="font-semibold text-zooa-lime underline underline-offset-4">
         Top up
+      </Link>{" "}
+      or{" "}
+      <Link href="/onchain" className="font-semibold text-zooa-lime underline underline-offset-4">
+        pay from your Solana wallet
       </Link>
     </>
   ) : `${left} of ${stash.kit.dailyMax} left today.`);
