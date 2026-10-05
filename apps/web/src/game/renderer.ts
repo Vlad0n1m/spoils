@@ -4,7 +4,7 @@
  * - The server is authoritative; the client sends an InputSample every INPUT_DT_MS (movement, aim,
  *   trigger, roll, walk) plus discrete intents (interact / reload / switch / heal).
  * - The local player is predicted with the shared stepMovement (Predictor) and reconciled against
- *   SelfState.lastSeq + roll state on every patch; remote players are interpolated ~100 ms in the
+ *   SelfState.lastSeq + roll state on every patch; remote players are interpolated two patches (INTERP_DELAY_MS) in the
  *   past.
  * - Self data comes from the owner-only `state.self.get(selfKey)`; `state.players` only holds the
  *   players this client can see (server LOS via StateView), so entries appear and disappear all
@@ -46,6 +46,7 @@ import {
   MATCH,
   NPC_ROLE,
   S2C,
+  SERVER_TICK_MS,
   SOLID,
   WEAPONS,
   XP,
@@ -106,6 +107,7 @@ import { KnownEmpty } from "./known-empty";
 import { WorldView, type ViewRect } from "./world";
 import { EMPTY_TALLY, bossKindOfLabel, corpseNpcRole, npcDisplayName, npcRoleName, tallyKill, type KillTally, type NpcRoleName } from "./npc-labels";
 import { getGameAudio } from "./audio/game-audio";
+import { OwnShotPredictor, predictedAngles } from "./own-shot";
 import { feedAimPointer, getCameraRig, reducedMotion, setTouchSticksActive } from "./camera";
 import { SPRITE_RECOIL_PX } from "./combat-fx";
 import { FX, KillcamPlayer, KillcamRecorder, entOf, lerpAngle, type FrameSnap, type FxSnap, type ReplaySample } from "./killcam";
@@ -118,8 +120,8 @@ const VIEW_W = 1600;
 const VIEW_H = 900;
 /** Retina at full resolution is expensive for little gain with this art style. */
 const MAX_RESOLUTION = 1.5;
-/** Remote players are drawn this far in the past (two 20 Hz patches) so there is always a pair to interpolate. */
-const INTERP_DELAY_MS = 100;
+/** Remote players are drawn this far in the past (two patches) so there is always a pair to interpolate. */
+const INTERP_DELAY_MS = 2 * SERVER_TICK_MS;
 /** Corrections larger than this snap instead of gliding (spawn, teleport, long desync). */
 const SNAP_DIST = 96;
 /** Time constant for gliding away small prediction errors. */
@@ -278,9 +280,17 @@ export class GameRenderer implements GameRendererApi {
   private corrX = 0;
   private corrY = 0;
   private inputAcc = 0;
+  /**
+   * A click sent ahead of the fixed cadence borrowed this much of the next step (ms): the following
+   * sample waits INPUT_DT_MS + inputLead, so the server still sees exactly INPUT_HZ samples a second.
+   * Non-zero until that next regular sample.
+   */
+  private inputLead = 0;
   private aim = 0;
   /** Fire state of the last input sent (semi-auto weapons fire on a press). */
   private prevFire = false;
+  /** Own shots drawn on the input that fires them; their server echo is then skipped (own-shot.ts). */
+  private readonly ownShot = new OwnShotPredictor();
   /** Local player's rendered position (what the camera follows and aim is measured from). */
   private selfRender: { x: number; y: number } | null = null;
   private camX = 0;
@@ -288,7 +298,7 @@ export class GameRenderer implements GameRendererApi {
   private zoom = 1;
   private warmedUp = false;
 
-  // Clock estimate between 20 Hz patches.
+  // Clock estimate between patches (SERVER_TICK_HZ).
   private clockBase = 0;
   private clockBaseAt = 0;
 
@@ -919,7 +929,7 @@ export class GameRenderer implements GameRendererApi {
     this.extracts.set(id, { state: e, view });
   }
 
-  /** Runs after every decoded patch (20 Hz): timestamps for interpolation + reconciliation. */
+  /** Runs after every decoded patch (SERVER_TICK_HZ): timestamps for interpolation + reconciliation. */
   private onStatePatch() {
     const state = this.state;
     if (!state || this.stopped) return;
@@ -943,6 +953,7 @@ export class GameRenderer implements GameRendererApi {
       // Not controllable (dead, extracted, raid over): follow the server directly.
       p.setTiming(sm);
       p.reset(sm.x, sm.y, sm.roll);
+      this.ownShot.reset();
       this.prevPredX = sm.x;
       this.prevPredY = sm.y;
       this.corrX = 0;
@@ -1017,6 +1028,42 @@ export class GameRenderer implements GameRendererApi {
     else if (m.k === "containers") this.effects.popText(at.x, at.y - 30, "XP cap", XP_CAP_COLOR, now, 15);
   }
 
+  /**
+   * Our own shot, from the gun we see (the predicted position), not where the server had us one
+   * round trip ago: on the input that fires it (predicted) or on an unpredicted server echo.
+   */
+  private drawOwnShot(w: WeaponId, angles: number[], now: number) {
+    if (!this.effects || !this.selfRender || !angles.length) return;
+    const muzzle = WEAPONS[w].muzzle;
+    const a = angles.reduce((s, v) => s + v, 0) / angles.length;
+    const { x: cx, y: cy } = this.selfRender;
+    const x = cx + Math.cos(a) * muzzle;
+    const y = cy + Math.sin(a) * muzzle;
+    this.effects.shot(this.idx, this.selfId, w, cx, cy, x, y, angles, true, now);
+    this.players.get(this.selfId)?.view.kick(SPRITE_RECOIL_PX[w], now);
+    this.killcam.addFx(now, FX.SHOT, this.selfId, cx, cy, x, y, 0, 4, { w, arr: angles, self: true });
+    this.killcam.addFx(now, FX.KICK, this.selfId, SPRITE_RECOIL_PX[w], 0, 0, 0, 0, 1);
+  }
+
+  /** Server rules (combat.ts tryFire) on the input just sent: a shot that will leave is shown now. */
+  private predictOwnShot(self: SelfState, fire: boolean, rolling: boolean) {
+    const me = this.me();
+    const w = me?.weapon && me.weapon in WEAPONS ? (me.weapon as WeaponId) : null;
+    const now = performance.now();
+    const shot = this.ownShot.tryFire({
+      now,
+      fire,
+      prevFire: this.prevFire,
+      def: w ? WEAPONS[w] : null,
+      mag: self.slots.get(self.active)?.mag ?? 0,
+      reloading: self.reloadUntil > this.clockNow(now),
+      rolling,
+    });
+    if (!shot || !w) return;
+    this.drawOwnShot(w, predictedAngles(this.aim, WEAPONS[w]), now);
+    getGameAudio()?.localShot(w);
+  }
+
   private onShot(m: ShotMsg) {
     if (!this.effects || !m || !Array.isArray(m.a) || !(m.w in WEAPONS)) return;
     const now = performance.now();
@@ -1024,16 +1071,8 @@ export class GameRenderer implements GameRendererApi {
     const muzzle = WEAPONS[w].muzzle;
     const isSelf = m.s === this.selfId;
     if (isSelf && this.selfRender && m.a.length) {
-      // Our own shots start at the gun we see (the predicted position), not where the
-      // server had us one round trip ago.
-      const a = m.a.reduce((s, v) => s + v, 0) / m.a.length;
-      const { x: cx, y: cy } = this.selfRender;
-      const x = cx + Math.cos(a) * muzzle;
-      const y = cy + Math.sin(a) * muzzle;
-      this.effects.shot(this.idx, m.s, w, cx, cy, x, y, m.a, true, now);
-      this.players.get(m.s)?.view.kick(SPRITE_RECOIL_PX[w], now);
-      this.killcam.addFx(now, FX.SHOT, m.s, cx, cy, x, y, 0, 4, { w, arr: m.a, self: true });
-      this.killcam.addFx(now, FX.KICK, m.s, SPRITE_RECOIL_PX[w], 0, 0, 0, 0, 1);
+      // Already drawn on the input that fired it (predictOwnShot); otherwise draw it now.
+      if (!this.ownShot.consumeEcho(now)) this.drawOwnShot(w, m.a, now);
       return;
     }
     // Walls are raycast from the shooter's centre, like the server's bullets. A clipped shot of a
@@ -1291,19 +1330,32 @@ export class GameRenderer implements GameRendererApi {
     // does not dump a backlog.
     if (controllable && pred) {
       this.inputAcc = Math.min(this.inputAcc + dt, INPUT_DT_MS * 3);
+      // A fresh click does not wait for its sample (up to INPUT_DT_MS): the next sample goes out now
+      // and the one after it waits the borrowed time, so the cadence and movement stay exact.
+      if (this.inputLead === 0 && this.inputAcc > 0 && this.inputAcc < INPUT_DT_MS && this.input?.hasFreshPress) {
+        this.inputLead = INPUT_DT_MS - this.inputAcc;
+        this.inputAcc -= INPUT_DT_MS;
+        if (!this.sendInput(true)) {
+          this.inputAcc += INPUT_DT_MS;
+          this.inputLead = 0;
+        }
+      }
       while (this.inputAcc >= INPUT_DT_MS) {
         this.inputAcc -= INPUT_DT_MS;
+        this.inputLead = 0;
         if (!this.sendInput()) break;
       }
     } else {
       this.inputAcc = 0;
+      this.inputLead = 0;
       // Drop clicks / roll presses made while out of control so they do not fire later.
       this.input?.dropBuffered();
     }
 
     // Local player: predicted position, smoothed between input steps, plus decaying correction.
     if (me && controllable && pred) {
-      const k = this.inputAcc / INPUT_DT_MS;
+      // After a click sent early, two steps are drawn over the two step times from the last regular sample.
+      const k = this.inputLead > 0 ? Math.min(1, Math.max(0, (this.inputAcc + INPUT_DT_MS) / (2 * INPUT_DT_MS))) : this.inputAcc / INPUT_DT_MS;
       const decay = decayFactor(dt, CORRECTION_TAU_MS);
       this.corrX *= decay;
       this.corrY *= decay;
@@ -1820,8 +1872,12 @@ export class GameRenderer implements GameRendererApi {
     }
   }
 
-  /** Sends one input sample and predicts it. Returns false when nothing could be sent. */
-  private sendInput(): boolean {
+  /**
+   * Sends one input sample and predicts it. Returns false when nothing could be sent. `early`: a click
+   * sent ahead of the cadence keeps the smoothing's start point, so this step and the previous one
+   * are drawn over the whole gap to the next sample (no jump).
+   */
+  private sendInput(early = false): boolean {
     const input = this.input;
     const p = this.predictor;
     if (!input || !p) return false;
@@ -1837,14 +1893,17 @@ export class GameRenderer implements GameRendererApi {
     if (roll) sample.roll = true;
     if (walk) sample.walk = true;
     if (!this.send(C2S.INPUT, sample)) return false;
-    this.prevPredX = p.x;
-    this.prevPredY = p.y;
+    if (!early) {
+      this.prevPredX = p.x;
+      this.prevPredY = p.y;
+    }
     const r = p.apply(sample);
     // Predicted roll start: play the roll sound now instead of one round trip later.
     if (r.started) getGameAudio()?.localRoll();
     // A shot (or a roll start) cancels the heal on the server right after this input.
     const self = this.selfState();
     if (self && inputCancelsHeal(self, fire, this.prevFire, r.rolling)) p.predictHealCancel();
+    if (self) this.predictOwnShot(self, fire, r.rolling);
     this.prevFire = fire;
     return true;
   }

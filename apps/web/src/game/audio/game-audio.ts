@@ -21,6 +21,7 @@ import {
   ACT,
   GRENADE_SOUND,
   MATCH,
+  SERVER_TICK_MS,
   SoundKind,
   WEAPONS,
   WEAPON_IDS,
@@ -62,8 +63,8 @@ import { clamp } from "./spatial";
 
 // ---------------------------------------------------------------- constants
 
-/** Remote players are drawn ~100 ms in the past (renderer INTERP_DELAY_MS); visible sounds follow. */
-export const REMOTE_SOUND_DELAY_S = 0.1;
+/** Remote players are drawn two patches in the past (renderer INTERP_DELAY_MS); visible sounds follow. */
+export const REMOTE_SOUND_DELAY_S = (2 * SERVER_TICK_MS) / 1000;
 /** Server and client positions differ a little; never drop a sound the server said we hear. */
 export const RANGE_SLACK = 1.15;
 /** A ShotMsg echo within this window of a local shot was already played by `localShot`. */

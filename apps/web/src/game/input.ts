@@ -376,6 +376,11 @@ export class InputController {
     }
   }
 
+  /** A click not yet carried by an input sample (the renderer sends it at once instead of waiting). */
+  get hasFreshPress(): boolean {
+    return this.fireLatched && !this.fireBlocked;
+  }
+
   get isFireBlocked(): boolean {
     return this.fireBlocked;
   }
