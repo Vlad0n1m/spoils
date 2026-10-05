@@ -30,6 +30,7 @@ import { InventoryOverlay } from "./inventory/inventory-overlay";
 import { MatchOutcomeOverlay } from "./match-outcome-overlay";
 import { ReplayOverlay, SpectateBar, nextMateKey } from "./spectate-replay";
 import { writeLastRaidSeen } from "@/lib/lobby/news-seen";
+import { RECONNECT, fetchRejoinTicket, reconnectDelayMs, shouldAutoReconnect } from "@/lib/lobby/reconnect";
 import { TutorialOverlay } from "./tutorial-overlay";
 import { useTouchMode } from "./use-touch-mode";
 
@@ -144,6 +145,8 @@ interface BattleCallbacks {
   /** The room closed on us; `exit` explains a kick (e.g. JOINED_ELSEWHERE), null = plain close. */
   onDisconnect: (exit: RoomExit | null) => void;
   onError: (exit: RoomExit) => void;
+  /** S2C.JOINED arrived: the raider is on the map with this connection. */
+  onJoined?: () => void;
 }
 
 /**
@@ -185,6 +188,7 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
       // JOINED arrives right after the join, long before the renderer module has loaded.
       joined.onMessage(S2C.JOINED, (msg: JoinedMsg) => {
         if (typeof msg?.selfKey === "string" && msg.selfKey) selfKey = msg.selfKey;
+        cb.onJoined?.();
       });
       joined.onMessage(S2C.OUTCOME, (msg: OutcomeMsg) => {
         hadOutcome = true;
@@ -315,6 +319,8 @@ function parseMates(s: string): Array<{ key: string; name: string }> {
 export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry, earnsXp = true }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<{ dispose: () => void; renderer: () => GameRendererApi | null } | null>(null);
+  /** Mounted (StrictMode-safe): a reconnect finishing after unmount does nothing. */
+  const alive = useRef(true);
   const disposeTimerRef = useRef<number | undefined>(undefined);
   // The renderer pushes HUD snapshots ~30×/s into this store; React reads throttled slices of it
   // (≤ 10 commits/s) instead of re-rendering the whole tree on every push.
@@ -325,6 +331,11 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
   const [overlayNodes, setOverlayNodes] = useState<Array<{ id: string; node: ReactNode }>>([]);
   const [disconnected, setDisconnected] = useState(false);
   const [kick, setKick] = useState<RoomExit | null>(null);
+  /** Automatic reconnect after a socket drop mid-raid: the try in progress (1..MAX_TRIES), 0 = none. */
+  const [reconnecting, setReconnecting] = useState(0);
+  const reconnectTries = useRef(0);
+  const reconnectTimer = useRef<number | undefined>(undefined);
+  const outcomeRef = useRef<OutcomeMsg | null>(null);
   const retryRef = useRef(onRetry);
   useEffect(() => {
     retryRef.current = onRetry;
@@ -339,25 +350,59 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
     // StrictMode runs cleanup + effect back to back: the deferred dispose is cancelled by the
     // second run, so the room is joined once and left only on a real unmount.
     window.clearTimeout(disposeTimerRef.current);
+    // A socket drop mid-raid (not a kick, no outcome yet): fetch a rejoin-only ticket and reconnect
+    // in place, RECONNECT.MAX_TRIES times with backoff, before the exit screen shows. The server keeps
+    // an out-of-combat raider hidden and safe meanwhile (WORLD.DISCONNECT_SHELTER_MS).
+    const giveUp = (exit: RoomExit | null) => {
+      setReconnecting(0);
+      setKick(exit);
+      setDisconnected(true);
+    };
+    const scheduleReconnect = (exit: RoomExit) => {
+      const n = ++reconnectTries.current;
+      if (n > RECONNECT.MAX_TRIES) return giveUp(exit);
+      setReconnecting(n);
+      reconnectTimer.current = window.setTimeout(() => {
+        void (async () => {
+          sessionRef.current?.dispose();
+          sessionRef.current = null;
+          const r = await fetchRejoinTicket();
+          if (!alive.current) return;
+          if (!r.ok) return r.final ? giveUp(exit) : scheduleReconnect(exit);
+          if (!mountRef.current) return;
+          sessionRef.current = startBattle(mountRef.current, r.ticket, r.roomId, callbacks(r.ticket, exit));
+        })();
+      }, reconnectDelayMs(n));
+    };
+    const callbacks = (t: JoinTicket, lastDrop: RoomExit | null): BattleCallbacks => ({
+      hud: hudStore,
+      onHud: hudStore.push,
+      onOverlays: setOverlayNodes,
+      onOutcome: (o) => {
+        outcomeRef.current = o;
+        setOutcome(o);
+        // The outcome screen already shows this raid's result: the menu must not repeat it as a card.
+        if (t.entryId) writeLastRaidSeen(t.entryId);
+      },
+      onSettled: setSettlement,
+      onJoined: () => {
+        reconnectTries.current = 0;
+        setReconnecting(0);
+      },
+      onDisconnect: (exit) => {
+        if (shouldAutoReconnect(exit, outcomeRef.current !== null)) return scheduleReconnect(exit!);
+        giveUp(exit);
+      },
+      // A reconnect whose room join fails tries again (then gives up with the drop's message).
+      onError: (exit) => (lastDrop ? scheduleReconnect(lastDrop) : setErr(exit)),
+    });
+    alive.current = true;
     if (!sessionRef.current && mountRef.current) {
-      sessionRef.current = startBattle(mountRef.current, ticket, battleRoomId, {
-        hud: hudStore,
-        onHud: hudStore.push,
-        onOverlays: setOverlayNodes,
-        onOutcome: (o) => {
-          setOutcome(o);
-          // The outcome screen already shows this raid's result: the menu must not repeat it as a card.
-          if (ticket.entryId) writeLastRaidSeen(ticket.entryId);
-        },
-        onSettled: setSettlement,
-        onDisconnect: (exit) => {
-          setKick(exit);
-          setDisconnected(true);
-        },
-        onError: setErr,
-      });
+      sessionRef.current = startBattle(mountRef.current, ticket, battleRoomId, callbacks(ticket, null));
     }
     return () => {
+      alive.current = false;
+      window.clearTimeout(reconnectTimer.current);
       disposeTimerRef.current = window.setTimeout(() => {
         sessionRef.current?.dispose();
         sessionRef.current = null;
@@ -465,6 +510,16 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
         </>
       )}
 
+      {!err && reconnecting > 0 && !disconnected && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/40" role="status" aria-live="polite">
+          <div className="toon-panel flex items-center gap-3 px-6 py-4 text-xl tracking-wide">
+            <span className="h-6 w-6 animate-spin rounded-full border-4 border-black border-t-zooa-lime motion-reduce:animate-none" aria-hidden />
+            <span className="toon-text-thin">
+              Reconnecting… {reconnecting}/{RECONNECT.MAX_TRIES}
+            </span>
+          </div>
+        </div>
+      )}
       {!err && after.replayPlaying && !disconnected && <ReplayOverlay store={hudStore} onSkip={skipReplay} />}
       {!err && watchingNow && !disconnected && phase !== "ended" && (
         <SpectateBar

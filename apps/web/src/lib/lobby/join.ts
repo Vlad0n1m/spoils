@@ -145,6 +145,7 @@ type ActiveEntryRow = {
  * 3. An active entry on a running world row of the current cycle → a rejoin ticket for that same
  *    entry (`rejoin: true`; a lost raids/enter reply heals here, D6). Any other active entry → 409
  *    `in_raid` with `settlesAt` = its ends_at + RAID_USER_VOID_GRACE_MS (when the lazy void frees it).
+ *    `opts.rejoinOnly` (the battle screen's reconnect) stops here: no active entry → 409 `not_on_map`.
  * 4. Not in the entry window → 409 `entry_closed` with `openAt` (this cycle's while resetting, else
  *    the next cycle's).
  * 5. No running world row for this cycle (raids/open has not landed yet) → 503 `world_starting`.
@@ -161,7 +162,7 @@ export async function worldJoin(
   c: Caller,
   entries?: LoadoutEntry[],
   now = worldNow(),
-  opts: { dropId?: string } = {},
+  opts: { dropId?: string; rejoinOnly?: boolean } = {},
 ): Promise<WorldJoinResult> {
   const fail = (status: number, error: WorldJoinErrorBody["error"], message: string, extra: Partial<WorldJoinErrorBody> = {}) =>
     ({ ok: false, status, body: { error, message, serverTime: now, ...extra } }) as const;
@@ -199,6 +200,8 @@ export async function worldJoin(
       ...(a.ends_at ? { settlesAt: new Date(a.ends_at).getTime() + RAID_USER_VOID_GRACE_MS } : {}),
     });
   }
+  // The battle screen's automatic reconnect: only ever a rejoin, never a fresh entry (no loadout lock).
+  if (opts.rejoinOnly) return fail(409, "not_on_map", "Your raider is no longer on the map.");
 
   const phase = worldPhase(wc, now);
   if (phase !== "open") {

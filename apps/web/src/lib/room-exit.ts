@@ -133,12 +133,14 @@ export function describeRoomExit(code: number | undefined, reason?: string, opts
   if (code === undefined || code === WS_CLOSE_CONSENTED || code === 1000) return null;
   if (code === WS_CLOSE_WITH_ERROR) {
     return {
+      code: "room_closed",
       title: "The room closed",
       message: "The game server closed the map unexpectedly. Try again.",
       action: "retry",
     };
   }
   return {
+    code: "connection_lost",
     title: "Connection lost",
     message: `Lost the connection to the game server (code ${code}). Check your network and try again.`,
     action: "retry",

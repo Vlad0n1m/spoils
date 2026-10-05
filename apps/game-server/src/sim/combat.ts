@@ -143,7 +143,8 @@ export function stepBullets(m: Match, dtMs: number): void {
     const npcShot = b.owner.isNpc && !NPC.FRIENDLY_FIRE;
     const party = b.owner.partyId;
     for (const rt of m.allRuntimes()) {
-      if (!rt.pub.alive || rt === b.owner || (npcShot && rt.isNpc)) continue;
+      // A sheltered (disconnected, hidden) raider is not there for bullets either.
+      if (!rt.pub.alive || rt === b.owner || (npcShot && rt.isNpc) || rt.shelterUntil >= 0) continue;
       // Party mates are transparent to each other's bullets (PARTY.FRIENDLY_FIRE = false).
       if (party && partyMates(party, rt.partyId)) continue;
       const t = segmentCircleT(b.x, b.y, sx, sy, rt.pub.x, rt.pub.y, R);
@@ -180,8 +181,13 @@ export function damagePlayer(
 ): void {
   const p = rt.pub;
   if (!p.alive) return;
+  // Disconnect shelter (Match.detach): a hidden raider takes no damage from any source.
+  if (rt.shelterUntil >= 0) return;
   // No damage between party mates from any source (HP, armor and its durability stay untouched).
   if (attacker && attacker !== rt && partyMates(attacker.partyId, rt.partyId)) return;
+  // "In combat" for the disconnect shelter: both sides of any damage.
+  rt.combatAt = m.clock;
+  if (attacker) attacker.combatAt = m.clock;
   const s = rt.self;
   const armor = s.slots.get("armor");
   const level = armor ? (itemDef(armor.def)?.armorLevel ?? 0) : 0;

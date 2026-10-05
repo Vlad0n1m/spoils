@@ -208,7 +208,7 @@ export function explode(m: Match, g: LiveGrenade): void {
   // An NPC's grenade (a boss move) never hurts NPCs (one "locals" faction, like their bullets).
   const npcOwner = g.owner.isNpc;
   for (const rt of [...m.allRuntimes()]) {
-    if (!rt.pub.alive || (npcOwner && rt.isNpc)) continue;
+    if (!rt.pub.alive || (npcOwner && rt.isNpc) || rt.shelterUntil >= 0) continue;
     const dx = rt.pub.x - x;
     const dy = rt.pub.y - y;
     if (dx * dx + dy * dy > R * R) continue;

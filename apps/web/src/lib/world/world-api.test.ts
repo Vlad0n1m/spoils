@@ -274,6 +274,19 @@ describe("worldJoin", () => {
     // A rejoin works after entry closes too (the runtime is still on the map).
     const late = await worldJoin(db, u, undefined, WC.entryClosesAt + 60_000);
     assert.ok(late.ok && late.body.rejoin);
+    // The battle screen's reconnect (rejoinOnly) gets the same rejoin ticket…
+    const only = await worldJoin(db, u, undefined, OPEN_NOW + 6_000, { rejoinOnly: true });
+    assert.ok(only.ok && only.body.rejoin && only.body.ticket.entryId === entryId);
+    // …but never a fresh entry: a user with no active entry gets not_on_map and nothing is locked.
+    const other = await user();
+    await makeItem(db, { def: "rifle", rarity: 0, ownerId: other.userId });
+    const none = await worldJoin(db, other, undefined, OPEN_NOW + 6_000, { rejoinOnly: true });
+    assert.ok(!none.ok);
+    if (none.ok) return;
+    assert.equal(none.status, 409);
+    assert.equal(none.body.error, "not_on_map");
+    const locked = await db.execute<{ n: number }>(sql`select count(*)::int as n from loadouts where user_id = ${other.userId}`);
+    assert.equal(Number(locked.rows[0]!.n), 0, "no loadout locked");
   });
 
   for (const serverId of ["eu-1", "default"]) {

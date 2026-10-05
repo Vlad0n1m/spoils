@@ -808,6 +808,8 @@ export class Match {
     }
     rt.connected = true;
     rt.idleSince = -1;
+    // Back within the shelter window: the raider reappears where it stood.
+    if (rt.shelterUntil >= 0) this.unshelter(rt);
     rt.queue.length = 0;
     rt.pendingThrow = null;
     rt.lastQueuedSeq = -1;
@@ -817,7 +819,12 @@ export class Match {
     return rt;
   }
 
-  /** Disconnected players stay on the map, idle and vulnerable (their search closes). */
+  /**
+   * A client dropped (page reload, lost connection). The player stays on the map, idle (their search
+   * closes). Out of combat (inCombat false) they are sheltered for WORLD.DISCONNECT_SHELTER_MS:
+   * hidden and invulnerable until they rejoin or the window ends. In combat they stay visible and
+   * vulnerable, as before: dropping the connection never saves anyone from a fight.
+   */
   detach(sessionId: string): void {
     const rt = this.runtimes.get(sessionId);
     if (!rt) return;
@@ -828,6 +835,39 @@ export class Match {
     rt.triggerHeld = false;
     rt.pressPending = false;
     closeSearch(this, rt, "disconnect");
+    if (!rt.isNpc && rt.pub.alive && !this.ended && !this.inCombat(rt)) this.shelter(rt);
+  }
+
+  /** Dealt or took damage, or fired, within the last WORLD.SHELTER_COMBAT_MS. */
+  inCombat(rt: PlayerRuntime): boolean {
+    return this.clock - Math.max(rt.combatAt, rt.lastShotAt) < WORLD.SHELTER_COMBAT_MS;
+  }
+
+  /** Is `rt` hidden by the disconnect shelter right now? */
+  isSheltered(rt: PlayerRuntime): boolean {
+    return rt.shelterUntil >= 0;
+  }
+
+  private shelter(rt: PlayerRuntime): void {
+    rt.shelterUntil = this.clock + WORLD.DISCONNECT_SHELTER_MS;
+    rt.vx = 0;
+    rt.vy = 0;
+    // The extraction channel pauses: it restarts from zero once the raider is back.
+    rt.self.extractId = "";
+    rt.self.extractStartedAt = 0;
+  }
+
+  private unshelter(rt: PlayerRuntime): void {
+    rt.shelterUntil = -1;
+  }
+
+  /** Shelters whose window ran out: the raider reappears in place, vulnerable again (still disconnected). */
+  private stepShelters(): void {
+    for (const rt of this.ordered) {
+      if (rt.shelterUntil < 0) continue;
+      if (!rt.pub.alive) rt.shelterUntil = -1;
+      else if (this.clock >= rt.shelterUntil) this.unshelter(rt);
+    }
   }
 
   // ---------------------------------------------------------------- intents
@@ -1025,6 +1065,7 @@ export class Match {
       const phase = this.clock >= MATCH.EXTRACT_OPEN_AT_MS ? "open" : "drop";
       if (this.state.phase !== phase) this.state.phase = phase;
     }
+    this.stepShelters();
     // Sample the environment once per tick; vision / sound / audience read the cached sample.
     envNow(this);
 
@@ -1411,6 +1452,8 @@ function newRuntime(
     exitHeld: false,
     lastHitBy: null,
     lastHitAt: -Infinity,
+    combatAt: -Infinity,
+    shelterUntil: -1,
     reloadKey: "",
     nextExtractSoundAt: 0,
     nextSearchSoundAt: 0,

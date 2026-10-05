@@ -43,7 +43,8 @@ export function openExtractAt(m: Match, rt: PlayerRuntime, x: number, y: number)
 export function stepExtraction(m: Match): void {
   for (const rt of m.allRuntimes()) {
     const p = rt.pub;
-    if (!p.alive) continue;
+    // A sheltered raider's channel is paused (Match.detach cleared it; no extract sound gives it away).
+    if (!p.alive || rt.shelterUntil >= 0) continue;
     const s = rt.self;
     const e = openExtractAt(m, rt, p.x, p.y);
     if (!e) {

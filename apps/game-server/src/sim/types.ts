@@ -128,6 +128,14 @@ export interface PlayerRuntime {
    * first attach, or its last detach; -1 while connected. Bounds how long it holds a seat (WORLD.IDLE_SEAT_MS).
    */
   idleSince: number;
+  /** Match clock of the last damage this runtime dealt or took (disconnect shelter: "in combat"). */
+  combatAt: number;
+  /**
+   * Disconnect shelter (WORLD.DISCONNECT_SHELTER_MS, Match.detach): match clock when it ends, or -1
+   * when not sheltered. A sheltered human is hidden from every vision row, takes no damage, does not
+   * stop bullets and its extraction channel is paused.
+   */
+  shelterUntil: number;
   /** Match clock of the last INV_ERR "rate" sent to this client (at most one per second, security audit). */
   rateErrAt: number;
   loadoutId: string;
