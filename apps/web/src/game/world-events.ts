@@ -80,7 +80,8 @@ interface Puff {
   y: number;
 }
 
-class EventToast {
+/** A queued title + subtitle toast (also used by the objectives system). */
+export class EventToast {
   readonly root = new Container();
   private readonly bar = new Graphics();
   private readonly title: Text;

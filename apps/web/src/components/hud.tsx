@@ -361,6 +361,7 @@ function xpPopIn(el: HTMLElement | null): void {
 
 const XP_LINE_SHORT: Readonly<Record<XpGain["k"], string>> = {
   containers: "Container",
+  objectives: "Objective",
   npc: "Marauder",
   guard: "Guard",
   boss: "Boss",

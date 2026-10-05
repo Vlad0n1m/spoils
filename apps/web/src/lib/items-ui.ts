@@ -6,6 +6,7 @@
  */
 
 import {
+  CACHE_NOTE_DEF,
   ARMOR,
   EQUIP_KEYS,
   ITEM_FLAG,
@@ -118,6 +119,8 @@ export function describeItem(ref: ItemRefLike): ItemDescription {
   const rarity = clampRarity(ref.rarity ?? d?.rarity ?? 0);
   let name = d?.name ?? ref.def;
   if (d?.id === "junk_dogtag" && ref.label) name = `Dog tag · ${ref.label}`;
+  // In-raid objectives: a clue note reads its clue ("Cache note · By the silo, Grain Elevator").
+  if (d?.id === CACHE_NOTE_DEF && ref.label) name = `${d.name} · ${ref.label}`;
   return {
     def: ref.def,
     icon: itemIcon(ref.def),

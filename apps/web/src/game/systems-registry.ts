@@ -18,6 +18,7 @@ import { createIntroSystem } from "./intro";
 import { createPartySystem } from "./party";
 import { SoundVizSystem } from "./sound-viz";
 import { createWorldEventsSystem } from "./world-events";
+import { createObjectivesSystem } from "./objectives";
 import type { SystemFactory } from "./systems";
 
 export const SYSTEM_FACTORIES: readonly SystemFactory[] = [
@@ -53,6 +54,8 @@ export const SYSTEM_FACTORIES: readonly SystemFactory[] = [
   () => createBossHudSystem(),
   // WORLD v6 supply drops / hot zones / fight signals: ground circles, crate flare, event toasts.
   () => createWorldEventsSystem(),
+  // In-raid objectives: locked gates / bars, crack dials, channel bars, objective toasts, clue circles.
+  () => createObjectivesSystem(),
   // Full map (M) and the zone toast; drawn last so the opened map covers the indicators.
   () => createMapOverlaySystem(),
   // Positional audio, ambience, own-action cues. Draws nothing.

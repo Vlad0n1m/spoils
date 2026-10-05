@@ -15,6 +15,25 @@ import { FIGHT, WEV_STATE, bandMid, decodeHeat, fightCellCentre, sectorAngle, ty
 export const DROP_COLOR = 0xffb020;
 export const HOT_COLOR = 0xff6a2a;
 export const FIGHT_COLOR = 0xff3b3b;
+/** In-raid objectives (objectives.ts system): clue circles and locked rooms on the full map. */
+export const CLUE_COLOR = 0x7fe0c8;
+export const LOCK_COLOR = 0xe8c060;
+
+/** A clue note's fuzzy circle (the holder's own notes only). */
+export interface ClueMark {
+  n: number;
+  x: number;
+  y: number;
+  r: number;
+  text: string;
+}
+
+/** A locked room's gate (public layout + BattleState.lockState). */
+export interface LockMark {
+  x: number;
+  y: number;
+  open: boolean;
+}
 
 export interface WevDropView {
   key: string;
@@ -58,6 +77,9 @@ export const worldEventsView = {
   heatRaw: "",
   clockMs: 0,
   mapW: 0,
+  /** Written by the objectives system (objectives.ts) every frame. */
+  clues: [] as ClueMark[],
+  locks: [] as LockMark[],
 };
 
 /** Fight markers live this long on the minimap. */
@@ -71,6 +93,8 @@ export function resetWorldEventsView(): void {
   worldEventsView.heat = [];
   worldEventsView.heatRaw = "";
   worldEventsView.clockMs = 0;
+  worldEventsView.clues = [];
+  worldEventsView.locks = [];
 }
 
 /** Keep the decoded heat in sync with BattleState.heat (decoded only when it changes). */
@@ -238,6 +262,24 @@ export class FullmapWorldMarks {
         g.rect(x - r, y - r, r * 2, r * 2).fill({ color: DROP_COLOR }).stroke({ width: 2, color: 0x111111 });
         put("SUPPLY DROP", x, y - r - 8, 0xffd27a);
       }
+    }
+    // In-raid objectives: locked rooms (padlock) and the holder's clue circles (dashed, "?").
+    for (const l of v.locks) {
+      const x = l.x * k, y = l.y * k;
+      const c = l.open ? 0x9aa3ad : LOCK_COLOR;
+      g.roundRect(x - 5, y - 2, 10, 8, 2).fill({ color: c }).stroke({ width: 1.5, color: 0x111111 });
+      g.moveTo(x - 3, y - 2).arc(x, y - 2, 3, Math.PI, 0).stroke({ width: 2, color: c });
+    }
+    for (const c of v.clues) {
+      const x = c.x * k, y = c.y * k, r = Math.max(10, c.r * k);
+      g.circle(x, y, r).fill({ color: CLUE_COLOR, alpha: 0.1 + 0.08 * pulse });
+      const n = 28;
+      for (let i = 0; i < n; i += 2) {
+        const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
+        g.moveTo(x + Math.cos(a0) * r, y + Math.sin(a0) * r).arc(x, y, r, a0, a1);
+      }
+      g.stroke({ width: 2.5, color: CLUE_COLOR, alpha: 0.95 });
+      put(`? ${c.text}`, x, y - r - 3, CLUE_COLOR);
     }
     for (let i = li; i < this.labels.length; i++) this.labels[i]!.visible = false;
   }

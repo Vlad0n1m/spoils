@@ -24,6 +24,8 @@ import {
   SEARCH,
   DROP,
   isSupplyDropId,
+  isCacheId,
+  CACHE,
   accepts,
   bagKeys,
   BACKPACK_SLOTS,
@@ -444,8 +446,9 @@ export function createInventoryClient(opts: InventoryClientOptions): InventoryCl
     let openMs: number = SEARCH.OPEN_MS.cache;
     if (corpseId !== null) {
       const crate = isSupplyDropId(corpseId);
-      title = crate ? "Supply drop" : bodyTitle(st?.corpses?.get(corpseId)?.label);
-      openMs = crate ? DROP.OPEN_MS : SEARCH.OPEN_MS.corpse;
+      const cache = isCacheId(corpseId);
+      title = crate ? "Supply drop" : cache ? "Hidden cache" : bodyTitle(st?.corpses?.get(corpseId)?.label);
+      openMs = crate ? DROP.OPEN_MS : cache ? CACHE.OPEN_MS : SEARCH.OPEN_MS.corpse;
     } else if (cIdx !== null) {
       const spot = opts.containers?.()?.[cIdx];
       if (spot) {
