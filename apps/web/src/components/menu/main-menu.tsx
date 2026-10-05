@@ -13,11 +13,13 @@ import {
   PANEL_TABS,
   panelHref,
   parseLobbyPanel,
+  visibleTabs,
   type LbPeriod,
   type LobbyPanel,
   type PanelState,
 } from "@/lib/lobby/panels";
 import { stageForUser, type PlayStage } from "@/lib/play-stage";
+import { idosClientSession } from "@/lib/idos/client-session";
 import {
   hasUnseenNews,
   readLastRaidSeen,
@@ -550,7 +552,7 @@ function MenuScreen({
             key={panel.panel}
             title={PANEL_LABEL[panel.panel]}
             variant={VARIANT[panel.panel]}
-            tabs={PANEL_TABS[panel.panel]}
+            tabs={visibleTabs(PANEL_TABS[panel.panel], idosClientSession() !== null)}
             tab={panel.tab ?? PANEL_TABS[panel.panel][0]}
             onTab={setTab}
             onClose={closePanel}

@@ -22,14 +22,23 @@ export type PanelTab<P extends LobbyPanel = LobbyPanel> = (typeof MAIN_PANEL_TAB
 export type PanelTabs = Readonly<Record<LobbyPanel, readonly string[]>>;
 
 /**
- * Tabs of each panel in a build. The iDos edition has no SOL market (lib/edition.ts SOL_ECONOMY), so
- * its Shop is Traders only, and old `tab=market` links land on Traders.
+ * Tabs of each panel in a build. The iDos edition keeps the CR market (lib/edition.ts EDITION_UI) and
+ * adds the SPOILS shop (lib/idos/shop.ts), shown only inside the iDos client (visibleTabs).
  */
 export function panelTabsFor(idosBuild: boolean): PanelTabs {
-  return idosBuild ? { ...MAIN_PANEL_TABS, shop: ["traders"] } : MAIN_PANEL_TABS;
+  return idosBuild ? { ...MAIN_PANEL_TABS, shop: ["market", "traders", "spoils"] } : MAIN_PANEL_TABS;
 }
 
 export const PANEL_TABS: PanelTabs = panelTabsFor(IDOS_BUILD);
+
+/**
+ * The tabs a player sees: `tabs` without "spoils" unless the page runs inside the iDos client with a
+ * signed-in iDos session (lib/idos/client-session.ts): the SPOILS shop pays with that session's ticket,
+ * so the edition opened directly on its own domain has nothing to pay with.
+ */
+export function visibleTabs(tabs: readonly string[], idosClient: boolean): readonly string[] {
+  return idosClient ? tabs : tabs.filter((t) => t !== "spoils");
+}
 
 /** Leaderboard periods (the level board is all-time and ignores it). */
 export const LB_PERIODS = ["map", "week", "all"] as const;
@@ -50,6 +59,7 @@ export const TAB_LABEL: Readonly<Record<string, string>> = {
   stash: "Stash",
   market: "Market",
   traders: "Traders",
+  spoils: "SPOILS",
   howto: "How to play",
   rules: "Rules",
   controls: "Controls",
