@@ -8,7 +8,7 @@
  */
 
 import type { Room } from "colyseus.js";
-import type { BossKind, HealKind, KillWeapon, MapData, RaidXpKey, WeaponId } from "@extract/shared";
+import type { BossKind, HealKind, KillWeapon, MapData, RaidXpKey, SpectateEndReason, WeaponId } from "@extract/shared";
 import type { KillTally } from "./npc-labels";
 
 export interface HudSlot {
@@ -149,6 +149,44 @@ export interface HudSnapshot {
   pose?: { x: number; y: number; aim: number } | null;
   /** In-raid XP actions of the last XP_GAIN_SHOW_MS, oldest first (EventsMsg.xp). */
   xpGains?: XpGain[];
+  /** Spectating a party mate after the run (S2C.SPECTATE). */
+  spectate?: HudSpectate;
+  /** The death replay (killcam.ts). */
+  replay?: HudReplay;
+}
+
+/** Spectate state for the outcome screen and the spectate bar. */
+export interface HudSpectate {
+  /** Party mates still on the map (S2C.PARTY), in message order: who can be watched. */
+  mates: Array<{ key: string; name: string }>;
+  /** The mate being watched, with the bars from their Player entry. */
+  watching: {
+    key: string;
+    name: string;
+    alive: boolean;
+    hp: number;
+    maxHp: number;
+    armor: number;
+    armorDur: number;
+    armorMax: number;
+    weapon: string;
+  } | null;
+  /** A request is out, no answer yet. */
+  pending: boolean;
+  /** Why the last watch ended or was refused (null after a manual stop). */
+  ended: { reason: SpectateEndReason; name: string } | null;
+}
+
+export interface HudReplay {
+  /** The local player died and the record is long enough to replay. */
+  available: boolean;
+  playing: boolean;
+  /** 0..1 of the running replay. */
+  progress: number;
+  /** A replay ran (and ended or was skipped) at least once. */
+  played: boolean;
+  /** Plays by itself once after the death beat (off under reduced motion: offered as a button). */
+  autoPlay: boolean;
 }
 
 /** One counted XP action (EventsMsg.xp) as the HUD shows it. */
@@ -194,4 +232,10 @@ export interface GameRendererApi {
   map?(): MapData | null;
   /** The local player's self key once known. */
   selfKey?(): string | null;
+  /** After the run: watch the party mate with this S2C.PARTY key, or stop (null). */
+  spectate?(key: string | null): void;
+  /** Play the death replay; false when there is none. */
+  startReplay?(): boolean;
+  /** Skip the death replay. */
+  stopReplay?(): void;
 }

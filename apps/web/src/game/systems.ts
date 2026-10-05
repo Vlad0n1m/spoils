@@ -46,10 +46,20 @@ export interface GameContext {
   self(): SelfState | null;
   /** Public entry of the local player (may be absent while dead/extracted). */
   me(): Player | null;
-  /** Where the local player is drawn (predicted), in world units. */
+  /**
+   * Where the local player is drawn (predicted), in world units. While the death replay plays or a
+   * party mate is watched: the replayed self / the watched mate (the listener follows them too).
+   */
   selfPos(): { x: number; y: number };
-  /** Local aim angle in radians (mouse). */
+  /** Local aim angle in radians (mouse); the replayed / watched aim likewise. */
   aim(): number;
+  /**
+   * What the screen shows: the live raid, the death replay (killcam.ts) or a watched party mate.
+   * Overlays of the own death (cinematics) step aside outside "live". Absent = "live".
+   */
+  view?(): "live" | "replay" | "spectate";
+  /** The watched mate's players-map id while spectating, else null. */
+  watchedId?(): string | null;
   camera(): CameraView;
   /** Match clock in ms, extrapolated between patches. */
   clockMs(): number;

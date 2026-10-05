@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
-import { BREAK_CHANCE_ON_DEATH, XP, type MatchSummaryMsg, type OutcomeMsg, type SoldLine } from "@extract/shared";
+import { BREAK_CHANCE_ON_DEATH, XP, type MatchSummaryMsg, type OutcomeMsg, type SoldLine, type SpectateEndReason } from "@extract/shared";
 import { playUi } from "@/game/audio/ui-sounds";
 import { buildReceipt, fmtClock, xpLineText } from "@/lib/items-ui";
 import type { RoomExit } from "@/lib/room-exit";
@@ -18,6 +18,7 @@ import { killedByLine, npcKillsLine, npcLabels, type KillTally } from "@/game/np
 import { earlyExtract } from "@/game/hud";
 import { DogTagRow, ItemStrip, SellReceipt } from "./inventory/outcome-receipt";
 import { DeathRecapCard } from "./death-recap-card";
+import { nextMateKey, spectateEndedLine } from "./spectate-replay";
 
 /** Delay before the result card appears, so the player sees the moment of death / extraction. */
 const CONTENT_DELAY_MS = 900;
@@ -56,6 +57,19 @@ export interface MatchOutcomeOverlayProps {
   /** Coin sound per receipt line; defaults to the shared UI coin sound. Pass a no-op to mute. */
   onCoin?: () => void;
   onContinue: () => void;
+  /**
+   * Party mates still on the map that can be watched (server-checked, sim/spectate.ts), and why the
+   * last watch ended. Null / no mates = no Spectate button.
+   */
+  spectate?: SpectateOffer | null;
+  /** The death replay can be watched (again): a "Watch replay" button. */
+  onWatchReplay?: () => void;
+}
+
+export interface SpectateOffer {
+  mates: Array<{ key: string; name: string }>;
+  ended: { reason: SpectateEndReason; name: string } | null;
+  onSpectate: (key: string) => void;
 }
 
 export function MatchOutcomeOverlay({
@@ -70,6 +84,8 @@ export function MatchOutcomeOverlay({
   enteredAtMs = 0,
   onCoin = defaultCoin,
   onContinue,
+  spectate = null,
+  onWatchReplay,
 }: MatchOutcomeOverlayProps) {
   const [dim, setDim] = useState(false);
   const [showContent, setShowContent] = useState(false);
@@ -118,6 +134,8 @@ export function MatchOutcomeOverlay({
                 enteredAtMs={enteredAtMs}
                 onCoin={onCoin}
                 onContinue={onContinue}
+                spectate={spectate}
+                onWatchReplay={onWatchReplay}
               />
             ) : (
               <WaitingCard raidEnded={raidEnded} disconnected={disconnected} kick={kick} onContinue={onContinue} />
@@ -148,6 +166,8 @@ function ResultCard({
   enteredAtMs,
   onCoin,
   onContinue,
+  spectate,
+  onWatchReplay,
 }: {
   outcome: OutcomeMsg;
   settlement: MatchSummaryMsg | null;
@@ -156,6 +176,8 @@ function ResultCard({
   enteredAtMs: number;
   onCoin: () => void;
   onContinue: () => void;
+  spectate: SpectateOffer | null;
+  onWatchReplay?: () => void;
 }) {
   const style = EXIT_STYLE[outcome.exit];
   const recap = outcome.exit === "dead" ? outcome.recap : undefined;
@@ -247,6 +269,9 @@ function ResultCard({
           </p>
         )}
 
+        {/* After the run: watch a party mate still on the map, or the death replay again. */}
+        <AfterRunActions spectate={spectate} onWatchReplay={outcome.exit === "dead" ? onWatchReplay : undefined} />
+
         {/* Always on screen: under the list in portrait, at the bottom of the left column in landscape. */}
         <button
           type="button"
@@ -306,6 +331,56 @@ function ResultCard({
         </div>
       </div>
     </section>
+  );
+}
+
+/** "Spectate <mate>" (› picks the next mate), "Watch replay", and why the last watch ended. */
+function AfterRunActions({ spectate, onWatchReplay }: { spectate: SpectateOffer | null; onWatchReplay?: () => void }) {
+  const mates = spectate?.mates ?? [];
+  const [pick, setPick] = useState<string | null>(null);
+  const chosen = mates.find((m) => m.key === pick) ?? mates[0] ?? null;
+  const note = spectateEndedLine(spectate?.ended ?? null);
+  if (!chosen && !onWatchReplay && !note) return null;
+  return (
+    <div className="order-last mt-4 flex shrink-0 flex-col gap-2 land:order-none land:mt-4 short:mt-2">
+      {note && <p className="font-body text-center text-sm font-semibold text-amber-200/90 short:text-xs">{note}</p>}
+      <div className="flex gap-2">
+        {chosen && spectate && (
+          <div className="flex min-w-0 flex-1 gap-1.5">
+            <button
+              type="button"
+              onClick={() => spectate.onSpectate(chosen.key)}
+              className="toon-btn-ghost min-h-11 min-w-0 flex-1 px-3 text-base tracking-wide short:min-h-10"
+              title="Watch your party mate's view until they die or extract"
+              aria-label={`Spectate ${chosen.name}`}
+            >
+              <span className="shrink-0">Spectate</span>
+              <span className="ml-1.5 min-w-0 truncate">{chosen.name}</span>
+            </button>
+            {mates.length > 1 && (
+              <button
+                type="button"
+                aria-label="Next mate"
+                onClick={() => setPick(nextMateKey(mates, chosen.key))}
+                className="toon-btn-ghost min-h-11 shrink-0 px-3 text-lg short:min-h-10"
+              >
+                ›
+              </button>
+            )}
+          </div>
+        )}
+        {onWatchReplay && (
+          <button
+            type="button"
+            onClick={onWatchReplay}
+            className={clsx("toon-btn-ghost min-h-11 px-3 text-base tracking-wide short:min-h-10", chosen ? "shrink-0" : "flex-1")}
+            title="Watch your last moments again"
+          >
+            {chosen ? "Replay" : "Watch replay"}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
