@@ -17,6 +17,7 @@ import {
 } from "@extract/shared";
 import { MARKET_CURRENCY } from "@/lib/market/config";
 import { BRAND } from "@/lib/brand";
+import { EDITION_UI } from "@/lib/edition";
 
 const min = (ms: number) => Math.round(ms / 60_000);
 const CYCLE_MIN = min(WORLD.CYCLE_MS);
@@ -126,6 +127,15 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 export function RulesSection() {
   return (
     <div className="paged-group">
+      {!EDITION_UI.market && (
+        <Block title="Credits">
+          <p>
+            CR is earned from junk you bring out (sold automatically) and spent at the traders on ammo, meds and bound gear.
+            Credits stay in the game: they never turn into money.
+          </p>
+        </Block>
+      )}
+      {EDITION_UI.market && (
       <Block title="Two currencies">
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
           <dt className="font-bold text-amber-300">CR</dt>
@@ -137,6 +147,7 @@ export function RulesSection() {
           </dd>
         </dl>
       </Block>
+      )}
       <Block title="Risk">
         <p>
           Gear you bring is at risk: die and each item has a {BREAK_PCT}% chance to break; the rest stays on your body. Lost

@@ -6,6 +6,7 @@ import clsx from "clsx";
 import { draftFromLocked, pruneDraft } from "@/lib/lobby/loadout-model";
 import type { StashResponse } from "@/lib/lobby/api-types";
 import { describeItem } from "@/lib/items-ui";
+import { EDITION_UI } from "@/lib/edition";
 
 const SLOT_LABEL: Record<string, string> = { w1: "Weapon 1", w2: "Weapon 2", armor: "Armor", bp: "Backpack" };
 
@@ -124,7 +125,7 @@ export function GearStrip({
   const entries = guest || !signedIn ? [] : loadoutOf(stash);
   if (entries.length === 0) {
     const hasGear = Boolean(stash?.uniques.some((u) => u.state === "in_stash"));
-    const buyKit = signedIn && !guest && stash && !stash.uniques.some((u) => u.state === "in_stash" && itemDef(u.def)?.cat === "weapon");
+    const buyKit = EDITION_UI.starterKitSale && signedIn && !guest && stash && !stash.uniques.some((u) => u.state === "in_stash" && itemDef(u.def)?.cat === "weapon");
     return (
       <div className="flex items-end gap-3 short:gap-2">
         <div className="relative">

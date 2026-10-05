@@ -12,6 +12,7 @@ import { panelHref } from "@/lib/lobby/panels";
 import { ListDialog } from "./list-dialog";
 import { api, type Resource } from "./use-lobby";
 import { Paged } from "@/components/paged";
+import { EDITION_UI } from "@/lib/edition";
 
 /**
  * Stash tab (inventory memo "stash-page"): wallet (CR + market balance), level, the paid starter
@@ -68,7 +69,11 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
             stacks={stash.stacks}
             selectedId={selectedId}
             onPickUnique={(u) => setSelectedId(u.id === selectedId ? null : u.id)}
-            emptyHint="Your stash is empty. Buy a starter kit, buy gear on the Market, or extract with loot."
+            emptyHint={
+              EDITION_UI.market
+                ? "Your stash is empty. Buy a starter kit, buy gear on the Market, or extract with loot."
+                : "Your stash is empty. Buy gear from the traders or extract with loot."
+            }
           />
         </div>
       </section>
@@ -80,6 +85,7 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
           <Paged gap={10} label="Stash summary pages">
             <section className="toon-panel grid grid-cols-2 gap-x-4 gap-y-3 bg-[#161b28]/95 p-4 short:gap-y-2 short:p-3">
               <Stat label="Credits" value={fmtCr(stash.credits)} tone="text-amber-300" />
+              {EDITION_UI.walletBalance && (
               <Stat
                 label={`Wallet (${stash.market.currency})`}
                 value={formatMinor(stash.balance).replace(` ${stash.market.currency}`, "")}
@@ -93,6 +99,7 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
                   </Link>
                 }
               />
+              )}
               <Stat
                 label="Level"
                 value={String(stash.level)}
@@ -104,13 +111,15 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
               />
               <Stat label="Raids" value={String(stash.matchesPlayed)} />
             </section>
-            <StarterKitCard stash={stash} buying={buying} onBuy={buyKit} />
+            {EDITION_UI.starterKitSale && <StarterKitCard stash={stash} buying={buying} onBuy={buyKit} />}
             {note && (
               <p role="status" className={note.ok ? "font-body text-sm text-zooa-lime" : "font-body text-sm text-rose-300"}>
                 {note.text}
               </p>
             )}
-            <p className="font-body text-sm text-white/70">Pick an item to see details or put it up for sale.</p>
+            <p className="font-body text-sm text-white/70">
+              {EDITION_UI.market ? "Pick an item to see details or put it up for sale." : "Pick an item to see its details."}
+            </p>
             <section className="toon-panel flex items-center gap-3 bg-[#161b28]/95 px-4 py-2 short:px-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/sprites/ammo.png" alt="" className="h-10 w-10 shrink-0 object-contain" draggable={false} />
@@ -128,7 +137,7 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
         )}
       </div>
 
-      {selling && (
+      {EDITION_UI.market && selling && (
         <ListDialog
           item={selling}
           market={stash.market}
@@ -270,10 +279,14 @@ function ItemDrawer({ item, stash, onSell, onClose }: { item: StashItemDto; stas
         )}
       </dl>
       <div className="mt-5 flex flex-col gap-2 short:mt-3">
-        <button type="button" onClick={() => onSell(item)} disabled={blocker !== null} className="toon-btn min-h-12 text-lg short:min-h-11">
-          <span className="optical-center">Sell on market</span>
-        </button>
-        {blocker && <p className="font-body text-sm text-white/75">{blocker}</p>}
+        {EDITION_UI.market && (
+          <>
+            <button type="button" onClick={() => onSell(item)} disabled={blocker !== null} className="toon-btn min-h-12 text-lg short:min-h-11">
+              <span className="optical-center">Sell on market</span>
+            </button>
+            {blocker && <p className="font-body text-sm text-white/75">{blocker}</p>}
+          </>
+        )}
         {item.state === "in_stash" && (
           <Link href={panelHref({ panel: "inventory", tab: "loadout" })} className="toon-btn-ghost min-h-11 text-sm">
             <span className="optical-center">Equip in loadout</span>

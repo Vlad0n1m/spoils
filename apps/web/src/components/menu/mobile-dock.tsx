@@ -4,6 +4,7 @@ import clsx from "clsx";
 import type { LobbyPanel } from "@/lib/lobby/panels";
 import { FallbackImg } from "./fallback-img";
 import { MENU_ICONS, type MenuIcon } from "./side-button";
+import { EDITION_UI } from "@/lib/edition";
 
 /**
  * Phone dock (WORLD v6 spec §6.1, < 768 px): five cells above PLAY — Inventory, Shop, News, Ranks
@@ -61,7 +62,7 @@ export function MobileDock({
           moreOpen || active === "friends",
           onMore,
           moreDot,
-          moreDot ? "More: info, friends (new), guilds, wallet, account" : "More: info, friends, guilds, wallet, account",
+          `More: info, friends${moreDot ? " (new)" : ""}, guilds, ${EDITION_UI.walletLinks ? "wallet, " : ""}account`,
         )}
       </ul>
     </nav>

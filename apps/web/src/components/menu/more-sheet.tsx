@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useLobby } from "@/lib/lobby/lobby-context";
 import { FallbackImg } from "./fallback-img";
 import { LockSticker, MENU_ICONS } from "./side-button";
+import { EDITION_UI } from "@/lib/edition";
 
 const row =
   "font-body flex min-h-14 w-full items-center gap-3 rounded-2xl border-[3px] border-black bg-[#1d2333] px-4 text-left text-base font-semibold text-white shadow-[0_3px_0_#000] active:translate-y-[2px] active:shadow-[0_1px_0_#000] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70";
@@ -82,7 +83,7 @@ export function MoreSheet({
           </span>
           Guilds · coming soon
         </button>
-        {sessionKind === "user" && (
+        {sessionKind === "user" && EDITION_UI.walletLinks && (
           <Link href="/wallet" className={row}>
             <span className="grid h-8 w-8 place-items-center text-xl text-sol-400" aria-hidden>
               ◆
@@ -90,12 +91,14 @@ export function MoreSheet({
             Wallet
           </Link>
         )}
-        <Link href={sessionKind === "anon" ? "/auth/login?next=/play" : "/economy"} className={row}>
-          <span className="grid h-8 w-8 place-items-center text-xl text-amber-300" aria-hidden>
-            ◎
-          </span>
-          {sessionKind === "anon" ? "Sign in" : "Economy stats"}
-        </Link>
+        {(sessionKind === "anon" || EDITION_UI.economyLinks) && (
+          <Link href={sessionKind === "anon" ? "/auth/login?next=/play" : "/economy"} className={row}>
+            <span className="grid h-8 w-8 place-items-center text-xl text-amber-300" aria-hidden>
+              ◎
+            </span>
+            {sessionKind === "anon" ? "Sign in" : "Economy stats"}
+          </Link>
+        )}
         <button type="button" onClick={onClose} className="toon-btn-ghost mt-1 min-h-12 text-base">
           <span className="optical-center">Close</span>
         </button>

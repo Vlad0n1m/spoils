@@ -7,6 +7,7 @@ import { useLobby } from "@/lib/lobby/lobby-context";
 import { AccountWalletEntry } from "@/components/wallet/account-wallet-entry";
 import { BRAND } from "@/lib/brand";
 import { useIdosFramed } from "./use-idos-frame";
+import { EDITION_UI, isIdosAccountEmail } from "@/lib/edition";
 
 const item =
   "font-body flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold text-white/85 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime";
@@ -81,7 +82,7 @@ export function AccountMenu() {
           {user ? (
             <div className="border-b-2 border-black/40 px-3 pb-3 pt-2">
               <p className="truncate text-base tracking-wide text-white">{user.nickname}</p>
-              <p className="font-body mt-1 truncate text-xs lg:text-[0.8125rem] text-white/75">{sessionKind === "guest" ? "Guest · loot isn't kept" : user.email}</p>
+              <p className="font-body mt-1 truncate text-xs lg:text-[0.8125rem] text-white/75">{sessionKind === "guest" ? "Guest · loot isn't kept" : isIdosAccountEmail(user.email) ? "iDos Games account" : user.email}</p>
             </div>
           ) : (
             <p className="font-body px-3 pb-3 pt-2 text-sm text-white/70">Not signed in</p>
@@ -89,13 +90,17 @@ export function AccountMenu() {
           <nav className="mt-1 flex flex-col" aria-label="Account">
             {sessionKind === "user" && user && (
               <>
-                {!idosFramed && <AccountWalletEntry userId={user.id} itemClassName={item} />}
-                <Link href="/wallet" className={item}>
-                  Wallet
-                </Link>
-                <Link href="/economy" className={item}>
-                  Economy stats
-                </Link>
+                {EDITION_UI.walletLinks && !idosFramed && <AccountWalletEntry userId={user.id} itemClassName={item} />}
+                {EDITION_UI.walletLinks && (
+                  <Link href="/wallet" className={item}>
+                    Wallet
+                  </Link>
+                )}
+                {EDITION_UI.economyLinks && (
+                  <Link href="/economy" className={item}>
+                    Economy stats
+                  </Link>
+                )}
               </>
             )}
             {sessionKind === "guest" && (
@@ -111,9 +116,11 @@ export function AccountMenu() {
                 <Link href="/auth/register?next=/play" className={item}>
                   Register
                 </Link>
-                <Link href="/economy" className={item}>
-                  Economy stats
-                </Link>
+                {EDITION_UI.economyLinks && (
+                  <Link href="/economy" className={item}>
+                    Economy stats
+                  </Link>
+                )}
               </>
             ) : (
               <button type="button" onClick={() => void signOut()} className={item}>
