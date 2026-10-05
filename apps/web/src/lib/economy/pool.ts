@@ -303,7 +303,7 @@ export async function releaseForEntry(tx: Tx, a: ReleaseForEntryArgs): Promise<R
     shardReleased: Number(shardRow?.released ?? 0),
     riskUsers,
     atMs: a.atMs,
-    entryCloseMs: WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS,
+    entryCloseMs: WORLD.MAP_MS - WORLD.ENTRY_CLOSE_MS,
     targets: a.targets,
     k,
     minReserve,

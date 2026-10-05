@@ -52,7 +52,7 @@ interface Props {
 const EMPTY_HUD: HudSnapshot = {
   phase: "drop",
   clockMs: 0,
-  durationMs: WORLD.CYCLE_MS,
+  durationMs: WORLD.MAP_MS,
   extractOpenAtMs: WORLD.EXTRACT_ARM_MS,
   wipeWarn: 0,
   boss: null,

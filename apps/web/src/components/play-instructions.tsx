@@ -38,7 +38,7 @@ const STEPS: { title: string; body: string; icon: string }[] = [
   {
     title: "Drop in",
     icon: "/sprites/pistol.png",
-    body: `${BRAND.mapName} is always on. Drop in any time: the map wipes every ${CYCLE_MIN} minutes and entry closes ${CLOSE_MIN} minutes before the wipe. You drop with your loadout or the basic gear (a pistol, light ammo and a bandage; that pistol never breaks and never drops). ${PLAYER.MAX_HP} HP.`,
+    body: `${BRAND.mapName} is always on. Drop in any time: the map wipes every ${CYCLE_MIN} minutes and entry closes ${CLOSE_MIN} minutes before the wipe, when the next map is already open, so there is always a map to drop into. You drop with your loadout or the basic gear (a pistol, light ammo and a bandage; that pistol never breaks and never drops). ${PLAYER.MAX_HP} HP.`,
   },
   {
     title: "Search",

@@ -5,7 +5,7 @@ import {
   cosmeticDef,
   levelForXp,
   mapNumber,
-  worldCycleAt,
+  worldCycleOf,
   type ExitType,
   type LastRaidDto,
   type MeWorldDto,
@@ -20,8 +20,9 @@ import { worldNow } from "./clock";
  * GET /api/me/world (spec §4.9, private, no-store): the caller's world state for the lobby.
  * Runs the user's lazy void first (voidStaleForUser, as /api/world/join does), so an entry on the
  * shard of a crashed or restarted game server is voided here instead of showing as rejoinable.
- * - activeEntry: their active raid_entries row; `rejoinable` = its shard row is running and in the
- *   current cycle (then /api/world/join hands back a rejoin ticket for it).
+ * - activeEntry: their active raid_entries row; `rejoinable` = its shard row is running and its map
+ *   has not wiped yet — the open cycle, or the closing previous one during the overlap (then
+ *   /api/world/join hands back a rejoin ticket for it).
  * - lastRaid: their newest raid_exits row that belongs to an entry (world exits; legacy exits have
  *   no raid_entries row). `levelBefore = levelForXp(users.xp − row.xp)` is valid because that exit is
  *   the newest XP change. `kills.npcs` counts every NPC (marauders, guards and bosses);
@@ -31,7 +32,6 @@ import { worldNow } from "./clock";
  * Guests (no users row) get level 0.
  */
 export async function meWorld(db: Db, userId: string, now = worldNow()): Promise<MeWorldDto> {
-  const wc = worldCycleAt(now);
   await voidStaleForUser(db, userId, new Date(now));
   const [act, last, user] = await Promise.all([
     db.execute<{ entry_id: string; match_id: string; cycle_id: number; ends_at: Date | string | null; status: string | null; raid_cycle: number | null }>(sql`
@@ -66,7 +66,8 @@ export async function meWorld(db: Db, userId: string, now = worldNow()): Promise
         entryId: a.entry_id,
         cycle: Number(a.cycle_id),
         wipeAt: a.ends_at ? new Date(a.ends_at).getTime() : 0,
-        rejoinable: a.status === "running" && Number(a.raid_cycle) === wc.cycle,
+        // Overlapping maps: the entry's map may be the closing previous cycle, rejoinable until its wipe.
+        rejoinable: a.status === "running" && a.raid_cycle !== null && now < worldCycleOf(Number(a.raid_cycle)).wipeAt,
       }
     : null;
 

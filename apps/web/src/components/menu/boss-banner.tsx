@@ -24,14 +24,14 @@ function BossFace({ down = false, small = false }: { down?: boolean; small?: boo
 /**
  * Boss line of the world card (WORLD v6 spec §6.4), compact for the event card. Alive → rose banner "BOSS EVENT · {name}
  * holds the {zone}" with tier and guards; killed → grey "{name} is down — killed by {nick}"; no boss →
- * one thin line; plus "Next map: {NAME} at {zone}" once the next boss is revealed. A boss that
+ * one thin line. Overlapping maps: the next map's boss is revealed when that map opens (the moment
+ * entry to the previous one closes), so it shows up here as the open map's own boss. A boss that
  * appears while the menu is open drops in once with a shake. Only a status of the current map
  * (`fresh`) is shown: a stale one would announce the previous map's boss. Phones get one line
- * (tier, guards and the next-map line from md up).
+ * (tier and guards from md up).
  */
 export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; fresh: boolean }) {
   const boss = fresh ? (status?.boss ?? null) : null;
-  const next = fresh ? status?.next.boss : undefined;
   const key = fresh && status ? `${status.cycle}:${boss?.kind ?? "-"}` : null;
 
   // Drop-in only for a change seen while the menu is open (not on the first status).
@@ -49,21 +49,10 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
 
   if (!fresh || !status) return null;
 
-  // Next map's boss: tall desktop screens only (the card stays compact elsewhere).
-  const nextLine =
-    next === undefined ? null : next === null ? (
-      <p className="font-body hidden text-xs lg:text-[0.8125rem] font-semibold text-white/70 [@media(min-width:1024px)_and_(min-height:760px)]:block">Next map: no boss</p>
-    ) : (
-      <p className="font-body hidden text-xs lg:text-[0.8125rem] font-semibold text-rose-200 [@media(min-width:1024px)_and_(min-height:760px)]:block">
-        Next map: <span className="uppercase tracking-wide">{next.name}</span> at the {next.zoneName}
-      </p>
-    );
-
   if (!boss) {
     return (
       <div className="flex flex-col gap-1 border-t-2 border-black/40 pt-1.5">
         <p className="font-body text-xs lg:text-[0.8125rem] font-semibold text-white/70">No boss this map · about 1 map in 3</p>
-        {nextLine}
       </div>
     );
   }
@@ -77,7 +66,6 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
             {boss.name} is down{boss.killedBy ? <> — by <span className="text-zooa-lime">{boss.killedBy}</span></> : null}
           </p>
         </div>
-        {nextLine}
       </div>
     );
   }
@@ -108,7 +96,6 @@ export function BossBanner({ status, fresh }: { status: WorldStatusDto | null; f
           </span>
         </span>
       </div>
-      {nextLine}
     </div>
   );
 }

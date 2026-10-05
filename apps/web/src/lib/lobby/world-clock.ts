@@ -89,16 +89,20 @@ export interface WorldView {
   /** Raiders on the map; null = unknown. */
   humans: number | null;
   capacity: number;
-  /** 0..1 of the cycle elapsed. */
+  /** Running copies (shards) of this map; null = unknown. */
+  shards: number | null;
+  /** 0..1 of the map's life (MAP_MS from its opening) elapsed. */
   elapsed: number;
-  /** 0..1 position of the entry close on the cycle bar. */
+  /** 0..1 position of the entry close on the map's bar. */
   closeMark: number;
 }
 
 /**
  * The world at `now`: phase and countdowns always come from the cycle clock (`now` is already
  * server-corrected); the status only adds what the clock cannot know (online, humans, boss) and
- * only while it belongs to the current cycle.
+ * only while it belongs to the current cycle. Overlapping maps: worldCycleAt is the cycle accepting
+ * entries, so `phase` is "open" at every instant and the menu never shows a "wait for the next map"
+ * state (the resetting / closing branches stay only as a fallback).
  */
 export function worldView(status: WorldStatusDto | null, now: number): WorldView {
   const wc = worldCycleAt(now);
@@ -118,8 +122,9 @@ export function worldView(status: WorldStatusDto | null, now: number): WorldView
     fresh,
     online: fresh ? status.online : null,
     humans: fresh ? Math.max(0, Math.floor(status.humans)) : null,
-    capacity: status?.capacity ?? WORLD.CAPACITY * WORLD.MAX_SHARDS,
-    elapsed: Math.min(1, Math.max(0, (now - wc.startAt) / WORLD.CYCLE_MS)),
-    closeMark: (WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS) / WORLD.CYCLE_MS,
+    capacity: status?.capacity ?? WORLD.CAPACITY,
+    shards: fresh ? Math.max(0, Math.floor(status.shards ?? 0)) : null,
+    elapsed: Math.min(1, Math.max(0, (now - wc.startAt) / WORLD.MAP_MS)),
+    closeMark: (WORLD.MAP_MS - WORLD.ENTRY_CLOSE_MS) / WORLD.MAP_MS,
   };
 }

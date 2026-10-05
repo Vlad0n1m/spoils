@@ -361,6 +361,31 @@ describe("party drop", () => {
     assert.equal((await db.select().from(partyDrops)).length, 1);
   });
 
+  test("several shards: a new drop goes to the fullest shard with room for the whole party; members follow it there", async () => {
+    const [a, b, c] = [await user(), await user(), await user()];
+    await party(a, b, c);
+    const s0 = shardReq({ shard: 0 });
+    const s1 = shardReq({ shard: 1 });
+    await openShard(db, s0);
+    await openShard(db, s1);
+    // Shard 0 has 2 free seats (too few for 3), shard 1 has plenty.
+    for (let i = 0; i < 22; i++) {
+      await db.insert(raidEntries).values({ entryId: randomUUID(), matchId: s0.matchId, cycleId: C, userId: (await user()).userId, status: "active" });
+    }
+    const solo = await worldJoin(db, await user(), undefined, NOW);
+    assert.ok(solo.ok && solo.body.matchId === s0.matchId, "a solo player takes a seat on the fuller shard");
+    const la = await worldJoin(db, a, undefined, NOW);
+    assert.ok(la.ok, JSON.stringify(la));
+    if (!la.ok) return;
+    assert.equal(la.body.matchId, s1.matchId, "the party fits only on shard 1");
+    const rows = await db.select().from(partyDrops);
+    assert.equal(rows[0]!.matchId, s1.matchId, "the drop is saved on the picked shard");
+    const lb = await worldJoin(db, b, undefined, NOW + 1_000);
+    assert.ok(lb.ok && lb.body.matchId === s1.matchId && lb.body.ticket.dropId === la.body.ticket.dropId);
+    const again = await worldJoin(db, a, undefined, NOW + 2_000);
+    assert.ok(again.ok && again.body.matchId === s1.matchId, "the leader's next PLAY in the window stays on the drop's shard");
+  });
+
   test("a malformed dropId (36 dashes, not a UUID) is ignored: the member's PLAY follows the live drop, never a 500", async () => {
     assert.equal(UUID_RE.test("-".repeat(36)), false);
     assert.ok(UUID_RE.test(randomUUID()));

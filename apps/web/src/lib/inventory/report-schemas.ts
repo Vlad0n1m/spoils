@@ -76,7 +76,7 @@ export const playerExitReportSchema = z.object({
   /** WORLD v6: this entry (world matches always set it; absent = a legacy roster match). */
   entryId: uuid.optional(),
   /** WORLD v6: cycle clock at admission. */
-  enteredAtMs: z.number().finite().min(0).max(WORLD.CYCLE_MS).optional(),
+  enteredAtMs: z.number().finite().min(0).max(WORLD.MAP_MS).optional(),
   /** WORLD v6: userIds of the humans this entry killed (guests included; the web filters). */
   victims: z.array(z.string().max(64)).max(256).optional(),
   /** WORLD v6: this entry's pool items never placed → pool, untaxed. */
@@ -167,7 +167,7 @@ export const entryRequestSchema = z
     userId: uuid,
     /** "" = free kit. */
     loadoutId: z.union([z.literal(""), uuid]),
-    atMs: z.number().finite().min(0).max(WORLD.CYCLE_MS),
+    atMs: z.number().finite().min(0).max(WORLD.MAP_MS),
     targets: z.number().int().min(0).max(100_000),
     bossAlive: z.boolean(),
   })
@@ -181,6 +181,6 @@ export const worldEventReportSchema = z
     boss: bossKind,
     by: z.string().max(64),
     byUserId: uuid.optional(),
-    atMs: z.number().finite().min(0).max(WORLD.CYCLE_MS),
+    atMs: z.number().finite().min(0).max(WORLD.MAP_MS),
   })
   .strict() satisfies z.ZodType<WorldEventReport>;

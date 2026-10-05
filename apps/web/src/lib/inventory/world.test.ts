@@ -235,7 +235,7 @@ describe("raids/enter", () => {
     const a = await geared();
     assert.equal((await enterRaid(db, entryReq(s.matchId, a.userId, a.loadoutId, { targets: POOL.MIN_TARGETS - 1 }))).pool.length, 0);
     const b = await geared();
-    const late = WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS - 1000;
+    const late = WORLD.MAP_MS - WORLD.ENTRY_CLOSE_MS - 1000;
     assert.equal((await enterRaid(db, entryReq(s.matchId, b.userId, b.loadoutId, { atMs: late }))).pool.length, 0, "taper → 0");
   });
 

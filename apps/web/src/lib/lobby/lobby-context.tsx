@@ -10,7 +10,7 @@
  * re-render every second.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { WORLD, worldCycleAt, worldPhase, type MeWorldDto, type WorldStatusDto } from "@extract/shared";
+import { worldCycleAt, worldCyclesLive, type MeWorldDto, type WorldStatusDto } from "@extract/shared";
 import { useSession, type MeUser } from "@/lib/session-context";
 import { useStash, type Resource } from "@/components/lobby/use-lobby";
 import type { StashResponse } from "./api-types";
@@ -71,10 +71,9 @@ export function LobbyProvider({ active = true, children }: { active?: boolean; c
   const local = useTicker(1000, active);
   const now = local + offset;
 
-  // Reload the status when the clock crosses a phase edge (entry close, wipe, reset end, next boss
-  // reveal): the card would otherwise show the old map's boss until the next poll.
-  const wc = worldCycleAt(now);
-  const edge = `${wc.cycle}:${worldPhase(wc, now)}:${now >= wc.wipeAt - WORLD.NEXT_BOSS_REVEAL_MS ? 1 : 0}`;
+  // Reload the status when the clock crosses an edge (entry close = the next map opens with its boss,
+  // the closing map's wipe): the card would otherwise show the old map until the next poll.
+  const edge = `${worldCycleAt(now).cycle}:${worldCyclesLive(now).length}`;
   const firstEdge = useRef(edge);
   const { reload: reloadStatus } = status;
   useEffect(() => {

@@ -45,6 +45,8 @@ beforeEach(() => resetDb(db));
 const C = worldCycleAt(Date.now()).cycle;
 const WC = worldCycleOf(C);
 const OPEN_NOW = WC.openAt + 60_000;
+/** After the previous cycle's wipe (overlapping maps: C − 1 runs until WC.openAt + ENTRY_CLOSE_MS). */
+const LATE_NOW = WC.openAt + WORLD.ENTRY_CLOSE_MS + 60_000;
 
 function shardReq(over: Partial<ShardOpenRequest> = {}): ShardOpenRequest {
   const wc = worldCycleOf(over.cycleId ?? C);
@@ -170,17 +172,48 @@ describe("worldJoin", () => {
     assert.deepEqual([r.status, r.body.error, r.body.retryInMs], [503, "world_starting", 3000]);
   });
 
-  test("entry_closed: resetting → this cycle's openAt; closing → the next cycle's openAt", async () => {
+  test("overlapping maps: never entry_closed — at the entry close of C the join goes to C + 1, open at once", async () => {
     const u = await user();
-    await openShard(db, shardReq());
-    const resetting = await worldJoin(db, u, undefined, WC.startAt + 5_000);
-    assert.equal(resetting.ok, false);
-    if (resetting.ok) return;
-    assert.deepEqual([resetting.status, resetting.body.error, resetting.body.openAt], [409, "entry_closed", WC.openAt]);
-    const closing = await worldJoin(db, u, undefined, WC.entryClosesAt);
-    assert.equal(closing.ok, false);
-    if (closing.ok) return;
-    assert.deepEqual([closing.body.error, closing.body.openAt], ["entry_closed", worldCycleOf(C + 1).openAt]);
+    const cur = shardReq();
+    const nxt = shardReq({ cycleId: C + 1, roomId: `room-${C + 1}` });
+    await openShard(db, cur);
+    await openShard(db, nxt);
+    const first = await worldJoin(db, u, undefined, WC.openAt);
+    assert.ok(first.ok, JSON.stringify(first));
+    if (first.ok) assert.equal(first.body.matchId, cur.matchId, "no reset gap: C takes entries from its opening");
+    const before = await worldJoin(db, u, undefined, WC.entryClosesAt - 1);
+    assert.ok(before.ok && before.body.matchId === cur.matchId);
+    const at = await worldJoin(db, u, undefined, WC.entryClosesAt);
+    assert.ok(at.ok, JSON.stringify(at));
+    if (!at.ok) return;
+    const N = worldCycleOf(C + 1);
+    assert.deepEqual([at.body.matchId, at.body.cycle, at.body.wipeAt, at.body.entryClosesAt], [nxt.matchId, C + 1, N.wipeAt, N.entryClosesAt]);
+    assert.equal(N.wipeAt - WC.entryClosesAt, WORLD.MAP_MS, "the first raiders of C + 1 get 55 minutes");
+  });
+
+  test("several shards: the fullest one with a free seat (players packed together), never a full one", async () => {
+    const s0 = shardReq({ shard: 0, roomId: "room-s0" });
+    const s1 = shardReq({ shard: 1, roomId: "room-s1" });
+    await openShard(db, s0);
+    await openShard(db, s1);
+    const fill = async (matchId: string, n: number) => {
+      for (let i = 0; i < n; i++) await addEntry({ matchId, cycleId: C, userId: (await user()).userId });
+    };
+    await fill(s0.matchId, 3);
+    await fill(s1.matchId, 8);
+    const a = await worldJoin(db, await user(), undefined, OPEN_NOW);
+    assert.ok(a.ok && a.body.matchId === s1.matchId && a.body.roomId === "room-s1", "the fuller shard");
+    await fill(s1.matchId, WORLD.CAPACITY - 8);
+    const b = await worldJoin(db, await user(), undefined, OPEN_NOW);
+    assert.ok(b.ok && b.body.matchId === s0.matchId, "a full shard is skipped");
+    // Every shard full by the web's count: the emptiest one, and the game server decides (world_full + a new shard).
+    await fill(s0.matchId, WORLD.CAPACITY - 3);
+    const c = await worldJoin(db, await user(), undefined, OPEN_NOW);
+    assert.ok(c.ok, JSON.stringify(c));
+    // A row of the closing cycle is never picked for a fresh entry.
+    await openShard(db, shardReq({ cycleId: C - 1, roomId: "room-prev" }));
+    const d = await worldJoin(db, await user(), undefined, OPEN_NOW);
+    assert.ok(d.ok && d.body.cycle === C && d.body.roomId !== "room-prev");
   });
 
   test("success: a fresh entry id, the shard's matchId and roomId in a signed ticket; empty loadout = free kit", async () => {
@@ -271,9 +304,11 @@ describe("worldJoin", () => {
     assert.equal(re.body.loadoutId, r.body.loadoutId);
     assert.deepEqual(re.body.entries.map((e) => e.itemId), [rifle]);
     assert.ok(sigOk(re.body.ticket));
-    // A rejoin works after entry closes too (the runtime is still on the map).
+    // A rejoin works after entry closes too (the runtime is still on the map), with its own map's
+    // cycle and wipe, while C + 1 is the open cycle.
     const late = await worldJoin(db, u, undefined, WC.entryClosesAt + 60_000);
     assert.ok(late.ok && late.body.rejoin);
+    if (late.ok) assert.deepEqual([late.body.cycle, late.body.wipeAt, late.body.matchId], [C, WC.wipeAt, s.matchId]);
     // The battle screen's reconnect (rejoinOnly) gets the same rejoin ticket…
     const only = await worldJoin(db, u, undefined, OPEN_NOW + 6_000, { rejoinOnly: true });
     assert.ok(only.ok && only.body.rejoin && only.body.ticket.entryId === entryId);
@@ -338,13 +373,17 @@ describe("worldJoin", () => {
     });
   }
 
-  test("an active entry on a shard of another cycle → 409 in_raid with settlesAt = ends_at + 5 min", async () => {
+  test("an active entry on the previous map: a rejoin while it still runs, 409 in_raid with settlesAt = ends_at + 5 min after its wipe", async () => {
     const u = await user();
     const prev = shardReq({ cycleId: C - 1 });
     await openShard(db, prev);
     await openShard(db, shardReq());
     await addEntry({ matchId: prev.matchId, cycleId: C - 1, userId: u.userId });
-    const r = await worldJoin(db, u, undefined, OPEN_NOW);
+    // Overlapping maps: C − 1 runs until its wipe (10 min after C opened); its raider rejoins it.
+    const back = await worldJoin(db, u, undefined, OPEN_NOW);
+    assert.ok(back.ok && back.body.rejoin, JSON.stringify(back));
+    if (back.ok) assert.deepEqual([back.body.matchId, back.body.cycle, back.body.wipeAt], [prev.matchId, C - 1, prev.endsAt]);
+    const r = await worldJoin(db, u, undefined, LATE_NOW);
     assert.equal(r.ok, false);
     if (r.ok) return;
     assert.deepEqual([r.status, r.body.error, r.body.settlesAt], [409, "in_raid", prev.endsAt + RAID_USER_VOID_GRACE_MS]);
@@ -372,15 +411,15 @@ describe("worldStatus", () => {
     const st = await worldStatus(db, OPEN_NOW);
     assert.equal(st.v, 1);
     assert.deepEqual(
-      [st.online, st.humans, st.boss, st.last, st.cycle, st.mapNumber, st.phase, st.capacity],
-      [false, 0, null, null, C, mapNumber(C), "open", WORLD.CAPACITY * WORLD.MAX_SHARDS],
+      [st.online, st.humans, st.shards, st.boss, st.last, st.closing, st.cycle, st.mapNumber, st.phase, st.capacity],
+      [false, 0, 0, null, null, null, C, mapNumber(C), "open", WORLD.CAPACITY],
     );
     assert.deepEqual([st.openAt, st.entryClosesAt, st.wipeAt, st.serverTime], [WC.openAt, WC.entryClosesAt, WC.wipeAt, OPEN_NOW]);
     assert.deepEqual(st.next, { cycle: C + 1, mapNumber: mapNumber(C + 1), openAt: worldCycleOf(C + 1).openAt });
     assert.ok(!("boss" in st.next));
   });
 
-  test("online with an alive boss; next boss only after the reveal; killed with the killer's nickname", async () => {
+  test("online with an alive boss (revealed when its map opens); killed with the killer's nickname", async () => {
     const s = shardReq({ boss: { kind: "foreman", zone: "elevator" }, nextBoss: { kind: "commander", zone: "radar" } });
     await openShard(db, s);
     const [a, b, c] = [await user(), await user(), await user()];
@@ -401,22 +440,40 @@ describe("worldStatus", () => {
       status: "alive",
       killedBy: null,
     });
-    assert.ok(!("boss" in st.next), "no next boss before the reveal");
-
-    const revealed = await worldStatus(db, WC.wipeAt - WORLD.NEXT_BOSS_REVEAL_MS);
-    assert.deepEqual(revealed.next.boss, { kind: "commander", name: "Commander", zoneName: "Radar Base" });
-    assert.equal(revealed.phase, "closing");
+    assert.ok(!("boss" in st.next), "the next map's boss shows once that map opens, as its own boss");
+    assert.deepEqual([st.shards, st.capacity], [1, WORLD.CAPACITY]);
 
     await recordWorldEvent(db, { matchId: s.matchId, cycleId: C, kind: "boss_killed", boss: "foreman", by: "Nick", atMs: 600_000 });
     const killed = await worldStatus(db, OPEN_NOW);
     assert.deepEqual([killed.boss?.status, killed.boss?.killedBy], ["killed", "Nick"]);
   });
 
-  test("a revealed map without a boss shows next.boss = null", async () => {
+  test("several shards: humans and capacity over all of them; the boss is killed once it died on every shard", async () => {
+    const boss = { kind: "foreman" as const, zone: "elevator" };
+    const s0 = shardReq({ shard: 0, boss });
+    const s1 = shardReq({ shard: 1, boss });
+    await openShard(db, s0);
+    await openShard(db, s1);
+    for (const m of [s0.matchId, s0.matchId, s1.matchId]) await addEntry({ matchId: m, cycleId: C, userId: (await user()).userId });
+    const st = await worldStatus(db, OPEN_NOW);
+    assert.deepEqual([st.humans, st.shards, st.capacity, st.boss?.status], [3, 2, 2 * WORLD.CAPACITY, "alive"]);
+    await recordWorldEvent(db, { matchId: s1.matchId, cycleId: C, kind: "boss_killed", boss: "foreman", by: "Ann", atMs: 600_000 }, new Date(OPEN_NOW + 1_000));
+    assert.equal((await worldStatus(db, OPEN_NOW + 2_000)).boss?.status, "alive", "still alive on shard 0");
+    await recordWorldEvent(db, { matchId: s0.matchId, cycleId: C, kind: "boss_killed", boss: "foreman", by: "Bob", atMs: 700_000 }, new Date(OPEN_NOW + 3_000));
+    const k = await worldStatus(db, OPEN_NOW + 4_000);
+    assert.deepEqual([k.boss?.status, k.boss?.killedBy], ["killed", "Ann"], "the first killer");
+  });
+
+  test("closing: the previous map while it still runs (raiders on it), gone after its wipe", async () => {
+    const prev = shardReq({ cycleId: C - 1 });
+    await openShard(db, prev);
     await openShard(db, shardReq());
-    const st = await worldStatus(db, WC.wipeAt - 1000);
-    assert.ok("boss" in st.next);
-    assert.equal(st.next.boss, null);
+    await addEntry({ matchId: prev.matchId, cycleId: C - 1, userId: (await user()).userId });
+    const st = await worldStatus(db, OPEN_NOW);
+    assert.equal(st.cycle, C);
+    assert.deepEqual(st.closing, { cycle: C - 1, mapNumber: mapNumber(C - 1), wipeAt: worldCycleOf(C - 1).wipeAt, humans: 1 });
+    assert.equal(st.humans, 0, "the closing map's raiders are not on the open map");
+    assert.equal((await worldStatus(db, LATE_NOW)).closing, null);
   });
 
   test("last: the previous cycle's settled row — exits by type, top ranked killer, boss killer", async () => {
@@ -435,7 +492,7 @@ describe("worldStatus", () => {
     await kill(b.userId, a.userId, { cycleId: C - 1, ranked: false });
     await kill(b.userId, a.userId, { cycleId: C, ranked: true });
 
-    const st = await worldStatus(db, OPEN_NOW);
+    const st = await worldStatus(db, LATE_NOW);
     assert.deepEqual(st.last, {
       cycle: C - 1,
       mapNumber: mapNumber(C - 1),
@@ -446,18 +503,20 @@ describe("worldStatus", () => {
       bossKilledBy: "Ace",
     });
     assert.equal(st.online, false, "the previous cycle's row does not make this cycle online");
+    // During the overlap the previous map is not over yet: `last` is the one before it.
+    assert.equal((await worldStatus(db, OPEN_NOW)).last, null);
   });
 
   test("last is null while the previous cycle's row is still running (end report pending)", async () => {
     await openShard(db, shardReq({ cycleId: C - 1 }));
-    assert.equal((await worldStatus(db, OPEN_NOW)).last, null);
+    assert.equal((await worldStatus(db, LATE_NOW)).last, null);
   });
 });
 
 // ============================================================================ me/world
 
 describe("meWorld", () => {
-  test("active entry (rejoinable only on a running row of this cycle) and the last world raid", async () => {
+  test("active entry (rejoinable on a running row until its map wipes) and the last world raid", async () => {
     const u = await user();
     const s = shardReq();
     await openShard(db, s);
@@ -493,8 +552,10 @@ describe("meWorld", () => {
         kills: { players: 2, npcs: 6, bosses: 1 },
       },
     );
-    // Next cycle: the same active entry is no longer rejoinable.
-    const later = await meWorld(db, u.userId, worldCycleOf(C + 1).openAt);
+    // The next cycle opened (entry to C closed): C still runs, so the entry is rejoinable until C's wipe.
+    const overlap = await meWorld(db, u.userId, worldCycleOf(C + 1).openAt);
+    assert.equal(overlap.activeEntry?.rejoinable, true);
+    const later = await meWorld(db, u.userId, WC.wipeAt);
     assert.equal(later.activeEntry?.rejoinable, false);
   });
 });
@@ -583,10 +644,10 @@ describe("worldEvents", () => {
     await addEntry({ matchId: p1.matchId, cycleId: C - 1, userId: u.userId, status: "exited" });
     await addExit({ matchId: p1.matchId, cycleId: C - 1, userId: u.userId, exit: "extract" });
 
-    const ev = await worldEvents(db, 20, OPEN_NOW);
+    const ev = await worldEvents(db, 20, LATE_NOW);
     assert.deepEqual(ev.events.map((e) => e.id), [
-      `${C}:boss_spawned`,
       `${C - 1}:wiped`,
+      `${C}:boss_spawned`,
       `${C - 2}:wiped`,
       `${C - 2}:boss_killed`,
       `${C - 2}:boss_spawned`,
@@ -597,9 +658,11 @@ describe("worldEvents", () => {
     assert.equal(wiped.mapNumber, mapNumber(C - 1));
     const killed = ev.events.find((e) => e.kind === "boss_killed")!;
     assert.deepEqual([killed.by, killed.boss?.name, killed.boss?.zoneName], ["Ace", "Commander", "Radar Base"]);
-    assert.equal(ev.events[0]!.at, WC.startAt);
+    assert.equal(ev.events[1]!.at, WC.startAt, "a boss spawns when its map opens");
+    // Before C − 1's wipe its `wiped` is in the future.
+    assert.ok(!(await worldEvents(db, 20, OPEN_NOW)).events.some((e) => e.id === `${C - 1}:wiped`));
 
-    const two = await worldEvents(db, 2, OPEN_NOW);
+    const two = await worldEvents(db, 2, LATE_NOW);
     assert.equal(two.events.length, 2);
   });
 });

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { AUTOSELL, mapNumber, worldCycleAt } from "@extract/shared";
+import { AUTOSELL, mapNumber, worldCycleAt, worldCyclesLive } from "@extract/shared";
 import { PARAM, getNumberParam } from "../economy/params";
 import type { Db } from "../inventory/db";
 import { MARKET_CURRENCY } from "../market/config";
@@ -98,7 +98,7 @@ export async function adminMetrics(
         group by r.shard, r.match_id
         order by r.shard`),
       db.execute<{ n: number }>(sql`
-        select count(*)::int as n from raid_entries where status = 'active' and cycle_id < ${wc.cycle}`),
+        select count(*)::int as n from raid_entries where status = 'active' and cycle_id < ${worldCyclesLive(clock.worldNowMs)[0]!.cycle}`),
       db.execute<{ day: string; n: number; guests: number; reg: number; gear: number }>(sql`
         select to_char(created_at at time zone 'UTC', 'YYYY-MM-DD') as day, count(*)::int as n,
           count(*) filter (where guest)::int as guests,

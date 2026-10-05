@@ -6,6 +6,7 @@ import {
   WORLD,
   cosmeticDef,
   isSlotKey,
+  pickWorldShard,
   worldCycleAt,
   worldCycleOf,
   worldPhase,
@@ -128,6 +129,9 @@ export type WorldJoinResult =
   | { ok: true; body: WorldJoinResponse }
   | { ok: false; status: number; body: WorldJoinErrorBody };
 
+/** A running shard of the open cycle for the join's pick (humans = its active entries). */
+type ShardChoice = { match_id: string; room_id: string; shard: number; humans: number };
+
 type ActiveEntryRow = {
   entry_id: string;
   match_id: string;
@@ -142,18 +146,25 @@ type ActiveEntryRow = {
  * POST /api/world/join (spec §4.7, D4/D5/D6): the lobby's PLAY. In order:
  * 1. anon → 401 `unauthenticated`.
  * 2. Lazy void of this user's stale shard (voidStaleForUser), so a crashed process never strands gear.
- * 3. An active entry on a running world row of the current cycle → a rejoin ticket for that same
- *    entry (`rejoin: true`; a lost raids/enter reply heals here, D6). Any other active entry → 409
- *    `in_raid` with `settlesAt` = its ends_at + RAID_USER_VOID_GRACE_MS (when the lazy void frees it).
+ * 3. An active entry on a running world row whose map has not wiped yet (ends_at > now: the open
+ *    cycle, or the closing previous one during the overlap) → a rejoin ticket for that same entry on
+ *    its own shard (`rejoin: true`, with that shard's cycle, wipeAt and entryClosesAt; a lost
+ *    raids/enter reply heals here, D6). Any other active entry → 409 `in_raid` with `settlesAt` = its
+ *    ends_at + RAID_USER_VOID_GRACE_MS (when the lazy void frees it).
  *    `opts.rejoinOnly` (the battle screen's reconnect) stops here: no active entry → 409 `not_on_map`.
- * 4. Not in the entry window → 409 `entry_closed` with `openAt` (this cycle's while resetting, else
- *    the next cycle's).
+ * 4. The cycle is the open one (worldCycleAt: overlapping maps, so there is always one — no
+ *    "entry closed, wait for the next map"); `entry_closed` only guards a clock at its very edge.
  * 5. No running world row for this cycle (raids/open has not landed yet) → 503 `world_starting`.
  * 6. WORLD.MAX_ENTRIES_PER_CYCLE entries of this user this cycle → 409 `entry_limit`.
  * 7. Party (lib/social/party.ts partyJoinPlan, registered users in a party of ≥ 2): the leader starts
  *    (or reuses) the party's drop for this map; a member follows the live drop (`opts.dropId`, else the
- *    party's newest) and is pinned to its shard while that runs. Loadout, risk and limits stay per player.
- * 8. lockAndIssueTicket with the shard's matchId, a fresh entryId and the party fields (the web's
+ *    party's newest); a live drop pins the join to its shard while that runs. Loadout, risk and limits
+ *    stay per player.
+ * 8. The shard (several per cycle, WORLD.MAX_SHARDS): a pinned drop's, else pickWorldShard over the
+ *    cycle's running shards by active entries — the fullest one with room for the join (1 seat, or the
+ *    whole party for a new drop), so players are packed together; no room anywhere → the emptiest one,
+ *    and the game server decides (it answers world_full and opens another shard when allowed).
+ * 9. lockAndIssueTicket with the shard's matchId, a fresh entryId and the party fields (the web's
  *    raids/enter makes it an entry only when the game server admits it); a new leader drop is saved.
  * Every body carries `serverTime` (= `now`, the world clock).
  */
@@ -177,7 +188,9 @@ export async function worldJoin(
     order by e.created_at desc limit 1`);
   const a = act.rows[0];
   if (a) {
-    if (a.raid_status === "running" && Number(a.raid_cycle) === wc.cycle && a.room_id) {
+    // Overlapping maps: the entry's own map may be the closing previous cycle; it runs until its wipe.
+    const own = a.raid_cycle !== null ? worldCycleOf(Number(a.raid_cycle)) : null;
+    if (a.raid_status === "running" && own && now < own.wipeAt && a.room_id) {
       const loadoutId = a.loadout_id ?? "";
       return {
         ok: true,
@@ -185,9 +198,9 @@ export async function worldJoin(
           ticket: signJoinTicket({ userId: c.userId, nickname: c.nickname, loadoutId, matchId: a.match_id, entryId: a.entry_id }),
           roomId: a.room_id,
           matchId: a.match_id,
-          cycle: wc.cycle,
-          wipeAt: wc.wipeAt,
-          entryClosesAt: wc.entryClosesAt,
+          cycle: own.cycle,
+          wipeAt: own.wipeAt,
+          entryClosesAt: own.entryClosesAt,
           rejoin: true,
           serverTime: now,
           loadoutId,
@@ -203,22 +216,21 @@ export async function worldJoin(
   // The battle screen's automatic reconnect: only ever a rejoin, never a fresh entry (no loadout lock).
   if (opts.rejoinOnly) return fail(409, "not_on_map", "Your raider is no longer on the map.");
 
-  const phase = worldPhase(wc, now);
-  if (phase !== "open") {
-    return fail(
-      409,
-      "entry_closed",
-      phase === "resetting" ? "A new map is starting. Entry opens in a few seconds." : "Entry to this map is closed. The next map opens soon.",
-      { openAt: phase === "resetting" ? wc.openAt : worldCycleOf(wc.cycle + 1).openAt },
-    );
+  // worldCycleAt is the cycle accepting entries, so this only trips on a clock at its very edge.
+  if (worldPhase(wc, now) !== "open") {
+    return fail(409, "entry_closed", "A new map is opening. Try again in a moment.", { openAt: worldCycleOf(wc.cycle + 1).openAt });
   }
 
-  const cur = await db.execute<{ match_id: string; room_id: string }>(sql`
-    select match_id, room_id from raids
-    where kind = 'world' and cycle_id = ${wc.cycle} and status = 'running' and room_id is not null
-    order by started_at desc limit 1`);
-  let shard = cur.rows[0];
-  if (!shard) return fail(503, "world_starting", "The map is starting up. Try again in a few seconds.", { retryInMs: 3000 });
+  // The cycle's running shards with their raiders (the newest row per shard index: a restart's
+  // newer row supersedes the older one).
+  const cur = await db.execute<{ match_id: string; room_id: string; shard: number | null; humans: number }>(sql`
+    select distinct on (r.shard) r.match_id, r.room_id, r.shard,
+      (select count(*)::int from raid_entries e where e.match_id = r.match_id and e.status = 'active') as humans
+    from raids r
+    where r.kind = 'world' and r.cycle_id = ${wc.cycle} and r.status = 'running' and r.room_id is not null
+    order by r.shard, r.started_at desc`);
+  const shards: ShardChoice[] = cur.rows.map((r) => ({ match_id: r.match_id, room_id: r.room_id, shard: Number(r.shard ?? 0), humans: Number(r.humans ?? 0) }));
+  if (shards.length === 0) return fail(503, "world_starting", "The map is starting up. Try again in a few seconds.", { retryInMs: 3000 });
 
   const cnt = await db.execute<{ n: number }>(sql`
     select count(*)::int as n from raid_entries where cycle_id = ${wc.cycle} and user_id = ${c.userId}`);
@@ -231,14 +243,20 @@ export async function worldJoin(
     );
   }
 
-  let plan: PartyJoinPlan | null = c.kind === "user" ? await partyJoinPlan(db, c.userId, { cycle: wc.cycle, matchId: shard.match_id, now, dropId: opts.dropId }) : null;
-  if (plan?.drop && !plan.leader && plan.drop.matchId !== shard.match_id) {
-    // Follow the leader into their shard while it runs; otherwise drop on your own.
-    const pin = await db.execute<{ match_id: string; room_id: string }>(sql`
-      select match_id, room_id from raids
-      where match_id = ${plan.drop.matchId} and kind = 'world' and cycle_id = ${wc.cycle} and status = 'running' and room_id is not null`);
-    if (pin.rows[0]) shard = pin.rows[0];
-    else plan = { ...plan, drop: null };
+  // The party plan first (a new drop's shard is picked below, with room for the whole party).
+  let plan: PartyJoinPlan | null =
+    c.kind === "user" ? await partyJoinPlan(db, c.userId, { cycle: wc.cycle, matchId: shards[0]!.match_id, now, dropId: opts.dropId }) : null;
+  let shard: ShardChoice | null = null;
+  if (plan?.drop && !plan.isNew) {
+    // A live drop (the leader's, or the one a member follows) pins the join to its shard while that
+    // runs; otherwise drop on your own.
+    shard = shards.find((s) => s.match_id === plan!.drop!.matchId) ?? null;
+    if (!shard) plan = { ...plan, drop: null };
+  }
+  if (!shard) {
+    const need = plan?.drop && plan.isNew ? dropSizeOf(plan.drop.members.length) : 1;
+    shard = pickWorldShard(shards, need)!;
+    if (plan?.drop && plan.isNew) plan = { ...plan, drop: { ...plan.drop, matchId: shard.match_id } };
   }
 
   const alpha = c.kind === "user" ? await alphaJoinExtras(db, c.userId, Boolean(plan?.drop)) : {};

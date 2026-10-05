@@ -18,7 +18,7 @@ import {
 
 const K = 650_000;
 const C = worldCycleOf(K);
-/** Wall ms at mm:ss into cycle K. */
+/** Wall ms at mm:ss into map K (0:00 = its opening; it wipes at 55:00, entry closes at 45:00). */
 const at = (min: number, sec = 0) => C.startAt + min * 60_000 + sec * 1000;
 const fmtTime = (ms: number) => `T${ms}`;
 
@@ -35,8 +35,10 @@ function status(over: Partial<WorldStatusDto> = {}): WorldStatusDto {
     online: true,
     humans: 3,
     capacity: WORLD.CAPACITY,
+    shards: 1,
     boss: null,
     next: { cycle: K + 1, mapNumber: 2, openAt: worldCycleOf(K + 1).openAt },
+    closing: null,
     last: null,
     ...over,
   };
@@ -74,38 +76,35 @@ describe("derivePlayState", () => {
   });
 
   it("ready (lime) with the risk line and the wipe countdown", () => {
-    assert.deepEqual(derivePlayState(input()), { kind: "ready", sub: "4 items at risk · wipe in 40:00", tone: "lime" });
+    assert.deepEqual(derivePlayState(input()), { kind: "ready", sub: "4 items at risk · wipe in 50:00", tone: "lime" });
     const one = derivePlayState(input({ stash: { loaded: true, inRaid: false, atRisk: 1, starterClaimed: true } }));
-    assert.deepEqual(one, { kind: "ready", sub: "1 item at risk · wipe in 40:00", tone: "lime" });
+    assert.deepEqual(one, { kind: "ready", sub: "1 item at risk · wipe in 50:00", tone: "lime" });
     const empty = derivePlayState(input({ stash: { loaded: true, inRaid: false, atRisk: 0, starterClaimed: false } }));
-    assert.deepEqual(empty, { kind: "ready", sub: "Basic gear · nothing at risk · wipe in 40:00", tone: "lime" });
+    assert.deepEqual(empty, { kind: "ready", sub: "Basic gear · nothing at risk · wipe in 50:00", tone: "lime" });
   });
 
   it("ready for a guest: basic gear, loot isn't kept (no stash needed)", () => {
     const s = derivePlayState(input({ session: { loading: false, kind: "guest" }, stash: null }));
-    assert.deepEqual(s, { kind: "ready", sub: "Basic gear · loot isn't kept · wipe in 40:00", tone: "lime" });
+    assert.deepEqual(s, { kind: "ready", sub: "Basic gear · loot isn't kept · wipe in 50:00", tone: "lime" });
   });
 
   it("ready turns amber when the wipe is under 15 minutes away", () => {
-    const s = derivePlayState(input({ now: at(32, 20) }));
+    const s = derivePlayState(input({ now: at(42, 20) }));
     assert.deepEqual(s, { kind: "ready", sub: "Short raid · wipe in 12:40", tone: "amber" });
-    assert.equal((derivePlayState(input({ now: at(29, 59) })) as { tone: string }).tone, "lime");
+    assert.equal((derivePlayState(input({ now: at(39, 59) })) as { tone: string }).tone, "lime");
   });
 
   it("joining while the join is in flight", () => {
     assert.deepEqual(derivePlayState(input({ local: { joining: true } })), { kind: "joining" });
   });
 
-  it("closed NEXT MAP during the last 10 minutes, counting down to the next map's entry", () => {
-    const s = derivePlayState(input({ now: at(37, 42) }));
-    const nextOpen = worldCycleOf(K + 1).openAt;
-    assert.deepEqual(s, { kind: "closed", label: "NEXT MAP", nextInS: Math.ceil((nextOpen - at(37, 42)) / 1000) });
-    assert.equal((s as { nextInS: number }).nextInS, 7 * 60 + 18 + 20);
-  });
-
-  it("closed NEW MAP during the reset window of a fresh map", () => {
-    const s = derivePlayState(input({ now: at(0, 6), world: status({ phase: "resetting" }) }));
-    assert.deepEqual(s, { kind: "closed", label: "NEW MAP", nextInS: 14 });
+  it("never closed: in a map's last 10 minutes the next map is already open (overlapping maps)", () => {
+    // 47:42 into map K: entry to K closed at 45:00, map K + 1 opened then and wipes 45 min after K.
+    const s = derivePlayState(input({ now: at(47, 42) }));
+    assert.deepEqual(s, { kind: "ready", sub: "4 items at risk · wipe in 52:18", tone: "lime" });
+    assert.equal(worldCycleOf(K + 1).wipeAt - at(47, 42), (52 * 60 + 18) * 1000);
+    // No reset gap either: a map takes entries from its first second.
+    assert.deepEqual(derivePlayState(input({ now: at(0, 6) })), { kind: "ready", sub: "4 items at risk · wipe in 54:54", tone: "lime" });
   });
 
   it("the clock decides the phase even with a stale status (from the previous map)", () => {
@@ -113,13 +112,9 @@ describe("derivePlayState", () => {
     assert.equal(kind(derivePlayState(input({ world: stale }))), "ready");
   });
 
-  it("armed: READY ✓ counting down to the cycle it waits for", () => {
-    const closing = derivePlayState(input({ now: at(40), local: { armedCycle: K + 1 } }));
-    assert.deepEqual(closing, { kind: "armed", nextInS: 5 * 60 + 20 });
-    const resetting = derivePlayState(input({ now: at(0, 10), local: { armedCycle: K } }));
-    assert.deepEqual(resetting, { kind: "armed", nextInS: 10 });
-    // Armed for an older cycle: no longer armed.
-    assert.equal(kind(derivePlayState(input({ now: at(40), local: { armedCycle: K } }))), "closed");
+  it("armed: an arm left from before fires for the open map at once; an older cycle's arm is ignored", () => {
+    assert.deepEqual(derivePlayState(input({ now: at(0, 10), local: { armedCycle: K } })), { kind: "armed", nextInS: 0 });
+    assert.equal(kind(derivePlayState(input({ now: at(47), local: { armedCycle: K } }))), "ready");
   });
 
   it("armed at 0 once the map opens (the menu fires the auto-enter); a hidden tab gets ready instead", () => {
@@ -156,8 +151,8 @@ describe("derivePlayState", () => {
     assert.equal(kind(derivePlayState(input({ worldError: true }))), "ready");
     // Not yet answered at all: the clock alone decides.
     assert.equal(kind(derivePlayState(input({ world: null }))), "ready");
-    // Entry closed: the countdown matters more than the outage.
-    assert.equal(kind(derivePlayState(input({ world: null, worldError: true, now: at(40) }))), "closed");
+    // The next map is open during the last 10 minutes too: still offline without a status.
+    assert.equal(kind(derivePlayState(input({ world: null, worldError: true, now: at(47) }))), "offline");
   });
 
   it("error wraps the base state with the API message and a fix", () => {
@@ -167,9 +162,9 @@ describe("derivePlayState", () => {
     assert.equal(s.base.kind, "ready");
     assert.equal(s.message, "No backpack slot");
     assert.equal(s.fix, "inventory");
-    const closed = derivePlayState(input({ now: at(40), local: { error: { message: "x" } } }));
-    assert.equal(closed.kind === "error" && closed.base.kind, "closed");
-    assert.equal(closed.kind === "error" && closed.fix, undefined);
+    const late = derivePlayState(input({ now: at(47), local: { error: { message: "x" } } }));
+    assert.equal(late.kind === "error" && late.base.kind, "ready");
+    assert.equal(late.kind === "error" && late.fix, undefined);
   });
 
   it("an error never hides loading, joining or signed_out", () => {

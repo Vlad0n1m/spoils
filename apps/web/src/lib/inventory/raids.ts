@@ -879,8 +879,8 @@ const INSTANCE_ID_SQL = sql`coalesce(r.instance_id, r.start_request->>'instanceI
 
 /**
  * A world shard row (alias `r`) is superseded when another instance of the same serverId opened a
- * newer row of the same (cycle, shard) after it. One game server runs the world (D3, MAX_SHARDS 1)
- * and a process opens one shard per cycle, so that only happens after a restart: the older row's
+ * newer row of the same (cycle, shard) after it. One game server runs the world (D3; up to
+ * WORLD.MAX_SHARDS shards per cycle, each shard index opened once per process), so that only happens after a restart: the older row's
  * process is gone. This holds even when the new process' void-orphans never reached the web, and for
  * the "default" serverId, whose boots never void anything. /api/world/join only hands out the newest
  * row too. Two servers with different GAME_SERVER_IDs never supersede each other.

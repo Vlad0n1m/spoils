@@ -21,7 +21,9 @@ const UNTOUCHED_MS = WORLD.EXTRACT_ARM_MS;
  * ENTRY CLOSED amber / NEW MAP… white / OFFLINE grey) with the map number, the map name, the big
  * countdown, raiders on the map with the local wipe time, the cycle bar (tall screens) and the boss
  * line. Public: everyone sees it, signed in or not. Without a status the phase and countdown still
- * run from the cycle clock.
+ * run from the cycle clock. Overlapping maps: the card always shows the map accepting entries (OPEN,
+ * its own wipe countdown; the ENTRY CLOSED / NEW MAP bands are only a fallback for a wrong clock),
+ * raiders over all its copies (shards), and a quiet line for the previous map while it still runs.
  */
 export function WorldCard({ className }: { className?: string }) {
   const { status, statusError, reloadStatus } = useLobby();
@@ -53,7 +55,11 @@ export function WorldCard({ className }: { className?: string }) {
         ? fresh
           ? "Empty · loot untouched"
           : "Nobody on the map"
-        : `${v.humans} on the map`;
+        : v.shards !== null && v.shards > 1
+          ? `${v.humans} on ${v.shards} copies of the map`
+          : `${v.humans} on the map`;
+  // Overlapping maps: the previous map still runs for those on it (no new entries) until its wipe.
+  const closing = v.fresh && status?.closing && status.closing.wipeAt > now ? status.closing : null;
 
   return (
     <section
@@ -126,6 +132,12 @@ export function WorldCard({ className }: { className?: string }) {
           )}
           <span className="shrink-0 tabular-nums text-white/70">{side}</span>
         </div>
+        {closing && !offline && (
+          <p className="font-body truncate text-xs lg:text-[0.8125rem] font-semibold tabular-nums text-white/55 short:hidden">
+            {mapLabel(closing.mapNumber)} wipes in {fmtClockS(secsUntil(closing.wipeAt, now))}
+            {closing.humans > 0 ? ` · ${closing.humans} still on it` : ""}
+          </p>
+        )}
 
         <div className="mt-1 empty:hidden">
           <BossBanner status={status} fresh={v.fresh} />

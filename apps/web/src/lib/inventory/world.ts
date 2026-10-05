@@ -167,7 +167,7 @@ export async function enterRaid(db: Db, req: EntryRequest, now = new Date()): Pr
     );
     if (Number(cnt.rows[0]?.n ?? 0) >= WORLD.MAX_ENTRIES_PER_CYCLE) return rejected("entry_limit", autosellMult);
 
-    const atMs = Math.max(0, Math.min(WORLD.CYCLE_MS, Math.floor(req.atMs) || 0));
+    const atMs = Math.max(0, Math.min(WORLD.MAP_MS, Math.floor(req.atMs) || 0));
     const ins = await tx
       .insert(raidEntries)
       .values({

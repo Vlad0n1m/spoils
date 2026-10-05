@@ -28,8 +28,10 @@ function status(over: Partial<WorldStatusDto> = {}): WorldStatusDto {
     online: true,
     humans: 17,
     capacity: 24,
+    shards: 1,
     boss: null,
     next: { cycle: K + 1, mapNumber: 2, openAt: worldCycleOf(K + 1).openAt },
+    closing: null,
     last: null,
     ...over,
   };
@@ -54,25 +56,25 @@ describe("clock offset", () => {
 });
 
 describe("worldView", () => {
-  it("without a status the phase and countdowns come from the cycle clock", () => {
+  it("without a status the phase and countdowns come from the cycle clock: always an open map", () => {
     const v = worldView(null, at(0, 5));
     assert.equal(v.cycle, K);
-    assert.equal(v.phase, "resetting");
-    assert.equal(v.entryOpensAt, C.openAt);
-    assert.equal(v.armCycle, K);
+    assert.equal(v.phase, "open", "no reset gap");
     assert.equal(v.online, null);
     assert.equal(v.humans, null);
+    assert.equal(v.shards, null);
     assert.equal(v.fresh, false);
-    assert.equal(v.capacity, WORLD.CAPACITY * WORLD.MAX_SHARDS);
+    assert.equal(v.capacity, WORLD.CAPACITY);
 
     const open = worldView(null, at(12));
     assert.equal(open.phase, "open");
     assert.equal(open.wipeAt, C.wipeAt);
 
-    const closing = worldView(null, at(36));
-    assert.equal(closing.phase, "closing");
-    assert.equal(closing.entryOpensAt, worldCycleOf(K + 1).openAt);
-    assert.equal(closing.armCycle, K + 1);
+    // Entry to K closed at 45:00: the card shows map K + 1, open, with its own wipe.
+    const late = worldView(null, at(46));
+    assert.equal(late.cycle, K + 1);
+    assert.equal(late.phase, "open");
+    assert.equal(late.wipeAt, worldCycleOf(K + 1).wipeAt);
   });
 
   it("a status of the current cycle adds online and humans; a stale one is ignored", () => {
@@ -84,16 +86,18 @@ describe("worldView", () => {
     assert.equal(stale.fresh, false);
     assert.equal(stale.online, null);
     assert.equal(stale.humans, null);
-    // The clock wins over the status phase (a cached status from just before the wipe).
-    const rolled = worldView(status({ phase: "closing" }), C.wipeAt + 1_000);
+    assert.equal(worldView(status({ shards: 3, humans: 50, capacity: 72 }), at(12)).shards, 3);
+    // The clock wins over the status (a cached status from just before the entry close).
+    const rolled = worldView(status(), C.entryClosesAt + 1_000);
     assert.equal(rolled.cycle, K + 1);
-    assert.equal(rolled.phase, "resetting");
+    assert.equal(rolled.phase, "open");
+    assert.equal(rolled.fresh, false);
   });
 
   it("cycle bar positions", () => {
     assert.equal(worldView(null, C.startAt).elapsed, 0);
-    assert.equal(worldView(null, at(22, 30)).elapsed, 0.5);
-    assert.equal(worldView(null, at(1)).closeMark, 35 / 45);
+    assert.equal(worldView(null, at(27, 30)).elapsed, 0.5);
+    assert.equal(worldView(null, at(1)).closeMark, 45 / 55);
   });
 });
 
