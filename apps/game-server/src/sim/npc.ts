@@ -48,6 +48,9 @@
  *               radius) and sweep ±NPC.SEARCH_SWEEP_DEG for NPC.SEARCH_MS; in a marauder squad of 2+
  *               the first living member keeps the post while the others search.
  *   RETURN      walk back to the post; IDLE on arrival. HP does not regenerate.
+ * Boss fights (boss-fight.ts, BOSS_FIGHT): bosses run two phases and one telegraphed signature move
+ * each (Foreman grenade, Commander reinforcement call, Warden dash + cover between bursts); a boss
+ * that sees its enemy without a line of fire steps to the nearest spot in its room that has one.
  * Squad alert (sight after the peace window, a hit, a shot heard within the squad's alert radius):
  * the whole squad gets alertUntil / alertAt and its members think on the next step. It never
  * propagates to another squad: other squads react only to what they hear themselves.
@@ -62,6 +65,8 @@ import {
   BOSSES,
   BOSS_AI,
   BOSS_EVENT,
+  BOSS_FIGHT,
+  BOSS_TELL,
   GRENADE,
   INPUT_DT_MS,
   ITEM_FLAG,
@@ -93,6 +98,7 @@ import {
   zoneAt,
   type BossKind,
   type BossSpot,
+  type BossTell,
   type InvItem,
   type ItemLike,
   type MarauderKit,
@@ -105,6 +111,8 @@ import {
 } from "@extract/shared";
 import { activeWeapon, ammoCount, fixActive, placeItem, syncPublic, weaponDefOf } from "./bag.js";
 import { equipBoss, equipGuard, finishNpcHealIfDue, giveSidearm, guardCount, startNpcHeal, stow } from "./boss.js";
+import { announce, equipReinforcement, newBossFight, reinforcementRoom, resetBossPhase, setTell, updateBossPhase, type BossFight } from "./boss-fight.js";
+import { throwNpcGrenade } from "./grenade.js";
 import { envNow } from "./environment.js";
 import { cloneItem, makeItem } from "./items.js";
 import type { Match } from "./match.js";
@@ -213,6 +221,8 @@ export interface BossGroup extends NpcSquad {
   tier: number;
   boss: PlayerRuntime;
   guards: PlayerRuntime[];
+  /** Phase, move stock and the Commander's call (boss-fight.ts). */
+  fight: BossFight;
 }
 
 /** What an NPC brain knows about itself. */
@@ -346,11 +356,12 @@ export class NpcSystem {
       const boss = add({ nickname: def.name, x: spot.x, y: spot.y });
       const group: BossGroup = {
         id: this.squads.length, type: "boss", members: [boss], alertUntil: 0, alertAt: null, post: null, awake: true,
-        gen: 0, retired: false, kind: spot.kind, spot, tier, boss, guards: [],
+        gen: 0, retired: false, kind: spot.kind, spot, tier, boss, guards: [], fight: newBossFight(spot.kind),
       };
       const pool = [...m.containers.takeBossPool(spot.kind), ...legacy];
       legacy = [];
       equipBoss(m, boss, spot.kind, pool);
+      boss.pub.bossPhase = 1;
       const bossAnchor = { x: spot.x, y: spot.y };
       this.register(boss, {
         role: "boss", squad: group, kind: spot.kind, group, guardIdx: -1, member: 0, cls: null,
@@ -529,6 +540,47 @@ export class NpcSystem {
       if ((rt.pub.x - a.x) ** 2 + (rt.pub.y - a.y) ** 2 <= r2) return;
     }
     boss.pub.hp = boss.pub.maxHp;
+    const group = this.groups.find((g) => g.boss === boss);
+    if (group) resetBossPhase(boss, group.fight);
+  }
+
+  /**
+   * Commander (BOSS_FIGHT.COMMANDER): the radio call lands. Up to CALL_COUNT guards with FREE-only
+   * kits (reinforcementRoom: the living-NPC cap NPC.MAX_PER_RAID and the runtime capacity), at the
+   * group's guard posts farthest from the boss's enemy (a post next to a human is never used while
+   * another is free), else around the boss. They join the group alerted toward `at`. Once per life.
+   */
+  spawnReinforcements(group: BossGroup, at: Pt, add: (n: NpcSpawn) => PlayerRuntime = (n) => this.m.addNpc(n)): PlayerRuntime[] {
+    const m = this.m;
+    if (group.fight.called || !group.boss.pub.alive) return [];
+    group.fight.called = true;
+    const n = reinforcementRoom(m, NPC.MAX_PER_RAID);
+    if (n <= 0) return [];
+    const def = BOSSES[group.kind];
+    const anchorOf = this.infos.get(group.boss)?.anchor ?? { x: group.spot.x, y: group.spot.y };
+    const posts = group.spot.guards
+      .map((g) => ({ x: g.x, y: g.y, d: Math.hypot(g.x - at.x, g.y - at.y) }))
+      .filter((g) => g.d > 300)
+      .sort((a, b) => b.d - a.d);
+    const out: PlayerRuntime[] = [];
+    for (let i = 0; i < n; i++) {
+      const spot = posts[i] ?? memberSpot(m, anchorOf, i + 1);
+      const rt = add({ nickname: def.guardName, x: spot.x, y: spot.y });
+      equipReinforcement(rt, NPC_ROLE.GUARD);
+      group.guards.push(rt);
+      group.members.push(rt);
+      const anchor = { x: spot.x, y: spot.y };
+      const leash = BOSS_AI.LEASH_GUARD_PX;
+      this.register(rt, {
+        role: "guard", squad: group, kind: group.kind, group, guardIdx: -1, member: group.members.length - 1, cls: null,
+        anchor, leash, chase: leash, route: [anchor, clampTo(anchor, anchorOf.x, anchorOf.y, leash)],
+        sloppiness: BOSS_AI.GUARD_SLOPPINESS, reactMs: BOSS_AI.REACT_MS,
+      });
+      if (this.brainsOn) this.addBrain(rt);
+      out.push(rt);
+    }
+    this.alert(group, at.x, at.y);
+    return out;
   }
 
   private register(rt: PlayerRuntime, info: NpcInfo): void {
@@ -595,6 +647,7 @@ export class NpcSystem {
   /** Per step, before the match's reload / heal timers: NPC heals land (capped at maxHp), then brains. */
   update(dtMs: number): void {
     for (const rt of this.infos.keys()) finishNpcHealIfDue(this.m, rt);
+    for (const g of this.groups) updateBossPhase(this.m, g.boss, g.kind, g.fight);
     if (this.m.clock >= this.wakeAt) {
       this.wakeAt = this.m.clock + WAKE_CHECK_MS;
       this.refreshWake();
@@ -717,6 +770,19 @@ export class NpcBrain {
   /** This decision walks home (trail / anchor): exempt from the outward-step clamp. */
   private homeward = false;
 
+  // ---- boss fights (boss-fight.ts, BOSS_FIGHT); bosses only.
+  /** The signature move being wound up (tell) or run (dash); null = none. */
+  private bossAct: { tell: BossTell; until: number; x: number; y: number; angle: number; targetId: string } | null = null;
+  /** Warden dash under way: until when, and where it stood a step ago (blocked = no progress). */
+  private dash: { until: number; lastX: number; lastY: number; stuckSteps: number } | null = null;
+  /** No new signature move before this clock. */
+  private nextMoveAt = 0;
+  /** Last time this boss saw an enemy (Foreman throws only at someone seen within SEEN_MS). */
+  private lastSight: { id: string; x: number; y: number; at: number } | null = null;
+  /** Warden: in cover until this clock after a shotgun shot, then back to `peek` to look again. */
+  private coverUntil = 0;
+  private peek: { x: number; y: number; until: number } | null = null;
+
   constructor(
     private readonly m: Match,
     readonly rt: PlayerRuntime,
@@ -746,6 +812,8 @@ export class NpcBrain {
       return;
     }
     this.recordTrail();
+    // A telegraphed boss move lands / a dash ends exactly on its clock, not on the next decision.
+    if (this.bossAct || this.dash) this.stepBossMove();
     // Every step (cheap): what was heard in the last delivery, and whether we were just hit.
     const heardUrgent = this.listen();
     const hit = this.checkHit();
@@ -866,12 +934,20 @@ export class NpcBrain {
           const span = BURST_SHOTS[def.id] ?? NPC.BURST.SHOTS;
           const shots = Math.round(this.rand(span[0], span[1]));
           this.burstUntil = clock + shots * def.fireIntervalMs;
-          this.pauseUntil = this.burstUntil + this.rand(NPC.BURST.PAUSE_MS[0], NPC.BURST.PAUSE_MS[1]);
+          this.pauseUntil = this.burstUntil + this.rand(NPC.BURST.PAUSE_MS[0], NPC.BURST.PAUSE_MS[1]) * this.phaseMult(BOSS_FIGHT.PHASE2_FIRE_MULT);
           fire = true;
         }
       } else if (!this.lastFire && clock >= this.nextPressAt) {
         fire = true;
-        this.nextPressAt = clock + Math.max(def.fireIntervalMs, MIN_PRESS_INTERVAL_MS) + this.rand(40, 220) * this.info.sloppiness;
+        // Boss phase 2 (BOSS_FIGHT.PHASE2_FIRE_MULT): presses come faster, never above the gun's own rate.
+        const k = this.phaseMult(BOSS_FIGHT.PHASE2_FIRE_MULT);
+        this.nextPressAt = clock + Math.max(def.fireIntervalMs, MIN_PRESS_INTERVAL_MS * k) + this.rand(40, 220) * this.info.sloppiness * k;
+        if (this.info.kind === "warden" && this.info.role === "boss") {
+          const fight = this.info.group?.fight;
+          this.coverUntil = clock + BOSS_FIGHT.WARDEN.COVER_MS[fight?.phase === 2 ? 1 : 0];
+          const p = this.rt.pub;
+          this.peek = { x: p.x, y: p.y, until: this.coverUntil + 2_500 };
+        }
       }
     }
     this.lastFire = fire;
@@ -1024,6 +1100,7 @@ export class NpcBrain {
     const clock = this.m.clock;
     const info = this.info;
     const sq = info.squad;
+    if (this.bossAct || this.dash) return;
     this.walker.walk = false;
     this.wantFire = false;
     this.homeward = false;
@@ -1050,8 +1127,17 @@ export class NpcBrain {
       this.walker.stop();
       return;
     }
+    if (info.role === "boss" && this.startBossMove(enemy)) return;
     if (enemy && this.armed()) {
       this.fight(enemy);
+      return;
+    }
+    if (info.role === "boss" && this.peek && clock < this.peek.until) {
+      // Warden: back out of cover to where it last fired from, to look again (facing the last sighting).
+      this.state = "combat";
+      if (this.lastSight) this.aim = Math.atan2(this.lastSight.y - p.y, this.lastSight.x - p.x);
+      if (Math.hypot(this.peek.x - p.x, this.peek.y - p.y) > 30 && this.go(this.peek.x, this.peek.y, info.chase)) return;
+      this.walker.stop();
       return;
     }
     if (this.enemyId !== "") {
@@ -1181,6 +1267,22 @@ export class NpcBrain {
         }
       }
       if (best) return best;
+    }
+    return null;
+  }
+
+  /** Nearest free spot within 200 px (inside the chase radius) with a line of fire to `e`; null if none. */
+  private findLane(e: Pt): Pt | null {
+    const m = this.m;
+    const p = this.rt.pub;
+    for (const r of [50, 100, 150, 200]) {
+      for (let k = 0; k < 12; k++) {
+        const a = (k / 12) * Math.PI * 2;
+        const x = p.x + Math.cos(a) * r;
+        const y = p.y + Math.sin(a) * r;
+        if (this.dAnchor(x, y) > this.info.chase - 20 || !circleIsFree(m.idx, x, y, PLAYER.RADIUS + 4)) continue;
+        if (hasLineOfSight(m.idx, x, y, e.x, e.y, SOLID.SHOT) && hasLineOfSight(m.idx, p.x, p.y, x, y, SOLID.MOVE)) return { x, y };
+      }
     }
     return null;
   }
@@ -1481,7 +1583,7 @@ export class NpcBrain {
       this.lastEnemyId = ert.id;
       this.enemySeen = null;
       this.enemySpeed = 0;
-      if (!remembered) this.reactAt = clock + this.rand(info.reactMs[0], info.reactMs[1]);
+      if (!remembered) this.reactAt = clock + this.rand(info.reactMs[0], info.reactMs[1]) * this.phaseMult(BOSS_FIGHT.PHASE2_REACT_MULT);
     }
     this.lastEnemyAt = clock;
     this.search = null;
@@ -1527,6 +1629,18 @@ export class NpcBrain {
     if (this.dAnchor(p.x, p.y) > info.chase) {
       this.goHome(info.anchor);
       return;
+    }
+    if (info.role === "boss" && info.kind === "warden" && clock < this.coverUntil) {
+      // Warden: ducks into cover between shotgun bursts, then peeks from where it fired.
+      this.wantFire = false;
+      this.takeCover({ x: e.x, y: e.y });
+      return;
+    }
+    if (info.role === "boss" && !los) {
+      // A boss that sees its enemy but has no line of fire (behind a pillar, the Warden after its
+      // cover) steps to the nearest spot in its room that has one, instead of standing there.
+      const lane = this.findLane(e);
+      if (lane && this.go(lane.x, lane.y, info.chase)) return;
     }
     if (info.role === "boss") {
       // The boss holds its room: strafes nowhere, never chases out of it.
@@ -1625,7 +1739,8 @@ export class NpcBrain {
     let best: Pt | null = null;
     let bestD: number = GRENADE.NPC_FLEE_PX;
     for (const g of gs) {
-      if (clock - g.thrownAt < GRENADE.NPC_NOTICE_MS) continue;
+      // A boss's own grenades never hurt NPCs (grenade.ts explode): nothing to run from.
+      if (g.owner.isNpc || clock - g.thrownAt < GRENADE.NPC_NOTICE_MS) continue;
       const rest = g.path[g.path.length - 1]!;
       const d = Math.hypot(rest.x - p.x, rest.y - p.y);
       if (d >= bestD) continue;
@@ -1650,6 +1765,140 @@ export class NpcBrain {
       }
     }
     this.walker.heading(away);
+  }
+
+  // ------------------------------------------------------------------ boss fights
+
+  /** `mult` in boss phase 2, else 1. */
+  private phaseMult(mult: number): number {
+    return this.info.role === "boss" && this.info.group?.fight.phase === 2 ? mult : 1;
+  }
+
+  /**
+   * Start a boss's signature move when its rules allow (BOSS_FIGHT; one at a time, after the
+   * cooldown, never while healing). The telegraph (Player.bossTell) shows for the move's TELL_MS;
+   * stepBossMove lands it. Returns true when a move started (this decision is spent on it).
+   */
+  private startBossMove(enemy: PlayerRuntime | null): boolean {
+    const group = this.info.group;
+    const kind = this.info.kind;
+    if (!group || !kind) return false;
+    const rt = this.rt;
+    const p = rt.pub;
+    const clock = this.m.clock;
+    if (enemy) {
+      // First sight of a fight: no move before it had a moment to react.
+      if (!this.lastSight || clock - this.lastSight.at > 10_000) this.nextMoveAt = Math.max(this.nextMoveAt, clock + 2_000);
+      this.lastSight = { id: enemy.id, x: enemy.pub.x, y: enemy.pub.y, at: clock };
+    }
+    if (clock < this.nextMoveAt || rt.self.healUntil > 0 || rt.self.rollLeft > 0) return false;
+    const fight = group.fight;
+    if (kind === "foreman") {
+      const F = BOSS_FIGHT.FOREMAN;
+      const seen = this.lastSight;
+      if (fight.stock <= 0 || !seen || clock - seen.at > F.SEEN_MS) return false;
+      const d = Math.hypot(seen.x - p.x, seen.y - p.y);
+      if (d < F.MIN_PX || d > F.MAX_PX) return false;
+      this.beginBossAct(BOSS_TELL.THROW, F.TELL_MS, seen.x, seen.y, seen.id);
+      return true;
+    }
+    if (kind === "commander") {
+      if (fight.phase !== 2 || fight.called || !enemy) return false;
+      this.beginBossAct(BOSS_TELL.CALL, BOSS_FIGHT.COMMANDER.TELL_MS, enemy.pub.x, enemy.pub.y, enemy.id);
+      return true;
+    }
+    if (kind === "warden") {
+      const W = BOSS_FIGHT.WARDEN;
+      if (!enemy) return false;
+      const e = enemy.pub;
+      const d = Math.hypot(e.x - p.x, e.y - p.y);
+      if (d < W.MIN_PX || d > W.MAX_PX) return false;
+      // A clear straight lane (walls and windows stop bodies) and a target inside its chase reach.
+      if (!hasLineOfSight(this.m.idx, p.x, p.y, e.x, e.y, SOLID.MOVE)) return false;
+      if (this.dAnchor(e.x, e.y) > this.info.chase + W.MAX_PX) return false;
+      this.beginBossAct(BOSS_TELL.CHARGE, W.TELL_MS, e.x, e.y, enemy.id);
+      return true;
+    }
+    return false;
+  }
+
+  private beginBossAct(tell: BossTell, ms: number, x: number, y: number, targetId: string): void {
+    const p = this.rt.pub;
+    const angle = Math.atan2(y - p.y, x - p.x);
+    this.bossAct = { tell, until: this.m.clock + ms, x, y, angle, targetId };
+    setTell(this.rt, tell);
+    this.state = "combat";
+    this.wantFire = false;
+    this.walker.stop();
+    this.aim = angle;
+  }
+
+  /**
+   * Every step while a move runs: the telegraph holds still (aim locked on the spot it was aimed at:
+   * dodgeable), then the move lands exactly at its clock — Foreman: a grenade at the telegraphed
+   * spot; Commander: the reinforcements; Warden: the dash, straight along the locked line until
+   * DASH_MS, STOP_PX from its target, a wall or its leash stops it.
+   */
+  private stepBossMove(): void {
+    const rt = this.rt;
+    const p = rt.pub;
+    const clock = this.m.clock;
+    const group = this.info.group!;
+    const fight = group.fight;
+    const cd = (pair: readonly [number, number]) => pair[fight.phase === 2 ? 1 : 0];
+    const d = this.dash;
+    if (d) {
+      const target = this.m.runtime(this.bossAct?.targetId ?? "");
+      const moved = Math.hypot(p.x - d.lastX, p.y - d.lastY);
+      d.stuckSteps = moved < 1 ? d.stuckSteps + 1 : 0;
+      d.lastX = p.x;
+      d.lastY = p.y;
+      const close = !!target && target.pub.alive && Math.hypot(target.pub.x - p.x, target.pub.y - p.y) <= BOSS_FIGHT.WARDEN.STOP_PX;
+      if (clock >= d.until || close || d.stuckSteps >= 3) this.endBossMove(cd(BOSS_FIGHT.WARDEN.COOLDOWN_MS));
+      return;
+    }
+    const act = this.bossAct;
+    if (!act) return;
+    this.wantFire = false;
+    this.aim = act.angle;
+    if (clock < act.until) {
+      this.walker.stop();
+      return;
+    }
+    switch (act.tell) {
+      case BOSS_TELL.THROW:
+        if (fight.stock > 0 && throwNpcGrenade(this.m, rt, act.x, act.y)) fight.stock--;
+        this.endBossMove(cd(BOSS_FIGHT.FOREMAN.COOLDOWN_MS));
+        return;
+      case BOSS_TELL.CALL:
+        if (this.sys.spawnReinforcements(group, { x: act.x, y: act.y }).length > 0) announce(this.m, rt, group.kind, "call");
+        this.endBossMove(4_000);
+        return;
+      case BOSS_TELL.CHARGE:
+        // The dash: PlayerRuntime.moveMult speeds up its ordinary movement (same collision as anyone).
+        rt.moveMult = BOSS_FIGHT.WARDEN.SPEED_MULT;
+        setTell(rt, BOSS_TELL.DASH);
+        this.dash = { until: clock + BOSS_FIGHT.WARDEN.DASH_MS, lastX: p.x, lastY: p.y, stuckSteps: 0 };
+        this.walker.mx = Math.cos(act.angle);
+        this.walker.my = Math.sin(act.angle);
+        this.walker.walk = false;
+        return;
+      default:
+        this.endBossMove(2_000);
+    }
+  }
+
+  private endBossMove(cooldownMs: number): void {
+    const clock = this.m.clock;
+    this.rt.moveMult = 1;
+    setTell(this.rt, BOSS_TELL.NONE);
+    this.bossAct = null;
+    this.dash = null;
+    this.walker.stop();
+    this.nextMoveAt = clock + cooldownMs;
+    // Back in the fight on the next step, without a fresh reaction delay.
+    this.reactAt = Math.min(this.reactAt, clock);
+    this.urgent = true;
   }
 
   private rand(min: number, max: number): number {

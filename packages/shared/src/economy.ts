@@ -871,6 +871,69 @@ export function rollBossSpawns(matchSeed: number, spots: readonly BossSpot[]): B
  */
 export const BOSS_EVENT = { BLOCK_CYCLES: 3, RESET_AFTER_MS: 180_000 } as const;
 
+/**
+ * Boss fights (docs/GAME_DESIGN.md §7c, server sim/boss-fight.ts + npc.ts): two phases and one
+ * signature move per boss. Phase 2 starts once at PHASE2_FRAC of the boss's max HP (announced to the
+ * humans within ARENA_PX of the boss: roar + toast) and ends only when the HP reset rule (BOSS_EVENT)
+ * puts it back to full. Every move is telegraphed (Player.bossTell) for its TELL_MS before it lands.
+ * Index [0] / [1] of a pair = phase 1 / phase 2. Nothing here mints value: thrown grenades come from
+ * a FREE stock that is never in the corpse, reinforcements carry only FREE gear (empty corpses).
+ */
+export const BOSS_FIGHT = {
+  PHASE2_FRAC: 0.5,
+  /** Humans within this distance of the boss get the phase / call events (toast + roar). */
+  ARENA_PX: 1400,
+  /** Phase 2: semi-auto press interval × this (never below the weapon's own fire interval)… */
+  PHASE2_FIRE_MULT: 0.7,
+  /** …and reaction delay × this. */
+  PHASE2_REACT_MULT: 0.7,
+  /** Foreman: server-authoritative grenades (the shared grenade system: fuse, bounces, walls, warning ring). */
+  FOREMAN: {
+    TELL_MS: 500,
+    COOLDOWN_MS: [10_000, 7_000] as readonly [number, number],
+    /** Throws only at a target point this far away (never at its own feet)… */
+    MIN_PX: 200,
+    /** …and within the hand-grenade range. */
+    MAX_PX: 540,
+    /** Only at someone it saw within this long (no throwing at sounds). */
+    SEEN_MS: 3_000,
+    /** FREE grenades per boss life (never in the corpse). */
+    STOCK: 5,
+  },
+  /** Commander: radios for reinforcements once per boss life, in phase 2, while fighting. */
+  COMMANDER: {
+    TELL_MS: 1_200,
+    CALL_COUNT: 2,
+    /** FREE-only kit (no rollGuardLoot drop): the corpse holds nothing. */
+    GUARD: { weapon: "rifle" as WeaponId, rarity: 0 as Rarity, armor: 1 as const, hp: 80 },
+  },
+  /** Warden: a telegraphed straight charge, then the shotgun; it ducks into cover between bursts. */
+  WARDEN: {
+    TELL_MS: 600,
+    DASH_MS: 550,
+    /** Walking speed × this while dashing (≈ 680 px/s, ≈ 370 px at most; walls and its leash stop it). */
+    SPEED_MULT: 2.6,
+    /** Charges at a visible target with a clear line between this far… */
+    MIN_PX: 170,
+    /** …and this far. */
+    MAX_PX: 520,
+    /** The dash stops this close to the target. */
+    STOP_PX: 80,
+    COOLDOWN_MS: [8_000, 5_000] as readonly [number, number],
+    /** Cover after each shotgun shot before peeking again. */
+    COVER_MS: [1_100, 700] as readonly [number, number],
+  },
+} as const;
+
+/** Player.bossTell: the move a boss is winding up (or running) right now. */
+export const BOSS_TELL = { NONE: 0, THROW: 1, CALL: 2, CHARGE: 3, DASH: 4 } as const;
+export type BossTell = (typeof BOSS_TELL)[keyof typeof BOSS_TELL];
+
+/** Permanent title granted for killing `kind` (killer + party mates who damaged it), COSMETICS id. */
+export function bossTrophyId(kind: BossKind): string {
+  return `t-${kind}-slayer`;
+}
+
 /** Seeded Fisher–Yates shuffle (mulberry32 of `seed`). */
 function shuffleSeeded<T>(items: readonly T[], seed: number): T[] {
   const out = [...items];
@@ -1392,6 +1455,11 @@ const COSMETIC_LIST: readonly CosmeticDef[] = [
   // Alpha trophy (pass.ts ALPHA_TROPHY) and the invite reward (PASS.INVITE_RAIDS).
   { id: "t-alpha-top10", kind: "title", name: "Alpha Top 10", grant: "trophy" },
   { id: "t-recruiter", kind: "title", name: "Recruiter", grant: "invite" },
+  // Boss trophies (BOSS_FIGHT, bossTrophyId): granted at settlement to the killer and the party mates
+  // who damaged the boss; permanent, one row each however many kills.
+  { id: "t-foreman-slayer", kind: "title", name: "Foreman Slayer", grant: "trophy" },
+  { id: "t-commander-slayer", kind: "title", name: "Commander Slayer", grant: "trophy" },
+  { id: "t-warden-slayer", kind: "title", name: "Warden Slayer", grant: "trophy" },
 ];
 
 /** Every cosmetic by id. */

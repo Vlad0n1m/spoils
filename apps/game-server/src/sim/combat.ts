@@ -13,6 +13,7 @@
 
 import {
   NPC,
+  NPC_ROLE,
   PLAYER,
   RARITY_DAMAGE_MULT,
   SERVER_TICK_MS,
@@ -197,6 +198,8 @@ export function damagePlayer(
     rt.lastHitBy = attacker;
     rt.lastHitAt = m.clock;
     attacker.stats.dmgDealt += hpLoss;
+    // Boss trophies (boss-fight.ts): the killer's party mates who damaged the boss share it.
+    if (p.role === NPC_ROLE.BOSS && !attacker.isNpc && hpLoss > 0) (rt.bossDamagers ??= new Set()).add(attacker);
   }
   // Taking damage restarts the extraction channel.
   if (s.extractId) s.extractStartedAt = m.clock;

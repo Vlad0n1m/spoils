@@ -1095,7 +1095,8 @@ export class Match {
       const terrainMult = terrainSpeedMult(terrainAt(this.map, p.x, p.y));
       // Players' rolls vault windows (the client predicts the same); NPCs never vault: their roll
       // treats windows as walls, like their nav and walk grid.
-      const r = stepMovement(this.idx, p.x, p.y, readRoll(s), input, healMult, terrainMult, !rt.isNpc);
+      // moveMult: the Warden's dash (boss-fight.ts; scales like terrain, walls still stop it); 1 for everyone else.
+      const r = stepMovement(this.idx, p.x, p.y, readRoll(s), input, healMult, terrainMult * (rt.isNpc ? rt.moveMult : 1), !rt.isNpc);
       if (r.started) {
         // A roll cancels heal and search (mobility memo); reload keeps running.
         cancelHeal(rt);
@@ -1176,6 +1177,7 @@ export class Match {
       report.unplaced = unplaced.map(toSettled);
     }
     if (rt.touch) report.touch = true;
+    if (rt.bossTrophies.size > 0) report.bossTrophies = [...rt.bossTrophies];
     rt.exitReport = report;
     this.exitReports.push(report);
 
@@ -1382,6 +1384,9 @@ function newRuntime(
     dropId: "",
     tutorial: false,
     touch: false,
+    moveMult: 1,
+    bossTrophies: new Set(),
+    bossDamagers: null,
   };
 }
 

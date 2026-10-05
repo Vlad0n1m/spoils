@@ -6,6 +6,8 @@
  *   heal and closes a search, and the gun stays locked for GRENADE.FIRE_LOCK_MS. The whole flight
  *   is computed at once (shared items.ts grenadePath, which the client's aim preview also draws):
  *   players never stop a grenade, only SHOT walls do.
+ * - throwNpcGrenade: a boss move (boss-fight.ts, the Foreman) — same flight, fuse, audience and
+ *   blast, from a FREE stock the boss counts (no item); an NPC's blast never hurts NPCs.
  * - stepGrenades (every tick): bounce sounds as the flight passes them, landing copies for humans
  *   who see the resting grenade but not the thrower, and the explosion at the fuse.
  * - explode: every living runtime within GRENADE.EDGE_PX whose centre the blast centre sees through
@@ -116,7 +118,29 @@ export function throwGrenade(m: Match, rt: PlayerRuntime, angle: number, frac: n
   rt.nextFireAt = Math.max(rt.nextFireAt, m.clock + GRENADE.FIRE_LOCK_MS);
   rt.pressPending = false;
   const a = Number.isFinite(angle) ? Math.atan2(Math.sin(angle), Math.cos(angle)) : p.aim;
-  const path = grenadePath(m.idx, p.x, p.y, a, grenadeThrowPx(frac), { width: m.map.width, height: m.map.height });
+  const g = launch(m, rt, a, grenadeThrowPx(frac));
+  syncPublic(rt);
+  return g;
+}
+
+/**
+ * Boss fights (boss-fight.ts, the Foreman): an NPC throws at the point (tx, ty), from a FREE stock
+ * the caller counts (no inventory item is used up, nothing reaches a corpse). Same flight, fuse,
+ * bounces, walls, audience and warning ring as a player's grenade; distance clamped to
+ * GRENADE.MIN_PX..MAX_PX. The blast never hurts NPCs (explode).
+ */
+export function throwNpcGrenade(m: Match, rt: PlayerRuntime, tx: number, ty: number): LiveGrenade | null {
+  const p = rt.pub;
+  if (!p.alive || !rt.isNpc) return null;
+  const d = Math.max(GRENADE.MIN_PX, Math.min(GRENADE.MAX_PX, Math.hypot(tx - p.x, ty - p.y)));
+  rt.nextFireAt = Math.max(rt.nextFireAt, m.clock + GRENADE.FIRE_LOCK_MS);
+  return launch(m, rt, Math.atan2(ty - p.y, tx - p.x), d);
+}
+
+/** The flight from the thrower's position, the throw sound and the full-flight copies. */
+function launch(m: Match, rt: PlayerRuntime, a: number, dist: number): LiveGrenade {
+  const p = rt.pub;
+  const path = grenadePath(m.idx, p.x, p.y, a, dist, { width: m.map.width, height: m.map.height });
   const g: LiveGrenade = {
     id: ++m.grenadeSeq,
     owner: rt,
@@ -135,7 +159,6 @@ export function throwGrenade(m: Match, rt: PlayerRuntime, angle: number, frac: n
     g.told.add(v.rosterIndex);
     m.emit({ type: "nade", to: v.rosterIndex, msg: grenadeMsg(m, g, true, true) });
   }
-  syncPublic(rt);
   return g;
 }
 
@@ -182,8 +205,10 @@ export function explode(m: Match, g: LiveGrenade): void {
   for (const r of to) m.emit({ type: "boom", to: r, msg: boom });
   emitSound(m, null, SoundKind.explosion, x, y);
   const R = GRENADE.EDGE_PX;
+  // An NPC's grenade (a boss move) never hurts NPCs (one "locals" faction, like their bullets).
+  const npcOwner = g.owner.isNpc;
   for (const rt of [...m.allRuntimes()]) {
-    if (!rt.pub.alive) continue;
+    if (!rt.pub.alive || (npcOwner && rt.isNpc)) continue;
     const dx = rt.pub.x - x;
     const dy = rt.pub.y - y;
     if (dx * dx + dy * dy > R * R) continue;

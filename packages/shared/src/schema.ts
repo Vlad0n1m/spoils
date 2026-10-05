@@ -109,6 +109,12 @@ export class Player extends Schema {
   @type("uint16") maxHp = 100;
   /** Character skin code (pass.ts SKIN_CODES): 0 = default, 1 = Alpha Veteran (Alpha Pass tier 8). Humans only. */
   @type("uint8") skin = 0;
+  /**
+   * Bosses only (BOSS_FIGHT): fight phase 1 / 2 (0 for everyone else) and the move it is winding up
+   * (BOSS_TELL). Synced like every Player field: only to clients that see the boss.
+   */
+  @type("uint8") bossPhase = 0;
+  @type("uint8") bossTell = 0;
 }
 
 /**

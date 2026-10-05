@@ -135,6 +135,11 @@ export interface PlayerExitReport {
   unplaced?: SettledItem[];
   /** The entry joined on touch controls (BattleJoinOptions.touch): the Alpha Pass "phone" tester task. */
   touch?: boolean;
+  /**
+   * Bosses this entry killed, or helped kill as a party mate of the killer who damaged it
+   * (BOSS_FIGHT): the web grants bossTrophyId(kind) at settlement. Optional for older servers.
+   */
+  bossTrophies?: BossKind[];
 }
 
 export interface MatchEndParticipant {
@@ -414,6 +419,8 @@ export interface LastRaidDto {
   levelBefore: number;
   level: number;
   kills: { players: number; npcs: number; bosses: number };
+  /** Boss trophy titles earned this raid (COSMETICS names, e.g. "Foreman Slayer"); absent = none. */
+  trophies?: string[];
 }
 /** GET /api/me/world (private). */
 export interface MeWorldDto {
