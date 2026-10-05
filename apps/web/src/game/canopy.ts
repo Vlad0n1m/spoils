@@ -11,6 +11,7 @@
 
 import { Container, Graphics, Sprite, type Texture } from "pixi.js";
 import {
+  SEARCH,
   TREE_CANOPY_MULT,
   UniformGrid,
   buildBushIndex,
@@ -26,6 +27,13 @@ import { chunkKey, chunkSpan, propHash, propSprite, type ChunkGrid, type ViewRec
 export const CANOPY_INSIDE_ALPHA = { tree: 0.4, bush: 0.5, roof: 0.55 } as const;
 /** Fade time constant, ms (≈ the old 0.25-per-frame lerp at 60 fps). */
 const FADE_TAU_MS = 55;
+/**
+ * A tree crown over a container fades while the local player is this close to the container
+ * (≈ the search range plus a step), so the crate is not hidden under the leaves when it matters.
+ */
+export const CONTAINER_REVEAL_R = SEARCH.OPEN_RANGE * 1.5;
+/** A container sprite reaches about this far from its centre (the widest is ~76 px). */
+const BOX_HALF = 40;
 /** Crowns reach this far past their chunk; the visible range is grown by it. */
 const CANOPY_REACH = 160;
 
@@ -37,6 +45,8 @@ interface CanopyItem {
   y: number;
   /** Radius within which the player counts as "under" it (0 = never fades). */
   fadeR: number;
+  /** Drawn crown radius (trees; 0 otherwise): a container touching it fades the crown. */
+  crownR: number;
   chunk: number;
   /** Index into the MapData array the item came from (bushes / circles / rects by kind). */
   src: number;
@@ -65,6 +75,12 @@ export class CanopyLayer {
   private readonly nextShown = new Set<number>();
   private readonly bushIdx: BushIndex;
   private maxFadeR = 0;
+  private maxCrownR = 0;
+  /** Containers by position (MapData.containers index), for the crown-over-container fade. */
+  private readonly boxes: UniformGrid;
+  private readonly boxScratch: number[] = [];
+  /** Tree crowns over a container near the player this frame. */
+  private readonly revealed = new Set<number>();
 
   constructor(
     readonly map: MapData,
@@ -77,10 +93,12 @@ export class CanopyLayer {
     this.byChunk = Array.from({ length: grid.cols * grid.rows }, () => []);
     this.near = new UniformGrid(map.width, map.height, 256);
     this.bushIdx = buildBushIndex(map.bushes, map.width, map.height);
+    this.boxes = new UniformGrid(map.width, map.height, 256);
+    map.containers.forEach((c, i) => this.boxes.set(i, c.x, c.y));
 
     map.bushes.forEach((b, i) => this.add("bush", b.x, b.y, b.r, i));
     map.circles.forEach((c, i) => {
-      if (c.k === "tree") this.add("tree", c.x, c.y, c.r * TREE_CANOPY_MULT * 0.85, i);
+      if (c.k === "tree") this.add("tree", c.x, c.y, c.r * TREE_CANOPY_MULT * 0.85, i, c.r * TREE_CANOPY_MULT);
       else if (c.k === "silo") this.add("silo", c.x, c.y, 0, i);
     });
     map.rects.forEach((r, i) => {
@@ -88,15 +106,16 @@ export class CanopyLayer {
     });
   }
 
-  private add(kind: CanopyKind, x: number, y: number, fadeR: number, src: number) {
+  private add(kind: CanopyKind, x: number, y: number, fadeR: number, src: number, crownR = 0) {
     const s = chunkSpan(this.grid, x, y, x, y);
     const chunk = chunkKey(this.grid, s.cx0, s.cy0);
     const id = this.items.length;
-    this.items.push({ kind, x, y, fadeR, chunk, src, obj: null });
+    this.items.push({ kind, x, y, fadeR, crownR, chunk, src, obj: null });
     this.byChunk[chunk]!.push(id);
     if (fadeR > 0) {
       this.near.set(id, x, y);
       this.maxFadeR = Math.max(this.maxFadeR, fadeR);
+      this.maxCrownR = Math.max(this.maxCrownR, crownR);
     }
   }
 
@@ -165,6 +184,21 @@ export class CanopyLayer {
         if (it.obj && (self.x - it.x) ** 2 + (self.y - it.y) ** 2 < it.fadeR * it.fadeR) this.fading.add(id);
       }
     }
+    // Tree crowns over a container the player is next to fade like the one they stand under.
+    this.revealed.clear();
+    if (self) {
+      for (const b of this.boxes.queryCircle(self.x, self.y, CONTAINER_REVEAL_R, this.boxScratch)) {
+        const c = this.map.containers[b]!;
+        if ((self.x - c.x) ** 2 + (self.y - c.y) ** 2 > CONTAINER_REVEAL_R * CONTAINER_REVEAL_R) continue;
+        for (const id of this.near.queryCircle(c.x, c.y, this.maxCrownR + BOX_HALF, this.nearScratch)) {
+          const it = this.items[id]!;
+          const reach = it.crownR + BOX_HALF;
+          if (it.kind !== "tree" || !it.obj || (c.x - it.x) ** 2 + (c.y - it.y) ** 2 >= reach * reach) continue;
+          this.revealed.add(id);
+          this.fading.add(id);
+        }
+      }
+    }
     const k = 1 - Math.exp(-dtMs / FADE_TAU_MS);
     for (const id of this.fading) {
       const it = this.items[id]!;
@@ -173,7 +207,7 @@ export class CanopyLayer {
         this.fading.delete(id);
         continue;
       }
-      const inside = !!self && (self.x - it.x) ** 2 + (self.y - it.y) ** 2 < it.fadeR * it.fadeR;
+      const inside = (!!self && (self.x - it.x) ** 2 + (self.y - it.y) ** 2 < it.fadeR * it.fadeR) || this.revealed.has(id);
       const target = inside ? CANOPY_INSIDE_ALPHA[it.kind === "bush" ? "bush" : it.kind === "tree" ? "tree" : "roof"] : 1;
       obj.alpha += (target - obj.alpha) * k;
       if (!inside && obj.alpha > 0.995) {
