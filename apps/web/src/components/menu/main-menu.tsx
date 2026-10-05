@@ -382,9 +382,14 @@ function MenuScreen({
       }
       setMore(false);
       setQuestsTab(null);
+      // Dropping in means the player moved on from the last raid: never leave its window above the battle.
+      if (lastRaid) {
+        writeLastRaidSeen(lastRaid.entryId);
+        setLastSeen(lastRaid.entryId);
+      }
       onBattle(b);
     },
-    [panel.panel, onBattle],
+    [panel.panel, onBattle, lastRaid],
   );
 
   const locked = (what: "Guilds") => {
@@ -502,7 +507,7 @@ function MenuScreen({
                   onRetry={() => void stash.reload()}
                 />
               </div>
-              {showCard && (
+              {showCard && !hidden && (
                 createPortal(
                 <div
                   className="fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 short:p-2"
