@@ -41,6 +41,8 @@ export interface ItemDef {
   throwable?: "grenade";
   /** Junk only: CR per unit paid by the auto-sale at settlement (dogtag: see dogTagCr). */
   value?: number;
+  /** Room keys (objectives, map/locks.ts): the zone id whose locked room this key opens. */
+  opens?: string;
 }
 
 export const POCKET_SLOTS = 4;
@@ -131,6 +133,47 @@ const ALL_DEFS: ItemDef[] = [
   // value 0: the price comes from dogTagCr(lvl). Never stacks (different labels).
   junk("dogtag", "Dog tag", 0, 1, 1),
 ];
+
+/**
+ * In-raid objectives (objectives.ts, map/locks.ts): one room key per T2–T4 POI (zone id → name).
+ * Keys are CR-economy junk: stack 1, take a slot, sold by the auto-sale at exit like any junk if
+ * still carried (never a SOL-valued unique); using one on its door consumes it. Value and rarity
+ * by the zone tier (KEY_VALUE_CR / KEY_RARITY).
+ */
+export const ROOM_KEYS: ReadonlyArray<{ zone: string; name: string; tier: 2 | 3 | 4 }> = [
+  { zone: "zarya", name: "Dawnfield storeroom key", tier: 2 },
+  { zone: "kolkhoz", name: "Farm office key", tier: 2 },
+  { zone: "sawmill", name: "Sawmill office key", tier: 2 },
+  { zone: "elevator", name: "Elevator control key", tier: 3 },
+  { zone: "depot", name: "Depot locker key", tier: 2 },
+  { zone: "checkpoint", name: "Checkpoint armory key", tier: 2 },
+  { zone: "radar", name: "Radar office key", tier: 4 },
+  { zone: "quarry", name: "Quarry office key", tier: 2 },
+  { zone: "millbrook", name: "Millbrook storeroom key", tier: 2 },
+  { zone: "pumpworks", name: "Pump station key", tier: 2 },
+  { zone: "relay", name: "Relay bunker key", tier: 3 },
+];
+/** Auto-sale CR of a room key by zone tier (a found key you never used still pays a little). */
+export const KEY_VALUE_CR: Readonly<Record<2 | 3 | 4, number>> = { 2: 15, 3: 30, 4: 50 };
+const KEY_RARITY: Readonly<Record<2 | 3 | 4, Rarity>> = { 2: 1, 3: 2, 4: 3 };
+
+/** Item def id of the key that opens `zone`'s locked room. */
+export function roomKeyDef(zone: string): string {
+  return `key_${zone}`;
+}
+
+/** Hidden-cache clue note (objectives.ts): label = the clue, ref = "cache:<n>:<x>:<y>:<r>" (fuzzy circle). */
+export const CACHE_NOTE_DEF = "note_cache";
+
+const KEY_DEFS: ItemDef[] = ROOM_KEYS.map((k) => ({
+  id: roomKeyDef(k.zone), cat: "junk", name: k.name, icon: `key_t${k.tier}`, stack: 1, unique: false,
+  rarity: KEY_RARITY[k.tier], value: KEY_VALUE_CR[k.tier], opens: k.zone,
+}));
+ALL_DEFS.push(
+  ...KEY_DEFS,
+  // value 0: a clue, not loot (the auto-sale pays nothing for it).
+  { id: CACHE_NOTE_DEF, cat: "junk", name: "Cache note", icon: "note_cache", stack: 1, unique: false, rarity: 0, value: 0 },
+);
 
 export const ITEM_DEFS: Readonly<Record<string, ItemDef>> = Object.freeze(
   Object.fromEntries(ALL_DEFS.map((d) => [d.id, Object.freeze(d)])),

@@ -5,6 +5,7 @@
 
 import { PLAYER, WORLD } from "../constants.js";
 import { buildCollisionIndex, SOLID, type CollisionIndex } from "../geometry.js";
+import { hasLockOverlay, lockOverlay } from "./locks.js";
 import { isIndoorByte, surfaceOf, type SurfaceInfo } from "./surface.js";
 import {
   CONTAINER_KINDS,
@@ -133,6 +134,19 @@ export function getCollisionIndex(m: MapData): CollisionIndex {
     indexCache.set(m, idx);
   }
   return idx;
+}
+
+/**
+ * Append the locked-room gates and bars (locks.ts lockOverlay, flags 0 = inert) to the cached
+ * collision index of a finished map. generateMap calls it once, after validation (which built the
+ * walk grid without them), so every consumer of getCollisionIndex shares the same rect indexes.
+ */
+export function installLockOverlay(m: MapData): void {
+  const o = lockOverlay(m);
+  if (o.rects.length === 0) return;
+  const cur = indexCache.get(m);
+  if (cur && hasLockOverlay(cur, m)) return;
+  indexCache.set(m, buildCollisionIndex({ rects: [...m.rects, ...o.rects], circles: m.circles }, m.width, m.height));
 }
 
 /** Rect kinds that muffle sound (critique: occlusion = one ray against a walls-only index). */

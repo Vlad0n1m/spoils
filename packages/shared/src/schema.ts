@@ -303,6 +303,11 @@ export class BattleState extends Schema {
   @type({ map: WorldEvent }) wev = new MapSchema<WorldEvent>();
   /** Full-map fight heat of the last FIGHT.HEAT_WINDOW_MS (encodeHeat: "cell:level,…", HEAT_CELL grid). */
   @type("string") heat = "";
+  /**
+   * In-raid objectives: LOCK_STATE per lockedRooms(map) index (0 locked, 1 open). Empty = objectives
+   * off (every gate inert). An unlock goes public like a container flip (disclosure.ts).
+   */
+  @type(["uint8"]) lockState = new ArraySchema<number>();
 }
 
 /** Every schema class (the no-@view lint and the codegen iterate this). */

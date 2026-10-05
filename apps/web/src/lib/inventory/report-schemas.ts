@@ -56,6 +56,8 @@ const statsSchema = z.object({
   guardKills: z.number().int().min(0).max(1000).optional(),
   /** WORLD v6: containers searched inside an active hot zone (× HOT_ZONE_XP_MULT; optional for older servers). */
   hotContainers: z.number().int().min(0).max(1000).optional(),
+  /** Objectives (rooms unlocked, safes cracked, caches opened; optional for older servers). */
+  objectives: z.number().int().min(0).max(1000).optional(),
 });
 
 export const playerExitReportSchema = z.object({

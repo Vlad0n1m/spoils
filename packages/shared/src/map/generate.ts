@@ -36,6 +36,7 @@ import {
   type ValidationReport,
 } from "./spots.js";
 import { RIVER_BANK, RIVER_HALF_WIDTH, STEPPE_CROSSINGS, STEPPE_RIVER, STEPPE_ROADS, STEPPE_ZONES } from "./steppe.js";
+import { installLockOverlay } from "./query.js";
 import { ROAD_MASK } from "./terrain.js";
 import { MAPS, TERRAIN, type MapData, type MapId, type ZoneKind } from "./types.js";
 import { polyXAtY } from "./util.js";
@@ -68,6 +69,8 @@ export function generateMap(id: MapId = "steppe"): MapData {
   let m = cache.get(id);
   if (!m) {
     m = generateMapWithReport(id).map;
+    // Locked-room gates / bars (locks.ts): inert rects after MapData.rects, not part of mapHash.
+    installLockOverlay(m);
     cache.set(id, m);
   }
   return m;
