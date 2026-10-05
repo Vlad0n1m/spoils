@@ -13,10 +13,11 @@
  *      same `dropId` and `partyId`. After `expiresAt` (createdAt + PARTY.DROP_TTL_MS) a member drops on
  *      their own (ticket with `partyId` only).
  *   3. Game server (apps/game-server world/directory.ts, sim/spawn.ts): the first admitted ticket of a
- *      `dropId` picks a normal spawn and holds `dropSize` seats on the shard for 60 s; later tickets
- *      with the same `dropId` spawn PARTY.SPAWN_MIN_PX–PARTY.SPAWN_NEAR_PX from a living member of
- *      that drop, unless a stranger is within 1200 px or the member's own body within 2000 px (then
- *      a normal spawn).
+ *      `dropId` picks a normal spawn (the landing zone, kept off the bodies of the party) and holds
+ *      `dropSize` seats on the shard for 60 s; later tickets with the same `dropId` spawn
+ *      PARTY.SPAWN_MIN_PX–PARTY.SPAWN_NEAR_PX from the landing zone on its side (same extracts),
+ *      even when the first member has moved on or a stranger stands nearby. A member who already
+ *      landed with the drop and re-enters takes a normal spawn.
  * Each member still locks their own loadout; the risk rule, pool limits and settlement stay per player.
  * Party members on the same shard: no damage between them (PARTY.FRIENDLY_FIRE = false, see
  * partyMates) and S2C.PARTY with their positions at ~PARTY.POS_HZ. Rejoin tickets (an active entry)
@@ -48,8 +49,8 @@ export const PARTY = {
    */
   FRIENDLY_FIRE: false,
   /**
-   * Later members of a drop spawn at most this far from a living member of the same drop
-   * (game server spawn.ts PARTY_SPAWN_MAX_PX)…
+   * Later members of a drop spawn at most this far from the drop's landing zone (its first
+   * member's spot; game server spawn.ts PARTY_SPAWN_MAX_PX)…
    */
   SPAWN_NEAR_PX: 300,
   /** …and at least this far (spawn.ts PARTY_SPAWN_MIN_PX). */

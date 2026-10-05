@@ -485,14 +485,10 @@ test("party drop admission: the first member needs room for a whole party; held 
     const lead = gm2();
     await g.dir.admit(lead);
     assert.equal(gs.drops.get(dropId)?.users.size, 1);
-    const anchor = gm.currentOf(lead.userId)!.pub;
-    // The fillers stand far off (the test map's spawns all sit within 1050 px): a stranger next to the
-    // leader would send the members to a normal spawn (spawn.ts dropSpawnSafe).
-    for (const f of gm.allRuntimes()) {
-      if (f.isNpc || f.userId === lead.userId) continue;
-      f.pub.x = gm.map.width - 200;
-      f.pub.y = gm.map.height - 200;
-    }
+    const leadRt = gm.currentOf(lead.userId)!;
+    const anchor = { x: leadRt.pub.x, y: leadRt.pub.y };
+    // The fillers stay where they spawned (the test map's spawns all sit within 1050 px, so strangers
+    // stand next to the landing zone, as on a full shard): the members still land together.
     // Everyone else sees the held seats as taken.
     await assert.rejects(g.dir.admit(ticket(gs.matchId)), { message: "world_full" });
     // The members take their held seats (no capacity refusal) and land next to the leader.
@@ -502,6 +498,8 @@ test("party drop admission: the first member needs room for a whole party; held 
       const rt = gm.currentOf(t.userId)!;
       const d = Math.hypot(rt.pub.x - anchor.x, rt.pub.y - anchor.y);
       assert.ok(d >= PARTY_SPAWN_MIN_PX && d <= PARTY_SPAWN_MAX_PX, `member ${i + 1} ${d.toFixed(0)} px from the leader`);
+      assert.equal(rt.self.side, leadRt.self.side, "the leader's side (same extracts)");
+      assert.equal(rt.self.extractMask, leadRt.self.extractMask);
       assert.equal(rt.partyId, partyId);
       assert.equal(rt.dropId, dropId);
     }

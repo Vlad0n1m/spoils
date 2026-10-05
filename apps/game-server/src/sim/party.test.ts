@@ -5,14 +5,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PARTY, PLAYER, WEAPONS, resolveCircle, walkCellOf, type MapData } from "@extract/shared";
+import { PARTY, PLAYER, WEAPONS, mulberry32, resolveCircle, walkCellOf, type MapData } from "@extract/shared";
 import { damagePlayer } from "./combat.js";
 import { killPlayer } from "./death.js";
 import { extractPlayer } from "./extraction.js";
 import type { Match } from "./match.js";
 import { mapRuntime } from "./nav.js";
 import { MATE_DOWN_MS, partyPositions } from "./party.js";
-import { PARTY_SPAWN_GAP_PX, PARTY_SPAWN_MAX_PX, PARTY_SPAWN_MIN_PX, partySpawnNear } from "./spawn.js";
+import { PARTY_SPAWN_GAP_PX, PARTY_SPAWN_MAX_PX, PARTY_SPAWN_MIN_PX, SPAWN_TOP_SHARE, partySpawnNear } from "./spawn.js";
 import type { PlayerRuntime } from "./types.js";
 import { enter, ids, jump, pl, place, rtOf, run, testMap, testMatch, worldMatch } from "./test-utils.js";
 
@@ -86,50 +86,69 @@ test("party drop: after PARTY.DROP_TTL_MS a member spawns normally (new anchor);
   assert.ok(lead.pub.alive);
 });
 
-test("party drop: a late member lands next to the living member, not at the drop's stale first spot", () => {
+test("party drop: a late member lands at the landing zone, even when the first member walked off or died", () => {
   const { m, wall } = worldMatch();
   jump(m, wall, 1_000);
   const lead = enter(m, "lead", { partyId: P, dropId: D });
   const first = { x: lead.pub.x, y: lead.pub.y };
-  // The leader walked 2500 px off along the long axis before the member followed.
+  // The leader walked 2500 px off along the long axis before the member followed (within the window).
   const nx = first.x < m.map.width / 2 ? first.x + 2500 : first.x - 2500;
   place(m, lead.id, nx, first.y);
   jump(m, wall, 50_000);
   const late = enter(m, "m1", { partyId: P, dropId: D });
-  const d = dist(late.pub, lead.pub);
-  assert.ok(d >= PARTY_SPAWN_MIN_PX && d <= PARTY_SPAWN_MAX_PX, `${d.toFixed(0)} px from the living leader`);
+  const d = dist(late.pub, first);
+  assert.ok(d >= PARTY_SPAWN_MIN_PX && d <= PARTY_SPAWN_MAX_PX, `${d.toFixed(0)} px from the landing zone`);
   assertClear(m, late.pub.x, late.pub.y, "late member");
   assert.equal(late.self.side, lead.self.side);
-  // Nobody of the drop alive: the stored first spot is the anchor.
+  assert.equal(late.self.extractMask, lead.self.extractMask);
+  // Nobody of the drop alive any more: still the landing zone, apart from the spots handed out.
   killPlayer(m, lead, null, "");
   killPlayer(m, late, null, "");
   const third = enter(m, "m2", { partyId: P, dropId: D });
   const d2 = dist(third.pub, first);
-  assert.ok(d2 >= PARTY_SPAWN_MIN_PX && d2 <= PARTY_SPAWN_MAX_PX, `${d2.toFixed(0)} px from the first spot`);
+  assert.ok(d2 >= PARTY_SPAWN_MIN_PX && d2 <= PARTY_SPAWN_MAX_PX, `${d2.toFixed(0)} px from the landing zone`);
+  assert.ok(dist(third.pub, late.pub) >= PARTY_SPAWN_GAP_PX, "apart from the earlier member's spot");
+  assert.equal(third.self.side, lead.self.side);
 });
 
-test("party drop: the late-spawn safety rules hold (no spawn next to a stranger, none on the own body)", () => {
-  // A stranger next to the living leader: the member takes a normal entry spot instead.
+test("party drop: strangers near the landing zone never split the drop (same area, same side, every seed)", () => {
+  for (let seed = 1; seed <= 24; seed++) {
+    const { m, wall } = worldMatch({ rng: mulberry32(seed) });
+    jump(m, wall, 1_000);
+    // A busy shard: raiders already on the map (the test map's spawns all sit within ~1000 px).
+    for (let i = 0; i < 6; i++) enter(m, `s${seed}-${i}`);
+    jump(m, wall, 6_000);
+    const lead = enter(m, "lead", { partyId: P, dropId: D });
+    const zone = { x: lead.pub.x, y: lead.pub.y };
+    // One of them walks right up to the landing zone, another member is a few seconds late.
+    const killer = enter(m, "killer");
+    place(m, killer.id, zone.x + 120, zone.y);
+    jump(m, wall, 3_000);
+    const mates = ["m1", "m2", "m3"].map((u) => enter(m, u, { partyId: P, dropId: D }));
+    for (const rt of mates) {
+      const d = dist(rt.pub, zone);
+      assert.ok(d >= PARTY_SPAWN_MIN_PX && d <= PARTY_SPAWN_MAX_PX, `seed ${seed} ${rt.nickname}: ${d.toFixed(0)} px from the landing zone`);
+      assertClear(m, rt.pub.x, rt.pub.y, `seed ${seed} ${rt.nickname}`);
+      assert.equal(rt.self.side, lead.self.side, `seed ${seed}: same side`);
+      assert.equal(rt.self.extractMask, lead.self.extractMask, `seed ${seed}: same extracts`);
+    }
+    assert.equal(m.partyDrops.get(D)!.spots.length, 4);
+  }
+});
+
+test("party drop: the landing zone avoids the party's own bodies; a member who re-enters within the window spawns normally", () => {
+  // A mate died earlier this cycle: the drop's landing zone keeps off that body like off the opener's own.
   {
     const { m, wall } = worldMatch();
     jump(m, wall, 1_000);
+    const mate = enter(m, "m1", { partyId: P });
+    killPlayer(m, mate, null, "");
+    const body = { x: mate.pub.x, y: mate.pub.y };
+    jump(m, wall, 10_000);
     const lead = enter(m, "lead", { partyId: P, dropId: D });
-    jump(m, wall, 5_000);
-    const killer = enter(m, "killer");
-    place(m, killer.id, lead.pub.x + 120, lead.pub.y);
-    const spots = m.partyDrops.get(D)!.spots.length;
-    const mate = enter(m, "m1", { partyId: P, dropId: D });
-    assert.ok(m.entrySpots().some((s) => s.x === mate.pub.x && s.y === mate.pub.y), "a normal entry spot");
-    assert.equal(m.partyDrops.get(D)!.spots.length, spots, "the drop hands out no spot");
-    assert.ok(dist(mate.pub, killer.pub) > PARTY_SPAWN_MAX_PX);
-    // A mate of the same party standing there is no threat.
-    const { m: m2, wall: w2 } = worldMatch();
-    jump(m2, w2, 1_000);
-    const l2 = enter(m2, "lead", { partyId: P, dropId: D });
-    const other = enter(m2, "o", { partyId: P });
-    place(m2, other.id, l2.pub.x + 120, l2.pub.y);
-    const m1 = enter(m2, "m1", { partyId: P, dropId: D });
-    assert.ok(dist(m1.pub, l2.pub) <= PARTY_SPAWN_MAX_PX, "a party mate does not block the drop");
+    const ds = m.entrySpots().map((s) => dist(s, body)).sort((a, b) => b - a);
+    const cut = ds[Math.max(1, Math.ceil(ds.length * SPAWN_TOP_SHARE)) - 1]!;
+    assert.ok(dist(lead.pub, body) >= cut, `${dist(lead.pub, body).toFixed(0)} px from the mate's body (top share from ${cut.toFixed(0)})`);
   }
   // The leader died at the drop and re-enters within the window: never next to their own body.
   {
@@ -140,11 +159,37 @@ test("party drop: the late-spawn safety rules hold (no spawn next to a stranger,
     killPlayer(m, lead, null, "");
     const body = { x: lead.pub.x, y: lead.pub.y };
     jump(m, wall, 10_000);
+    const spots = m.partyDrops.get(D)!.spots.length;
     const again = enter(m, "lead", { partyId: P, dropId: D });
     assert.ok(m.entrySpots().some((s) => s.x === again.pub.x && s.y === again.pub.y), "a normal entry spot");
     assert.ok(dist(again.pub, body) > PARTY_SPAWN_MAX_PX, `${dist(again.pub, body).toFixed(0)} px from the own body`);
+    assert.equal(m.partyDrops.get(D)!.spots.length, spots, "the drop hands out no spot");
     assert.ok(mate.pub.alive);
   }
+});
+
+test("party drop: solo raiders and party members outside the drop keep the normal entry spawn", () => {
+  const solo = () => {
+    const { m, wall } = worldMatch();
+    jump(m, wall, 1_000);
+    return { m, wall };
+  };
+  // The same shard with and without an open drop elsewhere hands a solo raider a normal entry spot.
+  const a = solo();
+  const plain = enter(a.m, "solo");
+  assert.ok(a.m.entrySpots().some((s) => s.x === plain.pub.x && s.y === plain.pub.y && s.side === plain.self.side));
+  assert.equal(plain.partyId, "");
+  assert.equal(plain.dropId, "");
+  const b = solo();
+  const lead = enter(b.m, "lead", { partyId: P, dropId: D });
+  const s2 = enter(b.m, "solo");
+  assert.ok(b.m.entrySpots().some((s) => s.x === s2.pub.x && s.y === s2.pub.y && s.side === s2.self.side), "a normal entry spot");
+  assert.ok(dist(s2.pub, lead.pub) >= PARTY_SPAWN_GAP_PX);
+  // A party member whose ticket follows no drop (pressed PLAY after it expired) spawns normally too.
+  const own = enter(b.m, "m9", { partyId: P });
+  assert.ok(b.m.entrySpots().some((s) => s.x === own.pub.x && s.y === own.pub.y), "a normal entry spot");
+  assert.equal(own.dropId, "");
+  assert.equal(b.m.partyDrops.get(D)!.spots.length, 1, "the drop hands out nothing to entries outside it");
 });
 
 /** The open test arena plus a closed 500 × 500 room (32 px walls) at (2000, 2000). */

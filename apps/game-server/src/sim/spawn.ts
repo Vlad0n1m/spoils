@@ -12,18 +12,18 @@
  * Pure apart from the rng draw; Match owns the recent-spawn list.
  *
  * Party drop (shared party.ts, JoinTicket.dropId): the first admitted member of a drop picks a spot
- * with the rules above and opens the drop; members of the same drop (same partyId) admitted within
- * PARTY.DROP_TTL_MS of it land PARTY_SPAWN_MIN_PX–PARTY_SPAWN_MAX_PX from a LIVING member of the drop
- * (the one nearest the drop's first spot: the group may have walked on; the stored first spot only
- * when nobody of the drop is alive) — partySpawnNear: a fixed spread per member slot, walk-grid cell
- * centres only, the anchor's connected walk component, re-checked against the solids, apart from
- * each other — on that member's side, so the whole drop shares its extracts. No rng: the same drop
- * always spreads the same way.
- * The late-spawn safety rules still hold for a drop spot (dropSpawnSafe): no living human outside the
- * party within PARTY_SPAWN_SAFE_PX (1200) and none of the user's own corpses of this cycle within
- * PARTY_SPAWN_CORPSE_PX (2000). A member who died at the drop and re-enters, or follows into a fight,
- * takes a normal entry spot instead.
- * After the window a member of the drop spawns as above (a new anchor for anyone after them).
+ * with the rules above (the corpses of every user of the party seen on this shard count as threats
+ * too, so nobody of the party lands on their own body) and opens the drop: that spot and its side are
+ * the drop's landing zone. Every later member of the same drop (same partyId) admitted within
+ * PARTY.DROP_TTL_MS of it lands PARTY_SPAWN_MIN_PX–PARTY_SPAWN_MAX_PX from the landing zone — even
+ * when the first member has walked off or died meanwhile — via partySpawnNear: a fixed spread per
+ * member slot, walk-grid cell centres only, the landing zone's connected walk component, re-checked
+ * against the solids, apart from each other and from the living members of the drop. Always on the
+ * landing zone's side, so the whole drop shares its extracts (extractMaskOf). No rng and no fallback
+ * to a far entry spot: the same drop always spreads the same way and its members always land together.
+ * A user who already landed with the drop (died and re-enters within the window) is past the drop and
+ * takes a normal entry spot (never next to their own body). After the window a member of the drop
+ * spawns as above (a new landing zone for anyone after them).
  */
 
 import {
@@ -53,15 +53,20 @@ export interface SpawnSpot {
   side: MapSide;
 }
 
-/** Pick the entry spot of `userId` (see the module comment) and remember it as recently handed out. */
-export function pickEntrySpawn(m: Match, rng: Rng, userId: string): SpawnSpot {
+/**
+ * Pick the entry spot of `userId` (see the module comment) and remember it as recently handed out.
+ * `corpseOwners`: more users whose corpses of this cycle count as threats (a party drop's landing zone).
+ */
+export function pickEntrySpawn(m: Match, rng: Rng, userId: string, corpseOwners?: ReadonlySet<string>): SpawnSpot {
   const clock = m.clock;
   const recent = m.recentSpawns;
   while (recent.length > 0 && clock - recent[0]!.at > RECENT_SPAWN_MS) recent.shift();
   const threats: Array<{ x: number; y: number }> = [];
   for (const rt of m.allRuntimes()) if (!rt.isNpc && rt.pub.alive) threats.push(rt.pub);
   for (const r of recent) threats.push(r);
-  for (const t of m.containers.corpses()) if (t.ownerUser !== null && t.ownerUser === userId) threats.push(t);
+  for (const t of m.containers.corpses()) {
+    if (t.ownerUser !== null && (t.ownerUser === userId || corpseOwners?.has(t.ownerUser))) threats.push(t);
+  }
   const spots = m.entrySpots();
   const spot = chooseSpawn(rng, spots, threats) ?? { x: m.map.width / 2, y: m.map.height / 2, side: 0 as MapSide };
   recent.push({ x: spot.x, y: spot.y, at: clock });
@@ -91,7 +96,7 @@ export function chooseSpawn<T extends { x: number; y: number }>(rng: Rng, spots:
 
 // ---------------------------------------------------------------- party drop
 
-/** Later members of a party drop land at least this far from the living member they join… */
+/** Later members of a party drop land at least this far from the drop's landing zone… */
 export const PARTY_SPAWN_MIN_PX = PARTY.SPAWN_MIN_PX;
 /** …and at most this far. */
 export const PARTY_SPAWN_MAX_PX = PARTY.SPAWN_NEAR_PX;
@@ -116,54 +121,61 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 /** One party drop on a shard (Match.partyDrops, keyed by dropId). */
 export interface PartyDropAnchor {
   partyId: string;
-  /** The first member's spot. */
+  /** The landing zone: the first member's spot… */
   x: number;
   y: number;
+  /** …and side (every member of the drop gets it, so the drop shares its extracts). */
   side: MapSide;
   /** Match clock of the first member's spawn. */
   at: number;
-  /** Spots handed out to this drop so far (anchor first). */
+  /** Spots handed out to this drop so far (landing zone first). */
   spots: Array<{ x: number; y: number }>;
+  /** Users who landed with this drop (a second entry of one of them is not part of the drop). */
+  users: Set<string>;
 }
 
 /**
  * Entry spot of a party drop member (module comment): the drop's first member (or the first after
- * the window) picks a normal entry spot and anchors the drop; later members land near the anchor.
+ * the window) picks a normal entry spot and opens the landing zone; later members land next to it,
+ * on its side.
  */
 export function pickDropSpawn(m: Match, rng: Rng, userId: string, dropId: string, partyId: string): SpawnSpot {
   const clock = m.clock;
   for (const [id, d] of m.partyDrops) if (clock - d.at > PARTY.DROP_TTL_MS) m.partyDrops.delete(id);
   const d = m.partyDrops.get(dropId);
   if (!d) {
-    const spot = pickEntrySpawn(m, rng, userId);
-    m.partyDrops.set(dropId, { partyId, x: spot.x, y: spot.y, side: spot.side, at: clock, spots: [{ x: spot.x, y: spot.y }] });
+    const spot = pickEntrySpawn(m, rng, userId, partyUsersOf(m, partyId));
+    m.partyDrops.set(dropId, { partyId, x: spot.x, y: spot.y, side: spot.side, at: clock, spots: [{ x: spot.x, y: spot.y }], users: new Set([userId]) });
     return spot;
   }
   // A ticket can only carry a dropId of its own party (both signed by the web); anything else drops solo.
   if (d.partyId !== partyId) return pickEntrySpawn(m, rng, userId);
-  // Land next to a living member of the drop: the one nearest the drop's first spot.
-  let anchor: { x: number; y: number; side: MapSide } = d;
-  let best = Infinity;
+  // Already landed with this drop (died, re-enters within the window): a normal entry, off the own body.
+  if (d.users.has(userId)) return pickEntrySpawn(m, rng, userId);
+  // The landing zone, wherever the members who landed before have gone since; keep clear of those
+  // still standing near it.
   const taken: Array<{ x: number; y: number }> = [...d.spots];
   for (const rt of m.allRuntimes()) {
     if (rt.isNpc || !rt.pub.alive || rt.dropId !== dropId || rt.partyId !== partyId || rt.userId === userId) continue;
     taken.push(rt.pub);
-    const dist = Math.hypot(rt.pub.x - d.x, rt.pub.y - d.y);
-    if (dist < best) {
-      best = dist;
-      anchor = { x: rt.pub.x, y: rt.pub.y, side: rt.self.side as MapSide };
-    }
   }
-  const p = partySpawnNear({ walk: m.mapRt.walk, regions: m.mapRt.regions, idx: m.idx, width: m.map.width, height: m.map.height }, anchor, d.spots.length, taken);
-  if (!dropSpawnSafe(m, p, userId, partyId)) return pickEntrySpawn(m, rng, userId);
+  const p = partySpawnNear({ walk: m.mapRt.walk, regions: m.mapRt.regions, idx: m.idx, width: m.map.width, height: m.map.height }, d, d.spots.length, taken);
   d.spots.push(p);
+  d.users.add(userId);
   m.recentSpawns.push({ x: p.x, y: p.y, at: clock });
-  return { x: p.x, y: p.y, side: anchor.side };
+  return { x: p.x, y: p.y, side: d.side };
+}
+
+/** Users of `partyId` seen on this shard (any of their runtimes, alive or not). */
+function partyUsersOf(m: Match, partyId: string): Set<string> {
+  const out = new Set<string>();
+  for (const rt of m.allRuntimes()) if (!rt.isNpc && rt.partyId === partyId && rt.userId) out.add(rt.userId);
+  return out;
 }
 
 /**
- * The late-spawn threat rules for a party drop spot: no living human outside `partyId` within
- * PARTY_SPAWN_SAFE_PX and none of `userId`'s own corpses within PARTY_SPAWN_CORPSE_PX.
+ * The late-spawn threat rules for a quiet spot (the tutorial spawn): no living human outside
+ * `partyId` within PARTY_SPAWN_SAFE_PX and none of `userId`'s own corpses within PARTY_SPAWN_CORPSE_PX.
  */
 export function dropSpawnSafe(m: Match, p: { x: number; y: number }, userId: string, partyId: string): boolean {
   const within = (q: { x: number; y: number }, r: number) => (q.x - p.x) ** 2 + (q.y - p.y) ** 2 < r * r;

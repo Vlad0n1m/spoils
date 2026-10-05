@@ -598,8 +598,8 @@ export class Match {
     const clock = this.clock;
     const partyId = e.partyId ?? "";
     const dropId = partyId ? (e.dropId ?? "") : "";
-    // A party drop (spawn.ts): the drop's first member picks a normal entry spot, later members of
-    // the same drop land 150–300 px from it within PARTY.DROP_TTL_MS.
+    // A party drop (spawn.ts): the drop's first member picks a normal entry spot (the landing zone),
+    // later members of the same drop land 150–300 px from it, on its side, within PARTY.DROP_TTL_MS.
     // Alpha: a solo first raid lands next to a quiet T1 container with a marauder post nearby.
     const tutorialSpawn = e.tutorial && !dropId ? pickTutorialSpawn(this, e.userId) : null;
     const spawn = tutorialSpawn ?? (dropId ? pickDropSpawn(this, this.rng, e.userId, dropId, partyId) : pickEntrySpawn(this, this.rng, e.userId));
