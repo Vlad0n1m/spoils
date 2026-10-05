@@ -80,7 +80,7 @@ export function LevelUpModal({
             <div className="relative -mx-5 mt-2 short:-mx-3 short:mt-1">
             <PagerArrow dir={-1} disabled={edge.start} onClick={() => by(-1)} className="absolute left-1 top-1/2 z-[3] -translate-y-1/2 shadow-[0_4px_0_#000] disabled:hidden" />
             <PagerArrow dir={1} disabled={edge.end} onClick={() => by(1)} className="absolute right-1 top-1/2 z-[3] -translate-y-1/2 shadow-[0_4px_0_#000] disabled:hidden" />
-            <div ref={track} {...handlers} className="rw-track relative overflow-hidden px-5 pb-2 pt-3 [touch-action:pan-y] short:px-3">
+            <div ref={track} {...handlers} className="rw-track relative overflow-hidden px-5 pb-2 pt-3 [touch-action:pan-y] short:px-3 short:pb-1 short:pt-2.5">
               <div className="mx-auto flex w-max gap-3">
                 {rewards.map((it, i) => (
                   <RewardCard
@@ -101,12 +101,13 @@ export function LevelUpModal({
         ) : (
           <p className="font-body relative mt-4 text-sm text-white/80">Keep raiding: your rank on the Level board just went up.</p>
         )}
-        <div className={clsx("relative mt-4 flex flex-col gap-2 short:mt-2 short:flex-row-reverse", "sm:flex-row-reverse sm:justify-center")}>
-          <button ref={ok} type="button" onClick={onClose} className="toon-btn min-h-12 w-full short:min-h-11 text-xl tracking-wide sm:w-56">
+        {/* Short screens: buttons tighter so their bottom shadow (toon-btn) stays inside the panel. */}
+        <div className={clsx("relative mt-4 flex flex-col gap-2 short:mt-1.5 short:flex-row-reverse short:pb-1.5", "sm:flex-row-reverse sm:justify-center")}>
+          <button ref={ok} type="button" onClick={onClose} className="toon-btn min-h-12 w-full short:min-h-10 text-xl tracking-wide sm:w-56 short:text-lg">
             <span className="optical-center">Nice!</span>
           </button>
           {onRewards && (
-            <button type="button" onClick={onRewards} className="toon-btn-ghost min-h-12 w-full short:min-h-11 text-base tracking-wide sm:w-56">
+            <button type="button" onClick={onRewards} className="toon-btn-ghost min-h-12 w-full short:min-h-10 text-base tracking-wide sm:w-56">
               <span className="optical-center">All rewards</span>
             </button>
           )}
