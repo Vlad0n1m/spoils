@@ -22,6 +22,7 @@ import { cancelHeal, cancelReload } from "./actions.js";
 import { carriedItems, clearSlots, syncPublic } from "./bag.js";
 import { grantBossTrophies } from "./boss-fight.js";
 import { closeSearch } from "./containers.js";
+import { buildRecap } from "./recap.js";
 import { isTrackedUnique, makeItem } from "./items.js";
 import type { Match } from "./match.js";
 import { emitSound } from "./sound.js";
@@ -89,6 +90,8 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
     }
   }
   const by = killer && killer !== rt ? killer : null;
+  // Death recap (recap.ts): a snapshot of this tick, before finishPlayer clears the vision row.
+  if (!rt.isNpc) rt.recap = buildRecap(m, rt, by, weapon);
   const { lost, dropped } = buildCorpse(m, rt, by);
   m.emit({
     type: "kill",

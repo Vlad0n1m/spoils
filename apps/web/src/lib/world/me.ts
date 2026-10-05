@@ -26,7 +26,8 @@ import { worldNow } from "./clock";
  *   no raid_entries row). `levelBefore = levelForXp(users.xp − row.xp)` is valid because that exit is
  *   the newest XP change. `kills.npcs` counts every NPC (marauders, guards and bosses);
  *   `kills.bosses` is the boss part of it; `kills.players` = human kills of the report;
- *   `trophies` = the boss trophy titles of the report (bossTrophies), by name.
+ *   `trophies` = the boss trophy titles of the report (bossTrophies), by name; `killedBy` /
+ *   `killedByRole` = the report's killer on a death.
  * Guests (no users row) get level 0.
  */
 export async function meWorld(db: Db, userId: string, now = worldNow()): Promise<MeWorldDto> {
@@ -97,6 +98,11 @@ export async function meWorld(db: Db, userId: string, now = worldNow()): Promise
       .map((k) => (BOSS_KINDS.includes(k) ? cosmeticDef(bossTrophyId(k))?.name : undefined))
       .filter((n): n is string => !!n);
     if (trophies.length > 0) lastRaid.trophies = trophies;
+    // Death: who killed you (the report's killedBy, NPCs by role display key).
+    if (l.exit === "dead" && typeof report?.killedBy === "string" && report.killedBy) {
+      lastRaid.killedBy = report.killedBy.slice(0, 64);
+      lastRaid.killedByRole = Number(report.killedByRole ?? 0) || 0;
+    }
   }
   return { serverTime: now, activeEntry, lastRaid };
 }

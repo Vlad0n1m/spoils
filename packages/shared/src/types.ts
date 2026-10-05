@@ -140,6 +140,12 @@ export interface PlayerExitReport {
    * (BOSS_FIGHT): the web grants bossTrophyId(kind) at settlement. Optional for older servers.
    */
   bossTrophies?: BossKind[];
+  /**
+   * Death only: who killed this entry (a human's nickname or an NPC's role display key) and the
+   * killer's NPC_ROLE (0 = human), for the after-raid card's "Killed by" line. Optional.
+   */
+  killedBy?: string;
+  killedByRole?: number;
 }
 
 export interface MatchEndParticipant {
@@ -421,6 +427,9 @@ export interface LastRaidDto {
   kills: { players: number; npcs: number; bosses: number };
   /** Boss trophy titles earned this raid (COSMETICS names, e.g. "Foreman Slayer"); absent = none. */
   trophies?: string[];
+  /** Death: who killed you (nickname or NPC role display key) and their NPC_ROLE (0 = human). */
+  killedBy?: string;
+  killedByRole?: number;
 }
 /** GET /api/me/world (private). */
 export interface MeWorldDto {
@@ -461,6 +470,77 @@ export interface SoldLine {
   label?: string;
 }
 
+/**
+ * Death recap ("who killed you and with what"): a snapshot taken at the moment of death, never
+ * updated afterwards (no live position of anyone after death). Fog-safe: only what the dead player
+ * is entitled to — the killer's name and weapon are in the kill feed already; the distance only
+ * when the victim saw the killer at the time; the killer's HP only when the victim hit them within
+ * the window; other human attackers are never named.
+ */
+export const DEATH_RECAP = {
+  /** Damage taken in this window before the death is listed. */
+  WINDOW_MS: 10_000,
+  /** Ring buffer of recent hits kept per runtime. */
+  MAX_HITS: 32,
+  /** Source lines sent at most (biggest damage first; the rest fold into the last line). */
+  MAX_SOURCES: 4,
+  /** Meters per world px for the distance (the HUD convention: 40 px = 1 m). */
+  PX_PER_METER: 40,
+} as const;
+
+/**
+ * Who a recap source is. "killer" = the killer; "party" = another member of the killer's party;
+ * "raider" = another human (never named); "npc" = an NPC (named by role); "self" = your own grenade;
+ * "other" = the remaining sources folded together.
+ */
+export type RecapWho = "killer" | "party" | "raider" | "npc" | "self" | "other";
+
+/** One line of damage taken: per source and weapon, summed over the window. */
+export interface RecapSource {
+  who: RecapWho;
+  /** Display name: the killer's nickname / NPC name (role display key); "" for raider / self / other. */
+  name: string;
+  /** NPC_ROLE of an NPC source (0 otherwise). */
+  role: number;
+  /** KillWeapon id, or "" (unknown / several). */
+  weapon: string;
+  /** Weapon rarity 0–3; -1 for grenades and folded lines. */
+  rarity: number;
+  /** HP lost (after armor), rounded. */
+  dmg: number;
+  hits: number;
+}
+
+export interface DeathRecap {
+  killer: {
+    /** "human" (a player), "npc", "self" (own grenade, nobody to credit) or "none". */
+    kind: "human" | "npc" | "self" | "none";
+    /** Nickname of a human killer, NPC role display key ("Marauder", guard / boss name); "" otherwise. */
+    name: string;
+    /** NPC_ROLE of the killer (0 = human). */
+    role: number;
+    /** Boss kind of a boss killer. */
+    boss?: BossKind;
+    /** The killing weapon (KillWeapon) and its rarity (-1 for a grenade). */
+    weapon: string;
+    rarity: number;
+    /** Meters between you and the killer at the death; only when you saw the killer then. */
+    distM?: number;
+    /** The killer's HP at your death and their max HP; only when you hit them within the window. */
+    hp?: number;
+    hpMax?: number;
+    /** The killer entered with a party. */
+    party: boolean;
+    /** The killer is a guest (no account). */
+    guest?: boolean;
+  };
+  /** Damage taken in the last DEATH_RECAP.WINDOW_MS, biggest first (≤ MAX_SOURCES lines). */
+  sources: RecapSource[];
+  /** Total HP lost in the window. */
+  total: number;
+  windowMs: number;
+}
+
 /** S2C.OUTCOME, to one client: their personal result (extract / death / timeout). */
 export interface OutcomeMsg {
   matchId: string;
@@ -492,6 +572,8 @@ export interface OutcomeMsg {
   /** Level after this exit. */
   level?: number;
   levelUp?: boolean;
+  /** Death only: the recap card (absent for other exits and older servers). */
+  recap?: DeathRecap;
 }
 
 /** S2C.SETTLED, broadcast at the end: scoreboard only (no user ids, no items). v5: humans only. */

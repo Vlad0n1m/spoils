@@ -58,6 +58,38 @@ const OUTCOMES: Record<string, OutcomeMsg> = {
     lost: [settled("sniper", { uid: "s", rarity: 3, dur: 40 }), settled("armor_3", { uid: "a3", dur: 120, rarity: 2 })],
     dropped: [settled("shotgun", { uid: "sg", rarity: 1, dur: 64 }), settled("ammo_heavy", { qty: 14 }), settled("junk_coldwallet", { rarity: 3 })],
     credits: 0, sold: [],
+
+    recap: {
+      killer: { kind: "human", name: "Viper", role: 0, weapon: "rifle", rarity: 2, distM: 34, hp: 37, hpMax: 100, party: true },
+      sources: [
+        { who: "killer", name: "Viper", role: 0, weapon: "rifle", rarity: 2, dmg: 64, hits: 3 },
+        { who: "party", name: "", role: 0, weapon: "grenade", rarity: -1, dmg: 40, hits: 1 },
+        { who: "npc", name: "Marauder", role: 3, weapon: "pistol", rarity: 0, dmg: 12, hits: 2 },
+        { who: "other", name: "", role: 0, weapon: "", rarity: -1, dmg: 9, hits: 3 },
+      ],
+      total: 125, windowMs: 10_000,
+    },
+  },
+  "dead-npc": {
+    matchId: "m1", exit: "dead", killedBy: "Foreman", kills: 0, atMs: 21 * 60_000 + 5_000, guest: false,
+    extracted: [], lost: [], dropped: [], credits: 0, sold: [],
+    recap: {
+      killer: { kind: "npc", name: "Foreman", role: 1, boss: "foreman", weapon: "shotgun", rarity: 3, party: false },
+      sources: [
+        { who: "killer", name: "Foreman", role: 1, weapon: "shotgun", rarity: 3, dmg: 78, hits: 4 },
+        { who: "npc", name: "Elevator thug", role: 2, weapon: "smg", rarity: 1, dmg: 22, hits: 5 },
+      ],
+      total: 100, windowMs: 10_000,
+    },
+  },
+  "dead-guest": {
+    matchId: "m1", exit: "dead", killedBy: "Guest4821", kills: 0, atMs: 31 * 60_000, guest: true,
+    extracted: [], lost: [], dropped: [settled("ammo_light", { qty: 30 })], credits: 0, sold: [],
+    recap: {
+      killer: { kind: "human", name: "Guest4821", role: 0, weapon: "sniper", rarity: 0, party: false, guest: true },
+      sources: [{ who: "killer", name: "Guest4821", role: 0, weapon: "sniper", rarity: 0, dmg: 100, hits: 2 }],
+      total: 100, windowMs: 10_000,
+    },
   },
   timeout: {
     matchId: "m1", exit: "timeout", killedBy: "", kills: 0, atMs: 30 * 60_000, guest: false,
@@ -79,6 +111,11 @@ function InventoryBench() {
   }, []);
   const [client, setClient] = useState<InventoryClient | null>(null);
   const [outcomeKey, setOutcomeKey] = useState<string | null>(null);
+  // ?outcome=<key> opens that sample at once (screenshots of the outcome card).
+  useEffect(() => {
+    const k = new URLSearchParams(window.location.search).get("outcome");
+    if (k && OUTCOMES[k]) setOutcomeKey(k);
+  }, []);
   const [final, setFinal] = useState<FinalCredits | null>(null);
 
   useEffect(() => {

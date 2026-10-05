@@ -1178,6 +1178,10 @@ export class Match {
     }
     if (rt.touch) report.touch = true;
     if (rt.bossTrophies.size > 0) report.bossTrophies = [...rt.bossTrophies];
+    if (exit === "dead" && rt.killedBy) {
+      report.killedBy = rt.killedBy;
+      report.killedByRole = rt.recap?.killer.role ?? 0;
+    }
     rt.exitReport = report;
     this.exitReports.push(report);
 
@@ -1202,6 +1206,7 @@ export class Match {
       sold,
       guest: rt.guest,
     };
+    if (exit === "dead" && rt.recap) msg.recap = rt.recap;
     rt.outcome = msg;
     this.vision.clearRow(rt.rosterIndex);
     if (!rt.isNpc) {
@@ -1387,6 +1392,8 @@ function newRuntime(
     moveMult: 1,
     bossTrophies: new Set(),
     bossDamagers: null,
+    hits: null,
+    recap: null,
   };
 }
 
