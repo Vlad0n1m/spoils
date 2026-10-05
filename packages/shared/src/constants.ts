@@ -5,6 +5,9 @@
  * v2 numbers come from the design critique (scratchpad/design/critique.md) and its memos.
  */
 
+// 20 Hz keeps the match clock on whole 50 ms steps; the sim's timings (search reveal, extract channel,
+// sound repeats, throw cooldowns) are written against that. 30 Hz was tried on 05.10.2026: 13 sim tests
+// broke on the fractional 33.3 ms clock, so a faster tick needs its own pass (docs/SCALING.md §9).
 export const SERVER_TICK_HZ = 20;
 export const SERVER_TICK_MS = 1000 / SERVER_TICK_HZ;
 

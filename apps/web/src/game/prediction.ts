@@ -70,7 +70,7 @@ export interface PendingInput {
 }
 
 /**
- * The server acks at 20 Hz, so normally only a handful of inputs are pending. If acks stop
+ * The server acks every tick (SERVER_TICK_HZ), so normally only a handful of inputs are pending. If acks stop
  * (lag spike, dead player) keep ~2 s worth: older inputs can no longer matter because the
  * server has either applied or dropped them.
  */
@@ -457,7 +457,7 @@ export interface Snapshot {
   aim: number;
 }
 
-/** Keep this much history; interpolation only looks ~100 ms back. */
+/** Keep this much history; interpolation only looks two patches back. */
 const SNAPSHOT_HISTORY_MS = 1000;
 /** A jump this large between two snapshots is a teleport (spawn), not movement. */
 const TELEPORT_DIST = 300;

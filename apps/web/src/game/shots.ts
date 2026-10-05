@@ -1,7 +1,7 @@
 /**
  * Pure helpers for drawing other players' combat events (no Pixi, no DOM, unit-tested):
  * - where a shot really starts and how far each tracer may fly (the server's bullet rules);
- * - a small delay queue that plays remote events on the same ~100 ms-late timeline as remote bodies.
+ * - a small delay queue that plays remote events on the same INTERP_DELAY_MS-late timeline as remote bodies.
  */
 
 import { raycastSolids, type CollisionIndex, type ShotMsg } from "@extract/shared";
