@@ -29,6 +29,7 @@ import {
 import type { InvSnapshot, InventoryClient } from "@/game/inventory-client";
 import { useItemDrag, type DragSource, type DropTarget } from "@/hooks/use-item-drag";
 import { describeItem, fmtCr, quickTarget, recordStore } from "@/lib/items-ui";
+import { EDITION_UI } from "@/lib/edition";
 import { useTouchMode } from "@/components/use-touch-mode";
 import { InvSlot } from "./inv-slot";
 import { SearchPanel } from "./search-panel";
@@ -278,7 +279,7 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
           </div>
 
           <footer className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t-[3px] border-black/50 pt-3 short:mt-2 short:pt-1.5">
-            <span className="text-sm text-white/70" title="Auto-sale value of carried junk if you extract (before market multiplier)">
+            <span className="text-sm text-white/70" title={`Auto-sale value of carried junk if you extract (before ${EDITION_UI.market ? "market" : "the junker"} multiplier)`}>
               Junk value <span className="toon-text-thin ml-1 text-lg text-amber-300">{fmtCr(snap.carry.junkCr)}</span>
             </span>
             <span className="text-sm tabular-nums text-white/60">

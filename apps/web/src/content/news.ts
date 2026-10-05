@@ -6,8 +6,12 @@
  * The menu panel shows `tag`, `date`, `title` and `body` as plain text. The optional fields are for
  * /news only: `tags` (extra labels), `intro` (a lead paragraph) and `sections` (headed bullet
  * lists). Those page-only strings may use `**bold**` and `[label](/path)` links; keep `body` plain.
+ *
+ * The iDos edition (lib/edition.ts SOL_ECONOMY off, docs/IDOS_EDITION.md §3.5) gets the same posts
+ * without the wallet linking and treasury lines: it has no wallet, market or treasury.
  */
 import { WORLD } from "@extract/shared";
+import { solEconomyEnabled } from "../lib/edition";
 
 export interface NewsSection {
   heading: string;
@@ -36,7 +40,10 @@ const GROUND_MIN = Math.round(WORLD.GROUND_EXPIRE_MS / 60_000);
 const CORPSE_MIN = Math.round(WORLD.CORPSE_EXPIRE_MS / 60_000);
 const ENTRIES = WORLD.MAX_ENTRIES_PER_CYCLE;
 
-export const NEWS_POSTS: readonly NewsPost[] = [
+/** Every post for a build (`sol` = the main build's SOL economy). */
+export function newsPosts(sol: boolean = solEconomyEnabled()): readonly NewsPost[] {
+  const valuables = sol ? "Valuables go to the treasury" : "Valuables go back into the loot pool";
+  return [
   {
     id: "2026-10-06-alpha",
     date: "2026-10-06",
@@ -49,8 +56,10 @@ export const NEWS_POSTS: readonly NewsPost[] = [
       `Extract or die and you can drop in again on the same map with a fresh loadout, up to ${ENTRIES} times per map.`,
       "Bosses are now events, announced in the lobby before the map starts. A boss holds its spot until someone takes it down.",
       "Raids earn XP. Level up and climb the Level, Raider kills and NPC kills leaderboards.",
-      "New main menu, touch controls for phones, a crosshair, and wallet linking with Sign-In with Solana.",
-      `Loose items vanish after ${GROUND_MIN} minutes on the ground and bodies after ${CORPSE_MIN} minutes. Valuables go to the treasury.`,
+      sol
+        ? "New main menu, touch controls for phones, a crosshair, and wallet linking with Sign-In with Solana."
+        : "New main menu, touch controls for phones and a crosshair.",
+      `Loose items vanish after ${GROUND_MIN} minutes on the ground and bodies after ${CORPSE_MIN} minutes. ${valuables}.`,
     ],
     sections: [
       {
@@ -84,23 +93,31 @@ export const NEWS_POSTS: readonly NewsPost[] = [
           "**Crosshair.** On desktop the cursor over the game is a crosshair. On phones a reticle shows where your shots will land while you aim.",
         ],
       },
-      {
-        heading: "Wallet",
-        items: [
-          "**Sign-In with Solana.** Link a Solana wallet such as Phantom to your account from the account menu or the Wallet page. Your wallet signs a one-time message to prove it is yours.",
-          "**Identity only.** Linking does not move funds and never asks you to sign a transaction. You can unlink at any time.",
-        ],
-      },
+      ...(sol
+        ? [
+            {
+              heading: "Wallet",
+              items: [
+                "**Sign-In with Solana.** Link a Solana wallet such as Phantom to your account from the account menu or the Wallet page. Your wallet signs a one-time message to prove it is yours.",
+                "**Identity only.** Linking does not move funds and never asks you to sign a transaction. You can unlink at any time.",
+              ],
+            },
+          ]
+        : []),
       {
         heading: "Cleanup",
         items: [
           `**Ground loot.** Items left on the ground vanish after ${GROUND_MIN} minutes.`,
-          `**Bodies.** Bodies vanish with their contents after ${CORPSE_MIN} minutes. Valuables go to the treasury instead of disappearing.`,
+          `**Bodies.** Bodies vanish with their contents after ${CORPSE_MIN} minutes. ${valuables} instead of disappearing.`,
         ],
       },
     ],
   },
-];
+  ];
+}
+
+/** newsPosts() of this build. */
+export const NEWS_POSTS: readonly NewsPost[] = newsPosts();
 
 /** Id of the newest post, or null. */
 export const LATEST_POST_ID: string | null = NEWS_POSTS[0]?.id ?? null;

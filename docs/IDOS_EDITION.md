@@ -347,7 +347,12 @@ iDos не привязывает билет к UserID: тогда меняем `
 
 Тексты без SOL: правила (Info · Rules: блок «Credits» вместо «Two currencies»), Shop · Traders
 («Credits stay in the game…»), подсказка Shop, гейт склада, пустой склад, лендинг, меню аккаунта
-(«iDos Games account» вместо email-заглушки), aria-метка дока.
+(«iDos Games account» вместо email-заглушки), aria-метка дока. Дочищено 05.10: страница `/alpha` и
+строки альфы на лендинге, в регистрации и в Info (`content/alpha.ts`: «No real money…» вместо тестового
+рыночного баланса, без набора, кошелька и ссылки на Economy), патч-ноуты (`content/news.ts`: без блока
+Sign-In with Solana, «Valuables go back into the loot pool» вместо казны), правила Info («valuables go
+back to the lost pool»), ссылки «Economy» на `/news` и в правилах, пустой лоадаут («Buy gear from the
+traders» вместо «Buy a starter kit»), множитель хламщика в чеке рейда («junker ×» вместо «market ×»).
 
 Предметы казны в издании. В основной версии в казну (`items.state = 'treasury'`) уходят: налог 1%
 с входящей в потерянный пул стоимости (`enterPool` → `applyTreasuryTax`) и уники, исчезнувшие с

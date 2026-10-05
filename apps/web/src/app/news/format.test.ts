@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { LATEST_POST_ID, NEWS_POSTS } from "../../content/news";
+import { LATEST_POST_ID, NEWS_POSTS, newsPosts } from "../../content/news";
 import { fmtPostDate, parseInline, plainInline, postAnchor, postTags, sortNewestFirst } from "./format";
 
 describe("sortNewestFirst", () => {
@@ -91,5 +91,19 @@ describe("content/news.ts", () => {
   it("has no earnings promises", () => {
     const all = JSON.stringify(NEWS_POSTS).toLowerCase();
     for (const w of ["play-to-earn", "play to earn", "p2e", "profit", "earn money", "earn sol"]) assert.ok(!all.includes(w), w);
+  });
+  it("main build keeps the wallet and treasury lines", () => {
+    assert.deepEqual(NEWS_POSTS, newsPosts(true), "tests run as the main build");
+    const all = JSON.stringify(newsPosts(true));
+    assert.match(all, /Sign-In with Solana/);
+    assert.match(all, /Valuables go to the treasury/);
+  });
+  it("iDos edition: same posts without wallet, Solana or treasury lines", () => {
+    const main = newsPosts(true);
+    const ed = newsPosts(false);
+    assert.deepEqual(ed.map((p) => p.id), main.map((p) => p.id));
+    assert.doesNotMatch(JSON.stringify(ed), /wallet|solana|phantom|treasury|market|\bSOL\b/i);
+    assert.match(JSON.stringify(ed), /Valuables go back into the loot pool/);
+    for (const p of ed) for (const b of p.body) assert.equal(plainInline(b), b);
   });
 });

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { TopBar } from "@/components/top-bar";
 import { BRAND } from "@/lib/brand";
+import { EDITION_UI } from "@/lib/edition";
 import { SITE_URL } from "@/lib/site-url";
 import { NEWS_POSTS, type NewsPost } from "@/content/news";
 import { fmtPostDate, parseInline, postAnchor, postTags, sortNewestFirst } from "./format";
@@ -171,9 +172,11 @@ export default function NewsPage() {
           <Link href="/" className="hover:text-zooa-lime">
             {BRAND.name} home →
           </Link>
-          <Link href="/economy" className="hover:text-zooa-lime">
-            Economy →
-          </Link>
+          {EDITION_UI.economyLinks && (
+            <Link href="/economy" className="hover:text-zooa-lime">
+              Economy →
+            </Link>
+          )}
         </p>
       </main>
     </div>
