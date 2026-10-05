@@ -30,6 +30,10 @@ export function xpLineText(l: XpLine): string {
   }
 }
 
+/** XP lines listed before the rest fold into one "N more" line (the card never scrolls). */
+const XP_LINES = 6;
+const fmtSigned = (n: number) => `${n < 0 ? "−" : "+"}${fmtInt(Math.abs(n))}`;
+
 /** "2 raiders · 7 NPCs (boss 1)"; "No kills" when there were none. */
 export function killsText(k: LastRaidDto["kills"]): string {
   const parts: string[] = [];
@@ -68,14 +72,18 @@ export function LastRaidCard({ raid, onDismiss }: { raid: LastRaidDto; onDismiss
           <Stat label="Kills" value={String(raid.kills.players + raid.kills.npcs)} tone="text-white" />
         </div>
         <p className="font-body mt-3 text-sm text-white/80 short:mt-2">{killsText(raid.kills)}</p>
+        {raid.trophies && raid.trophies.length > 0 && (
+          <p className="font-body mt-2 text-sm font-bold text-amber-300">Boss trophy: {raid.trophies.join(", ")}</p>
+        )}
         {levelUp && (
           <p className="toon-text-thin mt-3 rounded-xl border-[3px] border-black bg-zooa-lime px-3 py-2 text-center text-lg tracking-wide text-black">
             Level {raid.level} reached!
           </p>
         )}
         {raid.xpLines.length > 0 && (
-          <ul className="font-body mt-3 max-h-40 short:hidden space-y-1.5 overflow-y-auto rounded-xl border-2 border-black/50 bg-black/25 p-3 text-sm">
-            {raid.xpLines.map((l, i) => (
+          // No inner scroll: the first lines, then one "N more" line with the rest of the XP.
+          <ul className="font-body mt-3 short:hidden space-y-1.5 rounded-xl border-2 border-black/50 bg-black/25 p-3 text-sm">
+            {raid.xpLines.slice(0, raid.xpLines.length > XP_LINES ? XP_LINES - 1 : XP_LINES).map((l, i) => (
               <li key={`${l.key}-${i}`} className="flex justify-between gap-3 leading-snug text-white/85">
                 <span className="min-w-0 truncate">{xpLineText(l)}</span>
                 <span className={clsx("shrink-0 tabular-nums font-semibold", l.xp < 0 ? "text-amber-300" : "text-white")}>
@@ -84,6 +92,14 @@ export function LastRaidCard({ raid, onDismiss }: { raid: LastRaidDto; onDismiss
                 </span>
               </li>
             ))}
+            {raid.xpLines.length > XP_LINES && (
+              <li className="flex justify-between gap-3 leading-snug text-white/70">
+                <span className="min-w-0 truncate">{raid.xpLines.length - XP_LINES + 1} more</span>
+                <span className="shrink-0 tabular-nums font-semibold text-white">
+                  {fmtSigned(raid.xpLines.slice(XP_LINES - 1).reduce((n, l) => n + l.xp, 0))} XP
+                </span>
+              </li>
+            )}
           </ul>
         )}
         <button type="button" onClick={onDismiss} autoFocus className="toon-btn mt-4 min-h-12 w-full text-lg tracking-wide short:mt-3">

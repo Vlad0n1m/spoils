@@ -104,9 +104,10 @@ export function MatchOutcomeOverlay({
         aria-hidden
       />
       {showContent && (
-        // m-auto instead of items-center: a receipt taller than the screen must scroll from its top.
-        <div className="relative flex min-h-0 flex-1 overflow-y-auto p-4 sm:p-8">
-          <div className="m-auto w-full max-w-xl animate-outcome-enter">
+        // Never a page scroll: the card is at most the screen's height; only its item list scrolls
+        // (with faded edges) when a big haul doesn't fit. Landscape: a wide two-column card.
+        <div className="relative flex min-h-0 flex-1 overflow-hidden p-4 sm:p-8 short:!p-2">
+          <div className={clsx("m-auto flex max-h-full w-full max-w-xl flex-col animate-outcome-enter", outcome && "land:max-w-5xl")}>
             {outcome ? (
               <ResultCard
                 outcome={outcome}
@@ -167,16 +168,66 @@ function ResultCard({
   );
 
   return (
-    // overflow-clip on short screens: unlike overflow-hidden it is no scroll container, so the sticky
-    // "Back to lobby" below sticks to the overlay's scroller.
-    <section className="toon-panel overflow-hidden bg-[#161b28]/95 p-0 [@media(max-height:640px)]:overflow-clip" aria-live="polite">
-      <div className={clsx("h-3 border-b-[3px] border-black", style.band)} aria-hidden />
-      <div className="p-6 sm:p-8">
-        <p className="text-xs uppercase tracking-[0.25em] text-white/50">Raid result</p>
-        <h2 className={clsx("toon-text mt-2 text-5xl tracking-wide sm:text-6xl", style.color)}>{style.title}</h2>
-        <p className="font-body mt-3 text-lg font-semibold leading-snug text-white/85">{subtitle(outcome)}</p>
+    // Landscape: result, stats and the way back on the left, the loot and XP on the right. The right
+    // side is the screen's only scroll area, and only when a big haul is taller than the screen.
+    <section className="toon-panel flex max-h-full min-h-0 flex-col overflow-hidden bg-[#161b28]/95 p-0" aria-live="polite">
+      <div className={clsx("h-3 shrink-0 border-b-[3px] border-black", style.band)} aria-hidden />
+      <div className="flex min-h-0 flex-col p-6 sm:p-8 land:grid land:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] land:grid-rows-[minmax(0,1fr)] land:gap-8 short:!gap-4 short:!p-4">
+        <div className="contents land:flex land:min-h-0 land:flex-col">
+        <p className="shrink-0 text-xs uppercase tracking-[0.25em] text-white/50">Raid result</p>
+        <h2 className={clsx("toon-text mt-2 shrink-0 text-5xl tracking-wide sm:text-6xl short:!text-4xl", style.color)}>{style.title}</h2>
+        <p className="font-body mt-3 shrink-0 text-lg font-semibold leading-snug text-white/85 short:mt-1.5 short:text-base">{subtitle(outcome)}</p>
 
-        <div className="mt-6 space-y-5">
+
+        <dl
+          className={clsx(
+            "mt-6 grid shrink-0 gap-2 border-t-[3px] border-black/50 pt-5 text-center short:mt-3 short:pt-3",
+            killTally ? "grid-cols-2 gap-y-4 sm:grid-cols-4" : "grid-cols-3",
+          )}
+        >
+          {killTally ? (
+            <>
+              <Stat label={L.playersKilled} value={String(killTally.players)} />
+              <Stat
+                label={L.npcsKilled}
+                value={npcKillsLine(killTally)}
+                title="Marauders, guards and bosses you killed this raid"
+              />
+            </>
+          ) : (
+            <Stat label="Kills" value={String(outcome.kills)} />
+          )}
+          {enteredAtMs > 0 ? (
+            <Stat
+              label="On the map"
+              value={fmtClock(Math.max(0, outcome.atMs - enteredAtMs))}
+              title="Time from your drop-in to the end of this run"
+            />
+          ) : (
+            <Stat label={outcome.exit === "extract" ? "Out at" : "Survived"} value={fmtClock(outcome.atMs)} />
+          )}
+          <Stat
+            label="Extracted"
+            value={settlement ? `${raidersOut}/${humans.length}` : "…"}
+            title={settlement ? `${raidersOut} of ${humans.length} raiders got out` : "The map is still running"}
+          />
+        </dl>
+        {npc && (
+          <p className="font-body mt-3 shrink-0 text-center text-xs leading-relaxed text-white/50">
+            {npcRaidLine(npc)}
+          </p>
+        )}
+
+        {/* Always on screen: under the list in portrait, at the bottom of the left column in landscape. */}
+        <button
+          type="button"
+          onClick={onContinue}
+          className="toon-btn order-last mt-6 min-h-14 w-full shrink-0 text-xl tracking-wide land:order-none land:mt-auto short:min-h-12"
+        >
+          Back to lobby
+        </button>
+        </div>
+        <div className="scroll-fade mt-6 min-h-0 flex-1 space-y-5 overflow-y-auto py-1 land:mt-0 short:space-y-3">
           {outcome.exit === "extract" && (
             <>
               <ItemStrip
@@ -224,54 +275,6 @@ function ResultCard({
           )}
           <XpBlock outcome={outcome} enteredAtMs={enteredAtMs} />
         </div>
-
-        <dl
-          className={clsx(
-            "mt-6 grid gap-2 border-t-[3px] border-black/50 pt-5 text-center",
-            killTally ? "grid-cols-2 gap-y-4 sm:grid-cols-4" : "grid-cols-3",
-          )}
-        >
-          {killTally ? (
-            <>
-              <Stat label={L.playersKilled} value={String(killTally.players)} />
-              <Stat
-                label={L.npcsKilled}
-                value={npcKillsLine(killTally)}
-                title="Marauders, guards and bosses you killed this raid"
-              />
-            </>
-          ) : (
-            <Stat label="Kills" value={String(outcome.kills)} />
-          )}
-          {enteredAtMs > 0 ? (
-            <Stat
-              label="On the map"
-              value={fmtClock(Math.max(0, outcome.atMs - enteredAtMs))}
-              title="Time from your drop-in to the end of this run"
-            />
-          ) : (
-            <Stat label={outcome.exit === "extract" ? "Out at" : "Survived"} value={fmtClock(outcome.atMs)} />
-          )}
-          <Stat
-            label="Extracted"
-            value={settlement ? `${raidersOut}/${humans.length}` : "…"}
-            title={settlement ? `${raidersOut} of ${humans.length} raiders got out` : "The map is still running"}
-          />
-        </dl>
-        {npc && (
-          <p className="font-body mt-3 text-center text-xs leading-relaxed text-white/50">
-            {npcRaidLine(npc)}
-          </p>
-        )}
-
-        {/* Short (landscape phone) screens: the receipt scrolls, the way back stays on screen. */}
-        <button
-          type="button"
-          onClick={onContinue}
-          className="toon-btn mt-8 min-h-14 w-full text-xl tracking-wide [@media(max-height:640px)]:sticky [@media(max-height:640px)]:bottom-0 [@media(max-height:640px)]:z-10"
-        >
-          Back to lobby
-        </button>
       </div>
     </section>
   );

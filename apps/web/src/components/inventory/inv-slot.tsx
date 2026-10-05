@@ -71,8 +71,9 @@ export interface InvSlotProps {
 
 const SIZE = {
   sm: { box: "h-12 w-12 rounded-lg", img: "h-9 w-9", text: "text-[0.6rem]" },
-  md: { box: "h-[4.25rem] w-[4.25rem] rounded-xl", img: "h-12 w-12", text: "text-[0.7rem]" },
-  lg: { box: "h-20 w-20 rounded-2xl", img: "h-16 w-16", text: "text-xs" },
+  // Landscape phones (short / tiny): smaller tiles, so the raid inventory and the loot fit the height.
+  md: { box: "h-[4.25rem] w-[4.25rem] rounded-xl short:h-12 short:w-12 tiny:h-11 tiny:w-11", img: "h-12 w-12 short:h-9 short:w-9 tiny:h-8 tiny:w-8", text: "text-[0.7rem]" },
+  lg: { box: "h-20 w-20 rounded-2xl short:h-14 short:w-14 tiny:h-[3.25rem] tiny:w-[3.25rem]", img: "h-16 w-16 short:h-11 short:w-11 tiny:h-10 tiny:w-10", text: "text-xs" },
 } as const;
 
 export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
