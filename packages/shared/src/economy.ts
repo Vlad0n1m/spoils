@@ -1200,6 +1200,10 @@ export const XP = {
   CONTAINER_MAX: 30,
   NPC: 20,
   GUARD: 40,
+  /** In-raid objectives (objectives.ts): a room unlocked, a safe cracked, a hidden cache opened. */
+  OBJECTIVE: 30,
+  /** Objectives that pay per entry (the rest count 0). */
+  OBJECTIVE_MAX: 5,
   BOSS: 400,
   PVP: 80,
   PVP_PAIR_PER_DAY: 2,
@@ -1226,7 +1230,7 @@ export const XP = {
  * "quest" = daily tasks completed by this exit (quests.ts): added by the web after xpForExit, outside
  * the daily soft cap (xp_grind) and the first-extract bonus; qty = tasks completed.
  */
-export type XpKey = "extract" | "haul" | "containers" | "npc" | "guard" | "boss" | "pvp" | "first_extract" | "daily_cap" | "quest";
+export type XpKey = "extract" | "haul" | "containers" | "objectives" | "npc" | "guard" | "boss" | "pvp" | "first_extract" | "daily_cap" | "quest";
 /** One line of the XP receipt: `qty` units of `key` worth `xp` (daily_cap is negative). */
 export interface XpLine {
   key: XpKey;
@@ -1237,6 +1241,7 @@ export const XP_LINE_LABEL: Readonly<Record<XpKey, string>> = {
   extract: "Extracted",
   haul: "Haul",
   containers: "Containers searched",
+  objectives: "Objectives",
   npc: "Marauders",
   guard: "Guards",
   boss: "Boss",
@@ -1255,6 +1260,8 @@ export interface XpInput {
   containers: number;
   /** RaidStats.hotContainers: of those, searched inside an active hot zone (× HOT_ZONE_XP_MULT). Default 0. */
   hotContainers?: number;
+  /** RaidStats.objectives: rooms unlocked, safes cracked, caches opened (XP.OBJECTIVE each, ≤ OBJECTIVE_MAX). Default 0. */
+  objectives?: number;
   /** npcKillCount(report) − guardKills. */
   marauders: number;
   guards: number;
@@ -1273,8 +1280,9 @@ const cnt = (v: number): number => (Number.isFinite(v) ? Math.max(0, Math.floor(
  *   extract = qualifies ? EXTRACT_BASE + EXTRACT_PER_MIN × min(EXTRACT_MAX_MIN, floor(onMapMs / 60000)) : 0
  *   haul    = qualifies ? min(HAUL_MAX, floor(haulCr / HAUL_CR_PER_XP)) : 0
  *   containers = CONTAINER × min(CONTAINER_MAX, containers); npc = NPC × marauders; guard = GUARD × guards
- *   (exit "mia": containers = 0 — D9, a wiped player gets the kill lines only)
- *   time = extract + haul; act = containers + npc + guard; raw = time + act
+ *   objectives = OBJECTIVE × min(OBJECTIVE_MAX, objectives)
+ *   (exit "mia": containers = objectives = 0 — D9, a wiped player gets the kill lines only)
+ *   time = extract + haul; act = containers + objectives + npc + guard; raw = time + act
  *   room = max(0, DAILY_SOFT_CAP − grindToday); the time lines fill the room first (the split that
  *   pays the player most): timeIn = min(time, room), actIn = min(act, room − timeIn)
  *   grind = timeIn + actIn + floor((time − timeIn) × DAILY_TIME_OVER_MULT) + floor((act − actIn) × DAILY_OVER_MULT)
@@ -1294,11 +1302,13 @@ export function xpForExit(i: XpInput): { total: number; grind: number; lines: Xp
   // WORLD v6 hot zones: the hot ones among the counted containers pay × HOT_ZONE_XP_MULT.
   const nHot = Math.min(nCont, cnt(i.hotContainers ?? 0));
   const containers = XP.CONTAINER * nCont + Math.floor(XP.CONTAINER * (HOT_ZONE_XP_MULT - 1) * nHot);
+  const nObj = i.exit === "mia" ? 0 : Math.min(XP.OBJECTIVE_MAX, cnt(i.objectives ?? 0));
+  const objectives = XP.OBJECTIVE * nObj;
   const nNpc = cnt(i.marauders), nGuard = cnt(i.guards), nBoss = cnt(i.bosses), nPvp = cnt(i.rankedPvp);
   const npc = XP.NPC * nNpc;
   const guard = XP.GUARD * nGuard;
   const time = extract + haul;
-  const act = containers + npc + guard;
+  const act = containers + objectives + npc + guard;
   const raw = time + act;
   const room = Math.max(0, XP.DAILY_SOFT_CAP - cnt(i.grindToday));
   const timeIn = Math.min(time, room);
@@ -1316,6 +1326,7 @@ export function xpForExit(i: XpInput): { total: number; grind: number; lines: Xp
   push("extract", minutes, extract);
   push("haul", haulCr, haul);
   push("containers", nCont, containers);
+  push("objectives", nObj, objectives);
   push("npc", nNpc, npc);
   push("guard", nGuard, guard);
   push("daily_cap", 1, grind - raw);
@@ -1326,7 +1337,7 @@ export function xpForExit(i: XpInput): { total: number; grind: number; lines: Xp
 }
 
 /** The XP lines a raid can grow while the player is on the map (the server counts them as they happen). */
-export type RaidXpKey = "containers" | "npc" | "guard" | "boss" | "pvp";
+export type RaidXpKey = "containers" | "objectives" | "npc" | "guard" | "boss" | "pvp";
 
 /**
  * In-raid XP estimate of one counted action (EventsMsg.xp, SelfState.raidXp): the xpForExit term it
@@ -1339,6 +1350,8 @@ export function raidXpGain(key: RaidXpKey, count: number, hot = false): number {
   switch (key) {
     case "containers":
       return count >= 1 && count <= XP.CONTAINER_MAX ? XP.CONTAINER + (hot ? Math.floor(XP.CONTAINER * (HOT_ZONE_XP_MULT - 1) + 1e-9) : 0) : 0;
+    case "objectives":
+      return count >= 1 && count <= XP.OBJECTIVE_MAX ? XP.OBJECTIVE : 0;
     case "npc":
       return XP.NPC;
     case "guard":

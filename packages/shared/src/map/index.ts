@@ -4,3 +4,4 @@ export * from "./query.js";
 export * from "./generate.js";
 export * from "./placement.js";
 export * from "./legacy.js";
+export * from "./locks.js";

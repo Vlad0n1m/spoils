@@ -21,3 +21,4 @@ export * from "./quests.js";
 export * from "./replay.js";
 export * from "./pass.js";
 export * from "./world-events.js";
+export * from "./objectives.js";

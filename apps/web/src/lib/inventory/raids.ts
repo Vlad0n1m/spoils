@@ -389,6 +389,7 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
         haulCr,
         containers: Number(report.stats?.containersSearched ?? 0),
         hotContainers: Number(report.stats?.hotContainers ?? 0),
+        objectives: Number(report.stats?.objectives ?? 0),
         marauders: npcKills - guardKills,
         guards: guardKills,
         bosses: bossKills,

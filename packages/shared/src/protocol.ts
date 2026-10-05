@@ -314,6 +314,24 @@ export interface EventsMsg {
   fight?: number[];
   /** Boss fight beats (BOSS_FIGHT) for the humans in the boss's arena: no position, no HP. */
   boss?: BossEvMsg[];
+  /** In-raid objectives (objectives.ts): personal channel / result notices. */
+  obj?: ObjMsg[];
+}
+
+/**
+ * In-raid objective notice (objectives.ts), personal unless noted:
+ * - "locked": F at a locked gate without its key (i = lock id) → "Requires: <key>";
+ * - "unlock" / "crack": a channel started (i = lock id / container index, at = match clock it ends);
+ * - "stop": the running channel broke (damage, moved, died …);
+ * - "unlocked": gate i is open now (to the unlocker, those who see them, and humans that come near
+ *   the gate before its public BattleState.lockState flag catches up);
+ * - "cracked": safe i is cracked (to the cracker);
+ * - "found": hidden cache i (1-based) is within sight for the first time (to the finder only).
+ */
+export interface ObjMsg {
+  e: "locked" | "unlock" | "crack" | "stop" | "unlocked" | "cracked" | "found";
+  i: number;
+  at?: number;
 }
 
 /** A boss reached phase 2 ("phase2") or radioed for reinforcements ("call"). */

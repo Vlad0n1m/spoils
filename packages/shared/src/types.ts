@@ -103,6 +103,11 @@ export interface RaidStats {
    * their container XP pays × HOT.XP_MULT. Optional for older servers (then 0).
    */
   hotContainers?: number;
+  /**
+   * In-raid objectives done this entry (objectives.ts): rooms unlocked, safes cracked, hidden caches
+   * opened; XP.OBJECTIVE each up to XP.OBJECTIVE_MAX. Optional for older servers (then 0).
+   */
+  objectives?: number;
 }
 
 /** Sent once per human as soon as they leave the map. */
