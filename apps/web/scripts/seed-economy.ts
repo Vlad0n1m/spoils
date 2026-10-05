@@ -1,5 +1,6 @@
 /**
- * Seeds the demo economy: ≈700 lost-pool items + 20 NPC market listings (idempotent).
+ * Seeds the demo economy: ≈700 lost-pool items + 20 NPC market listings (idempotent). With IDOS_BUILD=1
+ * (the iDos edition, no market) the default is 0 listings.
  *   apps/game-server/node_modules/.bin/tsx apps/web/scripts/seed-economy.ts [--force] [--pool=700] [--listings=20] [--seed=1]
  * DATABASE_URL comes from the environment, else the repo-root / apps/web .env files (like drizzle.config.ts).
  */
@@ -11,6 +12,7 @@ import { Pool } from "pg";
 import { mulberry32 } from "@extract/shared";
 import * as schema from "../src/db/schema";
 import { seedEconomy } from "../src/lib/economy/seed";
+import { isIdosBuildEnv } from "../src/lib/edition";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.resolve(here, "..");
@@ -33,7 +35,7 @@ const pool = new Pool({ connectionString: url });
 try {
   const res = await seedEconomy(drizzle(pool, { schema }), {
     poolItems: Number(arg("pool") ?? 700),
-    listings: Number(arg("listings") ?? 20),
+    listings: Number(arg("listings") ?? (isIdosBuildEnv(process.env) ? 0 : 20)),
     rng: mulberry32(Number(arg("seed") ?? Date.now() % 2 ** 32)),
     force: process.argv.includes("--force"),
   });

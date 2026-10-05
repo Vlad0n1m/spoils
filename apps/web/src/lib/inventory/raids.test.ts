@@ -44,7 +44,7 @@ import {
   users,
 } from "../../db/schema";
 import { PARAM, getNumberParam, setParam } from "../economy/params";
-import { TIER_SCORE_SQL } from "../economy/pool";
+import { TIER_SCORE_SQL, enterPool, expireToTreasury } from "../economy/pool";
 import { runEconomyDaily } from "../economy/daily";
 import { addStack } from "./transition";
 import { lockLoadout, unlockLoadout, saveDraft } from "./loadout";
@@ -676,6 +676,47 @@ describe("raid end and conservation", () => {
     assert.ok(states.includes("treasury"));
     const ev = await db.select().from(itemEvents).where(eq(itemEvents.reason, "tax"));
     assert.ok(ev.length >= 1);
+  });
+
+  test("iDos edition (no treasury): the 1% tax step is skipped, every entering item stays in the lost pool", async () => {
+    await setParam(db, PARAM.TAX_ACC, 10_000);
+    const p = await lockedPlayer();
+    const { e } = await enterNew(p.userId, p.loadoutId);
+    const r = await db.transaction((tx) =>
+      enterPool(tx, e.matchId, [p.rifle, p.armor, p.bp].map((id) => ({ id, broke: false, reason: "mia" })), false),
+    );
+    assert.deepEqual(r.taxed, []);
+    assert.equal(r.pooled.length + r.destroyed.length, 3);
+    const states = await Promise.all([p.rifle, p.armor, p.bp].map(async (id) => (await item(id)).state));
+    assert.ok(states.every((st) => st === "lost_pool" || st === "destroyed"), states.join(","));
+    assert.equal((await db.select().from(itemEvents).where(eq(itemEvents.reason, "tax"))).length, 0);
+    assert.equal(await taxAcc(), 10_000, "accumulator untouched");
+  });
+
+  test("iDos edition (no treasury): A6 expiry sends player uniques back to the lost pool, no wear; bound / worn out are destroyed", async () => {
+    const p = await lockedPlayer();
+    const { e } = await enterNew(p.userId, p.loadoutId);
+    await db.update(items).set({ bound: true }).where(eq(items.id, p.bp));
+    const r = await db.transaction((tx) =>
+      expireToTreasury(
+        tx,
+        e.matchId,
+        [
+          { id: p.rifle, reportedPct: 70 },
+          { id: p.armor, reportedPct: 0 },
+          { id: p.bp },
+        ],
+        false,
+      ),
+    );
+    assert.deepEqual([r.treasury, r.pooled, r.destroyed.sort()], [[], [p.rifle], [p.armor, p.bp].sort()]);
+    const rifle = await item(p.rifle);
+    assert.deepEqual([rifle.state, rifle.ownerId, rifle.matchId, rifle.durability], ["lost_pool", null, null, 70]);
+    const ev = (await events(p.rifle)).at(-1)!;
+    assert.deepEqual([ev.reason, ev.refId, ev.toState], ["expire", e.matchId, "lost_pool"]);
+    assert.equal((await item(p.armor)).state, "destroyed");
+    assert.equal((await item(p.bp)).state, "destroyed");
+    assert.equal((await db.execute<{ n: number }>(sql`select count(*)::int as n from items where state = 'treasury'`)).rows[0]!.n, 0);
   });
 
   test("boss bag items: unlooted return to the pool with no wear; the human who kills the boss keeps what he extracts", async () => {

@@ -11,6 +11,7 @@ import {
 import { itemEvents, items, listings, type NewItem } from "../../db/schema";
 import type { Db } from "../inventory/db";
 import { PARAM, setParam } from "./params";
+import { SOL_ECONOMY } from "../edition";
 
 /**
  * NPC reference prices in market minor units (balance_cents) at 100 % durability. Placeholders
@@ -75,13 +76,14 @@ export interface SeedResult {
  * Demo seed (critique "Live vs demo economy mode"): a starter-kit lost pool (≈700 items, so
  * raids/enter has something to release on day 1) and NPC treasury listings (seller NULL) so the
  * market and /economy are not empty. Idempotent through economy_params.seeded_at unless `force`.
+ * The iDos edition has no market (docs/IDOS_EDITION.md §3.5): no treasury listings unless asked for.
  */
 export async function seedEconomy(
   db: Db,
   opts: { poolItems?: number; listings?: number; rng: Rng; force?: boolean; now?: Date },
 ): Promise<SeedResult> {
   const nPool = opts.poolItems ?? 700;
-  const nList = opts.listings ?? 20;
+  const nList = opts.listings ?? (SOL_ECONOMY ? 20 : 0);
   const now = opts.now ?? new Date();
   return db.transaction(async (tx) => {
     // Serialize concurrent seeders on the params row.

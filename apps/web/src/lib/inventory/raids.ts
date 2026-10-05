@@ -592,7 +592,7 @@ export interface EndResult {
   skipped: string[];
   /** WORLD v6: active entries the report did not list (never materialized): voided, gear back. */
   voidedEntries: string[];
-  /** A6: uniques that expired on the map and went to the treasury. */
+  /** A6: uniques that expired on the map and went to the treasury (0 in the iDos edition: they go to the pool, counted in `pooled`). */
   treasury: number;
 }
 
@@ -632,8 +632,8 @@ async function voidEntryTx(
  * POST /api/raids/end (WORLD v6 wipe; running rows of pre-v6 matches settle the same way). Idempotent on raids.status:
  * 1. WORLD v6: active entries not in `report.entries` never materialized → voided first (gear back,
  *    allocations to the pool untaxed).
- * 2. A6 expiry: `expired` (player corpse / ground uniques) → treasury, no wear, no tax step (reason
- *    expire, ref matchId); `expiredToPool` (NPC-corpse pool items) → lost pool untaxed.
+ * 2. A6 expiry: `expired` (player corpse / ground uniques) → treasury (lost pool in the iDos edition),
+ *    no wear, no tax step (reason expire, ref matchId); `expiredToPool` (NPC-corpse pool items) → lost pool untaxed.
  * 3. leftOnMap uniques → pool with no wear (reason left); pool allocations of this match re-enter
  *    untaxed (D20). Then a defensive sweep of anything still in_raid (logged), taxed likewise.
  * 4. Listed entries still active (no exit report: an anomaly) → voided so the one-active index frees.
@@ -775,7 +775,7 @@ export async function applyEnd(db: Db, report: MatchEndReport, now = new Date())
     await enqueueMatchSettled(tx, report, raid.mode, now);
     return {
       status: "applied",
-      pooled: left.pooled.length + botLost.pooled.length + sweep.pooled.length + expPool.pooled.length,
+      pooled: left.pooled.length + botLost.pooled.length + sweep.pooled.length + expPool.pooled.length + exp.pooled.length,
       destroyed:
         left.destroyed.length + botLost.destroyed.length + botDestroyed.length + sweep.destroyed.length + expPool.destroyed.length + exp.destroyed.length,
       swept: rest.length,

@@ -27,6 +27,7 @@ import type { Tx } from "../inventory/db";
 import { applyMove, applyMoves, lockItem, lockItems, nextOf, type LockedItem, type PlannedMove } from "../inventory/transition";
 import { PARAM, getNumberParam, lockNumberParam, setParam } from "./params";
 import { itemRefValueCr, toRaidDur } from "./value";
+import { SOL_ECONOMY } from "../edition";
 
 // ---------------------------------------------------------------- pool entry
 
@@ -62,8 +63,15 @@ export interface PoolEntryResult {
  * on the value that entered: the accumulator in economy_params takes whole items into `treasury`
  * once it covers them. Caller supplies the transaction; every move is guarded by
  * state = in_raid AND match_id = matchId, so a replay finds nothing to move.
+ * `treasury` false (the iDos edition, docs/IDOS_EDITION.md §3.5: no market sells treasury lots there)
+ * skips the tax step: every entering item stays in the lost pool and the accumulator is not touched.
  */
-export async function enterPool(tx: Tx, matchId: string, cands: readonly PoolCandidate[]): Promise<PoolEntryResult> {
+export async function enterPool(
+  tx: Tx,
+  matchId: string,
+  cands: readonly PoolCandidate[],
+  treasury: boolean = SOL_ECONOMY,
+): Promise<PoolEntryResult> {
   const out: PoolEntryResult = { pooled: [], destroyed: [], taxed: [], skipped: [] };
   const entering: Array<{ uid: string; value: number }> = [];
   // Set-based (docs/DB_REVIEW.md): every candidate is locked in one statement and the moves are
@@ -90,7 +98,7 @@ export async function enterPool(tx: Tx, matchId: string, cands: readonly PoolCan
     }
   }
   await applyMoves(tx, moves);
-  if (entering.length > 0) out.taxed = await applyTreasuryTax(tx, matchId, entering);
+  if (treasury && entering.length > 0) out.taxed = await applyTreasuryTax(tx, matchId, entering);
   return out;
 }
 
@@ -144,13 +152,17 @@ export interface ExpireCandidate {
  * player). Guarded like enterPool (in_raid in `matchId`); journal reason `expire`, ref = matchId.
  * A bound item never reaches the market: it is destroyed instead (as poolEntry would). Worn-out
  * items (0 %) are destroyed too.
+ * `treasury` false (the iDos edition, docs/IDOS_EDITION.md §3.5): there is no market to sell treasury
+ * lots, so the same items go back to the lost pool instead (still no wear, no tax, reason `expire`);
+ * bound and worn-out items are destroyed as above, which is also what the pool rules would do.
  */
 export async function expireToTreasury(
   tx: Tx,
   matchId: string,
   cands: readonly ExpireCandidate[],
-): Promise<{ treasury: string[]; destroyed: string[]; skipped: string[] }> {
-  const out = { treasury: [] as string[], destroyed: [] as string[], skipped: [] as string[] };
+  treasury: boolean = SOL_ECONOMY,
+): Promise<{ treasury: string[]; pooled: string[]; destroyed: string[]; skipped: string[] }> {
+  const out = { treasury: [] as string[], pooled: [] as string[], destroyed: [] as string[], skipped: [] as string[] };
   // Set-based like enterPool: one lock statement, one batch of moves.
   const rows = await lockItems(tx, cands.map((c) => c.id));
   const moves: PlannedMove[] = [];
@@ -171,12 +183,13 @@ export async function expireToTreasury(
           }
         : {
             it,
-            patch: { state: "treasury", ownerId: null, matchId: null, loadoutId: null, durability: dur },
+            patch: { state: treasury ? "treasury" : "lost_pool", ownerId: null, matchId: null, loadoutId: null, durability: dur },
             ev: { reason: "expire", refId: matchId },
           };
     rows.set(it.id, nextOf(it, move.patch));
     moves.push(move);
     if (move.patch.state === "destroyed") out.destroyed.push(it.id);
+    else if (move.patch.state === "lost_pool") out.pooled.push(it.id);
     else out.treasury.push(it.id);
   }
   await applyMoves(tx, moves);
