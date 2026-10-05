@@ -286,6 +286,15 @@ describe("buildHud", () => {
     self.searching = "c0";
     assert.equal(buildHud(args).interactHint, null);
   });
+
+  it("replaces the F hint with the running crack / unlock channel", () => {
+    const { state, map } = battle();
+    state.items.set("x", Object.assign(new GroundItem(), { id: "x", def: "rifle", x: 1010, y: 1000 }));
+    const args = { state, sessionId: "me", selfKey: "p3", selfPos: { x: 1000, y: 1000 }, clockMs: 0, killFeed: [], pingMs: null, map };
+    assert.equal(buildHud({ ...args, channel: "crack" }).interactHint, "Cracking… (move or get hit to stop)");
+    assert.equal(buildHud({ ...args, channel: "unlock" }).interactHint, "Unlocking… (move or get hit to stop)");
+    assert.match(buildHud({ ...args, channel: null }).interactHint ?? "", /pick up/);
+  });
 });
 
 describe("extractAllowed", () => {

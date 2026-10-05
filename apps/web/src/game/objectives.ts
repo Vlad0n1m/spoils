@@ -92,6 +92,12 @@ class ObjectivesSystem implements GameSystem {
   private readonly gfx = new Graphics();
   private readonly top = new Container();
   private readonly topGfx = new Graphics();
+  /**
+   * The own channel bar and its tag: screen layer (above the fog / darkness pass, which would dim
+   * a bar over a target inside a building), with a world transform set every frame.
+   */
+  private readonly lit = new Container();
+  private readonly litGfx = new Graphics();
   private readonly tags: Array<{ root: Container; icon: Sprite; text: Text }> = [];
   private readonly toast = new EventToast();
   /** Locks this client knows are open before the public flag (ObjMsg "unlocked"). */
@@ -118,10 +124,12 @@ class ObjectivesSystem implements GameSystem {
     }
     this.top.addChild(this.topGfx);
     this.top.eventMode = "none";
+    this.lit.addChild(this.litGfx);
+    this.lit.eventMode = "none";
     // worldFx (above building floors and walls, under canopies): the gates sit in wall gaps.
     ctx.layers.worldFx.addChild(this.gfx);
     ctx.layers.worldTop.addChild(this.top);
-    ctx.layers.screen.addChild(this.toast.root);
+    ctx.layers.screen.addChild(this.lit, this.toast.root);
     const cam = ctx.camera();
     this.resize(cam.width, cam.height);
     this.built = true;
@@ -182,6 +190,7 @@ class ObjectivesSystem implements GameSystem {
       this.eng?.play("dry_fire", { bus: "ui", gain: 0.35 });
     }
     if (this.channel && clock > this.channel.until + 1500) this.channel = null;
+    v.channel = this.channel && clock < this.channel.until ? this.channel.kind : null;
     this.toast.frame(now);
   }
 
@@ -221,11 +230,16 @@ class ObjectivesSystem implements GameSystem {
   private draw(ctx: GameContext, map: MapData, on: boolean, containerState: ArrayLike<number>, lockState: ArrayLike<number> | undefined, clock: number) {
     const g = this.gfx;
     const t = this.topGfx;
+    const b = this.litGfx;
     g.clear();
     t.clear();
+    b.clear();
     for (const tag of this.tags) tag.root.visible = false;
     if (!on) return;
     const cam = ctx.camera();
+    const o = ctx.toScreen(0, 0);
+    this.lit.position.set(o.x, o.y);
+    this.lit.scale.set(cam.zoom);
     const halfW = cam.width / (2 * cam.zoom) + 300;
     const halfH = cam.height / (2 * cam.zoom) + 300;
     const near = (x: number, y: number) => Math.abs(x - cam.x) < halfW && Math.abs(y - cam.y) < halfH;
@@ -266,15 +280,15 @@ class ObjectivesSystem implements GameSystem {
       const at = ch.kind === "unlock" ? (this.locks[ch.i] ? gateCentre(this.locks[ch.i]!) : null) : map.containers[ch.i] ?? null;
       if (at) {
         const w = 120, x = at.x - w / 2, y = at.y - 92;
-        t.roundRect(x - 3, y - 3, w + 6, 16, 6).fill({ color: 0x0c0c0c, alpha: 0.75 });
-        t.roundRect(x, y, w * p, 10, 4).fill({ color: ch.kind === "crack" ? 0xffd27a : 0x9dffa8 });
-        this.tag(tagN++, at.x, y - 8, ch.kind === "crack" ? "CRACKING — hold still" : "UNLOCKING", ch.kind === "crack" ? 0xffd27a : 0x9dffa8, 0);
+        b.roundRect(x - 3, y - 3, w + 6, 16, 6).fill({ color: 0x0c0c0c, alpha: 0.75 });
+        b.roundRect(x, y, w * p, 10, 4).fill({ color: ch.kind === "crack" ? 0xffd27a : 0x9dffa8 });
+        this.tag(tagN++, at.x, y - 8, ch.kind === "crack" ? "CRACKING — hold still" : "UNLOCKING", ch.kind === "crack" ? 0xffd27a : 0x9dffa8, 0, this.lit);
       }
     }
   }
 
   /** A world-space tag (key icon + text), anchored bottom-centre at (x, y). */
-  private tag(i: number, x: number, y: number, text: string, color: number, tier: number) {
+  private tag(i: number, x: number, y: number, text: string, color: number, tier: number, parent: Container = this.top) {
     while (this.tags.length <= i) {
       const root = new Container();
       const icon = new Sprite(Texture.EMPTY);
@@ -287,6 +301,7 @@ class ObjectivesSystem implements GameSystem {
       this.tags.push({ root, icon, text: t });
     }
     const tag = this.tags[i]!;
+    if (tag.root.parent !== parent) parent.addChild(tag.root);
     tag.root.visible = true;
     if (tag.text.text !== text) tag.text.text = text;
     tag.text.style.fill = color;
@@ -307,9 +322,11 @@ class ObjectivesSystem implements GameSystem {
     if (this.mapRef && this.enabled) setLocksEnabled(getCollisionIndex(this.mapRef), this.mapRef, false);
     this.gfx.destroy();
     this.top.destroy({ children: true });
+    this.lit.destroy({ children: true });
     this.toast.root.destroy({ children: true });
     worldEventsView.clues = [];
     worldEventsView.locks = [];
+    worldEventsView.channel = null;
   }
 }
 
