@@ -16,6 +16,8 @@ import {
   type JoinedMsg,
   type MatchEndReport,
   type MatchSummaryMsg,
+  type SpectateEndReason,
+  type SpectateMsg,
 } from "@extract/shared";
 import { registerInventoryHandlers } from "./inventory-handlers.js";
 import { IntentLimiter } from "./intent-limit.js";
@@ -26,6 +28,7 @@ import { buildBatches } from "../sim/audience.js";
 import { withNpcSettlement } from "../sim/items.js";
 import { Match, expectedMapHash, warmMatchMap } from "../sim/match.js";
 import { partyPositions } from "../sim/party.js";
+import { spectateEnd, spectateTarget, spectatorBatch } from "../sim/spectate.js";
 import type { MatchEvent } from "../sim/types.js";
 import { ViewSync } from "../sim/views.js";
 import { worldNow } from "../world/clock.js";
@@ -121,6 +124,12 @@ const PARTY_PERIOD_MS = 1000 / PARTY.POS_HZ;
  * also sends S2C.PARTY (sim/party.ts) to each connected party member: their mates' positions only.
  * The admin replay recorder (sim/replay-recorder.ts) reads each tick's drained events right after
  * the step; its chunks go to the web off the tick (world/replay-upload.ts).
+ *
+ * Spectating (C2S.SPECTATE, sim/spectate.ts): a member whose run ended (dead / extracted) may watch
+ * a party mate still on the map over the connection it already has (no seat, no new runtime). Its
+ * StateView mirrors the mate's (views.ts), its `ev` batch is the mate's world events plus its own
+ * kill feed / XP (spectatorBatch), and every gameplay message it sends is dropped. Checked after
+ * each step (spectateEnd): the mate's death / extraction, the wipe or a rejoin ends it.
  */
 export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> implements ShardRoom {
   override autoDispose = false;
@@ -149,6 +158,8 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
   private readonly partyShown = new Set<number>();
   /** Admin replay of this shard-cycle (world/replay-upload.ts); null when recording is off. */
   private replay: ReplayRecorder | null = null;
+  /** Spectator rosterIndex → the mate it watches and that mate's Player id as last sent. */
+  private readonly spectating = new Map<number, { target: number; id: string }>();
 
   get disposed(): boolean {
     return this.disposedFlag;
@@ -205,11 +216,13 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     this.setMetadata({ matchId: world.matchId, cycleId: world.cycleId });
 
     this.onMessage(C2S.INPUT, (client, raw: unknown) => {
+      // A spectator steers nothing (its runtime is off the map anyway; this keeps it explicit).
+      if (this.watching(client)) return;
       const samples = Array.isArray(raw) ? raw.slice(-MAX_INPUT_BATCH) : [raw];
       for (const s of samples) this.match.enqueueInput(client.sessionId, s);
     });
     // Intent messages share one per-client token bucket (intent-limit.ts): floods are dropped.
-    const ok = (client: Client) => this.intents.take(client);
+    const ok = (client: Client) => !this.watching(client) && this.intents.take(client);
     this.onMessage(C2S.INTERACT, (client) => {
       if (ok(client)) this.match.interact(client.sessionId);
     });
@@ -244,6 +257,9 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
       if (typeof t === "number" && Number.isFinite(t)) client.send(S2C.PONG, { t });
     });
     registerInventoryHandlers(this, () => this.match, ok);
+    this.onMessage(C2S.SPECTATE, (client, raw: unknown) => {
+      if (this.intents.take(client)) this.onSpectate(client, raw);
+    });
     // Unknown messages are ignored instead of logged: clients are untrusted.
     this.onMessage("*", () => {});
 
@@ -332,6 +348,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     // Every runtime this client was routed to (a user's earlier entry keeps its old client until it leaves).
     for (const [r, c] of this.byRoster) {
       if (c !== client) continue;
+      this.spectating.delete(r);
       this.byRoster.delete(r);
       this.views.detach(r, client.view);
     }
@@ -374,6 +391,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
     const events = this.match.drainEvents();
     // Never throws (a recorder error drops its chunk, not the tick).
     this.replay?.tick(events);
+    if (this.spectating.size > 0) this.checkSpectators();
     this.syncViews(events);
     this.broadcastPatch();
     this.dispatch(events);
@@ -406,8 +424,15 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
    * sounds), then the personal sends and web reports.
    */
   private dispatch(events: readonly MatchEvent[]) {
-    const batches = buildBatches(this.match, events, [...this.byRoster.keys()]);
-    for (const [r, batch] of batches) this.byRoster.get(r)?.send(S2C.EV, batch);
+    const recipients = [...this.byRoster.keys()];
+    // Watched mates get a batch built even when they are not connected themselves (spectate.ts).
+    for (const { target } of this.spectating.values()) if (!this.byRoster.has(target)) recipients.push(target);
+    const batches = buildBatches(this.match, events, recipients);
+    for (const [r, client] of this.byRoster) {
+      const watched = this.spectating.get(r);
+      const batch = watched ? spectatorBatch(batches.get(r), batches.get(watched.target)) : batches.get(r);
+      if (batch) client.send(S2C.EV, batch);
+    }
     for (const ev of events) {
       switch (ev.type) {
         case "outcome":
@@ -455,6 +480,59 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
       if (!client) continue;
       client.send(S2C.PARTY, msg);
       this.partyShown.add(r);
+    }
+  }
+
+  /** The client is watching a party mate (every gameplay message of it is dropped). */
+  private watching(client: Client): boolean {
+    if (this.spectating.size === 0) return false;
+    const rt = this.match.runtime(client.sessionId);
+    return !!rt && this.spectating.has(rt.rosterIndex) && this.byRoster.get(rt.rosterIndex) === client;
+  }
+
+  /** C2S.SPECTATE {key}: start watching that party mate (spectate.ts decides), or stop ({key: null}). */
+  private onSpectate(client: Client, raw: unknown) {
+    const rt = this.match.runtime(client.sessionId);
+    if (!rt || this.byRoster.get(rt.rosterIndex) !== client) return;
+    const r = rt.rosterIndex;
+    const key = (raw as { key?: unknown } | null)?.key;
+    if (key === null || key === undefined || key === "") {
+      this.stopSpectating(r, "stopped");
+      return;
+    }
+    const check = spectateTarget(this.match, r, key);
+    if (!check.ok) {
+      client.send(S2C.SPECTATE, { key: null, reason: "refused" } satisfies SpectateMsg);
+      return;
+    }
+    const t = check.target;
+    if (!this.views.mirror(r, t.rosterIndex)) return;
+    this.spectating.set(r, { target: t.rosterIndex, id: t.id });
+    client.send(S2C.SPECTATE, { key: t.selfKey, id: t.id, name: t.nickname } satisfies SpectateMsg);
+  }
+
+  private stopSpectating(r: number, reason: SpectateEndReason) {
+    if (!this.spectating.delete(r)) return;
+    this.views.unmirror(r);
+    this.byRoster.get(r)?.send(S2C.SPECTATE, { key: null, reason } satisfies SpectateMsg);
+  }
+
+  /**
+   * After the step: end what may not go on (mate down / out, wipe, rejoin), and tell a spectator the
+   * mate's new Player id when the mate reconnected (attachHuman re-keys the Player).
+   */
+  private checkSpectators() {
+    for (const [r, w] of [...this.spectating]) {
+      const end = spectateEnd(this.match, r, w.target);
+      if (end) {
+        this.stopSpectating(r, end);
+        continue;
+      }
+      const t = this.match.rosterRuntime(w.target);
+      if (t && t.id !== w.id) {
+        w.id = t.id;
+        this.byRoster.get(r)?.send(S2C.SPECTATE, { key: t.selfKey, id: t.id, name: t.nickname } satisfies SpectateMsg);
+      }
     }
   }
 

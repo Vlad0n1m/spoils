@@ -13,7 +13,7 @@ import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { pathToFileURL } from "node:url";
 import { Encoder } from "@colyseus/schema";
-import { C2S, CLOSE_CODES, NET, S2C, WORLD, worldCycleAt, type JoinTicket, type JoinedMsg, type OutcomeMsg } from "@extract/shared";
+import { C2S, CLOSE_CODES, NET, S2C, WORLD, worldCycleAt, type JoinTicket, type JoinedMsg, type OutcomeMsg, type SpectateMsg } from "@extract/shared";
 
 // As in index.ts: before anything can create a room or a serializer.
 Encoder.BUFFER_SIZE = NET.ENCODER_BUFFER_BYTES;
@@ -361,6 +361,54 @@ test("party tickets: a drop's members land together and get S2C.PARTY with each 
   assert.equal(got.get("solo"), undefined);
   const n = got.get("lead")!.length;
   assert.ok(n >= 2 && n <= 5, `${n} party messages in ~1.5 s`);
+});
+
+test("spectate: a dead member watches a living mate over its open connection; strangers and the living are refused; it ends when the mate goes down", async () => {
+  const partyId = randomUUID();
+  const member = (nickname: string) =>
+    signJoinTicket({ userId: randomUUID(), nickname, issuedAt: Date.now(), matchId: shard.matchId, entryId: randomUUID(), partyId }, SECRET);
+  const lead = member("Lead");
+  const mate = member("Mate");
+  const L = await joinAndHello(lead);
+  const M = await joinAndHello(mate);
+  const solo = ticket(randomUUID(), { nickname: "Solo" });
+  const S = await joinAndHello(solo);
+  const inbox = new Map<SdkRoom, SpectateMsg[]>();
+  for (const r of [L.room, M.room, S.room]) {
+    inbox.set(r, []);
+    r.onMessage(S2C.SPECTATE, (m) => inbox.get(r)!.push(m as SpectateMsg));
+  }
+  const last = (r: SdkRoom) => inbox.get(r)!.at(-1);
+  const a = match.currentOf(lead.userId)!;
+  const b = match.currentOf(mate.userId)!;
+  const s = match.currentOf(solo.userId)!;
+
+  // Alive: refused.
+  L.room.send(C2S.SPECTATE, { key: M.hello.selfKey });
+  await waitFor(() => last(L.room)?.reason === "refused");
+  // Dead lead watches the mate.
+  killPlayer(match, a, null, "");
+  L.room.send(C2S.SPECTATE, { key: M.hello.selfKey });
+  await waitFor(() => last(L.room)?.key === M.hello.selfKey);
+  assert.deepEqual(last(L.room), { key: M.hello.selfKey, id: b.id, name: "Mate" });
+  // A dead solo raider may not watch them.
+  killPlayer(match, s, null, "");
+  S.room.send(C2S.SPECTATE, { key: M.hello.selfKey });
+  await waitFor(() => last(S.room)?.reason === "refused");
+  // The spectator's inputs never move anything.
+  const seq = a.lastQueuedSeq;
+  L.room.send(C2S.INPUT, { seq: seq + 1, mx: 1, my: 0, aim: 0, fire: true });
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(a.lastQueuedSeq, seq);
+  // The mate goes down: one final patch, then "mate_down".
+  killPlayer(match, b, null, "");
+  await waitFor(() => last(L.room)?.key === null);
+  assert.equal(last(L.room)?.reason, "mate_down");
+  // Stop when nothing runs: nothing is sent.
+  const n = inbox.get(L.room)!.length;
+  L.room.send(C2S.SPECTATE, { key: null });
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(inbox.get(L.room)!.length, n);
 });
 
 test("world_full at WORLD.CAPACITY humans on the map, without a web call", async () => {

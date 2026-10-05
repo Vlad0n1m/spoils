@@ -91,6 +91,12 @@ export const C2S = {
   PING: "ping",
   /** ThrowMsg — Weapons v2: throw one hand grenade (G / 5, touch THROW button). */
   THROW: "throw",
+  /**
+   * SpectateReqMsg — after your death / extraction: watch a party mate who is still on the map
+   * ({key} = the mate's PartyMatePos.key from S2C.PARTY), or stop watching ({key: null}). Answered
+   * with S2C.SPECTATE. The server refuses anyone but a living mate of a dead / extracted member.
+   */
+  SPECTATE: "spectate",
 } as const;
 
 /** Server → client message names. */
@@ -113,7 +119,33 @@ export const S2C = {
    * outside the party). A member whose mates are all gone gets one empty list.
    */
   PARTY: "party",
+  /**
+   * SpectateMsg, to one client: whom it now watches (the mate's key, Player id and name), or
+   * {key: null, reason} when spectating was refused or ended (mate down / out, wipe, stopped).
+   */
+  SPECTATE: "spectate",
 } as const;
+
+/** C2S.SPECTATE: the party mate to watch (PartyMatePos.key), null = stop. */
+export interface SpectateReqMsg {
+  key: string | null;
+}
+
+/** Why S2C.SPECTATE says {key: null}. */
+export type SpectateEndReason = "refused" | "stopped" | "mate_down" | "mate_out" | "wipe";
+
+/**
+ * S2C.SPECTATE. While `key` is set the client's state view mirrors that mate's (their Player, the
+ * players their published vision row holds, their AOI ring) and its `ev` batches carry what the
+ * mate gets (shots, hits, sounds as heard by the mate…); its own kill feed and XP stay its own.
+ * `id` is the mate's key in state.players; a mate who reconnects gets a new one (sent again).
+ */
+export interface SpectateMsg {
+  key: string | null;
+  id?: string;
+  name?: string;
+  reason?: SpectateEndReason;
+}
 
 export interface SwitchMsg {
   slot: "w1" | "w2";
