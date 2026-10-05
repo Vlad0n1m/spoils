@@ -482,7 +482,9 @@ function TierCard({
     const r = await claim(t.tier);
     setBusy(false);
     playUi(r.ok ? "coin" : "error");
-    toast(r.message);
+    // On success the reward flying into the plate says it; the toast stays for errors and for
+    // reduced motion (no fly).
+    if (!r.ok || window.matchMedia("(prefers-reduced-motion: reduce)").matches) toast(r.message);
     if (r.ok) {
       setCelebrate(true);
       const rect = art.current?.getBoundingClientRect();

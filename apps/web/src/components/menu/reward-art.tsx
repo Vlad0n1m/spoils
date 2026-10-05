@@ -7,7 +7,8 @@
  * the Alpha Veteran skin as the character art, the Founder medal, and feature unlocks as icons.
  * Presentation only: what is owned, worn and claimable comes from the caller.
  */
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import clsx from "clsx";
 import { cosmeticDef, type WearableKind } from "@extract/shared";
 import type { RewardItem } from "@/lib/lobby/levels";
@@ -283,8 +284,33 @@ export function RewardCard({
         )}
         {footer && <div className="mt-auto flex flex-col pt-1.5">{footer}</div>}
       </div>
-      {celebrate && <Confetti />}
+      {celebrate && <CardConfetti />}
     </div>
+  );
+}
+
+/**
+ * The claim burst of a card, thrown from the card's middle but drawn in a fixed layer on <body>: a
+ * card sits in a scrolling reward track whose overflow would clip the confetti to the track.
+ */
+function CardConfetti() {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  useLayoutEffect(() => {
+    const r = anchor.current?.getBoundingClientRect();
+    if (r) setAt({ x: r.left, y: r.top });
+  }, []);
+  return (
+    <>
+      <span ref={anchor} className="pointer-events-none absolute left-1/2 top-[40%] h-0 w-0" aria-hidden />
+      {at &&
+        createPortal(
+          <span className="pointer-events-none fixed z-[95] h-0 w-0" style={{ left: at.x, top: at.y }} aria-hidden>
+            <Confetti />
+          </span>,
+          document.body,
+        )}
+    </>
   );
 }
 
