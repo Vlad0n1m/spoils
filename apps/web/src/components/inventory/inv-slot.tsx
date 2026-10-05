@@ -172,8 +172,9 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
               className={clsx(
                 "pointer-events-none select-none object-contain drop-shadow-[0_2px_0_rgba(0,0,0,0.55)]",
                 sz.img,
-                broken && (props.brokenLook === "plate" ? "opacity-80 grayscale-[0.6]" : "opacity-60"),
+                broken && props.brokenLook !== "plate" && "opacity-60",
               )}
+              style={broken && props.brokenLook === "plate" ? BROKEN_PLATE_ICON : undefined}
             />
             {item!.qty > 1 && (
               <span className="toon-text-thin absolute bottom-0.5 right-1 text-sm tabular-nums text-white">
@@ -281,12 +282,22 @@ function stampIn(el: HTMLElement | null): void {
 }
 
 /**
+ * The item under the BROKEN plate: desaturated but lifted and outlined in light grey, so a dark
+ * sprite (sniper, black armour) still reads against the dark striped tile.
+ */
+const BROKEN_PLATE_ICON: CSSProperties = {
+  filter:
+    "grayscale(0.55) brightness(1.45) drop-shadow(1px 0 0 #cbd5e1) drop-shadow(-1px 0 0 #cbd5e1) drop-shadow(0 1px 0 #cbd5e1) drop-shadow(0 -1px 0 #cbd5e1) drop-shadow(0 2px 0 rgba(0,0,0,0.55))",
+};
+
+/**
  * The search panel's BROKEN plate: a red-and-black stamp across the tile (with the crack) that lands
  * with a zoom-out while it wipes in from top to bottom — the item broke when its owner died.
  */
 function BrokenPlate() {
   return (
-    <span className="pointer-events-none absolute inset-0 grid place-items-center" aria-hidden>
+    // Stamp in the lower third: a long thin sprite (sniper) stays readable across the middle.
+    <span className="pointer-events-none absolute inset-0 grid place-items-end justify-center pb-[14%]" aria-hidden>
       <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full">
         <path d="M58 0 L48 30 L62 44 L40 64 L52 78 L44 100" fill="none" stroke="#000" strokeWidth="7" strokeLinejoin="round" />
         <path d="M58 0 L48 30 L62 44 L40 64 L52 78 L44 100" fill="none" stroke="#f43f5e" strokeWidth="3" strokeLinejoin="round" />
