@@ -317,6 +317,8 @@ async function sendAndSettle(db: Db, deps: ChainDeps, opId: string, raw: Buffer,
 }
 
 function shortError(m: string): string {
+  if (/no record of a prior credit|insufficient (funds|lamports)/i.test(m)) return "not enough SOL to pay for it";
+  if (/blockhash not found/i.test(m)) return "the transaction expired, try again";
   const custom = /custom program error: (0x[0-9a-f]+)/i.exec(m);
   return (custom ? `program error ${custom[1]}` : m).slice(0, 300);
 }

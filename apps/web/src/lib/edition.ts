@@ -134,10 +134,11 @@ export const IDOS_DISABLED_API: readonly string[] = Object.freeze([
   "/api/withdraw",
   "/api/stash/starter",
   "/api/economy",
+  "/api/onchain",
 ]);
 
 /** Pages of the SOL economy: the edition redirects them to /play. */
-export const IDOS_DISABLED_PAGES: readonly string[] = Object.freeze(["/wallet", "/economy"]);
+export const IDOS_DISABLED_PAGES: readonly string[] = Object.freeze(["/wallet", "/economy", "/onchain"]);
 
 /** Edition-only API (the iDos sign-in bridge): 404 in the main build. */
 export const MAIN_DISABLED_API: readonly string[] = Object.freeze(["/api/idos"]);

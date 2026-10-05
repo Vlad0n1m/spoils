@@ -57,6 +57,13 @@ export async function OnChainBlock() {
         The game server signs and pays for every record; players never sign anything and never pay a fee for it. No
         account ids, nicknames or emails go on chain: raiders appear only as salted hashes.
       </p>
+      <p className="font-body mt-2 max-w-[70ch] text-sm leading-relaxed text-white/70">
+        Epic and legendary gear can also leave the game as a Solana asset in your own wallet and trade for SOL through an escrow
+        program, where the buyer pays the seller and receives the item in one transaction.{" "}
+        <a href="/onchain" className="text-zooa-lime underline-offset-4 hover:underline">
+          Items on chain →
+        </a>
+      </p>
 
       {programId && (
         <div className="font-body mt-4 rounded-lg border border-white/10 bg-black/20 p-3 text-sm">

@@ -31,6 +31,11 @@ export function TopBar() {
               Economy
             </Link>
           )}
+          {EDITION_UI.economyLinks && (
+            <Link href="/onchain" className={`hidden sm:inline ${navLinkClass(path === "/onchain")}`}>
+              On chain
+            </Link>
+          )}
           {/* Narrow portrait phones: no room next to the account buttons (the menu's News panel links here). */}
           <Link href="/news" className={`hidden sm:inline ${navLinkClass(path === "/news")}`}>
             News
