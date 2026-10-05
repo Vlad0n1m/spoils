@@ -73,6 +73,8 @@ export interface SearchView {
   /** Tier name for containers ("Rare"), "" for corpses. */
   subtitle: string;
   containerKind: ContainerKind | null;
+  /** World-event bodies that are not bodies: a supply drop crate or a hidden cache (header art). */
+  crate?: "drop" | "cache" | null;
   /** MapData tier 0..4 (containers), -1 for corpses. */
   tier: number;
   /** Match clock: open delay start / end (progress ring until open). */
@@ -443,10 +445,12 @@ export function createInventoryClient(opts: InventoryClientOptions): InventoryCl
     let subtitle = "";
     let containerKind: ContainerKind | null = null;
     let tier = -1;
+    let crateKind: "drop" | "cache" | null = null;
     let openMs: number = SEARCH.OPEN_MS.cache;
     if (corpseId !== null) {
       const crate = isSupplyDropId(corpseId);
       const cache = isCacheId(corpseId);
+      crateKind = crate ? "drop" : cache ? "cache" : null;
       title = crate ? "Supply drop" : cache ? "Hidden cache" : bodyTitle(st?.corpses?.get(corpseId)?.label);
       openMs = crate ? DROP.OPEN_MS : cache ? CACHE.OPEN_MS : SEARCH.OPEN_MS.corpse;
     } else if (cIdx !== null) {
@@ -485,6 +489,7 @@ export function createInventoryClient(opts: InventoryClientOptions): InventoryCl
       title,
       subtitle,
       containerKind,
+      crate: crateKind,
       tier,
       openStartAt: readyAt - openMs,
       readyAt,

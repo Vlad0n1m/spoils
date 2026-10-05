@@ -131,6 +131,7 @@ function InventoryBench() {
   }, [room]);
 
   const corpse = () => room.openSearch("kbody1", devCorpseLoot(), SEARCH.OPEN_MS.corpse, "Sasha");
+  const cache = () => room.openSearch("khc1", devChestLoot(), 1500);
   const chest = () => room.openSearch("c1", devChestLoot(), 2300);
   const crate = () =>
     room.openSearch("c0", [fakeItem("junk_apple", { qty: 2 }), fakeItem("junk_water"), fakeItem("bandage", { qty: 1 })], 800);
@@ -162,6 +163,7 @@ function InventoryBench() {
         <DevBtn onClick={() => client?.toggle()}>Inventory [Tab]</DevBtn>
         <DevBtn onClick={corpse}>Search body</DevBtn>
         <DevBtn onClick={chest}>Search safe</DevBtn>
+        <DevBtn onClick={cache}>Search hidden cache</DevBtn>
         <DevBtn onClick={crate}>Search crate</DevBtn>
         <DevBtn onClick={() => room.stealLoot(0)}>Someone takes #1</DevBtn>
         <DevBtn onClick={fill}>Fill bag</DevBtn>

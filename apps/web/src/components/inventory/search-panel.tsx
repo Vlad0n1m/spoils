@@ -27,8 +27,13 @@ export interface SearchPanelProps {
   touch?: boolean;
 }
 
-/** Sprite for the panel header: the body, or the container kind's own art (opened-empty once done). */
-export function searchIcon(s: Pick<SearchView, "kind" | "containerKind" | "tier">, empty = false): string {
+/**
+ * Sprite for the panel header: the body, the supply drop crate / hidden cache stash as drawn in the
+ * world, or the container kind's own art (opened-empty once done).
+ */
+export function searchIcon(s: Pick<SearchView, "kind" | "containerKind" | "tier" | "crate">, empty = false): string {
+  if (s.crate === "cache") return `/sprites/cache_stash${empty ? "_open" : ""}.png`;
+  if (s.crate === "drop") return `/sprites/box_weapon_box${empty ? "_open" : ""}.png`;
   if (s.kind === "corpse") return "/sprites/corpse.png";
   const kind = s.containerKind && CONTAINER_KINDS.includes(s.containerKind) ? s.containerKind : "crate";
   return `/sprites/box_${kind}${empty ? "_open" : ""}.png`;
