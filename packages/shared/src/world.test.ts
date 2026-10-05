@@ -11,7 +11,9 @@ import {
   mapNumber,
   worldCycleAt,
   worldCycleOf,
+  worldCyclesLive,
   worldPhase,
+  pickWorldShard,
 } from "./constants.js";
 import { BOSSES, BOSS_EVENT, bossEventOf } from "./economy.js";
 import { BOSS_KINDS, type BossKind } from "./map/types.js";
@@ -40,11 +42,12 @@ function testHash(salt: string): (label: string) => number {
 
 test("T1 cycle config matches the decisions table", () => {
   assert.equal(WORLD.CYCLE_MS, 45 * MIN);
-  assert.equal(WORLD.RESET_MS, 20_000);
   assert.equal(WORLD.ENTRY_CLOSE_MS, 10 * MIN);
+  assert.equal(WORLD.MAP_MS, WORLD.CYCLE_MS + WORLD.ENTRY_CLOSE_MS, "a map lives 55 min: opens at the previous entry close");
   assert.deepEqual([...WORLD.WARN_AT_MS], [600_000, 300_000, 60_000]);
   assert.equal(WORLD.CAPACITY, 24);
-  assert.equal(WORLD.MAX_SHARDS, 1);
+  assert.equal(WORLD.MAX_SHARDS, 4);
+  assert.equal(WORLD.SPARE_SEATS, 4);
   assert.equal(WORLD.MAX_RUNTIMES_PER_SHARD - WORLD.RUNTIME_HEADROOM, 232);
   assert.equal(WORLD.EXTRACT_ARM_MS, 3 * MIN);
   assert.equal(WORLD.EXTRACT_EARLY_CLOSE_MS, 5 * MIN);
@@ -56,50 +59,80 @@ test("T1 cycle config matches the decisions table", () => {
   assert.equal(WORLD.WIDTH, 28 * 1024);
 });
 
-test("T1 worldCycleAt boundaries at k × 45 min; 32 cycles a day aligned to UTC midnight", () => {
+test("T1 the grid: wipes at (k + 1) × 45 min, 32 a day at :00 :45 :30 :15 UTC", () => {
   for (const k of [0, 1, 7, 650_000, 657_408]) {
-    const at = k * WORLD.CYCLE_MS;
-    const c = worldCycleAt(at);
+    const c = worldCycleOf(k);
     assert.equal(c.cycle, k);
-    assert.equal(c.startAt, at);
-    assert.equal(c.wipeAt, at + WORLD.CYCLE_MS);
-    assert.equal(worldCycleAt(at - 1).cycle, k - 1, "1 ms before the boundary is the previous cycle");
-    assert.equal(worldCycleAt(at + WORLD.CYCLE_MS - 1).cycle, k, "the last ms is still this cycle");
-    assert.deepEqual(worldCycleOf(k), c);
+    assert.equal(c.wipeAt, (k + 1) * WORLD.CYCLE_MS);
+    assert.equal(c.startAt, c.wipeAt - WORLD.MAP_MS);
+    assert.equal(c.openAt, c.startAt, "no reset gap: entry opens with the map");
+    assert.equal(c.entryClosesAt, c.wipeAt - WORLD.ENTRY_CLOSE_MS);
+    assert.equal(c.openAt, worldCycleOf(k - 1).entryClosesAt, "cycle k opens exactly when entry to k − 1 closes");
   }
   assert.equal(86_400_000 % WORLD.CYCLE_MS, 0);
   assert.equal(86_400_000 / WORLD.CYCLE_MS, 32);
   const day = Date.UTC(2026, 9, 10);
-  const first = worldCycleAt(day), last = worldCycleAt(day + 86_400_000 - 1);
-  assert.equal(first.startAt, day, "a cycle starts at UTC midnight");
-  assert.equal(last.cycle - first.cycle + 1, 32);
-  // Wipes at :00 :45 :30 :15.
   const mins = new Set<number>();
-  for (let k = first.cycle; k <= last.cycle; k++) mins.add(new Date(worldCycleOf(k).wipeAt).getUTCMinutes());
+  let wipes = 0;
+  for (let k = Math.floor(day / WORLD.CYCLE_MS); worldCycleOf(k).wipeAt <= day + 86_400_000; k++) {
+    const w = worldCycleOf(k).wipeAt;
+    if (w <= day) continue;
+    wipes++;
+    mins.add(new Date(w).getUTCMinutes());
+  }
+  assert.equal(wipes, 32);
   assert.deepEqual([...mins].sort((a, b) => a - b), [0, 15, 30, 45]);
 });
 
-test("T1 openAt = start + 20 s; entryClosesAt = wipe − 10 min", () => {
-  const c = worldCycleAt(Date.UTC(2026, 9, 10, 15, 7, 31));
-  assert.equal(c.openAt, c.startAt + 20_000);
-  assert.equal(c.entryClosesAt, c.wipeAt - 10 * MIN);
-  assert.equal(c.entryClosesAt - c.startAt, 35 * MIN);
-  assert.equal(new Date(c.startAt).toISOString(), "2026-10-10T15:00:00.000Z");
+test("T1 worldCycleAt = the one cycle accepting entries: it switches at entry close, never waits", () => {
+  const k = 657_000;
+  const c = worldCycleOf(k);
+  assert.equal(worldCycleAt(c.openAt).cycle, k);
+  assert.equal(worldCycleAt(c.entryClosesAt - 1).cycle, k);
+  assert.equal(worldCycleAt(c.entryClosesAt).cycle, k + 1, "the next map opens at the entry close");
+  assert.equal(worldCycleAt(c.wipeAt).cycle, k + 1);
+  // Every instant: the returned cycle is open (no "entry closed, wait" gap anywhere).
+  for (let t = c.openAt; t < c.wipeAt + WORLD.CYCLE_MS; t += 37_000) {
+    assert.equal(worldPhase(worldCycleAt(t), t), "open", `open at +${t - c.openAt} ms`);
+  }
+  const at = worldCycleAt(Date.UTC(2026, 9, 10, 15, 7, 31));
+  assert.equal(new Date(at.wipeAt).toISOString(), "2026-10-10T15:45:00.000Z");
+  assert.equal(new Date(at.openAt).toISOString(), "2026-10-10T14:50:00.000Z");
+  assert.equal(new Date(worldCycleAt(Date.UTC(2026, 9, 10, 15, 36)).wipeAt).toISOString(), "2026-10-10T16:30:00.000Z", "15:36: entry to 15:45 closed, the 16:30 map is open");
+});
+
+test("T1 worldCyclesLive: two maps during the 10-minute overlap, one otherwise", () => {
+  const c = worldCycleOf(657_000);
+  assert.deepEqual(worldCyclesLive(c.openAt + 60_000).map((x) => x.cycle), [656_999, 657_000]);
+  assert.deepEqual(worldCyclesLive(c.openAt + WORLD.ENTRY_CLOSE_MS - 1).map((x) => x.cycle), [656_999, 657_000]);
+  assert.deepEqual(worldCyclesLive(c.openAt + WORLD.ENTRY_CLOSE_MS).map((x) => x.cycle), [657_000], "k − 1 wiped");
+  assert.deepEqual(worldCyclesLive(c.entryClosesAt).map((x) => x.cycle), [657_000, 657_001]);
 });
 
 test("T1 worldPhase edges", () => {
   const c = worldCycleOf(657_000);
-  assert.equal(worldPhase(c, c.startAt), "resetting");
-  assert.equal(worldPhase(c, c.openAt - 1), "resetting");
+  assert.equal(worldPhase(c, c.openAt - 1), "resetting", "a prewarmed room before its opening");
   assert.equal(worldPhase(c, c.openAt), "open");
   assert.equal(worldPhase(c, c.entryClosesAt - 1), "open");
   assert.equal(worldPhase(c, c.entryClosesAt), "closing");
   assert.equal(worldPhase(c, c.wipeAt - 1), "closing");
 });
 
+test("T1 pickWorldShard: the fullest shard with room for the join, else the emptiest", () => {
+  const s = (shard: number, humans: number) => ({ shard, humans });
+  assert.equal(pickWorldShard([]), null);
+  assert.deepEqual(pickWorldShard([s(0, 5), s(1, 17), s(2, 3)]), s(1, 17), "pack players together");
+  assert.deepEqual(pickWorldShard([s(0, 23), s(1, 10)]), s(0, 23), "the last seat of a shard");
+  assert.deepEqual(pickWorldShard([s(0, 24), s(1, 10)]), s(1, 10), "a full shard is skipped");
+  assert.deepEqual(pickWorldShard([s(0, 22), s(1, 10)], 3), s(1, 10), "a party needs room for all of it");
+  assert.deepEqual(pickWorldShard([s(0, 21), s(1, 21)], 3), s(0, 21), "ties → the lower shard");
+  assert.deepEqual(pickWorldShard([s(0, 24), s(1, 23)], 2), s(1, 23), "no room anywhere → the emptiest (the game server decides)");
+});
+
 test("T1 mapNumber: the epoch cycle is map #1; cycleEnvSeed is a pure uint32", () => {
-  const epochCycle = worldCycleAt(WORLD.NUMBER_EPOCH_MS).cycle;
-  assert.equal(worldCycleOf(epochCycle).startAt, WORLD.NUMBER_EPOCH_MS, "the epoch is a cycle start");
+  const epochCycle = WORLD.NUMBER_EPOCH_MS / WORLD.CYCLE_MS;
+  assert.ok(Number.isInteger(epochCycle), "the epoch is on the grid");
+  assert.equal(worldCycleOf(epochCycle).wipeAt, WORLD.NUMBER_EPOCH_MS + WORLD.CYCLE_MS, "map #1 wipes 45 min after the epoch");
   assert.equal(mapNumber(epochCycle), 1);
   assert.equal(mapNumber(epochCycle + 31), 32);
   assert.equal(mapNumber(epochCycle - 1), 0, "may be ≤ 0 before the epoch");

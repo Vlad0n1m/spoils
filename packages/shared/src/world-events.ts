@@ -291,10 +291,10 @@ export interface DropPlan {
 
 /**
  * Supply drops of a cycle from the secret loot seed: COUNT_MIN..COUNT_MAX landings spread over
- * [FIRST_ANNOUNCE_MS + WARN_MS, CYCLE_MS − NO_LAND_LAST_MS] in equal segments (each landing in the
+ * [FIRST_ANNOUNCE_MS + WARN_MS, mapMs − NO_LAND_LAST_MS] of the map's clock (MAP_MS from its opening) in equal segments (each landing in the
  * middle 60 % of its segment, so two drops are ≥ 40 % of a segment apart).
  */
-export function planSupplyDrops(lootSeed: number, cycleMs: number = WORLD.CYCLE_MS): DropPlan[] {
+export function planSupplyDrops(lootSeed: number, cycleMs: number = WORLD.MAP_MS): DropPlan[] {
   const rng = mulberry32(eventSeed(lootSeed, DROP_SALT));
   const count = DROP.COUNT_MIN + Math.floor(rng() * (DROP.COUNT_MAX - DROP.COUNT_MIN + 1));
   const from = DROP.FIRST_ANNOUNCE_MS + DROP.WARN_MS;
@@ -317,7 +317,7 @@ export interface HotPlan {
 }
 
 /** Hot zones of a cycle from the secret loot seed: one per HOT.PERIOD_MS, each over before the wipe. */
-export function planHotZones(lootSeed: number, cycleMs: number = WORLD.CYCLE_MS): HotPlan[] {
+export function planHotZones(lootSeed: number, cycleMs: number = WORLD.MAP_MS): HotPlan[] {
   const rng = mulberry32(eventSeed(lootSeed, HOT_SALT));
   const out: HotPlan[] = [];
   for (let k = 0; ; k++) {

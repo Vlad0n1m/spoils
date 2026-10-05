@@ -78,7 +78,7 @@ export function sanitizeWorld(raw: unknown): WorldCreateOptions | null {
   if (!Number.isInteger(o.cycleId) || (o.cycleId as number) < 0 || (o.cycleId as number) > 0x7fffffff) return null;
   if (!Number.isInteger(o.shard) || (o.shard as number) < 0 || (o.shard as number) > 64) return null;
   if (!Number.isSafeInteger(o.cycleStartsAt) || (o.cycleStartsAt as number) < 0) return null;
-  if (typeof o.entryCloseMs !== "number" || !Number.isFinite(o.entryCloseMs) || o.entryCloseMs < 0 || o.entryCloseMs > WORLD.CYCLE_MS) return null;
+  if (typeof o.entryCloseMs !== "number" || !Number.isFinite(o.entryCloseMs) || o.entryCloseMs < 0 || o.entryCloseMs > WORLD.MAP_MS) return null;
   if (!u32(o.matchSeed) || !u32(o.lootSeed) || !u32(o.envSeed)) return null;
   if (o.bossEvent !== null && !(BOSS_KINDS as readonly unknown[]).includes(o.bossEvent)) return null;
   if (o.mode !== "live" && o.mode !== "demo") return null;
@@ -454,7 +454,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
             boss: ev.boss,
             by: ev.by.slice(0, 64),
             ...(ev.byUserId ? { byUserId: ev.byUserId } : {}),
-            atMs: Math.min(WORLD.CYCLE_MS, this.match.clock),
+            atMs: Math.min(WORLD.MAP_MS, this.match.clock),
           });
           break;
         case "ended":

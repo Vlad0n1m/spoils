@@ -80,7 +80,7 @@ test("world events: drop and hot-zone schedules are deterministic in the loot se
     for (const d of a) {
       assert.ok(d.announceAt >= DROP.FIRST_ANNOUNCE_MS, `seed ${seed}: first announce at ≥ 8:00`);
       assert.equal(d.landAt - d.announceAt, DROP.WARN_MS);
-      assert.ok(d.landAt <= WORLD.CYCLE_MS - DROP.NO_LAND_LAST_MS, `seed ${seed}: no landing in the last 6 min`);
+      assert.ok(d.landAt <= WORLD.MAP_MS - DROP.NO_LAND_LAST_MS, `seed ${seed}: no landing in the last 6 min`);
       assert.ok(d.landAt - prev >= 60_000 * 3, "drops are minutes apart");
       prev = d.landAt;
     }
@@ -89,7 +89,7 @@ test("world events: drop and hot-zone schedules are deterministic in the loot se
     assert.ok(h.length >= 2 && h.length <= 3, `seed ${seed}: one hot zone per ~15 min`);
     for (const z of h) {
       assert.equal(z.endAt - z.startAt, HOT.DURATION_MS);
-      assert.ok(z.endAt <= WORLD.CYCLE_MS);
+      assert.ok(z.endAt <= WORLD.MAP_MS);
     }
   }
   assert.notDeepEqual(planSupplyDrops(1), planSupplyDrops(2), "the seed matters");
@@ -173,7 +173,7 @@ test("world events: an untouched crate is a pool target (one item), never minted
   m.searchClose(b.id);
   put(b, 400, 4300);
   // Wipe: the unlooted pool item is left on the map (back to the pool), the ledger stays clean.
-  jump(m, wall, WORLD.CYCLE_MS);
+  jump(m, wall, WORLD.MAP_MS);
   assert.ok(m.report);
   assert.ok(m.report!.leftOnMap.some((s) => s.uid === uniques[0]!.uid), "unlooted crate unique → leftOnMap");
 });
@@ -417,10 +417,10 @@ test("late refill: waits while a living human is within HUMAN_MIN_PX, respects t
   const { m: m2, wall: w2 } = worldMatch({ map: testMap({ containers: spots }), worldEvents: true, worldEventsOverride: { drops: [], hots: [] } });
   const b = enter(m2, "bob");
   // Emptied so late that its cooldown ends inside the last STOP_BEFORE_END_MS: it stays empty.
-  sweepTo(m2, w2, WORLD.CYCLE_MS - LATE_REFILL.STOP_BEFORE_END_MS - LATE_REFILL.COOLDOWN_MIN_MS + 30_000);
+  sweepTo(m2, w2, WORLD.MAP_MS - LATE_REFILL.STOP_BEFORE_END_MS - LATE_REFILL.COOLDOWN_MIN_MS + 30_000);
   emptyContainer(m2, w2, b, idx);
   put(b, 400, 4400);
-  sweepTo(m2, w2, WORLD.CYCLE_MS - 30_000);
+  sweepTo(m2, w2, WORLD.MAP_MS - 30_000);
   assert.equal(m2.worldEvents.late.has(idx), false, "no refill in the last minutes");
   assert.equal(m2.containers.stateOf(idx), CONTAINER_STATE.EMPTIED);
 });

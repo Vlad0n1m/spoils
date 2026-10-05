@@ -158,58 +158,98 @@ const quiet = async <T>(fn: () => Promise<T>): Promise<T> => {
   }
 };
 
-test("boot mid-cycle opens the current cycle; prewarm at T − 30 s, wipe at T, next schedule, hard stop", () =>
+test("overlapping maps: k + 1 opens exactly at k's entry close, both run, k wipes at its own time, k + 1 runs on; rejoin to k", () =>
   quiet(async () => {
-    const h = harness(WC.startAt + 10 * 60_000);
+    const h = harness(WC.openAt + 10 * 60_000);
     await h.dir.start();
     const cur = h.dir.shardOfCycle(K)!;
-    assert.ok(cur, "current cycle open at once");
+    assert.ok(cur, "the open cycle's shard 0 opens at once");
     assert.equal(h.rooms.length, 1);
     const o = h.rooms[0]!.opts;
     assert.equal(o.cycleId, K);
-    assert.equal(o.cycleStartsAt, WC.startAt);
-    assert.equal(o.entryCloseMs, WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS);
+    assert.equal(o.shard, 0);
+    assert.equal(o.cycleStartsAt, WC.startAt, "match clock 0 = the map's opening");
+    assert.equal(WC.startAt, WC.wipeAt - WORLD.MAP_MS);
+    assert.equal(o.entryCloseMs, WORLD.MAP_MS - WORLD.ENTRY_CLOSE_MS);
     assert.equal(o.envSeed, cycleEnvSeed(K));
     assert.equal(o.bossEvent, K % 3 === 0 ? "warden" : null);
     assert.match(o.matchId, /^[0-9a-f-]{36}$/);
     await h.time.settle();
     assert.equal(cur.registered, true);
     assert.equal(h.opens[0]!.matchId, cur.matchId);
+    assert.equal(h.opens[0]!.startsAt, WC.startAt);
+    assert.equal(h.opens[0]!.entryClosesAt, WC.entryClosesAt);
     assert.equal(h.opens[0]!.endsAt, WC.wipeAt);
     assert.equal(h.opens[0]!.instanceId, "inst-1");
+    const cm = cur.room.match as Match;
+    cm.step(50);
+    assert.equal(cm.clock, 10 * 60_000, "the map clock counts from the opening");
+    assert.equal(cm.world!.durationMs, WORLD.MAP_MS);
 
-    await h.time.advanceTo(WC.wipeAt - WORLD.PREWARM_MS - 1);
+    // A raider on k (enters late, stays through the overlap).
+    const stay = ticket(cur.matchId);
+    await h.dir.admit(stay);
+
+    // k + 1 is prewarmed PREWARM_MS before entry to k closes, and opens at that very instant.
+    const N = worldCycleOf(K + 1);
+    assert.equal(N.openAt, WC.entryClosesAt);
+    await h.time.advanceTo(WC.entryClosesAt - WORLD.PREWARM_MS - 1);
     assert.equal(h.dir.shardOfCycle(K + 1), undefined, "not prewarmed yet");
-    await h.time.advanceTo(WC.wipeAt - WORLD.PREWARM_MS);
+    await h.time.advanceTo(WC.entryClosesAt - WORLD.PREWARM_MS);
     const next = h.dir.shardOfCycle(K + 1)!;
-    assert.ok(next, "prewarmed 30 s before the wipe");
-    assert.equal(next.room.match.clock, 0, "the prewarmed match idles until its cycle starts");
-    assert.equal(h.rooms[1]!.opts.cycleStartsAt, WC.wipeAt);
+    assert.ok(next, "prewarmed 30 s before the entry close");
+    assert.equal(h.rooms[1]!.opts.cycleStartsAt, WC.entryClosesAt);
+    const nm = next.room.match as Match;
+    nm.step(50);
+    assert.equal(nm.clock, 0, "the prewarmed match idles until it opens");
+    assert.equal(h.dir.current(), cur, "k still takes entries");
 
-    await h.time.advanceTo(WC.wipeAt - 1);
-    assert.equal(cur.room.match.ended, false);
+    await h.time.advanceTo(WC.entryClosesAt);
+    assert.equal(h.dir.current(), next, "k + 1 takes entries from k's entry close on");
+    await assert.rejects(h.dir.admit(ticket(cur.matchId)), /entry_closed/, "no new entries on k");
+    const fresh = ticket(next.matchId);
+    await h.dir.admit(fresh);
+    assert.ok(nm.currentOf(fresh.userId)?.pub.alive, "no waiting: the new map takes the player at once");
+
+    // Both maps run for ENTRY_CLOSE_MS; a raider of k rejoins k (no web call).
+    await h.time.advanceTo(WC.wipeAt - 60_000);
+    cm.step(50);
+    nm.step(50);
+    assert.equal(cm.clock, WORLD.MAP_MS - 60_000);
+    assert.equal(nm.clock, WORLD.ENTRY_CLOSE_MS - 60_000);
+    const enters = h.enters.length;
+    await h.dir.admit(ticket(cur.matchId, stay.userId));
+    assert.equal(h.enters.length, enters, "rejoin to the closing map");
+    assert.equal(cm.ended || nm.ended, false);
+
+    // k wipes at its own wipeAt (the raider still on it is MIA); k + 1 runs on to its own wipe.
     await h.time.advanceTo(WC.wipeAt);
-    assert.equal(cur.room.match.ended, true, "wiped at T");
-    assert.equal((cur.room.match as Match).report?.cycleId, K);
-    assert.equal(h.dir.current(), next);
+    assert.equal(cm.ended, true, "k wiped at wipeAt(k)");
+    assert.equal(cm.report?.cycleId, K);
+    assert.ok(cm.report?.participants.some((x) => x.userId === stay.userId && x.exitType === "mia"), "MIA at its own shard's wipe");
+    assert.equal(nm.ended, false, "k + 1 keeps running");
+    assert.ok(nm.currentOf(fresh.userId)?.pub.alive);
+    await assert.rejects(h.dir.admit(ticket(cur.matchId, stay.userId)), /map_gone/);
 
-    // The next cycle is scheduled: its prewarm opens K + 2.
-    const wc1 = worldCycleOf(K + 1);
-    await h.time.advanceTo(wc1.wipeAt - WORLD.PREWARM_MS);
+    // Hard stop of k; k + 1 opens k + 2 at its own entry close and wipes at wipeAt(k + 1).
+    await h.time.advanceTo(N.entryClosesAt - WORLD.PREWARM_MS);
     assert.ok(h.dir.shardOfCycle(K + 2));
-
-    // Hard stop: the room of K outlived its wipe by 60 s (the fake never disposes itself).
-    assert.ok(h.time.now() > WC.wipeAt + HARD_STOP_AFTER_MS);
-    assert.equal(h.rooms[0]!.forced, 1);
+    assert.equal(h.rooms[0]!.forced, 1, "k's room outlived its wipe by 60 s (the fake never disposes itself)");
     assert.equal(h.dir.shardOfCycle(K), undefined);
     assert.equal(h.dir.shardByMatch(cur.matchId), undefined);
+    await h.time.advanceTo(N.wipeAt - 1);
+    nm.step(50);
+    assert.equal(nm.ended, false);
+    assert.equal(nm.clock, WORLD.MAP_MS - 1, "the first raiders of k + 1 got 55 minutes");
+    await h.time.advanceTo(N.wipeAt);
+    assert.equal(nm.ended, true);
     h.dir.stop();
     assert.equal(h.time.pending, 0, "stop clears every timer");
   }));
 
-test("boot seconds before the wipe opens the current cycle and prewarms the next at once", () =>
+test("boot: seconds before entry close opens the open cycle and prewarms the next at once; during the overlap only the open cycle", () =>
   quiet(async () => {
-    const h = harness(WC.wipeAt - 5_000);
+    const h = harness(WC.entryClosesAt - 5_000);
     await h.dir.start();
     await h.time.settle();
     await h.time.advance(0);
@@ -218,6 +258,13 @@ test("boot seconds before the wipe opens the current cycle and prewarms the next
     await h.time.advanceTo(WC.wipeAt);
     assert.equal(h.dir.shardOfCycle(K)!.room.match.ended, true);
     h.dir.stop();
+
+    const o = harness(WC.entryClosesAt + 60_000);
+    await o.dir.start();
+    assert.equal(o.dir.shardOfCycle(K), undefined, "a closing cycle is never reopened (nobody could enter it)");
+    assert.ok(o.dir.shardOfCycle(K + 1));
+    assert.equal(o.rooms.length, 1);
+    o.dir.stop();
   }));
 
 test("raids/open: retried every 10 s until it lands; a 4xx stops; nothing after the wipe", () =>
@@ -244,10 +291,13 @@ test("raids/open: retried every 10 s until it lands; a 4xx stops; nothing after 
     assert.equal(r.opens.length, 1, "a refused body is not retried");
     r.dir.stop();
 
-    const late = harness(WC.wipeAt - 15_000, { openShard: async (req) => (late.opens.push(req), null) });
+    const late = harness(WC.entryClosesAt - 15_000, { openShard: async (req) => (late.opens.push(req), null) });
     await late.dir.start();
+    await late.time.advanceTo(WC.wipeAt);
+    const atWipe = late.opens.filter((q) => q.cycleId === K).length;
+    assert.ok(atWipe >= 2, "retried until the wipe");
     await late.time.advanceTo(WC.wipeAt + 5 * OPEN_RETRY_MS);
-    assert.equal(late.opens.filter((q) => q.cycleId === K).length, 2, "retries stop at the wipe");
+    assert.equal(late.opens.filter((q) => q.cycleId === K).length, atWipe, "retries stop at the wipe");
     late.dir.stop();
   }));
 
@@ -268,7 +318,7 @@ test("admission: dedupe per user, in-flight entries count toward capacity, the a
     await h.time.settle();
     assert.equal(h.enters.length, 1, "one raids/enter for two PLAYs of the same user");
     assert.equal(s.inflight.size, 1);
-    assert.equal(h.enters[0]!.atMs, WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS - 1_000, "atMs = cycle clock");
+    assert.equal(h.enters[0]!.atMs, WORLD.MAP_MS - WORLD.ENTRY_CLOSE_MS - 1_000, "atMs = map clock (0 = the opening)");
     // 23 on the map + 1 in flight = full.
     const m = s.room.match as Match;
     while (m.humansOnMap() < WORLD.CAPACITY - 1) {
@@ -293,18 +343,20 @@ test("admission: dedupe per user, in-flight entries count toward capacity, the a
     h.dir.stop();
   }));
 
-test("admission: entry_closed after T − 10 min and during the reset; map_gone, exit_settling, world_full, web errors", () =>
+test("admission: entry_closed after T − 10 min and on a prewarmed map; map_gone, exit_settling, world_full, web errors", () =>
   quiet(async () => {
-    const h = harness(WC.startAt + 5_000);
+    const h = harness(WC.openAt);
     await h.dir.start();
     const s = h.dir.shardOfCycle(K)!;
-    await assert.rejects(h.dir.admit(ticket(s.matchId)), /entry_closed/, "resetting (first RESET_MS)");
-    await h.time.advanceTo(WC.openAt);
     await h.dir.admit(ticket(s.matchId));
+    await h.time.advanceTo(WC.entryClosesAt - WORLD.PREWARM_MS);
+    const n = h.dir.shardOfCycle(K + 1)!;
+    await assert.rejects(h.dir.admit(ticket(n.matchId)), /entry_closed/, "the prewarmed next map is not open yet");
     await h.time.advanceTo(WC.entryClosesAt - 1);
     await h.dir.admit(ticket(s.matchId));
     await h.time.advanceTo(WC.entryClosesAt);
     await assert.rejects(h.dir.admit(ticket(s.matchId)), /entry_closed/);
+    await h.dir.admit(ticket(n.matchId));
     await assert.rejects(h.dir.admit(ticket(randomUUID())), /map_gone/);
     await assert.rejects(h.dir.admit({ ...ticket(s.matchId), matchId: undefined }), /map_gone/);
     await assert.rejects(h.dir.admit({ ...ticket(s.matchId), entryId: undefined }), /invalid_ticket/);
@@ -561,4 +613,100 @@ test("admission: bodies without a client hold a seat only WORLD.IDLE_SEAT_MS; a 
     assert.ok(m.attachHuman(idle[0]!.userId, "back"), "the idle body is attachable again");
     assert.equal(m.seatHolders(), WORLD.CAPACITY + 1, "a rejoin may go past CAPACITY (never refused)");
     h.dir.stop();
+  }));
+
+// ---------------------------------------------------------------- several shards per cycle
+
+const filler = (m: Match) =>
+  m.addHuman({ entryId: randomUUID(), userId: randomUUID(), nickname: "F", loadoutId: "", guest: false, level: 0, snapshot: null, pool: [], bossFill: [] });
+
+test("on-demand shards: the next opens once every shard has < SPARE_SEATS free seats, up to MAX_SHARDS; same boss, own seeds, wiped with the cycle", () =>
+  quiet(async () => {
+    const h = harness(WC.openAt + 60_000);
+    await h.dir.start();
+    const s0 = h.dir.shardOfCycle(K)!;
+    const m0 = s0.room.match as Match;
+    while (m0.humansOnMap() < WORLD.CAPACITY - WORLD.SPARE_SEATS - 1) filler(m0);
+    // 19 + this admission = 20: still SPARE_SEATS free → nothing opens.
+    await h.dir.admit(ticket(s0.matchId));
+    await h.time.settle();
+    assert.equal(h.dir.shardsOfCycle(K).length, 1, "4 free seats: no new shard yet");
+    // 20 + this admission = 21: fewer than SPARE_SEATS free → shard 1 opens while the player enters.
+    await h.dir.admit(ticket(s0.matchId));
+    await h.time.settle();
+    const s1 = h.dir.shardOfCycle(K, 1)!;
+    assert.ok(s1, "shard 1 opened on demand");
+    assert.equal(s1.cycle, K);
+    assert.equal(s1.wc.wipeAt, WC.wipeAt, "it wipes with its cycle");
+    const o0 = h.rooms[0]!.opts;
+    const o1 = h.rooms[1]!.opts;
+    assert.equal(o1.shard, 1);
+    assert.equal(o1.cycleStartsAt, o0.cycleStartsAt, "the same map clock as shard 0");
+    assert.equal(o1.bossEvent, o0.bossEvent, "the cycle's boss event on every shard");
+    assert.equal(o1.envSeed, o0.envSeed, "same weather / time of day");
+    assert.notEqual(o1.matchId, o0.matchId);
+    assert.ok(h.opens.some((r) => r.matchId === s1.matchId && r.shard === 1 && r.cycleId === K), "registered as (cycle, shard 1)");
+    assert.ok(s1.registered);
+    // Admissions on shard 0 while shard 1 has room open nothing more.
+    while (m0.humansOnMap() < WORLD.CAPACITY) await h.dir.admit(ticket(s0.matchId));
+    assert.equal(h.dir.shardsOfCycle(K).length, 2);
+    await assert.rejects(h.dir.admit(ticket(s0.matchId)), /world_full/, "a full shard is full; the web sends the next player to shard 1");
+    // Fill shards 1..3 the same way: shard 3 is the last one.
+    for (let i = 1; i < WORLD.MAX_SHARDS; i++) {
+      const s = h.dir.shardOfCycle(K, i)!;
+      assert.ok(s, `shard ${i} open`);
+      const m = s.room.match as Match;
+      while (m.humansOnMap() < WORLD.CAPACITY) await h.dir.admit(ticket(s.matchId));
+      await h.time.settle();
+    }
+    assert.equal(h.dir.shardsOfCycle(K).length, WORLD.MAX_SHARDS, "never more than MAX_SHARDS");
+    for (const s of h.dir.shardsOfCycle(K)) await assert.rejects(h.dir.admit(ticket(s.matchId)), /world_full/);
+    await h.time.settle();
+    assert.equal(h.rooms.filter((r) => r.opts.cycleId === K).length, WORLD.MAX_SHARDS, "world_full only when all MAX_SHARDS are full");
+    // The wipe of the cycle wipes every shard; the hard stop forgets all of them.
+    await h.time.advanceTo(WC.wipeAt);
+    for (const s of h.dir.shardsOfCycle(K)) assert.equal(s.room.match.ended, true, `shard ${s.idx} wiped`);
+    await h.time.advanceTo(WC.wipeAt + HARD_STOP_AFTER_MS);
+    assert.equal(h.dir.shardsOfCycle(K).length, 0);
+    assert.equal(h.rooms.filter((r) => r.opts.cycleId === K && r.forced === 1).length, WORLD.MAX_SHARDS);
+    h.dir.stop();
+  }));
+
+test("on-demand shards: a world_full refusal opens the next shard; nothing opens once entry closed; a party lands together on the new shard", () =>
+  quiet(async () => {
+    const h = harness(WC.openAt + 60_000);
+    await h.dir.start();
+    const s0 = h.dir.shardOfCycle(K)!;
+    const m0 = s0.room.match as Match;
+    // 21 raiders put on the map without any admission (no trigger ran): a party of 4 does not fit.
+    while (m0.humansOnMap() < WORLD.CAPACITY - PARTY.MAX_SIZE + 1) filler(m0);
+    assert.equal(h.dir.shardsOfCycle(K).length, 1);
+    const partyId = randomUUID();
+    const dropId = randomUUID();
+    await assert.rejects(h.dir.admit({ ...ticket(s0.matchId), partyId, dropId, dropSize: 4 }), { message: `world_full:${PARTY_FULL_DETAIL}` });
+    await h.time.settle();
+    const s1 = h.dir.shardOfCycle(K, 1)!;
+    assert.ok(s1, "the refusal opened shard 1");
+    // The retry of the party goes to shard 1 (the web picks a shard with room for all of it): all four together.
+    const m1 = s1.room.match as Match;
+    const lead = { ...ticket(s1.matchId), partyId, dropId, dropSize: 4 };
+    await h.dir.admit(lead);
+    for (let i = 0; i < 3; i++) await h.dir.admit({ ...ticket(s1.matchId), partyId, dropId, dropSize: 4 });
+    assert.equal(m1.humansOnMap(), 4);
+    assert.ok(m1.allRuntimes().filter((r) => !r.isNpc).every((r) => r.dropId === dropId));
+    assert.equal(s1.drops.get(dropId)?.users.size, 4);
+    h.dir.stop();
+
+    // Closing phase: entry is closed, so nothing opens however full the shard is.
+    const c = harness(WC.entryClosesAt - 30_000);
+    await c.dir.start();
+    const cs = c.dir.shardOfCycle(K)!;
+    const cm = cs.room.match as Match;
+    while (cm.humansOnMap() < WORLD.CAPACITY) filler(cm);
+    await c.time.advanceTo(WC.entryClosesAt);
+    assert.equal(c.dir.ensureRoom(K), null, "entry to k closed: no new shard of k");
+    await assert.rejects(c.dir.admit(ticket(cs.matchId)), /entry_closed/);
+    await c.time.settle();
+    assert.equal(c.dir.shardsOfCycle(K).length, 1);
+    c.dir.stop();
   }));

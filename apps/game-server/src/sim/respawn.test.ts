@@ -121,7 +121,7 @@ test("T15 respawn: a cleared squad comes back once, 15 min after its last member
   assert.equal(NPC.RESPAWN.MAX_PER_POST, 1);
   clear(m, sq, human);
   jump(m, wall, NPC.RESPAWN.AFTER_MS + 30_000);
-  assert.ok(WORLD.CYCLE_MS - m.clock >= NPC.RESPAWN.MIN_CYCLE_LEFT_MS);
+  assert.ok(WORLD.MAP_MS - m.clock >= NPC.RESPAWN.MIN_CYCLE_LEFT_MS);
   assert.equal(living(m).length, 0, "once per post per cycle");
   assert.equal(marauderSquads(m).length, 2);
 });
@@ -150,11 +150,11 @@ test("T15 respawn: not when fewer than 10 min of the cycle would remain; never o
   const { m, wall, human, squad } = squadWorld();
   human.pub.x = 4600;
   human.pub.y = 4600;
-  // Last death at 21:00 → due at 36:00, when only 9 min remain.
-  jump(m, wall, 20 * 60_000 - m.clock + 60_000);
+  // Last death at 31:00 → due at 46:00, when only 9 min of the 55-min map remain.
+  jump(m, wall, 30 * 60_000 - m.clock + 60_000);
   clear(m, squad, human);
   jump(m, wall, NPC.RESPAWN.AFTER_MS);
-  assert.ok(WORLD.CYCLE_MS - m.clock < NPC.RESPAWN.MIN_CYCLE_LEFT_MS);
+  assert.ok(WORLD.MAP_MS - m.clock < NPC.RESPAWN.MIN_CYCLE_LEFT_MS);
   advance(m, wall, 25_000);
   jump(m, wall, 4 * 60_000);
   assert.equal(living(m).length, 0);
@@ -163,10 +163,10 @@ test("T15 respawn: not when fewer than 10 min of the cycle would remain; never o
   const b = squadWorld();
   b.human.pub.x = 4600;
   b.human.pub.y = 4600;
-  jump(b.m, b.wall, WORLD.CYCLE_MS - NPC.RESPAWN.MIN_CYCLE_LEFT_MS - NPC.RESPAWN.AFTER_MS - b.m.clock - 5_000);
+  jump(b.m, b.wall, WORLD.MAP_MS - NPC.RESPAWN.MIN_CYCLE_LEFT_MS - NPC.RESPAWN.AFTER_MS - b.m.clock - 5_000);
   clear(b.m, b.squad, b.human);
   jump(b.m, b.wall, NPC.RESPAWN.AFTER_MS);
-  assert.ok(WORLD.CYCLE_MS - b.m.clock >= NPC.RESPAWN.MIN_CYCLE_LEFT_MS);
+  assert.ok(WORLD.MAP_MS - b.m.clock >= NPC.RESPAWN.MIN_CYCLE_LEFT_MS);
   assert.equal(living(b.m).length, 1);
 
   // Legacy roster match: no respawn at all.

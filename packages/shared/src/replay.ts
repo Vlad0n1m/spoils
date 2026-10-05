@@ -214,7 +214,7 @@ export interface ReplayChunkUpload {
   cycleId: number;
   shard: number;
   mapId: string;
-  /** Wall ms of the cycle start (replays.started_at). */
+  /** Wall ms of the map's opening = match clock 0 (worldCycleOf startAt; replays.started_at). */
   cycleStartsAt: number;
   /**
    * MapData.genVersion (MAP_GEN_VERSION) the shard's map was generated with (replays.gen_version):

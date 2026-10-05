@@ -80,13 +80,13 @@ function assertLives(m: Match): void {
 
 // ---------------------------------------------------------------- T6 world clock
 
-test("T6 world clock: no step before the cycle start; the clock follows the wall after a stall; never ends for lack of humans; the backstop is a wipe (MIA)", () => {
+test("T6 world clock: no step before the map opens; the clock follows the wall after a stall; never ends for lack of humans; the backstop is a wipe (MIA)", () => {
   const { m, wall } = worldMatch({ map: arenaMap(), startOffsetMs: -WORLD.PREWARM_MS });
   assert.equal(m.state.phase, "open");
-  assert.equal(m.state.durationMs, WORLD.CYCLE_MS);
+  assert.equal(m.state.durationMs, WORLD.MAP_MS, "a map lives 55 min: opening → wipe");
   assert.equal(m.state.startedAt, WORLD_T0);
   assert.equal(m.state.cycleId, 1000);
-  assert.equal(m.state.entryCloseMs, WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS);
+  assert.equal(m.state.entryCloseMs, WORLD.MAP_MS - WORLD.ENTRY_CLOSE_MS);
   assert.equal(m.state.bossKind, "");
   assert.equal(m.state.bossState, 0);
   advance(m, wall, WORLD.PREWARM_MS - 1000);
@@ -113,13 +113,17 @@ test("T6 world clock: no step before the cycle start; the clock follows the wall
   jump(m, wall, 5 * 60_000);
   assert.equal(m.ended, false, "a world match never ends for lack of humans");
 
+  // 45 minutes in: still running (the first raiders of a map get up to 55 minutes).
   wall.t = WORLD_T0 + WORLD.CYCLE_MS + 3000;
+  m.step(SERVER_TICK_MS);
+  assert.equal(m.ended, false, "no wipe at 45:00 of the map clock");
+  wall.t = WORLD_T0 + WORLD.MAP_MS + 3000;
   const ev = (() => {
     m.step(SERVER_TICK_MS);
     return m.drainEvents();
   })();
   assert.ok(m.ended, "the backstop wiped the map");
-  assert.equal(m.clock, WORLD.CYCLE_MS, "clamped at the cycle end");
+  assert.equal(m.clock, WORLD.MAP_MS, "clamped at the map's end");
   assert.equal(m.state.phase, "ended");
   assert.equal(a.exitReport!.exit, "mia");
   assert.ok(!m.exitReports.some((x) => x.exit === "timeout"), "never a timeout in world mode");
@@ -174,7 +178,7 @@ test("T7 addHuman: indexes after the NPCs, selfKey p<i>, currentOf = newest entr
 
 // ---------------------------------------------------------------- T8 extract arm
 
-test("T8 extract arm: a fresh entrant cannot extract before enteredAt + 3 min while an earlier one can in the same tick; N2 / S2 close at 40:00", () => {
+test("T8 extract arm: a fresh entrant cannot extract before enteredAt + 3 min while an earlier one can in the same tick; N2 / S2 close at 50:00 (5 min before the wipe)", () => {
   const extracts = [
     { id: "N1", name: "N1", x: 1200, y: 3800, r: 110, side: 2 as MapSide, kind: "always" as const },
     { id: "N2", name: "N2", x: 3600, y: 3800, r: 110, side: 2 as MapSide, kind: "always" as const, closesAtMs: 25 * 60_000 },
@@ -185,8 +189,8 @@ test("T8 extract arm: a fresh entrant cannot extract before enteredAt + 3 min wh
   assert.equal(n1.openAt, 0);
   assert.equal(n1.closeAt, 0);
   assert.equal(n2.openAt, 0);
-  assert.equal(n2.closeAt, WORLD.CYCLE_MS - WORLD.EXTRACT_EARLY_CLOSE_MS);
-  assert.equal(n2.closeAt, 40 * 60_000);
+  assert.equal(n2.closeAt, WORLD.MAP_MS - WORLD.EXTRACT_EARLY_CLOSE_MS);
+  assert.equal(n2.closeAt, 50 * 60_000);
 
   jump(m, wall, 1000);
   const a = enter(m, "ua");
@@ -202,13 +206,13 @@ test("T8 extract arm: a fresh entrant cannot extract before enteredAt + 3 min wh
   advance(m, wall, 10_500);
   assert.equal(b.exitReport?.exit, "extract");
 
-  // N2 at 40:00: closed for everyone.
+  // N2 at 50:00: closed for everyone.
   const c = enter(m, "uc");
-  wall.t = WORLD_T0 + 40 * 60_000;
+  wall.t = WORLD_T0 + 50 * 60_000;
   m.step(SERVER_TICK_MS);
   put(c, n2.x, n2.y);
   advance(m, wall, 12_000);
-  assert.equal(c.pub.alive, true, "N2 closed at 40:00");
+  assert.equal(c.pub.alive, true, "N2 closed at 50:00");
 });
 
 // ---------------------------------------------------------------- T9 ledger lives
@@ -264,7 +268,7 @@ test("T10 wipe: alive humans (connected or not) leave MIA with everything in los
     bossFill: [poolItem("uid-boss-f1", "shotgun", 1)],
   });
   m.drainEvents();
-  wall.t = WORLD_T0 + WORLD.CYCLE_MS;
+  wall.t = WORLD_T0 + WORLD.MAP_MS;
   m.step(SERVER_TICK_MS);
   const ev = m.drainEvents();
   assert.ok(m.ended);

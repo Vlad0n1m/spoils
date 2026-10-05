@@ -66,19 +66,30 @@ export const WORLD = {
   TERRAIN_CELL: 64,
   /** Client bake / interest-management chunk. */
   CHUNK: 1024,
-  // ---- WORLD v6: one always-live map per cycle, aligned to the UTC wall clock (spec D1–D21).
-  /** One map ("cycle") lasts this long; wipes at :00 :45 :30 :15 UTC, 32 maps a day. */
+  // ---- WORLD v6: always-live maps aligned to the UTC wall clock (spec D1–D21), overlapping (World v7).
+  /**
+   * Cycle grid: one cycle every CYCLE_MS, wipes at :00 :45 :30 :15 UTC, 32 maps a day. Cycle k wipes
+   * at (k + 1) × CYCLE_MS whatever else changes; the grid never moves.
+   */
   CYCLE_MS: 45 * 60_000,
-  /** Entry opens this long after the cycle start (the reset window after the wipe). */
-  RESET_MS: 20_000,
-  /** Entry closes this long before the wipe. */
+  /**
+   * Entry to a map closes this long before its wipe — and at that very moment the next cycle's map
+   * opens (overlapping maps, owner 05.10: nobody ever waits for a map). So exactly one cycle accepts
+   * entries at any instant, and for these ENTRY_CLOSE_MS two cycles run at once (the closing one
+   * finishes for those already on it).
+   */
   ENTRY_CLOSE_MS: 10 * 60_000,
+  /**
+   * A map's whole life, from its opening (the previous cycle's entry close) to its own wipe:
+   * CYCLE_MS + ENTRY_CLOSE_MS = 55 min. The match clock (BattleState.clockMs) runs from the opening,
+   * so every map timer (time of day, weather, supply drops, hot zones, NPC respawns, the early extract
+   * close, the pool's late taper) counts over this span; the first raiders get up to 55 minutes.
+   */
+  MAP_MS: 55 * 60_000,
   /** Wipe warnings (time left), derived from the clock by the client. */
   WARN_AT_MS: [600_000, 300_000, 60_000] as const,
-  /** The next cycle's room is created this long before its start. */
+  /** A map's room is created this long before it opens (its Match idles until its clock 0). */
   PREWARM_MS: 30_000,
-  /** The next map's boss is revealed in the lobby this long before the wipe. */
-  NEXT_BOSS_REVEAL_MS: 10 * 60_000,
   /** Humans on one map (shard). A full map answers world_full. */
   CAPACITY: 24,
   /**
@@ -98,8 +109,18 @@ export const WORLD = {
    */
   DISCONNECT_SHELTER_MS: 180_000,
   SHELTER_COMBAT_MS: 10_000,
-  /** v6 launches with one shard; overflow shards are later. */
-  MAX_SHARDS: 1,
+  /**
+   * Shards (copies of the map, one battle room each, all in the one game-server process) a cycle may
+   * run. Shard 0 opens with the cycle; another one opens on demand while the cycle accepts entries,
+   * once every shard of it has fewer than SPARE_SEATS free seats (WorldDirectory). world_full only
+   * when all MAX_SHARDS are full. Every shard wipes with its cycle.
+   */
+  MAX_SHARDS: 4,
+  /**
+   * Free seats under which a shard counts as full for the on-demand open (= PARTY.MAX_SIZE, so a
+   * whole party always finds one shard with room while the next one is starting).
+   */
+  SPARE_SEATS: 4,
   /** Vision is allocated for this many runtimes (humans + NPCs, never reused) per shard. */
   MAX_RUNTIMES_PER_SHARD: 256,
   /** Admission refuses at MAX_RUNTIMES_PER_SHARD − this (kept for NPC respawns). */
@@ -118,7 +139,7 @@ export const WORLD = {
   LATE_SPAWN_FALLBACK_PX: 2000,
   /** Client: armed auto-enter waits rand(0..this) after openAt. */
   AUTO_ENTER_JITTER_MS: 4_000,
-  /** Map #1 = the cycle that starts at this instant (planned v6 launch, a UTC midnight). */
+  /** Map #1 = the cycle whose grid slot starts at this instant (planned v6 launch, a UTC midnight; it wipes 45 min later). */
   NUMBER_EPOCH_MS: Date.UTC(2026, 9, 6),
   // ---- Ground and corpse expiry (addendum A6, world mode only; legacy roster matches unchanged).
   /**
@@ -135,7 +156,10 @@ export const WORLD = {
   EXPIRE_WARN_MS: 60_000,
 } as const;
 
-/** One world cycle (wall-clock ms). */
+/**
+ * One world cycle (wall-clock ms). `startAt` = `openAt` = the map opens (the previous cycle's entry
+ * close: wipeAt − MAP_MS), and is the match clock 0; entry closes at entryClosesAt; it wipes at wipeAt.
+ */
 export interface WorldCycle {
   cycle: number;
   startAt: number;
@@ -143,30 +167,66 @@ export interface WorldCycle {
   entryClosesAt: number;
   wipeAt: number;
 }
-/** resetting: [startAt, openAt); open: [openAt, entryClosesAt); closing: [entryClosesAt, wipeAt). */
+/**
+ * resetting: before openAt (a prewarmed room, never the cycle worldCycleAt returns); open:
+ * [openAt, entryClosesAt); closing: [entryClosesAt, wipeAt) — the next cycle is open meanwhile.
+ */
 export type WorldPhase = "resetting" | "open" | "closing";
 
-/** cycle = floor(nowMs / CYCLE_MS); openAt = startAt + RESET_MS; entryClosesAt = wipeAt − ENTRY_CLOSE_MS. */
+/**
+ * Cycle k on the grid: wipeAt = (k + 1) × CYCLE_MS; entryClosesAt = wipeAt − ENTRY_CLOSE_MS;
+ * startAt = openAt = wipeAt − MAP_MS (= the entry close of cycle k − 1).
+ */
 export function worldCycleOf(cycle: number): WorldCycle {
   const c = Math.floor(cycle);
-  const startAt = c * WORLD.CYCLE_MS;
-  const wipeAt = startAt + WORLD.CYCLE_MS;
-  return { cycle: c, startAt, openAt: startAt + WORLD.RESET_MS, entryClosesAt: wipeAt - WORLD.ENTRY_CLOSE_MS, wipeAt };
-}
-
-/** The cycle running at wall-clock `nowMs` (pure: callers pass their own clock). */
-export function worldCycleAt(nowMs: number): WorldCycle {
-  return worldCycleOf(Math.floor(nowMs / WORLD.CYCLE_MS));
+  const wipeAt = (c + 1) * WORLD.CYCLE_MS;
+  const startAt = wipeAt - WORLD.MAP_MS;
+  return { cycle: c, startAt, openAt: startAt, entryClosesAt: wipeAt - WORLD.ENTRY_CLOSE_MS, wipeAt };
 }
 
 /**
- * resetting: [startAt, openAt); open: [openAt, entryClosesAt); closing: [entryClosesAt, wipeAt).
- * Outside the cycle: before openAt → "resetting", from entryClosesAt on → "closing".
+ * The cycle accepting entries at wall-clock `nowMs` (exactly one at any instant, so its phase is
+ * always "open"): floor((nowMs + ENTRY_CLOSE_MS) / CYCLE_MS). Pure: callers pass their own clock.
  */
+export function worldCycleAt(nowMs: number): WorldCycle {
+  return worldCycleOf(Math.floor((nowMs + WORLD.ENTRY_CLOSE_MS) / WORLD.CYCLE_MS));
+}
+
+/**
+ * The cycles whose maps run at `nowMs`, oldest first: the open one, preceded by the previous cycle
+ * during its last ENTRY_CLOSE_MS (closing, still on the map for those who entered it).
+ */
+export function worldCyclesLive(nowMs: number): WorldCycle[] {
+  const open = worldCycleAt(nowMs);
+  const prev = worldCycleOf(open.cycle - 1);
+  return nowMs < prev.wipeAt ? [prev, open] : [open];
+}
+
+/** resetting: before openAt; open: [openAt, entryClosesAt); closing: from entryClosesAt on. */
 export function worldPhase(c: WorldCycle, nowMs: number): WorldPhase {
   if (nowMs < c.openAt) return "resetting";
   if (nowMs < c.entryClosesAt) return "open";
   return "closing";
+}
+
+/**
+ * The shard a join goes to, among the running shards of the open cycle (`humans` = raiders on it,
+ * `need` = seats the join takes: 1, or a new party drop's size): the fullest one that still has room
+ * for `need` (players packed together so maps feel alive; ties → the lower shard index), else the
+ * emptiest one — the game server then decides (seats of idle bodies count as free there) and answers
+ * world_full when it really is full, opening another shard if MAX_SHARDS allows. null = no shard.
+ */
+export function pickWorldShard<T extends { shard: number; humans: number }>(shards: readonly T[], need = 1): T | null {
+  let best: T | null = null;
+  for (const s of shards) {
+    if (s.humans + need > WORLD.CAPACITY) continue;
+    if (!best || s.humans > best.humans || (s.humans === best.humans && s.shard < best.shard)) best = s;
+  }
+  if (best) return best;
+  for (const s of shards) {
+    if (!best || s.humans < best.humans || (s.humans === best.humans && s.shard < best.shard)) best = s;
+  }
+  return best;
 }
 
 /** Public map number: cycle − floor(NUMBER_EPOCH_MS / CYCLE_MS) + 1 (may be ≤ 0 before the epoch). */

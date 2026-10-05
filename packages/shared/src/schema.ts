@@ -291,7 +291,7 @@ export class BattleState extends Schema {
   // ---- WORLD v6 (plain fields, no @view)
   /** World cycle of this map (worldCycleOf); 0 = legacy match. */
   @type("uint32") cycleId = 0;
-  /** Cycle clock when entry closes (CYCLE_MS − ENTRY_CLOSE_MS); 0 = legacy match. */
+  /** Map clock when entry closes (MAP_MS − ENTRY_CLOSE_MS; clock 0 = the map's opening); 0 = legacy match. */
   @type("number") entryCloseMs = 0;
   /** Event boss of this map: BossKind or "". */
   @type("string") bossKind = "";

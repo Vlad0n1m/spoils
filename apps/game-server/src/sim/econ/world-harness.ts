@@ -45,6 +45,7 @@ import {
   WORLD,
   bossFillPlan,
   cycleEnvSeed,
+  worldCycleOf,
   dogTagCr,
   itemDef,
   junkSellCr,
@@ -261,8 +262,9 @@ function drawMix<T extends string>(mix: ReadonlyArray<{ key: T; w: number }>, rn
 export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult; entries: WorldEntryRecord[] } {
   const t0 = performance.now();
   const cycle = o.cycleId ?? 2000 + o.seed;
-  const startAt = cycle * WORLD.CYCLE_MS;
-  const entryCloseMs = WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS;
+  // The map opens at the previous cycle's entry close (clock 0) and wipes MAP_MS later.
+  const startAt = worldCycleOf(cycle).startAt;
+  const entryCloseMs = WORLD.MAP_MS - WORLD.ENTRY_CLOSE_MS;
   const rng = mulberry32((o.seed * 0x9e3779b1) >>> 0);
   const matchSeed = Math.floor(rng() * 2 ** 32) >>> 0;
   const lootSeed = Math.floor(rng() * 2 ** 32) >>> 0;
@@ -317,7 +319,7 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
   };
   type Arrival = { at: number; user: User; role: WorldEntryRecord["role"]; probeMin: number };
   const queue: Arrival[] = [];
-  const open = WORLD.RESET_MS;
+  const open = 0;
   const nUsers = o.users ?? 36;
   for (let i = 0; i < nUsers; i++) {
     const strategy = drawMix(usable, arng);
@@ -529,7 +531,7 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
   while (!m.ended) {
     while (queue.length && queue[0]!.at <= m.clock) admit(queue.shift()!);
     for (const l of lives) if (l.rt.pub.alive) l.agent.update(SERVER_TICK_MS);
-    if (m.clock >= WORLD.CYCLE_MS - 2 * SERVER_TICK_MS) {
+    if (m.clock >= WORLD.MAP_MS - 2 * SERVER_TICK_MS) {
       res.pool.pendingAtWipe =
         m.allRuntimes().reduce((n, rt) => n + rt.pendingPool.filter((it) => poolUid.has(it.uid) && !poolUid.get(it.uid)!.boss).length, 0) +
         m.unplacedPool.filter((u) => poolUid.has(u.it.uid)).length;

@@ -361,7 +361,11 @@ export interface WorldBossDto {
   status: "alive" | "killed";
   killedBy: string | null;
 }
-/** GET /api/world/status (public, CDN-cached). */
+/**
+ * GET /api/world/status (public, CDN-cached). Describes the open cycle (the one accepting entries:
+ * worldCycleAt, so `phase` is "open" whenever a map runs), plus `closing` = the previous cycle while
+ * its map still runs for those already on it (overlapping maps, its last ENTRY_CLOSE_MS).
+ */
 export interface WorldStatusDto {
   v: 1;
   serverTime: number;
@@ -371,20 +375,33 @@ export interface WorldStatusDto {
   openAt: number;
   entryClosesAt: number;
   wipeAt: number;
-  /** A running world raids row exists for this cycle. */
+  /** A running world raids row (shard) exists for this cycle. */
   online: boolean;
-  /** Active entries of this cycle. */
+  /** Active entries of this cycle, over all its shards. */
   humans: number;
-  /** WORLD.CAPACITY × WORLD.MAX_SHARDS. */
+  /** Running shards of this cycle (0 while none registered yet). */
+  shards: number;
+  /** WORLD.CAPACITY × max(1, shards): seats of the maps running now (WORLD.MAX_SHARDS caps shards). */
   capacity: number;
+  /**
+   * The cycle's event boss (same kind on every shard; each shard runs its own instance): "killed"
+   * once it died on every running shard, `killedBy` = the first killer.
+   */
   boss: WorldBossDto | null;
+  /** The cycle after this one; its map opens when entry here closes (its boss is revealed then). */
   next: {
     cycle: number;
     mapNumber: number;
     openAt: number;
-    /** Absent until revealed (WORLD.NEXT_BOSS_REVEAL_MS before the wipe). */
-    boss?: { kind: BossKind; name: string; zoneName: string } | null;
   };
+  /** The previous cycle while its map still runs (no new entries; it wipes at `wipeAt`), else null. */
+  closing: {
+    cycle: number;
+    mapNumber: number;
+    wipeAt: number;
+    /** Raiders still on it (active entries). */
+    humans: number;
+  } | null;
   last: {
     cycle: number;
     mapNumber: number;

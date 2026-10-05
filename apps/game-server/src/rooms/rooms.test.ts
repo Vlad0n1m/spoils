@@ -164,12 +164,16 @@ after(async () => {
   worldDirectory.stop();
   // leave() of a connection the server already closed never settles: do not wait for it.
   for (const r of joined) await Promise.race([r.leave().catch(() => {}), new Promise((res) => setTimeout(res, 200))]);
-  const room = matchMaker.getLocalRoomById(shard.roomId) as unknown as
-    | { reservedSeatTimeouts: Record<string, NodeJS.Timeout>; disconnect(): Promise<void> }
-    | undefined;
-  if (room) {
-    for (const t of Object.values(room.reservedSeatTimeouts)) clearTimeout(t);
-    await room.disconnect();
+  // Every shard of the cycle: filling shard 0 opens on-demand shards (WORLD.MAX_SHARDS) whose rooms
+  // would keep the process alive.
+  for (const s of worldDirectory.shardsOfCycle(shard.cycle)) {
+    const room = matchMaker.getLocalRoomById(s.roomId) as unknown as
+      | { reservedSeatTimeouts: Record<string, NodeJS.Timeout>; disconnect(): Promise<void> }
+      | undefined;
+    if (room) {
+      for (const t of Object.values(room.reservedSeatTimeouts)) clearTimeout(t);
+      await room.disconnect();
+    }
   }
   gameServer.transport.shutdown();
   http.close(() => {});
@@ -451,14 +455,14 @@ test("create / joinOrCreate are not exposed; battle creation needs the launch ke
 
 test("world create options are sanitized", () => {
   const ok = {
-    matchId: randomUUID(), cycleId: 5, shard: 0, cycleStartsAt: 5 * WORLD.CYCLE_MS, entryCloseMs: WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS,
+    matchId: randomUUID(), cycleId: 5, shard: 0, cycleStartsAt: 5 * WORLD.CYCLE_MS, entryCloseMs: WORLD.MAP_MS - WORLD.ENTRY_CLOSE_MS,
     matchSeed: 1, lootSeed: 2, envSeed: 3, bossEvent: "warden", mode: "live",
   };
   assert.deepEqual(sanitizeWorld(ok), ok);
   assert.equal(sanitizeWorld({ ...ok, matchId: "m-1" }), null);
   assert.equal(sanitizeWorld({ ...ok, bossEvent: "dragon" }), null);
   assert.equal(sanitizeWorld({ ...ok, lootSeed: -1 }), null);
-  assert.equal(sanitizeWorld({ ...ok, entryCloseMs: WORLD.CYCLE_MS + 1 }), null);
+  assert.equal(sanitizeWorld({ ...ok, entryCloseMs: WORLD.MAP_MS + 1 }), null);
   assert.equal(sanitizeWorld({ ...ok, mode: "free" }), null);
   assert.equal(sanitizeWorld(null), null);
   assert.deepEqual(sanitizeWorld({ ...ok, bossEvent: null }), { ...ok, bossEvent: null });

@@ -12,7 +12,7 @@
  * WORLD v6 (MatchOptions.world, spec §3.4): one shard-cycle of the persistent world. The clock is
  * the cycle clock (injected now() − cycleStartsAt), humans arrive and leave through addHuman /
  * extract / death (re-entries are new runtimes; indexes are never reused), the wipe at
- * WORLD.CYCLE_MS sends everyone left MIA, released pool items are placed by the server
+ * WORLD.MAP_MS (the cycle's wipe) sends everyone left MIA, released pool items are placed by the server
  * (pool-place.ts) and player drops / corpses expire (A6). Legacy roster matches are unchanged.
  *
  * Tick order inside step() (later WPs fill the hooks, never the structure):
@@ -247,8 +247,8 @@ export interface MatchOptions {
   npcOnlyUntilMs?: number;
   /**
    * WORLD v6 (spec §3.4): this match is one shard-cycle of the persistent world. The clock follows
-   * the wall clock (`now() − cycleStartsAt`, so the directory can inject worldNow()), humans arrive
-   * through addHuman (roster empty), the map is wiped at WORLD.CYCLE_MS (MIA) and never ends for
+   * the wall clock (`now() − cycleStartsAt`, the map's opening, so the directory can inject worldNow()), humans arrive
+   * through addHuman (roster empty), the map is wiped at WORLD.MAP_MS (MIA) and never ends for
    * lack of humans. Only the event boss's spot spawns (boss + guards). Absent = legacy roster match.
    */
   world?: WorldOptions;
@@ -270,9 +270,12 @@ export interface MatchOptions {
 export interface WorldOptions {
   cycleId: number;
   shard: number;
-  /** Wall ms of the cycle start (clock 0). */
+  /**
+   * Wall ms of the map's opening = clock 0 (worldCycleOf startAt: the previous cycle's entry close;
+   * the map wipes WORLD.MAP_MS later, at its cycle's wipeAt).
+   */
   cycleStartsAt: number;
-  /** Cycle clock when entry closes (CYCLE_MS − ENTRY_CLOSE_MS). */
+  /** Map clock when entry closes (MAP_MS − ENTRY_CLOSE_MS). */
   entryCloseMs: number;
   /** Event boss of this cycle (bossEventOf), or null. */
   bossEvent: BossKind | null;
@@ -327,7 +330,7 @@ export class Match {
   readonly exitReports: PlayerExitReport[] = [];
 
   // ---- WORLD v6
-  /** World mode options plus the backstop (durationMs = WORLD.CYCLE_MS); null = legacy roster match. */
+  /** World mode options plus the backstop (durationMs = WORLD.MAP_MS: opening → wipe); null = legacy roster match. */
   readonly world: (WorldOptions & { durationMs: number }) | null;
   /** Spawn spots handed out recently (spawn.ts pickEntrySpawn). */
   readonly recentSpawns: Array<{ x: number; y: number; at: number }> = [];
@@ -380,7 +383,7 @@ export class Match {
     this.state.mapId = this.map.id;
     this.state.mapSeed = seed;
     this.lootSeed = (opts.lootSeed ?? seed) >>> 0;
-    this.world = opts.world ? { ...opts.world, durationMs: WORLD.CYCLE_MS } : null;
+    this.world = opts.world ? { ...opts.world, durationMs: WORLD.MAP_MS } : null;
     this.state.phase = this.world ? "open" : "drop";
     this.state.startedAt = this.world ? this.world.cycleStartsAt : this.now();
     this.state.clockMs = 0;
@@ -490,7 +493,7 @@ export class Match {
         // D8: every extract is open from clock 0 (each player arms after their own entry); the
         // map's early-closing ones (N2 / S2) close EXTRACT_EARLY_CLOSE_MS before the wipe.
         e.openAt = 0;
-        e.closeAt = spot.closesAtMs !== undefined ? WORLD.CYCLE_MS - WORLD.EXTRACT_EARLY_CLOSE_MS : 0;
+        e.closeAt = spot.closesAtMs !== undefined ? this.world.durationMs - WORLD.EXTRACT_EARLY_CLOSE_MS : 0;
       } else {
         e.openAt = MATCH.EXTRACT_OPEN_AT_MS;
         e.closeAt = spot.closesAtMs ?? (closing.has(i) ? Math.round(MATCH.DURATION_MS * MATCH.EXTRACT_CLOSE_EARLY_AT) : 0);
@@ -1055,8 +1058,8 @@ export class Match {
     if (this.ended) return;
     const dt = Math.max(0, Math.min(MAX_STEP_MS, dtMs));
     if (this.world) {
-      // D7: the clock is the cycle clock (wall time since the cycle start, monotonic, clamped);
-      // a prewarmed room does nothing before its cycle starts. Physics keeps the clamped dt.
+      // D7: the clock is the map clock (wall time since the map's opening, monotonic, clamped);
+      // a prewarmed room does nothing before its map opens. Physics keeps the clamped dt.
       const wall = this.now() - this.world.cycleStartsAt;
       if (wall < 0) return;
       this.state.clockMs = Math.min(this.world.durationMs, Math.max(this.clock, wall));

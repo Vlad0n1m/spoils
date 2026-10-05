@@ -157,7 +157,7 @@ test("world: a sheltered raider still holds its place for the wipe (MIA as usual
   m.detach("sess-alice");
   assert.ok(m.isSheltered(rt));
   assert.equal(m.humansOnMap(), 1);
-  jump(m, wall, WORLD.CYCLE_MS);
+  jump(m, wall, WORLD.MAP_MS);
   assert.ok(m.ended);
   assert.equal(rt.exitReport?.exit, "mia");
 });

@@ -623,9 +623,9 @@ export interface EntryReleaseInput {
   shardReleased: number;
   /** Distinct users with risk ≥ 1 on this shard, including this entry. */
   riskUsers: number;
-  /** Cycle clock at admission. */
+  /** Map clock at admission (0 = the map's opening). */
   atMs: number;
-  /** CYCLE_MS − ENTRY_CLOSE_MS. */
+  /** Map clock of the entry close: MAP_MS − ENTRY_CLOSE_MS (clock 0 = the map's opening). */
   entryCloseMs: number;
   /** Valid pool targets on the map now (server count). */
   targets: number;

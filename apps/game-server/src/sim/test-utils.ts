@@ -234,7 +234,7 @@ type Extract2<T, U> = T extends U ? T : never;
 
 // ---------------------------------------------------------------- WORLD v6 helpers
 
-/** Wall ms of the test cycle's start (cycle 1000 × 45 min). */
+/** Wall ms of the test map's opening (match clock 0; the map wipes WORLD.MAP_MS later). */
 export const WORLD_T0 = 1000 * WORLD.CYCLE_MS;
 
 /** The injected wall clock of a world test match (`now()` reads `t`). */
@@ -260,7 +260,7 @@ export function worldMatch(opts: Partial<MatchOptions> & { startOffsetMs?: numbe
     strictLedger: true,
     envSeed: 1,
     weatherOverride: "clear",
-    world: { cycleId: 1000, shard: 0, cycleStartsAt: WORLD_T0, entryCloseMs: WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS, bossEvent },
+    world: { cycleId: 1000, shard: 0, cycleStartsAt: WORLD_T0, entryCloseMs: WORLD.MAP_MS - WORLD.ENTRY_CLOSE_MS, bossEvent },
     ...rest,
   });
   return { m, wall };

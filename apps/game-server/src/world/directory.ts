@@ -1,15 +1,31 @@
 /**
  * WORLD v6 world directory (spec §3.2): the one place that opens, wipes and admits into the world's
  * shards. One shard = one Colyseus battle room = one Match = one matchId = one web raids row
- * (kind 'world'), per (cycle, shard); launch has one shard per cycle (WORLD.MAX_SHARDS = 1).
+ * (kind 'world'), per (cycle, shard index). All shards live in this one process (SCALING.md §9: a
+ * shard costs ≈ 20–50 % of a vCPU at 20 Hz, so WORLD.MAX_SHARDS = 4 fit one game server).
  *
- * Timers run on absolute world times (worldNow(), addendum A1) and recompute their delay when they
- * fire:
- * - wipeAt(k) − PREWARM_MS → open the shard of cycle k + 1 (its Match idles until its cycle starts);
- * - wipeAt(k)              → wipe the shard of cycle k (MIA), then schedule cycle k + 1;
- * - wipeAt(k) + 60 s       → a room of cycle k still alive is force-disposed (logged).
- * Boot mid-cycle opens the current cycle's shard at once (a fresh matchId and loot seed, the same
- * boss event; void-orphans has returned the previous process' gear by then).
+ * Overlapping maps (owner 05.10: nobody ever waits for a map). Cycle k's map opens at the entry close
+ * of cycle k − 1 (worldCycleOf(k).openAt = wipeAt(k) − WORLD.MAP_MS) and wipes at its own wipeAt(k) on
+ * the unchanged UTC grid, so exactly one cycle accepts entries at any instant and for ENTRY_CLOSE_MS
+ * two cycles run side by side: k − 1 finishing for those already on it, k filling up. Timers run on
+ * absolute world times (worldNow(), addendum A1) and recompute their delay when they fire:
+ * - openAt(k + 1) − PREWARM_MS → open shard 0 of cycle k + 1 (its Match idles until its clock 0,
+ *   the opening; entry to it opens exactly when entry to k closes);
+ * - wipeAt(k)               → wipe every shard of cycle k (MIA, each its own report), then schedule
+ *   cycle k + 1;
+ * - wipeAt(k) + 60 s        → a room of cycle k still alive is force-disposed (logged).
+ * Boot opens shard 0 of the cycle accepting entries at once (a fresh matchId and loot seed, the same
+ * boss event; void-orphans has returned the previous process' gear by then). A cycle that was closing
+ * at boot is not reopened (nobody could enter it).
+ *
+ * Several shards per cycle (on demand). While a cycle accepts entries, another shard of it opens as
+ * soon as every shard it has is nearly full — fewer than WORLD.SPARE_SEATS free seats counting the
+ * raiders on the map, admissions in flight and seats held for party drops — up to WORLD.MAX_SHARDS.
+ * Opening a little before the last seat goes means the room and its raids/open row are ready when the
+ * next player (or a whole party) arrives. The web's /api/world/join picks the shard (shared
+ * pickWorldShard: the fullest one with room, players packed together); a world_full refusal here
+ * also triggers the open, so the player's retry finds the new shard. Every shard of a cycle runs the
+ * cycle's boss event on its own (same kind, its own instance and boss bag) and wipes with the cycle.
  *
  * Admission (`admit`, called by BattleRoom's static onAuth before any seat is reserved) runs the
  * checks of §3.2 and the web's raids/enter, then puts the raider on the map (Match.addHuman), so
@@ -17,13 +33,15 @@
  * is a WORLD_JOIN_ERR code ("<code>" or "<code>:<detail>"). Capacity counts seat holders
  * (Match.seatHolders): connected humans and bodies without a client for less than WORLD.IDLE_SEAT_MS,
  * plus admissions in flight; a longer idle body stays on the map (rejoin always works) but frees its seat.
+ * A rejoin goes to the ticket's own shard, whichever cycle it belongs to (a raider on the closing map
+ * keeps playing it until its wipe).
  *
  * Party drops (shared party.ts, JoinTicket.dropId): the first admission of a dropId on a shard needs
  * room for the whole drop (its signed JoinTicket.dropSize; PARTY.MAX_SIZE for an older ticket without
  * one) and holds those seats for PARTY.DROP_TTL_MS, so a pair never blocks four seats; it is refused with "world_full:party" (PARTY_FULL_DETAIL) when the
  * shard cannot take them all. Later members of that drop take a held seat (no capacity refusal),
  * and every other admission counts the held seats as taken. Spawning together is the Match's
- * (spawn.ts pickDropSpawn).
+ * (spawn.ts pickDropSpawn). The web puts a new drop on a shard with room for the whole party.
  */
 
 import { randomInt, randomUUID } from "node:crypto";
@@ -59,9 +77,9 @@ export interface WorldCreateOptions {
   matchId: string;
   cycleId: number;
   shard: number;
-  /** Wall ms of the cycle start (Match clock 0). */
+  /** Wall ms of the map's opening (Match clock 0): worldCycleOf(cycle).startAt. */
   cycleStartsAt: number;
-  /** Cycle clock when entry closes (CYCLE_MS − ENTRY_CLOSE_MS). */
+  /** Map clock when entry closes (MAP_MS − ENTRY_CLOSE_MS). */
   entryCloseMs: number;
   /** Public map seed (BattleState.mapSeed). */
   matchSeed: number;
@@ -198,9 +216,11 @@ export function defaultDirectoryDeps(): DirectoryDeps {
 
 export class WorldDirectory {
   private readonly deps: DirectoryDeps;
-  private readonly byCycle = new Map<number, Shard>();
+  /** Shards of each cycle, by shard index (on-demand shards are appended). */
+  private readonly byCycle = new Map<number, Shard[]>();
   private readonly byMatch = new Map<string, Shard>();
-  private readonly opening = new Map<number, Promise<Shard | null>>();
+  /** Shards being created, keyed "cycle:idx". */
+  private readonly opening = new Map<string, Promise<Shard | null>>();
   private readonly scheduled = new Set<number>();
   private readonly timers = new Set<unknown>();
   private stopped = false;
@@ -210,7 +230,7 @@ export class WorldDirectory {
     this.deps = { ...defaultDirectoryDeps(), ...deps };
   }
 
-  /** Boot: open the current cycle's shard at once (even seconds before its wipe), then run the timers. */
+  /** Boot: open shard 0 of the cycle accepting entries at once (even seconds before its entry closes), then run the timers. */
   async start(): Promise<void> {
     this.stopped = false;
     const k = worldCycleAt(this.deps.now()).cycle;
@@ -230,13 +250,19 @@ export class WorldDirectory {
     return this.byMatch.get(matchId);
   }
 
-  shardOfCycle(cycle: number): Shard | undefined {
-    return this.byCycle.get(cycle);
+  /** Shard `idx` (default 0) of `cycle`, if open. */
+  shardOfCycle(cycle: number, idx = 0): Shard | undefined {
+    return this.byCycle.get(cycle)?.find((s) => s.idx === idx);
   }
 
-  /** The shard of the cycle running now, if open. */
+  /** Every open shard of `cycle`, by index. */
+  shardsOfCycle(cycle: number): readonly Shard[] {
+    return this.byCycle.get(cycle) ?? [];
+  }
+
+  /** Shard 0 of the cycle accepting entries now, if open. */
   current(): Shard | undefined {
-    return this.byCycle.get(worldCycleAt(this.deps.now()).cycle);
+    return this.shardOfCycle(worldCycleAt(this.deps.now()).cycle);
   }
 
   // ---------------------------------------------------------------- timers
@@ -266,12 +292,16 @@ export class WorldDirectory {
     return new Promise((resolve) => this.at(target, resolve, "sleep"));
   }
 
-  /** Prewarm k + 1, wipe k, hard-stop k (once per cycle). */
+  /**
+   * Open cycle k + 1 (prewarmed PREWARM_MS before it opens, i.e. before entry to k closes), wipe k,
+   * hard-stop k (once per cycle).
+   */
   private schedule(k: number): void {
     if (this.scheduled.has(k) || this.stopped) return;
     this.scheduled.add(k);
     const wc = worldCycleOf(k);
-    this.at(wc.wipeAt - WORLD.PREWARM_MS, () => this.openShard(k + 1), `prewarm cycle ${k + 1}`);
+    const next = worldCycleOf(k + 1);
+    this.at(next.openAt - WORLD.PREWARM_MS, () => this.openShard(k + 1), `prewarm cycle ${k + 1}`);
     this.at(wc.wipeAt, () => this.onWipeTime(k), `wipe cycle ${k}`);
     this.at(wc.wipeAt + HARD_STOP_AFTER_MS, () => this.hardStop(k), `hard stop cycle ${k}`);
   }
@@ -288,49 +318,52 @@ export class WorldDirectory {
     }
   }
 
-  /** Wipe the shard of cycle k now (idempotent: the Match ignores a second wipe). */
+  /** Wipe every shard of cycle k now (idempotent: the Match ignores a second wipe). */
   wipe(k: number): void {
-    const shard = this.byCycle.get(k);
-    if (!shard || shard.room.disposed) return;
-    console.log(`[world] wipe cycle ${k} (${shard.matchId}): ${shard.room.match.humansOnMap()} on the map`);
-    shard.room.wipe();
+    for (const shard of this.shardsOfCycle(k)) {
+      if (shard.room.disposed) continue;
+      console.log(`[world] wipe cycle ${k} shard ${shard.idx} (${shard.matchId}): ${shard.room.match.humansOnMap()} on the map`);
+      shard.room.wipe();
+    }
   }
 
   private async hardStop(k: number): Promise<void> {
     this.scheduled.delete(k);
-    const shard = this.byCycle.get(k);
-    if (!shard) return;
+    const shards = this.shardsOfCycle(k);
     this.byCycle.delete(k);
-    this.byMatch.delete(shard.matchId);
-    if (!shard.room.disposed) {
-      console.error(`[world] cycle ${k} room ${shard.roomId} (${shard.matchId}) still alive ${HARD_STOP_AFTER_MS / 1000} s after its wipe: disposing`);
-      await shard.room.forceDispose();
+    for (const shard of shards) {
+      this.byMatch.delete(shard.matchId);
+      if (!shard.room.disposed) {
+        console.error(`[world] cycle ${k} shard ${shard.idx} room ${shard.roomId} (${shard.matchId}) still alive ${HARD_STOP_AFTER_MS / 1000} s after its wipe: disposing`);
+        await shard.room.forceDispose();
+      }
     }
   }
 
   // ---------------------------------------------------------------- shards
 
-  /** Open (create + register) the shard of `cycle`; concurrent and repeated calls share one shard. */
-  openShard(cycle: number): Promise<Shard | null> {
-    const have = this.byCycle.get(cycle);
+  /** Open (create + register) shard `idx` of `cycle`; concurrent and repeated calls share one shard. */
+  openShard(cycle: number, idx = 0): Promise<Shard | null> {
+    const have = this.shardOfCycle(cycle, idx);
     if (have) return Promise.resolve(have);
-    let p = this.opening.get(cycle);
+    const key = `${cycle}:${idx}`;
+    let p = this.opening.get(key);
     if (!p) {
-      p = this.createShard(cycle).finally(() => this.opening.delete(cycle));
-      this.opening.set(cycle, p);
+      p = this.createShard(cycle, idx).finally(() => this.opening.delete(key));
+      this.opening.set(key, p);
     }
     return p;
   }
 
-  private async createShard(cycle: number): Promise<Shard | null> {
+  private async createShard(cycle: number, idx: number): Promise<Shard | null> {
     const wc = worldCycleOf(cycle);
     if (this.stopped || this.deps.now() >= wc.wipeAt) return null;
     const world: WorldCreateOptions = {
       matchId: randomUUID(),
       cycleId: cycle,
-      shard: 0,
+      shard: idx,
       cycleStartsAt: wc.startAt,
-      entryCloseMs: WORLD.CYCLE_MS - WORLD.ENTRY_CLOSE_MS,
+      entryCloseMs: WORLD.MAP_MS - WORLD.ENTRY_CLOSE_MS,
       matchSeed: randomInt(0, 2 ** 32),
       lootSeed: randomInt(0, 2 ** 32),
       envSeed: cycleEnvSeed(cycle),
@@ -341,13 +374,15 @@ export class WorldDirectory {
     try {
       created = await this.deps.createRoom(world);
     } catch (e) {
-      console.error(`[world] cycle ${cycle}: creating the battle room failed (retry in ${CREATE_RETRY_MS / 1000} s):`, e);
-      this.at(this.deps.now() + CREATE_RETRY_MS, () => this.openShard(cycle), `reopen cycle ${cycle}`);
+      // Shard 0 is the cycle's map: retried while the cycle lasts. An on-demand shard is opened again
+      // by the next admission that finds the cycle full.
+      console.error(`[world] cycle ${cycle} shard ${idx}: creating the battle room failed${idx === 0 ? ` (retry in ${CREATE_RETRY_MS / 1000} s)` : ""}:`, e);
+      if (idx === 0) this.at(this.deps.now() + CREATE_RETRY_MS, () => this.openShard(cycle), `reopen cycle ${cycle}`);
       return null;
     }
     const shard: Shard = {
       cycle,
-      idx: 0,
+      idx,
       wc,
       matchId: world.matchId,
       roomId: created.roomId,
@@ -358,11 +393,40 @@ export class WorldDirectory {
       inflight: new Map(),
       drops: new Map(),
     };
-    this.byCycle.set(cycle, shard);
+    const list = [...this.shardsOfCycle(cycle), shard].sort((a, b) => a.idx - b.idx);
+    this.byCycle.set(cycle, list);
     this.byMatch.set(shard.matchId, shard);
     console.log(`[world] cycle ${cycle} shard ${shard.idx} open: room ${shard.roomId}, match ${shard.matchId}, ${world.mode}, boss ${world.bossEvent ?? "none"}`);
     void this.register(shard).catch((e) => console.error(`[world] raids/open ${shard.matchId} failed:`, e));
     return shard;
+  }
+
+  /**
+   * Seats a shard counts as taken for the on-demand open: raiders on the map (idle bodies too, like
+   * the web's active-entry count that picks shards), admissions in flight, seats held for party drops.
+   */
+  shardLoad(shard: Shard): number {
+    return shard.room.match.humansOnMap() + shard.inflight.size + this.heldSeats(shard, this.deps.now());
+  }
+
+  /**
+   * On-demand shards (module comment): while `cycle` accepts entries and fewer than MAX_SHARDS of it
+   * exist, open the next one once every live shard of it has fewer than SPARE_SEATS free seats. One
+   * open at a time per cycle. Returns that opening (tests), or null when nothing was opened.
+   */
+  ensureRoom(cycle: number): Promise<Shard | null> | null {
+    if (this.stopped || worldPhase(worldCycleOf(cycle), this.deps.now()) !== "open") return null;
+    const shards = this.shardsOfCycle(cycle);
+    if (shards.length === 0 || shards.length >= WORLD.MAX_SHARDS) return null;
+    for (const key of this.opening.keys()) if (key.startsWith(`${cycle}:`)) return null;
+    for (const s of shards) {
+      if (s.room.disposed || s.room.match.ended) continue;
+      if (WORLD.CAPACITY - this.shardLoad(s) >= WORLD.SPARE_SEATS) return null;
+    }
+    const idx = shards[shards.length - 1]!.idx + 1;
+    if (idx >= WORLD.MAX_SHARDS) return null;
+    console.log(`[world] cycle ${cycle}: every shard is nearly full, opening shard ${idx}`);
+    return this.openShard(cycle, idx);
   }
 
   /** The raids/open request of a shard (boss = the spot that actually spawned; zone = MapData zone id). */
@@ -430,9 +494,18 @@ export class WorldDirectory {
       await running;
       return;
     }
-    const seat = this.takeSeat(shard, t);
+    let seat: DropSeats | null;
+    try {
+      seat = this.takeSeat(shard, t);
+    } catch (e) {
+      // world_full: open another shard of the cycle when allowed, so the retry finds room there.
+      void this.ensureRoom(shard.cycle);
+      throw e;
+    }
     const p = this.runAdmission(shard, t, t.entryId);
     shard.inflight.set(t.userId, p);
+    // Counted with the admission in flight: the next shard opens while this player is still entering.
+    void this.ensureRoom(shard.cycle);
     try {
       await p;
     } catch (e) {
@@ -447,6 +520,16 @@ export class WorldDirectory {
     }
   }
 
+  /** Seats held for party drops on a shard (expired drops are forgotten). */
+  private heldSeats(shard: Shard, now: number): number {
+    let held = 0;
+    for (const [id, d] of shard.drops) {
+      if (now - d.firstAt > PARTY.DROP_TTL_MS) shard.drops.delete(id);
+      else held += Math.max(0, d.size - d.users.size);
+    }
+    return held;
+  }
+
   /**
    * Capacity of one admission (module comment): throws world_full / world_full:party, or returns the
    * drop whose seat this admission took (null: a solo seat or a member already counted in the drop).
@@ -454,11 +537,7 @@ export class WorldDirectory {
   private takeSeat(shard: Shard, t: JoinTicket): DropSeats | null {
     const m = shard.room.match;
     const now = this.deps.now();
-    let held = 0;
-    for (const [id, d] of shard.drops) {
-      if (now - d.firstAt > PARTY.DROP_TTL_MS) shard.drops.delete(id);
-      else held += Math.max(0, d.size - d.users.size);
-    }
+    const held = this.heldSeats(shard, now);
     // Seat holders, not every living body: a body idle past WORLD.IDLE_SEAT_MS no longer blocks entry.
     const humans = m.seatHolders() + shard.inflight.size;
     const runtimes = m.allRuntimes().length;
@@ -494,8 +573,8 @@ export class WorldDirectory {
       entryId,
       userId: t.userId,
       loadoutId: t.loadoutId,
-      // The cycle clock (D7); the wall term covers a room that has not stepped yet (boot mid-cycle).
-      atMs: Math.max(0, Math.min(WORLD.CYCLE_MS, Math.max(m.clock, this.deps.now() - shard.wc.startAt))),
+      // The map clock (D7, 0 = the map's opening); the wall term covers a room that has not stepped yet.
+      atMs: Math.max(0, Math.min(WORLD.MAP_MS, Math.max(m.clock, this.deps.now() - shard.wc.startAt))),
       targets: m.poolTargetCount(),
       bossAlive: m.bossAlive(),
     };
