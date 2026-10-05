@@ -1,0 +1,19 @@
+{
+  "name": "spoils-idos-shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SPOILS iDos Games edition shell: the static page iDos hosts at https://<titleid>.idos.games. It signs the player in with @idosgames/core and shows the edition (our own server) in a full-screen iframe. Not part of the pnpm workspace on purpose: build it with npm here (docs/IDOS_EDITION.md).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@idosgames/core": "0.21.1"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "8.1.5"
+  }
+}

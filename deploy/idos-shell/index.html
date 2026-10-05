@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#08070B" />
+    <title>SPOILS — iDos Games edition</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #08070b; color: #fff; font-family: system-ui, sans-serif; overflow: hidden; }
+      #app { position: fixed; inset: 0; }
+      iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+      .card { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 16px; }
+      .card h1 { font-size: 28px; letter-spacing: 0.04em; color: #ccff00; margin: 0 0 8px; }
+      .card p { color: rgba(255, 255, 255, 0.75); margin: 0 0 20px; max-width: 36ch; }
+      .card button { display: block; width: 100%; min-height: 48px; margin: 8px 0; border: 3px solid #000; border-radius: 14px; font-size: 17px; font-weight: 700; cursor: pointer; }
+      .primary { background: #ccff00; color: #000; }
+      .ghost { background: transparent; color: #fff; border-color: rgba(255, 255, 255, 0.4) !important; }
+      .error { color: #fda4af; min-height: 1.4em; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
