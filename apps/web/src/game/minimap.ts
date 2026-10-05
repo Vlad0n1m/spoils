@@ -1,11 +1,11 @@
 /**
  * Minimap (top-right corner; the React HUD keeps that corner free) and the map overview texture.
  *
- * The overview is painted ONCE per MapData into a 1024² canvas (terrain colours, roads, rails,
- * buildings, perimeter walls; ~24 world px per texel) and shared by reference count between the
- * minimap, the full map (fullmap.ts) and the ground-chunk fallback (ground-chunks.ts). The v1
- * minimap re-tessellated thousands of tree circles every frame; this one only moves a texture
- * window and a handful of markers.
+ * The minimap shows a window of the cartographic map art (map-art.ts: smooth terrain regions, roads,
+ * river, buildings, painted once per map at 2048² and shared with the full map). The realistic
+ * overview below (paintOverview, 1024², ground colours) stays the ground-chunk fallback
+ * (ground-chunks.ts via world.ts). The v1 minimap re-tessellated thousands of tree circles every
+ * frame; this one only moves a texture window and a handful of markers.
  *
  * Shows a 4096 px window around the local player, extraction points by state (allowed ones
  * brighter; off-window allowed extracts as edge pips), boss POI skulls (an edge skull when a boss
@@ -20,6 +20,8 @@ import { bossSpotShown, minimapBossHint, type EventBossState } from "./boss";
 import { skullContext } from "./boss-icons";
 import { TERRAIN_COLOR, groundKinds } from "./terrain-tiles";
 import { MinimapWorldMarks } from "./world-events-marks";
+import { MAP_ART_PX, acquireMapArt, releaseMapArt } from "./map-art";
+import { uiFonts, whenUiFontsReady } from "./ui-fonts";
 
 /** Overview canvas size (px). 24,576 / 1024 = 24 world px per texel. */
 export const OVERVIEW_PX = 1024;
@@ -232,21 +234,25 @@ export class Minimap {
   private released = false;
 
   constructor(readonly map: MapData) {
-    const overview = acquireOverview(map);
-    this.k = OVERVIEW_PX / Math.max(map.width, map.height);
+    // The cartographic map art (map-art.ts, shared with the full map): smooth regions, crisp roads.
+    const art = acquireMapArt(map);
+    this.k = MAP_ART_PX / Math.max(map.width, map.height);
     // A private Texture over the shared source: only its frame moves each frame.
-    this.windowTex = new Texture({ source: overview.source, frame: new Rectangle(0, 0, 1, 1), orig: new Rectangle(0, 0, 1, 1) });
+    this.windowTex = new Texture({ source: art.source, frame: new Rectangle(0, 0, 1, 1), orig: new Rectangle(0, 0, 1, 1) });
     this.view = new Sprite(this.windowTex);
 
-    this.frame.roundRect(-5, -5, BASE + 10, BASE + 10, 9).fill({ color: 0x0c120a, alpha: 0.78 });
-    this.frame.roundRect(-1, -1, BASE + 2, BASE + 2, 4).stroke({ width: 2, color: 0xffffff, alpha: 0.45 });
+    this.frame.roundRect(-5, -5, BASE + 10, BASE + 10, 9).fill({ color: 0x0e1210, alpha: 0.85 });
+    this.frame.rect(-0.5, -0.5, BASE + 1, BASE + 1).stroke({ width: 1, color: 0xffffff, alpha: 0.35 });
 
     this.me.circle(0, 0, 9).fill({ color: 0xffffff, alpha: 0.25 });
     this.me.poly([10, 0, -6, -7, -3, 0, -6, 7]).fill({ color: 0xffffff }).stroke({ width: 2, color: 0x111111 });
 
     this.north = new Text({
       text: "N",
-      style: { fontFamily: "ui-rounded, 'Trebuchet MS', system-ui, sans-serif", fontSize: 13, fontWeight: "800", fill: 0xffffff, stroke: { color: 0x000000, width: 3 } },
+      style: { fontFamily: uiFonts().display, fontSize: 13, fill: 0xffffff, stroke: { color: 0x000000, width: 3 } },
+    });
+    whenUiFontsReady(() => {
+      if (!this.north.destroyed) this.north.style.update();
     });
     this.north.anchor.set(0.5, 0);
     this.north.position.set(BASE / 2, 2);
@@ -392,7 +398,7 @@ export class Minimap {
     this.windowTex.destroy(false);
     if (!this.released) {
       this.released = true;
-      releaseOverview(this.map);
+      releaseMapArt(this.map);
     }
   }
 }

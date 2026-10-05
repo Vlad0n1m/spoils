@@ -203,21 +203,31 @@ export class MinimapWorldMarks {
 
 /** Full-map layer: fight heat cells, hot POIs, drop circles / crates with short labels. */
 export class FullmapWorldMarks {
+  /** Shapes (heat, hot zones, drop circles, clue circles): under the map's name labels. */
   readonly root = new Container();
+  /** Timer labels: the full map puts this layer above its name labels so countdowns stay readable. */
+  readonly labelLayer = new Container();
   private readonly g = new Graphics();
-  private readonly labels: Text[] = [];
+  /** Pooled labels: a dark pill behind the text, redrawn only when the text or its size changes. */
+  private readonly labels: Array<{ t: Text; pill: Graphics; key: string }> = [];
+  /** Boxes (panel px) of the labels shown last update, for the full map's label placement. */
+  readonly boxes: Array<{ x: number; y: number; w: number; h: number }> = [];
+  /** Changes when a label appears, disappears, moves or resizes (not on a countdown tick of equal width). */
+  boxKey = "";
 
   constructor(private readonly font: string) {
     this.root.addChild(this.g);
     this.root.eventMode = "none";
+    this.labelLayer.eventMode = "none";
   }
 
-  private label(i: number): Text {
+  private label(i: number): { t: Text; pill: Graphics; key: string } {
     while (this.labels.length <= i) {
-      const t = new Text({ text: "", style: { fontFamily: this.font, fontSize: 13, fontWeight: "900", fill: 0xffffff, stroke: { color: 0x0b0b0b, width: 4 }, letterSpacing: 1 } });
+      const t = new Text({ text: "", style: { fontFamily: this.font, fontSize: 12, fontWeight: "900", fill: 0xffffff, letterSpacing: 0.5 } });
       t.anchor.set(0.5, 1);
-      this.root.addChild(t);
-      this.labels.push(t);
+      const pill = new Graphics();
+      this.labelLayer.addChild(pill, t);
+      this.labels.push({ t, pill, key: "" });
     }
     return this.labels[i]!;
   }
@@ -234,13 +244,30 @@ export class FullmapWorldMarks {
       g.roundRect((c.x * k) - cell / 2 + 1, (c.y * k) - cell / 2 + 1, cell - 2, cell - 2, 4).fill({ color: FIGHT_COLOR, alpha: a * (0.8 + 0.2 * pulse) });
     }
     let li = 0;
+    this.boxes.length = 0;
+    let boxKey = "";
+    const size = Math.max(9, Math.round(12 * fontScale * 2) / 2);
     const put = (text: string, x: number, y: number, color: number) => {
-      const t = this.label(li++);
-      t.visible = true;
+      const l = this.label(li++);
+      const t = l.t;
+      t.visible = l.pill.visible = true;
       if (t.text !== text) t.text = text;
+      if (t.style.fontSize !== size) t.style.fontSize = size;
       t.style.fill = color;
-      t.scale.set(fontScale);
-      t.position.set(x, y);
+      const key = `${text}|${size}|${color}`;
+      if (l.key !== key) {
+        l.key = key;
+        const w = t.width + 12;
+        const h = t.height + 4;
+        l.pill.clear().roundRect(-w / 2, -h, w, h, h / 2).fill({ color: 0x0d1210, alpha: 0.85 }).stroke({ width: 1, color, alpha: 0.6 });
+      }
+      t.position.set(x, y - 2);
+      l.pill.position.set(x, y);
+      // Width bucketed to 8 px so a ticking countdown does not re-place the map's labels every second.
+      const bw = Math.ceil((t.width + 12) / 8) * 8;
+      const bh = t.height + 4;
+      this.boxes.push({ x: x - bw / 2, y: y - bh, w: bw, h: bh });
+      boxKey += `${Math.round(x)},${Math.round(y)},${bw};`;
     };
     const clock = v.clockMs;
     for (const h of v.hots) {
@@ -259,9 +286,11 @@ export class FullmapWorldMarks {
         g.circle(x, y, r).fill({ color: DROP_COLOR, alpha: 0.18 + 0.12 * pulse }).stroke({ width: 3, color: DROP_COLOR, alpha: 0.95 });
         put(`SUPPLY DROP · ${mmss(d.at - clock)}`, x, y - r - 3, 0xffd27a);
       } else {
-        const r = 6 + 2 * pulse;
-        g.circle(x, y, r + 6).fill({ color: DROP_COLOR, alpha: 0.3 });
-        g.rect(x - r, y - r, r * 2, r * 2).fill({ color: DROP_COLOR }).stroke({ width: 2, color: 0x111111 });
+        const r = 6 + 1.5 * pulse;
+        g.circle(x, y, r + 7).fill({ color: DROP_COLOR, alpha: 0.28 });
+        g.roundRect(x - r, y - r, r * 2, r * 2, 2).fill({ color: DROP_COLOR }).stroke({ width: 2, color: 0x111111 });
+        // Crate straps.
+        g.moveTo(x - r, y).lineTo(x + r, y).moveTo(x, y - r).lineTo(x, y + r).stroke({ width: 1.5, color: 0x5a3a00, alpha: 0.8 });
         put("SUPPLY DROP", x, y - r - 8, 0xffd27a);
       }
     }
@@ -283,10 +312,12 @@ export class FullmapWorldMarks {
       g.stroke({ width: 2.5, color: CLUE_COLOR, alpha: 0.95 });
       put(`? ${c.text}`, x, y - r - 3, CLUE_COLOR);
     }
-    for (let i = li; i < this.labels.length; i++) this.labels[i]!.visible = false;
+    for (let i = li; i < this.labels.length; i++) this.labels[i]!.t.visible = this.labels[i]!.pill.visible = false;
+    this.boxKey = boxKey;
   }
 
   destroy(): void {
     this.root.destroy({ children: true });
+    if (!this.labelLayer.destroyed) this.labelLayer.destroy({ children: true });
   }
 }
