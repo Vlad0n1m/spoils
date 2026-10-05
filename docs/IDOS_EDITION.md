@@ -267,37 +267,39 @@ P2P-маркетплейс в валюте тайтла, вывод крипто
 `.env` для `next dev`) и отдельная база в `DATABASE_URL`. Для теста фрейма с локальной страницы
 добавить её адрес, например `IDOS_FRAME_ANCESTORS="https://idosgames.com http://localhost:5173"`.
 
-### 3.2 Оболочка на хостинге iDos — сделано (`deploy/idos-shell`)
+### 3.2 Клиент игры на хостинге iDos — сделано 05.10 (`deploy/idos-shell`)
 
-Статичная страница на Vite + `@idosgames/core` 0.21.1 без React и без лобби iDos (их скелет весит
-сотни килобайт, а лобби, магазин и кошелёк у нас свои). Лежит вне pnpm-workspace, чтобы не трогать
-lockfile основной сборки; собирается своим `npm`.
+**Требование iDos (Ерасыл, 05.10):** игра хостится у iDos на поддомене тайтла; встраивать чужой сайт
+(iframe на наш домен) нельзя. Бэкенд (API, игровой сервер, база) остаётся на нашем VPS.
 
-1. Определяет тайтл по адресу (`{id}.idos.games` → `ID`, `{id}-dev.idos.games` → `ID-DEV`) или по
-   `src/idos.title.ts`.
-2. Вход: код SSO из фрагмента → `loginWithSsoCode`; иначе `autoLogin()` (refresh-токен, без лишней
-   новой сессии — лимит устройств тайтла); иначе экран «Continue with iDos Games»
-   (`beginSsoRedirect`) или «Play as guest» (`loginWithDeviceID`).
-3. Во весь экран iframe на `VITE_SPOILS_EDITION_URL` (например `https://idos.<домен>/play`),
-   `allow="fullscreen; autoplay; gamepad; clipboard-write"`.
-4. На `postMessage` «hello» от iframe (проверка `origin` и `source`) отвечает
-   `{ titleId, userId, ticket }` только в `origin` игры.
+Поэтому `deploy/idos-shell` — уже не оболочка с iframe, а весь клиент: лобби и PixiJS-клиент из
+`apps/web`, собранные Vite в статику (`npm run build`, ~20 МБ, 363 файла).
 
-Проверено 05.10: `npm install` в папке (19 пакетов, свой `package-lock.json`; корневой lockfile и
-pnpm-workspace не тронуты; версия `@idosgames/core` 0.21.1 совпадает с манифестом iDos), `tsc` и
-`vite build` проходят: бандл 543 КБ (126 КБ gzip, почти весь — SDK), `build.zip` 123 КБ. Локально
-(`vite preview`): без тайтла — «This page only runs on its iDos Games address»; с временно подставленным
-id — экран «Continue with iDos Games» / «Play as guest», гость с несуществующим тайтлом получает 400 от
-`api.idosgames.com` и текст ошибки. Не проверено: вход на живом тайтле, поведение в фрейме
-idosgames.com (вложенный iframe, звук, полноэкранный режим, cookie на iPhone).
+1. Вход iDos (SSO / сохранённая сессия / гость), как раньше; `autoLogin()` только при сохранённой
+   сессии (иначе SDK молча создаёт гостя).
+2. Билет iDos → `POST https://idos.<домен>/api/idos/session` → **токен сессии** (та же запечатанная
+   iron-session, но в заголовке `Authorization: Bearer`, а не в cookie: на поддомене тайтла это
+   стороннее cookie, Safari его режет). Первый вход шлёт `Bearer none`. Токен в localStorage.
+3. Все `fetch("/api/…")` приложения уходят на `VITE_SPOILS_API_URL` с токеном (`src/api.ts`);
+   игровой сервер — `VITE_SPOILS_GAME_SERVER_URL` (Colyseus сам отвечает CORS).
+4. Next-специфичное заменено заглушками: `next/link`, `next/navigation` (`src/shims`); панели лобби
+   `/play?panel=…` маппятся на путь страницы (`src/nav.ts`); ссылки на другие страницы сайта
+   (новости, правила) открываются на `idos.<домен>` в новой вкладке; шрифты свои (`src/fonts`).
+5. Пути к `public/` переписываются в относительные при сборке (тестовая копия живёт в `/v/<build>/`).
 
-На живом тайтле 05.10: `8YECHSD4` (DEV `8YECHSD4-DEV`), версии 1–2 залиты с `deploy: false`
-(TestUrl `https://8yechsd4-dev.idos.games/v/<build>/index.html`). Найдено и исправлено: на первом
-визите `autoLogin()` повторяет способ по умолчанию (Device) и молча создаёт гостя — экран выбора не
-показывался; теперь `autoLogin()` только при сохранённой сессии (`Saved_AuthType_<id>` /
-`Saved_Auth_RefreshToken_<id>`). Проверено: экран выбора → «Continue with iDos Games» →
-`idosgames.com/sso/?title=8YECHSD4-DEV`; гость (Device) входит. Возврат после SSO и мост — после
-боевого адреса игры.
+Сервер (только `IDOS_BUILD=1`): `lib/session.ts` читает токен из заголовка; CORS и исключение из
+CSRF-проверки — только для origin тайтла (`https://<id>.idos.games`, `-dev`) из `IDOS_TITLE_IDS`.
+
+```bash
+cd deploy/idos-shell && npm ci
+VITE_SPOILS_API_URL=https://idos.spoils.gg VITE_SPOILS_GAME_SERVER_URL=wss://game-idos.spoils.gg \
+  VITE_IDOS_TITLE_IDS="8YECHSD4 8YECHSD4-DEV" npm run build
+cd dist && zip -qr ../build.zip . -x ".well-known/*" ".gitkeep" && cd ..
+```
+
+Проверено 05.10 на тестовой копии (версия 5): гость iDos → мост → аккаунт, лобби с фоном, рейд
+через `wss://game-idos.spoils.gg`, стрельба. Подмена `userId` → 401, `/api/me` без токена — без
+игрока, чужой origin не получает CORS-заголовков.
 
 ### 3.3 Мост входа (auth bridge) — сделано, вариант Б
 
