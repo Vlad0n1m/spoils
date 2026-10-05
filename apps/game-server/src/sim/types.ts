@@ -9,6 +9,7 @@
 
 import type {
   BoomMsg,
+  BossEvMsg,
   XpMsg,
   BossKind,
   GrenadeMsg,
@@ -224,6 +225,12 @@ export interface PlayerRuntime {
   tutorial: boolean;
   /** Alpha: a client of this entry joined on touch controls (PlayerExitReport.touch). */
   touch: boolean;
+  /** Walking speed multiplier of an NPC's inputs (1; the Warden's dash, boss-fight.ts). Humans: always 1. */
+  moveMult: number;
+  /** Bosses whose trophy this human earned this raid (PlayerExitReport.bossTrophies). */
+  bossTrophies: Set<BossKind>;
+  /** Bosses only: humans who damaged it this life (party trophy, boss-fight.ts). */
+  bossDamagers: Set<PlayerRuntime> | null;
 }
 
 export interface Bullet {
@@ -261,6 +268,8 @@ export type MatchEvent =
   | { type: "snd"; to: number; msg: SoundMsg }
   /** Weapons v2: a grenade for one recipient (grenade.ts already applied the visibility rules). */
   | { type: "nade"; to: number; msg: GrenadeMsg }
+  /** Boss fight beat (phase 2, reinforcement call) for one human in the boss's arena (boss-fight.ts). */
+  | { type: "boss"; to: number; msg: BossEvMsg }
   /** Weapons v2: a grenade blast for one recipient. */
   | { type: "boom"; to: number; msg: BoomMsg }
   /** In-raid XP the recipient earned (xp.ts creditRaidXp): personal, to that player only. */

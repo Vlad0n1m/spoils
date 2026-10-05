@@ -9,6 +9,7 @@ import type { SlotKey } from "./inventory.js";
 import type { KillWeapon, WeaponId } from "./items.js";
 import type { SoundMsg } from "./sound.js";
 import type { RaidXpKey } from "./economy.js";
+import type { BossKind } from "./map/types.js";
 
 /** Colyseus room names. */
 export const ROOMS = {
@@ -279,6 +280,14 @@ export interface EventsMsg {
    * [sector, band], computed from the fight cell's centre (never a shooter's position or id).
    */
   fight?: number[];
+  /** Boss fight beats (BOSS_FIGHT) for the humans in the boss's arena: no position, no HP. */
+  boss?: BossEvMsg[];
+}
+
+/** A boss reached phase 2 ("phase2") or radioed for reinforcements ("call"). */
+export interface BossEvMsg {
+  k: BossKind;
+  e: "phase2" | "call";
 }
 
 /**

@@ -20,6 +20,7 @@
 import { BREAK_CHANCE_ON_DEATH, DOG_TAG, ITEM_FLAG, NPC, NPC_ROLE, SoundKind, partyMates, type ItemLike, type KillWeapon } from "@extract/shared";
 import { cancelHeal, cancelReload } from "./actions.js";
 import { carriedItems, clearSlots, syncPublic } from "./bag.js";
+import { grantBossTrophies } from "./boss-fight.js";
 import { closeSearch } from "./containers.js";
 import { isTrackedUnique, makeItem } from "./items.js";
 import type { Match } from "./match.js";
@@ -53,6 +54,9 @@ export function killPlayer(m: Match, rt: PlayerRuntime, killer: PlayerRuntime | 
       else if (p.role === NPC_ROLE.BOSS) {
         killer.stats.bossKills++;
         creditRaidXp(m, killer, "boss", killer.stats.bossKills);
+        // Boss trophy (boss-fight.ts): the killer and their party mates who damaged it.
+        const kind = m.npcs.info(rt)?.kind;
+        if (kind) grantBossTrophies(rt, kind, killer);
       } else {
         killer.stats.npcKills++;
         if (p.role === NPC_ROLE.GUARD) {

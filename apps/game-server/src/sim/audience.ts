@@ -234,6 +234,9 @@ export function buildBatches(
       case "boom":
         if (recipients.includes(ev.to)) (batchOf(out, ev.to).booms ??= []).push(ev.msg);
         break;
+      case "boss":
+        if (recipients.includes(ev.to)) (batchOf(out, ev.to).boss ??= []).push(ev.msg);
+        break;
       case "fight":
         // Already per listener and quantized (world-events.ts): fight cell sector + band only.
         if (recipients.includes(ev.to)) (batchOf(out, ev.to).fight ??= []).push(...ev.msg);
