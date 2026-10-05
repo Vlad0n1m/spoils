@@ -194,7 +194,8 @@ test("windows: an NPC sees a raider through a window and shoots him through it; 
     human.pub.hp = 1e6;
     const b = m.npcs.brain(npc)!;
     b.tune({ aim: 0, rollChance: 0 });
-    const ev = run(m, 4000);
+    // 8 s: the alpha-softened NPC (sloppier, slower to react) needs longer than 4 s to land a hit.
+    const ev = run(m, 8000);
     assert.ok(m.clock < NPC.PEACE_MS);
     return { m, npc, human, ev };
   };
