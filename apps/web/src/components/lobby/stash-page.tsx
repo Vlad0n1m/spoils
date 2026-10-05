@@ -13,6 +13,8 @@ import { ListDialog } from "./list-dialog";
 import { api, type Resource } from "./use-lobby";
 import { Paged } from "@/components/paged";
 import { EDITION_UI } from "@/lib/edition";
+import type { StashMoneyDto } from "@/lib/lobby/api-types";
+import { hasStashMoney } from "@/lib/lobby/stash-response";
 
 /**
  * Stash tab (inventory memo "stash-page"): wallet (CR + market balance), level, the paid starter
@@ -26,6 +28,8 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
   const [buying, setBuying] = useState(false);
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
   const selected = stash.uniques.find((u) => u.id === selectedId) ?? null;
+  // Wallet, market rules and the kit offer: main build only (the iDos edition's /api/stash omits them).
+  const money = hasStashMoney(stash) ? stash : null;
 
   const buyKit = async () => {
     setBuying(true);
@@ -85,10 +89,10 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
           <Paged gap={10} label="Stash summary pages">
             <section className="toon-panel grid grid-cols-2 gap-x-4 gap-y-3 bg-[#161b28]/95 p-4 short:gap-y-2 short:p-3">
               <Stat label="Credits" value={fmtCr(stash.credits)} tone="text-amber-300" />
-              {EDITION_UI.walletBalance && (
+              {EDITION_UI.walletBalance && money && (
               <Stat
-                label={`Wallet (${stash.market.currency})`}
-                value={formatMinor(stash.balance).replace(` ${stash.market.currency}`, "")}
+                label={`Wallet (${money.market.currency})`}
+                value={formatMinor(money.balance).replace(` ${money.market.currency}`, "")}
                 tone="text-zooa-lime"
                 extra={
                   <Link
@@ -111,7 +115,7 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
               />
               <Stat label="Raids" value={String(stash.matchesPlayed)} />
             </section>
-            {EDITION_UI.starterKitSale && <StarterKitCard stash={stash} buying={buying} onBuy={buyKit} />}
+            {EDITION_UI.starterKitSale && money && <StarterKitCard stash={money} buying={buying} onBuy={buyKit} />}
             {note && (
               <p role="status" className={note.ok ? "font-body text-sm text-zooa-lime" : "font-body text-sm text-rose-300"}>
                 {note.text}
@@ -137,10 +141,10 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
         )}
       </div>
 
-      {EDITION_UI.market && selling && (
+      {EDITION_UI.market && money && selling && (
         <ListDialog
           item={selling}
-          market={stash.market}
+          market={money.market}
           credits={stash.credits}
           onClose={() => setSelling(null)}
           onListed={async () => {
@@ -165,7 +169,7 @@ const KIT_TEXT = (() => {
  * The paid starter kit (design §19): always for sale, up to STARTER_KIT.DAILY_MAX a day. A big lime-edged card
  * while the stash holds no weapon, else a slim row; disabled when paused, at the daily cap or short of money.
  */
-function StarterKitCard({ stash, buying, onBuy }: { stash: StashResponse; buying: boolean; onBuy: () => void }) {
+function StarterKitCard({ stash, buying, onBuy }: { stash: StashResponse & StashMoneyDto; buying: boolean; onBuy: () => void }) {
   const price = formatMinor(stash.kit.priceMinor);
   const left = Math.max(0, stash.kit.dailyMax - stash.kit.boughtToday);
   const short = BigInt(stash.balance) < BigInt(stash.kit.priceMinor);
@@ -246,7 +250,8 @@ export function sellBlocker(u: StashItemDto, level: number, unlockLevel: number)
 function ItemDrawer({ item, stash, onSell, onClose }: { item: StashItemDto; stash: StashResponse; onSell: (u: StashItemDto) => void; onClose: () => void }) {
   const d = describeItem({ def: item.def, rarity: item.rarity });
   const def = itemDef(item.def);
-  const blocker = sellBlocker(item, stash.level, stash.market.sellUnlockLevel);
+  const market = EDITION_UI.market ? stash.market : undefined;
+  const blocker = market ? sellBlocker(item, stash.level, market.sellUnlockLevel) : null;
   const b = uniqueBadge(item);
   return (
     <section className="toon-panel flex min-h-0 flex-col bg-[#161b28]/95 p-5 short:p-3">
@@ -279,7 +284,7 @@ function ItemDrawer({ item, stash, onSell, onClose }: { item: StashItemDto; stas
         )}
       </dl>
       <div className="mt-5 flex flex-col gap-2 short:mt-3">
-        {EDITION_UI.market && (
+        {market && (
           <>
             <button type="button" onClick={() => onSell(item)} disabled={blocker !== null} className="toon-btn min-h-12 text-lg short:min-h-11">
               <span className="optical-center">Sell on market</span>

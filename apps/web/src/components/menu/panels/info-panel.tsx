@@ -51,7 +51,7 @@ function AlphaRulesLink() {
 /** Rules · Levels and daily tasks (RETENTION.md §3, §5): what each level gives and how tasks pay. */
 function LevelsInfo() {
   const { stash } = useLobby();
-  const sell = stash.data?.market.sellUnlockLevel;
+  const sell = stash.data?.market?.sellUnlockLevel;
   return (
     // The same card as the Rules blocks above it (play-instructions Block), not a bare heading.
     <section aria-labelledby="info-levels" className="paged-split toon-panel flex flex-col gap-3 bg-[#161b28]/95 p-4 md:p-5">

@@ -20,15 +20,30 @@ export interface MarketConfigDto {
   listingFeeCr: readonly number[];
 }
 
-/** GET /api/stash */
-export interface StashResponse extends StashDto {
+/** The paid starter kit (design §19): price (minor units), today's purchases and the daily cap. */
+export interface StarterKitOfferDto {
+  priceMinor: string;
+  dailyMax: number;
+  boughtToday: number;
+  paused: boolean;
+}
+
+/**
+ * The SOL-economy part of GET /api/stash. Sent in the main build only: the iDos edition has no
+ * market, wallet or paid kit (docs/IDOS_EDITION.md §3.5), so its /api/stash omits all three fields
+ * and the client must treat them as optional.
+ */
+export interface StashMoneyDto {
   /** Market wallet (minor units). */
   balance: string;
   market: MarketConfigDto;
+  kit: StarterKitOfferDto;
+}
+
+/** GET /api/stash */
+export interface StashResponse extends StashDto, Partial<StashMoneyDto> {
   /** Junk autosell multiplier currently paid by the junker. */
   autosellMult: number;
-  /** The paid starter kit (design §19): price (minor units), today's purchases and the daily cap. */
-  kit: { priceMinor: string; dailyMax: number; boughtToday: number; paused: boolean };
 }
 
 export interface ListingItemDto {

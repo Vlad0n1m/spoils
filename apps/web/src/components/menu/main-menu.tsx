@@ -610,7 +610,7 @@ function MenuScreen({
         {levelUp && (
           <LevelUpModal
             level={levelUp.level}
-            rewards={rewardsBetween(levelUp.levelBefore, levelUp.level, s?.market.sellUnlockLevel)}
+            rewards={rewardsBetween(levelUp.levelBefore, levelUp.level, s?.market?.sellUnlockLevel)}
             nick={lobby.user?.nickname ?? "You"}
             canWear={sessionKind === "user"}
             onClose={() => setLevelUpDone(levelUp.entryId)}
