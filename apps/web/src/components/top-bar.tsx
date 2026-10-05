@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { AudioSettingsButton } from "./audio-settings";
 import { AuthButton } from "./auth-button";
 import { BRAND } from "@/lib/brand";
+import { EDITION_UI } from "@/lib/edition";
 
 function navLinkClass(active: boolean) {
   return [
@@ -25,9 +26,11 @@ export function TopBar() {
           <Link href="/play" className={navLinkClass(path === "/play" || path.startsWith("/play/"))}>
             Play
           </Link>
-          <Link href="/economy" className={navLinkClass(path === "/economy")}>
-            Economy
-          </Link>
+          {EDITION_UI.economyLinks && (
+            <Link href="/economy" className={navLinkClass(path === "/economy")}>
+              Economy
+            </Link>
+          )}
           {/* Narrow portrait phones: no room next to the account buttons (the menu's News panel links here). */}
           <Link href="/news" className={`hidden sm:inline ${navLinkClass(path === "/news")}`}>
             News

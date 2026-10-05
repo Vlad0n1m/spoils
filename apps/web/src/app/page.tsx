@@ -4,6 +4,7 @@ import { Reveal } from "@/components/reveal";
 import { Trailer } from "@/components/trailer";
 import { ALPHA_SHORT, alphaWipeText } from "@/content/alpha";
 import { BRAND } from "@/lib/brand";
+import { EDITION_UI } from "@/lib/edition";
 import { rarityHex } from "@/lib/items-ui";
 
 const S = (name: string) => `/sprites/${name}.png`;
@@ -281,11 +282,12 @@ function ComingSoon() {
       <Reveal className="mx-auto flex max-w-4xl flex-col items-center">
         <Sprite name="chest_legendary" className="h-28 w-28 drop-shadow-[0_8px_0_rgba(0,0,0,0.25)]" />
         <h2 className="mt-4 text-balance text-4xl leading-[1.05] tracking-tight md:text-6xl">
-          A real item economy
+          {EDITION_UI.market ? "A real item economy" : "Every item has a story"}
         </h2>
         <p className="font-body mt-6 max-w-[56ch] text-base font-semibold leading-relaxed text-black/75 md:text-lg">
-          Your own stash, a player-to-player marketplace and items with real value, powered by iDos. Playing
-          is free, and the game never pays out: every valuable you find was once lost by another raider.
+          {EDITION_UI.market
+            ? "Your own stash, a player-to-player marketplace and items with real value, powered by iDos. Playing is free, and the game never pays out: every valuable you find was once lost by another raider."
+            : "Your own stash, traders that take credits you earn in raids, and gear that is really at risk. Playing is free: every valuable you find was once lost by another raider."}
         </p>
       </Reveal>
     </section>

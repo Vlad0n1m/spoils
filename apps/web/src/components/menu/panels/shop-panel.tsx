@@ -7,6 +7,7 @@ import { fmtCr } from "@/lib/items-ui";
 import { MarketTab } from "@/components/lobby/market-tab";
 import { TraderJunker } from "@/components/lobby/trader-junker";
 import { Gate, StashWait } from "./gate";
+import { EDITION_UI } from "@/lib/edition";
 
 /**
  * Shop (WORLD v6 spec §6.3): Market (player and treasury lots for the market currency; anyone can
@@ -20,7 +21,8 @@ export function ShopPanel({ tab }: { tab: string }) {
     if (registered) void reload();
   }, [registered, reload]);
 
-  if (tab !== "traders") return <MarketTab stash={registered ? stash : null} sessionLoading={sessionLoading} />;
+  // The iDos edition has no market (lib/lobby/panels.ts gives its Shop only the Traders tab).
+  if (EDITION_UI.market && tab !== "traders") return <MarketTab stash={registered ? stash : null} sessionLoading={sessionLoading} />;
   if (!registered) return <Gate loading={sessionLoading} guest={sessionKind === "guest"} next={panelHref({ panel: "shop", tab: "traders" })} />;
   const s = stash.data;
   if (!s) return <StashWait error={stash.error} onRetry={() => void reload()} />;
@@ -31,7 +33,7 @@ export function ShopPanel({ tab }: { tab: string }) {
         <p className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">Credits</p>
         <p className="toon-text-thin text-4xl tabular-nums tracking-wide text-amber-300 short:text-3xl">{fmtCr(s.credits)}</p>
         <p className="font-body rounded-xl border-2 border-black bg-amber-300 px-3 py-2 text-sm font-bold text-black">
-          Credits never convert to SOL.
+          {EDITION_UI.market ? "Credits never convert to SOL." : "Credits stay in the game: they never turn into money."}
         </p>
         <details className="font-body group text-sm leading-relaxed text-white/75">
           <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 font-semibold text-white/85 [&::-webkit-details-marker]:hidden">

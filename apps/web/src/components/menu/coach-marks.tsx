@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { playUi } from "@/game/audio/ui-sounds";
+import { EDITION_UI } from "@/lib/edition";
 
 const DONE_KEY = "spoils.coachDone";
 
@@ -15,7 +16,13 @@ interface CoachStep {
 export const COACH_STEPS: readonly CoachStep[] = [
   { id: "play", title: "Drop in", text: "PLAY drops you onto the live map. Loot, fight, and reach an extract before the wipe to keep what you carry." },
   { id: "inventory", title: "Your gear", text: "Pick what you take into the raid here. Anything you bring in can be lost if you die." },
-  { id: "shop", title: "Shop", text: "Traders sell gear for CR, and the market is where raiders trade what they extract." },
+  {
+    id: "shop",
+    title: "Shop",
+    text: EDITION_UI.market
+      ? "Traders sell gear for CR, and the market is where raiders trade what they extract."
+      : "Traders sell ammo, meds and gear for CR you earn in raids.",
+  },
 ];
 
 function readDone(): boolean {
