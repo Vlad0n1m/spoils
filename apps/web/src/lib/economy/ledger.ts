@@ -9,6 +9,8 @@ export type CreditReason =
   | "consumables"
   | "bound"
   | "listing_fee"
+  | "market_buy"
+  | "market_sale"
   | "admin";
 
 export type CreditResult =

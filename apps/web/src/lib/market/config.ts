@@ -62,3 +62,32 @@ export function listingFeeCr(rarity: number): number {
   const i = Math.max(0, Math.min(MARKET.LISTING_FEE_CR.length - 1, Math.floor(rarity || 0)));
   return MARKET.LISTING_FEE_CR[i]!;
 }
+
+/**
+ * Player-market prices (alpha decision 05.10): lots are priced in whole CR, kept in
+ * listings.price_minor. SOL only settles the starter kit and the on-chain escrow (lib/onchain).
+ */
+export const MARKET_PRICE = { code: "CR", decimals: 0 } as const;
+/** Upper bound on one CR listing price: keeps typos from creating absurd lots. */
+export const MAX_PRICE_CR = 10_000_000n;
+
+/** 12500 → "12 500 CR". */
+export function formatPrice(v: bigint | string | number): string {
+  let n: bigint;
+  try {
+    n = BigInt(v);
+  } catch {
+    n = 0n;
+  }
+  const neg = n < 0n;
+  const s = (neg ? -n : n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${neg ? "−" : ""}${s} CR`;
+}
+
+/** What a seller types ("1500", " 1 500 ") → whole CR, or null for anything else. */
+export function parsePrice(text: string): bigint | null {
+  const t = text.replace(/[\s\u202f]/g, "");
+  if (!/^\d{1,8}$/.test(t)) return null;
+  const v = BigInt(t);
+  return v > 0n && v <= MAX_PRICE_CR ? v : null;
+}

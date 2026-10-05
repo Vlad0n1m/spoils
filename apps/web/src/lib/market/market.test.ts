@@ -8,12 +8,12 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { CONSUMABLES_CR, MARKET, boundOffer, mulberry32 } from "@extract/shared";
-import { creditLedger, itemEvents, items, listings, moneyLedger, trades, users } from "../../db/schema";
+import { creditLedger, itemEvents, items, listings, trades, users } from "../../db/schema";
 import { closeTestDb, lockTestDb, makeItem, makeUser, openTestDb, resetDb } from "../inventory/test-db";
 import { PARAM, setParam } from "../economy/params";
 import { seedEconomy } from "../economy/seed";
 import { getEconomyStats } from "../lobby/economy-stats";
-import { HOUSE_ACCOUNT, browseListings, buyListing, cancelListing, createListing, expireListings, marketHistory, myListings } from "./market";
+import { browseListings, buyListing, cancelListing, createListing, expireListings, marketHistory, myListings } from "./market";
 import { buyBound, buyConsumables } from "./trader";
 
 const { db, pool } = openTestDb();
@@ -23,19 +23,19 @@ beforeEach(() => resetDb(db));
 
 const OPTS = { sellUnlockLevel: 1, feeBps: 500 };
 
-async function setBalance(userId: string, cents: bigint, level = 1): Promise<void> {
-  await db.update(users).set({ balanceCents: cents, level }).where(eq(users.id, userId));
+/** Lots are priced in CR (alpha 05.10): a user's spendable balance is their credits. */
+async function setBalance(userId: string, cr: bigint, level = 1): Promise<void> {
+  await db.update(users).set({ credits: Number(cr), level }).where(eq(users.id, userId));
 }
 
-async function user(cents = 0n, level = 1): Promise<string> {
+async function user(cr = 1000n, level = 1): Promise<string> {
   const id = await makeUser(db);
-  await setBalance(id, cents, level);
+  await setBalance(id, cr, level);
   return id;
 }
 
 async function balanceOf(id: string): Promise<bigint> {
-  const [r] = await db.select({ b: users.balanceCents }).from(users).where(eq(users.id, id));
-  return r!.b;
+  return BigInt(await creditsOf(id));
 }
 
 async function creditsOf(id: string): Promise<number> {
@@ -48,9 +48,12 @@ async function itemRow(id: string) {
   return r!;
 }
 
-async function houseTotal(): Promise<bigint> {
-  const r = await db.execute<{ s: string | null }>(sql`select sum(delta_minor) as s from money_ledger where account = ${HOUSE_ACCOUNT}`);
-  return BigInt(r.rows[0]?.s ?? 0);
+/** CR that left circulation through market buys (fees and treasury lots are burned). */
+async function burned(): Promise<bigint> {
+  const r = await db.execute<{ s: string | null }>(
+    sql`select sum(delta) as s from credit_ledger where reason in ('market_buy', 'market_sale')`,
+  );
+  return -BigInt(r.rows[0]?.s ?? 0);
 }
 
 async function listed(seller: string, def = "rifle", price = 1000n, rarity = 1): Promise<{ itemId: string; listingId: string }> {
@@ -112,17 +115,17 @@ test("list rules: level, giveaway lock, bound, ownership, price, CR, cap", async
   assert.deepEqual(await createListing(db, seller, lvl, 100n, OPTS), { ok: false, code: "too_many_listings" });
 });
 
-test("buy: money moves with a 5% fee, item changes owner, trade recorded", async () => {
-  const seller = await user(0n);
+test("buy: CR moves with a 5% fee, item changes owner, trade recorded", async () => {
+  const seller = await user();
   const buyer = await user(5000n);
   const { itemId, listingId } = await listed(seller, "rifle", 1000n);
   const r = await buyListing(db, buyer, listingId, { feeBps: 500 });
   assert.ok(r.ok, JSON.stringify(r));
   assert.equal(r.fee, "50");
-  assert.equal(r.balance, "4000");
+  assert.equal(r.credits, 4000);
   assert.equal(await balanceOf(buyer), 4000n);
-  assert.equal(await balanceOf(seller), 950n);
-  assert.equal(await houseTotal(), 50n);
+  assert.equal(await balanceOf(seller), 1000n - BigInt(MARKET.LISTING_FEE_CR[1]) + 950n);
+  assert.equal(await burned(), 50n);
   const it = await itemRow(itemId);
   assert.equal(it.state, "in_stash");
   assert.equal(it.ownerId, buyer);
@@ -132,15 +135,15 @@ test("buy: money moves with a 5% fee, item changes owner, trade recorded", async
   assert.equal(t.length, 1);
   assert.equal(t[0]!.priceMinor, 1000n);
   assert.equal(t[0]!.feeMinor, 50n);
-  // Money is conserved: buyer −1000 = seller +950 + house +50.
-  const sum = await db.execute<{ s: string }>(sql`select sum(delta_minor) as s from money_ledger`);
-  assert.equal(BigInt(sum.rows[0]!.s), 0n);
+  // Journalled once per side: buyer −1000, seller +950; the 50 CR fee is burned.
+  const rows = await db.select().from(creditLedger).where(eq(creditLedger.refId, listingId));
+  assert.deepEqual(rows.map((x) => [x.reason, x.delta]).sort(), [["listing_fee", -MARKET.LISTING_FEE_CR[1]], ["market_buy", -1000], ["market_sale", 950]]);
   // The buyer now owns it and can list it again.
   assert.ok((await createListing(db, buyer, itemId, 2000n, OPTS)).ok);
 });
 
 test("stop-crane market_paused (admin): no new lots, no sales, nothing charged; cancelling still works; 0 reopens", async () => {
-  const seller = await user(0n);
+  const seller = await user();
   const buyer = await user(5000n);
   const { listingId } = await listed(seller, "rifle", 1000n);
   const other = await makeItem(db, { def: "rifle", rarity: 1, ownerId: seller });
@@ -160,7 +163,7 @@ test("stop-crane market_paused (admin): no new lots, no sales, nothing charged; 
 });
 
 test("buy race: N buyers click the same lot at once → exactly one wins, nobody else pays", async () => {
-  const seller = await user(0n);
+  const seller = await user();
   const { itemId, listingId } = await listed(seller, "shotgun", 700n);
   const buyers = await Promise.all(Array.from({ length: 6 }, () => user(10_000n)));
   const results = await Promise.all(buyers.map((b) => buyListing(db, b, listingId)));
@@ -170,9 +173,9 @@ test("buy race: N buyers click the same lot at once → exactly one wins, nobody
   const winner = buyers[results.findIndex((r) => r.ok)]!;
   assert.equal((await itemRow(itemId)).ownerId, winner);
   for (const b of buyers) assert.equal(await balanceOf(b), b === winner ? 9_300n : 10_000n);
-  assert.equal(await balanceOf(seller), 665n);
+  assert.equal(await balanceOf(seller), 1000n - BigInt(MARKET.LISTING_FEE_CR[1]) + 665n);
   assert.equal((await db.select().from(trades)).length, 1);
-  assert.equal((await db.select().from(moneyLedger)).length, 3);
+  assert.equal(await burned(), 35n);
 });
 
 test("buy race: the same buyer double-clicking pays once", async () => {
@@ -189,7 +192,7 @@ test("buy refusals: own lot, no funds, hidden, cancelled, unknown", async () => 
   const poor = await user(10n);
   const { listingId } = await listed(seller, "rifle", 1000n);
   assert.deepEqual(await buyListing(db, seller, listingId), { ok: false, code: "own_listing" });
-  assert.deepEqual(await buyListing(db, poor, listingId), { ok: false, code: "insufficient_funds" });
+  assert.deepEqual(await buyListing(db, poor, listingId), { ok: false, code: "insufficient_credits" });
   assert.deepEqual(await buyListing(db, poor, randomUUID()), { ok: false, code: "not_found" });
   assert.deepEqual(await buyListing(db, poor, "nope"), { ok: false, code: "not_found" });
   const hiddenItem = await makeItem(db, { def: "shotgun", ownerId: seller });
@@ -245,7 +248,7 @@ test("expiry: player lots return to the stash, treasury lots to the treasury", a
   assert.equal(await expireListings(db, later), 0);
 });
 
-test("treasury (seeded NPC) lot: the house gets the whole price", async () => {
+test("treasury (seeded NPC) lot: the whole CR price is burned", async () => {
   await seedEconomy(db, { poolItems: 0, listings: 1, rng: mulberry32(3) });
   const buyer = await user(1_000_000n);
   const [lot] = await browseListings(db, { viewerId: buyer });
@@ -253,7 +256,7 @@ test("treasury (seeded NPC) lot: the house gets the whole price", async () => {
   const r = await buyListing(db, buyer, lot.id);
   assert.ok(r.ok);
   assert.equal(r.fee, "0");
-  assert.equal(await houseTotal(), BigInt(lot.price));
+  assert.equal(await burned(), BigInt(lot.price));
   assert.equal((await itemRow(lot.item.id)).ownerId, buyer);
 });
 
@@ -335,8 +338,27 @@ test("economy stats: faucets, sinks, pool, treasury and trades add up", async ()
   assert.equal(s.market.tradesAll, 1);
   assert.equal(s.market.volumeAll, "2000");
   assert.equal(s.market.feesAll, "100");
-  assert.equal(s.credits.outAll, MARKET.LISTING_FEE_CR[0] + CONSUMABLES_CR.bandage.cr);
-  assert.equal(s.credits.circulating, 2000 - MARKET.LISTING_FEE_CR[0] - CONSUMABLES_CR.bandage.cr);
+  assert.equal(s.credits.outAll, MARKET.LISTING_FEE_CR[0] + CONSUMABLES_CR.bandage.cr + 100, "listing fee + bandage + burned sale fee");
+  assert.equal(s.credits.circulating, 1000 + 10_000 - 100 - MARKET.LISTING_FEE_CR[0] - CONSUMABLES_CR.bandage.cr);
   assert.equal(s.players.registered, 2);
   assert.equal(s.items.circulating, 3, "bought rifle + 2 treasury lots");
+});
+
+test("migration 014: open SOL-era lots close, items return to stash / treasury, old trades leave the index", async () => {
+  const { readFileSync } = await import("node:fs");
+  const seller = await user();
+  const { itemId, listingId } = await listed(seller, "rifle", 1000n);
+  await seedEconomy(db, { poolItems: 0, listings: 1, rng: mulberry32(5) });
+  const migration = readFileSync(new URL("../../../migrations/014_cr_market.sql", import.meta.url), "utf8");
+  await pool.query(migration);
+  await pool.query(migration);
+  assert.equal((await itemRow(itemId)).state, "in_stash");
+  const [l] = await db.select().from(listings).where(eq(listings.id, listingId));
+  assert.equal(l!.status, "cancelled");
+  const open = await db.execute<{ n: number }>(sql`select count(*)::int as n from listings where status in ('pending', 'active')`);
+  assert.equal(open.rows[0]!.n, 0);
+  const listedLeft = await db.execute<{ n: number }>(sql`select count(*)::int as n from items where state = 'listed'`);
+  assert.equal(listedLeft.rows[0]!.n, 0);
+  const ev = await db.select().from(itemEvents).where(eq(itemEvents.itemId, itemId));
+  assert.deepEqual(ev.map((e) => [e.reason, e.toState]), [["list", "listed"], ["delist", "in_stash"]]);
 });

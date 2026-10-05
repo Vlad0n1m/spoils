@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import clsx from "clsx";
 import type { ListingRowDto, ListingsResponse } from "@/lib/lobby/api-types";
 import { describeItem } from "@/lib/items-ui";
-import { formatMinor } from "@/lib/market/config";
+import { formatPrice } from "@/lib/market/config";
 import { MARKET_CATS, templateLabel, type MarketCat } from "@/lib/market/templates";
 import { ItemCard } from "./item-card";
 import { api, timeLeft, useResource } from "./use-lobby";
@@ -47,7 +47,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
     setMsg(null);
     try {
       await api("/api/market/buy", { body: { listingId: l.id } });
-      setMsg({ ok: true, text: `Bought ${describeItem({ def: l.item.def, rarity: l.item.rarity }).name} for ${formatMinor(l.price)}. It's in your stash.` });
+      setMsg({ ok: true, text: `Bought ${describeItem({ def: l.item.def, rarity: l.item.rarity }).name} for ${formatPrice(l.price)}. It's in your stash.` });
       onBought();
     } catch (e) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : "Purchase failed" });
@@ -59,7 +59,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
   };
 
   const rows = res.data?.listings ?? [];
-  const balance = res.data?.balance ? BigInt(res.data.balance) : null;
+  const credits = res.data?.credits ?? null;
 
   return (
     <section className="toon-panel flex min-h-0 flex-1 flex-col bg-[#161b28]/95 p-5 short:p-3">
@@ -105,7 +105,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
         {rows.map((l) => {
           const d = describeItem({ def: l.item.def, rarity: l.item.rarity });
           const pending = l.visibleAt > now;
-          const short = balance !== null && balance < BigInt(l.price);
+          const short = credits !== null && BigInt(credits) < BigInt(l.price);
           return (
             <li
               key={l.id}
@@ -124,7 +124,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
                 </p>
               </div>
               <p className="toon-text-thin text-right text-lg tabular-nums tracking-wide text-zooa-lime max-sm:col-span-3 max-sm:row-start-2 max-sm:text-left sm:text-xl short:!text-base">
-                {formatMinor(l.price)}
+                {formatPrice(l.price)}
               </p>
               <div className="max-sm:col-start-3 max-sm:row-start-1">
                 {l.mine ? (
@@ -145,7 +145,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
                     type="button"
                     onClick={() => setConfirm(l.id)}
                     disabled={short || busy !== null}
-                    title={short ? "Not enough balance" : undefined}
+                    title={short ? "Not enough CR" : undefined}
                     className="toon-btn min-h-9 px-4 text-sm [@media(pointer:coarse)]:min-h-11"
                   >
                     <span className="optical-center">Buy</span>
@@ -199,7 +199,7 @@ export function RecentTrades({ refreshKey, className }: { refreshKey: number; cl
               <span className="min-w-0 flex-1 truncate text-white/80">
                 {templateLabel(t.template)} <span className="text-white/70">{Math.round(t.dur)}%</span>
               </span>
-              <span className="tabular-nums text-zooa-lime">{formatMinor(t.price)}</span>
+              <span className="tabular-nums text-zooa-lime">{formatPrice(t.price)}</span>
             </li>
           ))}
         </Paged>

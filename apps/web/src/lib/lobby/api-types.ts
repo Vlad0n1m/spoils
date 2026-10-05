@@ -77,8 +77,8 @@ export interface ListingRowDto {
 export interface ListingsResponse {
   listings: ListingRowDto[];
   market: MarketConfigDto;
-  /** Viewer's market wallet, null for guests / signed-out viewers. */
-  balance: string | null;
+  /** Viewer's CR (lots are priced in CR), null for guests / signed-out viewers. */
+  credits: number | null;
 }
 
 export interface TradeRowDto {

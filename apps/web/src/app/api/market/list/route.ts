@@ -2,15 +2,15 @@ import { z } from "zod";
 import { db } from "@/db/client";
 import { createListing } from "@/lib/market/market";
 import { marketRules, visibleDelayMs } from "@/lib/market/server-config";
-import { formatMinor } from "@/lib/market/config";
+import { formatPrice } from "@/lib/market/config";
 import { apiError, caller, json, readJson, registeredOnly } from "@/lib/lobby/route-helpers";
 
 export const dynamic = "force-dynamic";
 
 const bodySchema = z.object({
   itemId: z.string().uuid(),
-  /** Minor units as a decimal string (bigint over JSON). */
-  price: z.string().regex(/^\d{1,15}$/),
+  /** Whole CR as a decimal string (bigint over JSON). */
+  price: z.string().regex(/^\d{1,8}$/),
 });
 
 const MESSAGES: Record<string, string> = {
@@ -27,7 +27,7 @@ const MESSAGES: Record<string, string> = {
   market_paused: "The market is paused for a moment. Your item stays in your stash; try again later.",
 };
 
-/** Puts a stash unique on the market at a fixed price; charges the CR listing fee. */
+/** Puts a stash unique on the market at a fixed CR price; charges the CR listing fee. */
 export async function POST(req: Request) {
   const c = await caller();
   const deny = registeredOnly(c);
@@ -45,7 +45,7 @@ export async function POST(req: Request) {
       r.code === "level_locked"
         ? `Selling unlocks at level ${rules.sellUnlockLevel}.`
         : r.code === "price_out_of_band" && r.band
-          ? `Price must be between ${formatMinor(r.band.min)} and ${r.band.max ? formatMinor(r.band.max) : "∞"} right now.`
+          ? `Price must be between ${formatPrice(r.band.min)} and ${r.band.max ? formatPrice(r.band.max) : "∞"} right now.`
           : (MESSAGES[r.code] ?? r.code);
     const status = r.code === "no_user" ? 401 : r.code === "market_paused" ? 503 : r.code === "price_out_of_band" || r.code === "bad_price" ? 400 : 409;
     return apiError(status, r.code, message);

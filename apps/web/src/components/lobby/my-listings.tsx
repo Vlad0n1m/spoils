@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import clsx from "clsx";
 import type { ListingRowDto, ListingsResponse } from "@/lib/lobby/api-types";
 import { describeItem } from "@/lib/items-ui";
-import { formatMinor, saleBreakdown } from "@/lib/market/config";
+import { formatPrice, saleBreakdown } from "@/lib/market/config";
 import { ItemCard } from "./item-card";
 import { api, timeAgo, timeLeft, useResource } from "./use-lobby";
 import { Paged } from "@/components/paged";
@@ -64,9 +64,9 @@ export function MyListings({ refreshKey, onChanged, className }: { refreshKey: n
                     <span className={clsx("shrink-0 rounded-md border-2 border-black px-1.5 py-0.5 text-xs lg:text-[0.8125rem] uppercase tracking-wider text-black", st.cls)}>{st.text}</span>
                   </p>
                   <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">
-                    <span className="tabular-nums text-zooa-lime">{formatMinor(l.price)}</span>
+                    <span className="tabular-nums text-zooa-lime">{formatPrice(l.price)}</span>
                     {l.status === "sold" ? (
-                      <> · you got {formatMinor(saleBreakdown(BigInt(l.price), feeBps).net)}</>
+                      <> · you got {formatPrice(saleBreakdown(BigInt(l.price), feeBps).net)}</>
                     ) : open ? (
                       <> · {timeLeft(l.expiresAt, now)} left</>
                     ) : l.closedAt ? (

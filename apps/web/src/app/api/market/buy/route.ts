@@ -15,7 +15,7 @@ const MESSAGES: Record<string, string> = {
   expired: "That lot has expired.",
   own_listing: "That's your own lot.",
   rate_limited: "Buying too fast — wait a bit and try again.",
-  insufficient_funds: "Not enough balance. Top up your wallet first.",
+  insufficient_credits: "Not enough CR.",
   no_user: "Sign in again.",
   market_paused: "The market is paused for a moment. Nothing was charged; try again later.",
 };

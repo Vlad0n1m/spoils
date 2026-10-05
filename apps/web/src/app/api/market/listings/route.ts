@@ -35,10 +35,10 @@ export async function GET(req: Request) {
             template,
             sort: sortParam && SORTS.includes(sortParam) ? sortParam : "price_asc",
           });
-  let balance: string | null = null;
+  let credits: number | null = null;
   if (viewerId) {
-    const b = await db.execute<{ balance_cents: string }>(sql`select balance_cents from users where id = ${viewerId}`);
-    balance = String(b.rows[0]?.balance_cents ?? "0");
+    const b = await db.execute<{ credits: string }>(sql`select credits from users where id = ${viewerId}`);
+    credits = Number(b.rows[0]?.credits ?? 0);
   }
-  return json<ListingsResponse>({ listings: rows, market: marketConfig(), balance });
+  return json<ListingsResponse>({ listings: rows, market: marketConfig(), credits });
 }

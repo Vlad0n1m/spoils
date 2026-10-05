@@ -5,7 +5,7 @@ import Link from "next/link";
 import { STARTER_KIT, itemDef, levelForXp, xpToNext } from "@extract/shared";
 import type { StashItemDto, StashResponse } from "@/lib/lobby/api-types";
 import { describeItem, fmtCr } from "@/lib/items-ui";
-import { formatMinor } from "@/lib/market/config";
+import { MARKET_CURRENCY, formatMinor } from "@/lib/market/config";
 import { ItemCard } from "./item-card";
 import { StashList, uniqueBadge } from "./stash-list";
 import { panelHref } from "@/lib/lobby/panels";
@@ -91,8 +91,8 @@ export function StashPage({ res }: { res: Resource<StashResponse> }) {
               <Stat label="Credits" value={fmtCr(stash.credits)} tone="text-amber-300" />
               {EDITION_UI.walletBalance && money && (
               <Stat
-                label={`Wallet (${money.market.currency})`}
-                value={formatMinor(money.balance).replace(` ${money.market.currency}`, "")}
+                label={`Wallet (${MARKET_CURRENCY.code})`}
+                value={formatMinor(money.balance).replace(` ${MARKET_CURRENCY.code}`, "")}
                 tone="text-zooa-lime"
                 extra={
                   <Link

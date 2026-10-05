@@ -11,25 +11,24 @@ import {
   type PricePoint,
   type Rarity,
 } from "@extract/shared";
-import { listings, moneyLedger, trades } from "../../db/schema";
+import { listings, trades } from "../../db/schema";
 import type { Db, Tx } from "../inventory/db";
 import { applyMove, isUuid, lockItem } from "../inventory/transition";
 import { credit } from "../economy/ledger";
 import { PARAM, pausedParam } from "../economy/params";
 import type { ListingRowDto, TradeRowDto } from "../lobby/api-types";
-import { MAX_PRICE_MINOR, listingFeeCr } from "./config";
+import { MAX_PRICE_CR, listingFeeCr } from "./config";
 import { defOfTemplate } from "./templates";
 
 /**
- * Market v1 (economy memo §7, critique WP-W2): fixed-price lots of uniques, paid in the custodial
- * balance_cents unit. Every mutation is one Postgres transaction that row-locks the listing first,
+ * Market v1 (economy memo §7, critique WP-W2): fixed-price lots of uniques, paid in CR (alpha
+ * decision 05.10: player trades run on credits; SOL trades go through the on-chain escrow in
+ * lib/onchain). Prices sit in listings.price_minor as whole CR. Every mutation is one Postgres transaction that row-locks the listing first,
  * so a lot can be sold once no matter how many buyers click at the same moment; the item moves
  * through the guarded transition helpers (listed → in_stash) with an item_events row per move.
- * Money moves are journalled in money_ledger (UNIQUE(account, reason, ref) = idempotent).
+ * CR moves go through credit_ledger (UNIQUE(user, reason, ref) = idempotent); the seller fee is
+ * burned (a CR sink), so there is no house account on this market.
  */
-
-/** The house account that collects fees and treasury sales. */
-export const HOUSE_ACCOUNT = "house";
 
 export type ListErr =
   | "no_user"
@@ -53,7 +52,7 @@ export type BuyErr =
   | "expired"
   | "own_listing"
   | "rate_limited"
-  | "insufficient_funds"
+  | "insufficient_credits"
   | "no_user"
   | "market_paused";
 
@@ -90,7 +89,7 @@ export async function createListing(
   opts: ListOpts,
 ): Promise<ListResult> {
   const now = opts.now ?? new Date();
-  if (price <= 0n || price > MAX_PRICE_MINOR) return { ok: false, code: "bad_price" };
+  if (price <= 0n || price > MAX_PRICE_CR) return { ok: false, code: "bad_price" };
   if (!isUuid(sellerId)) return { ok: false, code: "no_user" };
   // Admin stop-crane (economy_params market_paused, /admin/params).
   if (await pausedParam(db, PARAM.MARKET_PAUSED)) return { ok: false, code: "market_paused" };
@@ -153,7 +152,7 @@ export async function createListing(
 }
 
 export type BuyResult =
-  | { ok: true; tradeId: string; itemId: string; price: string; fee: string; balance: string }
+  | { ok: true; tradeId: string; itemId: string; price: string; fee: string; credits: number }
   | { ok: false; code: BuyErr };
 
 type ListingLockRow = {
@@ -199,14 +198,12 @@ export async function buyListing(
 
       const ids = [buyerId, ...(l.seller_id ? [l.seller_id] : [])].sort();
       // One row at a time in id order: two buyers trading with each other cannot deadlock.
-      let buyer: { id: string; balance_cents: string } | undefined;
+      let found = false;
       for (const id of ids) {
-        const ur = await tx.execute<{ id: string; balance_cents: string }>(
-          sql`select id, balance_cents from users where id = ${id} for update`,
-        );
-        if (id === buyerId) buyer = ur.rows[0];
+        const ur = await tx.execute<{ id: string }>(sql`select id from users where id = ${id} for update`);
+        if (id === buyerId && ur.rows[0]) found = true;
       }
-      if (!buyer) throw new Abort<BuyErr>("no_user");
+      if (!found) throw new Abort<BuyErr>("no_user");
 
       const hour = await tx.execute<{ n: number }>(
         sql`select count(*)::int as n from trades where buyer_id = ${buyerId} and at > ${new Date(now.getTime() - 3600_000)}`,
@@ -219,7 +216,6 @@ export async function buyListing(
       if (Number(day.rows[0]?.n ?? 0) >= MARKET.MAX_BUYS_PER_TEMPLATE_PER_DAY) throw new Abort<BuyErr>("rate_limited");
 
       const price = BigInt(l.price_minor);
-      if (BigInt(buyer.balance_cents) < price) throw new Abort<BuyErr>("insufficient_funds");
       const fee = l.seller_id ? marketFeeMinor(price, opts.feeBps ?? MARKET.FEE_BPS) : 0n;
       const net = price - fee;
 
@@ -228,22 +224,9 @@ export async function buyListing(
       // so the whole buy rolls back rather than charging for an item that cannot move.
       if (!it || it.state !== "listed" || it.ownerId !== l.seller_id) throw new Error(`market: listing ${l.id} item ${l.item_id} is not listed`);
 
-      const after = await tx.execute<{ balance_cents: string }>(
-        sql`update users set balance_cents = balance_cents - ${price} where id = ${buyerId} returning balance_cents`,
-      );
-      if (l.seller_id) {
-        await tx.execute(sql`update users set balance_cents = balance_cents + ${net} where id = ${l.seller_id}`);
-      }
-      const journal: Array<typeof moneyLedger.$inferInsert> = [
-        { account: buyerId, deltaMinor: -price, reason: "buy", refId: l.id, at: now },
-      ];
-      if (l.seller_id) {
-        journal.push({ account: l.seller_id, deltaMinor: net, reason: "sale", refId: l.id, at: now });
-        if (fee > 0n) journal.push({ account: HOUSE_ACCOUNT, deltaMinor: fee, reason: "fee", refId: l.id, at: now });
-      } else {
-        journal.push({ account: HOUSE_ACCOUNT, deltaMinor: price, reason: "treasury_sale", refId: l.id, at: now });
-      }
-      await tx.insert(moneyLedger).values(journal);
+      const paid = await credit(tx, buyerId, -Number(price), "market_buy", l.id);
+      if (!paid.ok) throw new Abort<BuyErr>(paid.code === "no_user" ? "no_user" : "insufficient_credits");
+      if (l.seller_id && net > 0n) await credit(tx, l.seller_id, Number(net), "market_sale", l.id);
 
       await applyMove(tx, it, { state: "in_stash", ownerId: buyerId, matchId: null, loadoutId: null }, { reason: "buy", refId: l.id });
       await tx.execute(sql`update listings set status = 'sold', closed_at = ${now} where id = ${l.id}`);
@@ -280,7 +263,7 @@ export async function buyListing(
         itemId: it.id,
         price: price.toString(),
         fee: fee.toString(),
-        balance: String(after.rows[0]?.balance_cents ?? "0"),
+        credits: paid.balance,
       } as const;
     });
   } catch (e) {

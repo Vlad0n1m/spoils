@@ -4,7 +4,6 @@ import { useState } from "react";
 import Link from "next/link";
 import type { StashItemDto, StashResponse } from "@/lib/lobby/api-types";
 import { fmtCr } from "@/lib/items-ui";
-import { formatMinor } from "@/lib/market/config";
 import { panelHref } from "@/lib/lobby/panels";
 import { hasStashMoney } from "@/lib/lobby/stash-response";
 import { ItemCard } from "./item-card";
@@ -54,14 +53,14 @@ export function MarketTab({ stash, sessionLoading = false }: { stash: Resource<S
             <section className="toon-panel shrink-0 bg-[#161b28]/95 px-4 py-3 short:px-3 short:py-1.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70 short:hidden">Wallet</p>
-                  <p className="toon-text-thin mt-1 truncate text-2xl tabular-nums tracking-wide text-zooa-lime short:mt-0 short:text-xl">{formatMinor(s.balance)}</p>
-                  <p className="font-body mt-0.5 truncate text-xs lg:text-[0.8125rem] text-white/70 short:hidden" title={`${fmtCr(s.credits)} for listing fees`}>
-                    {fmtCr(s.credits)} for fees · {(s.market.feeBps / 100).toFixed(s.market.feeBps % 100 ? 1 : 0)}% on sales
+                  <p className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70 short:hidden">Credits</p>
+                  <p className="toon-text-thin mt-1 truncate text-2xl tabular-nums tracking-wide text-amber-300 short:mt-0 short:text-xl">{fmtCr(s.credits)}</p>
+                  <p className="font-body mt-0.5 truncate text-xs lg:text-[0.8125rem] text-white/70 short:hidden">
+                    Lots are priced in CR · {(s.market.feeBps / 100).toFixed(s.market.feeBps % 100 ? 1 : 0)}% fee on sales
                   </p>
                 </div>
-                <Link href="/wallet" className="toon-btn-ghost min-h-10 shrink-0 whitespace-nowrap px-4 text-sm [@media(pointer:coarse)]:min-h-11 short:!min-h-9">
-                  <span className="optical-center">Top up</span>
+                <Link href="/onchain" className="toon-btn-ghost min-h-10 shrink-0 whitespace-nowrap px-4 text-sm [@media(pointer:coarse)]:min-h-11 short:!min-h-9">
+                  <span className="optical-center">SOL market</span>
                 </Link>
               </div>
             </section>

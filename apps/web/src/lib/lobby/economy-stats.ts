@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../inventory/db";
 import { PARAM, getNumberParam } from "../economy/params";
-import { MARKET_CURRENCY } from "../market/config";
+import { MARKET_PRICE } from "../market/config";
 import type { EconomyStatsDto } from "./api-types";
 
 /**
@@ -21,7 +21,14 @@ export async function getEconomyStats(db: Db, now = new Date()): Promise<Economy
         coalesce(-sum(delta) filter (where delta < 0 and at > ${dayAgo}), 0) as out24,
         coalesce(sum(delta) filter (where delta > 0), 0) as in_all,
         coalesce(-sum(delta) filter (where delta < 0), 0) as out_all
-      from credit_ledger group by reason order by reason`),
+      from (
+        select reason, delta, at from credit_ledger where reason not in ('market_buy', 'market_sale')
+        union all
+        -- A market trade moves CR between players; only its burned fee is a sink.
+        select 'market_fee' as reason, sum(delta) as delta, max(at) as at
+        from credit_ledger where reason in ('market_buy', 'market_sale') group by ref_id
+      ) f
+      group by reason order by reason`),
     db.execute<{ total: string | null }>(sql`select sum(credits) as total from users`),
     db.execute<{ state: string; n: number }>(sql`select state, count(*)::int as n from items group by state`),
     db.execute<{ t24: number; t_all: number; v24: string; v_all: string; f24: string; f_all: string }>(sql`
@@ -63,7 +70,7 @@ export async function getEconomyStats(db: Db, now = new Date()): Promise<Economy
   const exits = Number(rd?.exits24 ?? 0);
   return {
     generatedAt: now.getTime(),
-    currency: MARKET_CURRENCY.code,
+    currency: MARKET_PRICE.code,
     players: {
       registered: Number(players.rows[0]?.registered ?? 0),
       active24h: Number(rd?.active24 ?? 0),

@@ -3,15 +3,15 @@
 import { useEffect, useId, useState } from "react";
 import { templateKey, templateRefPriced } from "@extract/shared";
 import type { HistoryResponse, MarketConfigDto, StashItemDto } from "@/lib/lobby/api-types";
-import { formatMinor, parsePriceToMinor, saleBreakdown } from "@/lib/market/config";
+import { formatPrice, parsePrice, saleBreakdown } from "@/lib/market/config";
 import { templateLabel } from "@/lib/market/templates";
 import { describeItem, fmtCr } from "@/lib/items-ui";
 import { ItemCard } from "./item-card";
 import { api } from "./use-lobby";
 
 /**
- * Sell dialog (economy memo §7): fixed price in the market currency, with the fee breakdown
- * (seller fee in the currency + non-refundable CR listing fee), the price index and allowed band
+ * Sell dialog (economy memo §7): fixed CR price, with the fee breakdown
+ * (seller fee in CR + non-refundable CR listing fee), the price index and allowed band
  * when the template has enough trades, and the last sales of that template as a reference.
  */
 export function ListDialog({
@@ -53,7 +53,7 @@ export function ListDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const price = parsePriceToMinor(text);
+  const price = parsePrice(text);
   const br = price ? saleBreakdown(price, market.feeBps) : null;
   const band = hist?.band;
   const outOfBand = price !== null && band ? price < BigInt(band.min) || (band.max !== null && price > BigInt(band.max)) : false;
@@ -103,26 +103,26 @@ export function ListDialog({
           <input
             id={`${id}-p`}
             autoFocus
-            inputMode="decimal"
+            inputMode="numeric"
             autoComplete="off"
-            placeholder="0.00"
+            placeholder="0"
             value={text}
             onChange={(e) => setText(e.target.value)}
             className="w-full rounded-2xl border-[3px] border-black bg-white px-4 py-3 text-xl tabular-nums text-black placeholder:text-black/30 focus:outline-none focus:ring-4 focus:ring-zooa-lime/60"
           />
           <span className="text-lg text-white/70">{market.currency}</span>
         </div>
-        {text && !price && <p className="font-body mt-1 text-sm text-rose-300">Enter an amount like 12.50 (max {market.decimals} decimals).</p>}
+        {text && !price && <p className="font-body mt-1 text-sm text-rose-300">Enter a whole number of CR, like 1500.</p>}
         </div>
 
         <div>
         <dl className="font-body mt-5 short:mt-0 grid grid-cols-[1fr_auto] gap-y-1.5 rounded-2xl border-2 border-black bg-black/30 p-4 text-sm">
           <dt className="text-white/75">Buyer pays</dt>
-          <dd className="text-right tabular-nums text-white">{price ? formatMinor(price) : "—"}</dd>
+          <dd className="text-right tabular-nums text-white">{price ? formatPrice(price) : "—"}</dd>
           <dt className="text-white/75">Market fee ({(market.feeBps / 100).toFixed(market.feeBps % 100 ? 1 : 0)}%)</dt>
-          <dd className="text-right tabular-nums text-white/80">{br ? `− ${formatMinor(br.fee)}` : "—"}</dd>
+          <dd className="text-right tabular-nums text-white/80">{br ? `− ${formatPrice(br.fee)}` : "—"}</dd>
           <dt className="font-semibold text-white">You receive</dt>
-          <dd className="text-right font-semibold tabular-nums text-zooa-lime">{br ? formatMinor(br.net) : "—"}</dd>
+          <dd className="text-right font-semibold tabular-nums text-zooa-lime">{br ? formatPrice(br.net) : "—"}</dd>
           <dt className="mt-2 text-white/75">Listing fee (not refunded)</dt>
           <dd className={canAffordFee ? "mt-2 text-right tabular-nums text-amber-300" : "mt-2 text-right tabular-nums text-rose-300"}>{fmtCr(feeCr)}</dd>
         </dl>
@@ -133,11 +133,11 @@ export function ListDialog({
               <span className="text-white/70">{templateLabel(template)}: </span>
               {hist?.index ? (
                 <>
-                  index <span className="tabular-nums text-white">{formatMinor(hist.index)}</span>
+                  index <span className="tabular-nums text-white">{formatPrice(hist.index)}</span>
                   {band && (
                     <>
                       {" "}
-                      · allowed {formatMinor(band.min)} – {band.max ? formatMinor(band.max) : "∞"}
+                      · allowed {formatPrice(band.min)} – {band.max ? formatPrice(band.max) : "∞"}
                     </>
                   )}
                 </>
@@ -149,7 +149,7 @@ export function ListDialog({
             </p>
             {hist && hist.trades.length > 0 && (
               <p className="mt-1 text-white/70">
-                Last sales: {hist.trades.slice(0, 5).map((t) => `${formatMinor(t.price)} (${Math.round(t.dur)}%)`).join(" · ")}
+                Last sales: {hist.trades.slice(0, 5).map((t) => `${formatPrice(t.price)} (${Math.round(t.dur)}%)`).join(" · ")}
               </p>
             )}
           </div>

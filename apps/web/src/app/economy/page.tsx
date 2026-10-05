@@ -4,7 +4,7 @@ import { db } from "@/db/client";
 import { getEconomyStats } from "@/lib/lobby/economy-stats";
 import type { EconomyStatsDto } from "@/lib/lobby/api-types";
 import { fmtCr } from "@/lib/items-ui";
-import { formatMinor } from "@/lib/market/config";
+import { formatPrice } from "@/lib/market/config";
 import { BRAND } from "@/lib/brand";
 import { OnChainBlock } from "./on-chain";
 
@@ -144,11 +144,11 @@ export default async function EconomyPage() {
                   <dd className="text-right tabular-nums">{num(stats.market.trades24h)}</dd>
                   <dd className="text-right tabular-nums">{num(stats.market.tradesAll)}</dd>
                   <dt className="text-white/70">Volume</dt>
-                  <dd className="text-right tabular-nums">{formatMinor(stats.market.volume24h)}</dd>
-                  <dd className="text-right tabular-nums">{formatMinor(stats.market.volumeAll)}</dd>
+                  <dd className="text-right tabular-nums">{formatPrice(stats.market.volume24h)}</dd>
+                  <dd className="text-right tabular-nums">{formatPrice(stats.market.volumeAll)}</dd>
                   <dt className="text-white/70">Fees collected</dt>
-                  <dd className="text-right tabular-nums">{formatMinor(stats.market.fees24h)}</dd>
-                  <dd className="text-right tabular-nums">{formatMinor(stats.market.feesAll)}</dd>
+                  <dd className="text-right tabular-nums">{formatPrice(stats.market.fees24h)}</dd>
+                  <dd className="text-right tabular-nums">{formatPrice(stats.market.feesAll)}</dd>
                   <dt className="text-white/70">Open lots</dt>
                   <dd className="col-span-2 text-right tabular-nums">{num(stats.market.activeListings)}</dd>
                 </dl>

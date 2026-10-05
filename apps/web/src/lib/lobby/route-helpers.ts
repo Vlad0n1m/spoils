@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "../session";
-import { MARKET_CURRENCY, listingFeeCr } from "../market/config";
+import { MARKET_PRICE, listingFeeCr } from "../market/config";
 import { marketRules } from "../market/server-config";
 import type { ApiError, MarketConfigDto } from "./api-types";
 
@@ -47,8 +47,8 @@ export async function readJson(req: Request): Promise<unknown> {
 export function marketConfig(): MarketConfigDto {
   const r = marketRules();
   return {
-    currency: MARKET_CURRENCY.code,
-    decimals: MARKET_CURRENCY.decimals,
+    currency: MARKET_PRICE.code,
+    decimals: MARKET_PRICE.decimals,
     feeBps: r.feeBps,
     sellUnlockLevel: r.sellUnlockLevel,
     maxActiveListings: r.maxActiveListings,
