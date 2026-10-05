@@ -7,6 +7,7 @@ import { describeItem } from "@/lib/items-ui";
 import { formatMinor, saleBreakdown } from "@/lib/market/config";
 import { ItemCard } from "./item-card";
 import { api, timeAgo, timeLeft, useResource } from "./use-lobby";
+import { Paged } from "@/components/paged";
 
 const STATUS: Record<ListingRowDto["status"], { text: string; cls: string }> = {
   pending: { text: "Pending", cls: "bg-sky-300" },
@@ -16,8 +17,8 @@ const STATUS: Record<ListingRowDto["status"], { text: string; cls: string }> = {
   expired: { text: "Expired", cls: "bg-white/50" },
 };
 
-/** The seller's lots: open ones with Cancel, then recent sold / withdrawn / expired ones. */
-export function MyListings({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) {
+/** The seller's lots: open ones with Cancel, then recent sold / withdrawn / expired ones (paged). */
+export function MyListings({ refreshKey, onChanged, className }: { refreshKey: number; onChanged: () => void; className?: string }) {
   const res = useResource<ListingsResponse>("/api/market/listings?mine=1");
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -44,13 +45,13 @@ export function MyListings({ refreshKey, onChanged }: { refreshKey: number; onCh
   const feeBps = res.data?.market.feeBps ?? 0;
   const now = Date.now();
   return (
-    <section className="toon-panel bg-[#161b28]/95 p-5">
-      <h2 className="toon-text-thin text-xl tracking-wide text-white">My listings</h2>
-      {err && <p className="font-body mt-2 text-sm text-rose-300">{err}</p>}
+    <section className={clsx("toon-panel flex min-h-0 flex-col bg-[#161b28]/95 p-5 short:p-3", className)}>
+      <h2 className="toon-text-thin shrink-0 text-xl tracking-wide text-white short:text-lg">My listings</h2>
+      {err && <p className="font-body mt-2 shrink-0 text-sm text-rose-300">{err}</p>}
       {rows.length === 0 ? (
         <p className="font-body mt-3 text-sm text-white/70">{res.loading ? "Loading…" : "Nothing listed. Pick an item in your Stash and press Sell."}</p>
       ) : (
-        <ul className="mt-3 flex flex-col gap-2">
+        <Paged as="ul" className="mt-3 short:mt-2" gap={8} label="Listing pages">
           {rows.slice(0, 12).map((l) => {
             const open = l.status === "active" || l.status === "pending";
             const st = open && l.visibleAt > now ? STATUS.pending : STATUS[l.status];
@@ -81,7 +82,7 @@ export function MyListings({ refreshKey, onChanged }: { refreshKey: number; onCh
               </li>
             );
           })}
-        </ul>
+        </Paged>
       )}
     </section>
   );

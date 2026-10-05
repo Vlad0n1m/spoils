@@ -5,6 +5,7 @@ import { BOUND_OFFERS, CONSUMABLES_CR, boundTraderLevel, itemDef, type Consumabl
 import { fmtCr } from "@/lib/items-ui";
 import { ItemCard } from "./item-card";
 import { api, newRequestId } from "./use-lobby";
+import { Paged } from "@/components/paged";
 
 const OFFERS = Object.entries(CONSUMABLES_CR) as Array<[ConsumableId, { qty: number; cr: number }]>;
 
@@ -72,27 +73,28 @@ export function TraderJunker({
   const tl = boundTraderLevel(level);
 
   return (
-    <section className="toon-panel bg-[#1b2234]/95 p-5">
-      <header className="flex items-center gap-4">
-        <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border-[3px] border-black bg-amber-300 shadow-[0_3px_0_#000]">
+    <section className="toon-panel flex min-h-0 flex-1 flex-col bg-[#1b2234]/95 p-5 short:p-3">
+      <header className="flex shrink-0 items-center gap-4 short:gap-3">
+        <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border-[3px] border-black bg-amber-300 shadow-[0_3px_0_#000] short:h-11 short:w-11">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/sprites/junk_toolbox.png" alt="" className="h-10 w-10 object-contain" draggable={false} />
         </span>
         <div className="min-w-0">
-          <h2 className="toon-text-thin text-2xl tracking-wide text-amber-300">Junker</h2>
+          <h2 className="toon-text-thin text-2xl tracking-wide text-amber-300 short:text-xl">Junker</h2>
           <p className="font-body text-sm text-white/75">
             “Ammo, bandages, the good stuff. I buy your junk too.” Demand today{" "}
             <span className="font-semibold tabular-nums text-white">×{autosellMult.toFixed(2)}</span>
           </p>
         </div>
       </header>
-      <ul className="mt-5 divide-y-2 divide-black/40">
+      <Paged className="mt-3 short:mt-2" gap={0} minCol={340} maxCols={2} label="Trader pages">
+      <ul className="paged-group">
         {OFFERS.map(([def, o]) => {
           const n = packs[def] ?? 1;
           const cost = o.cr * n;
           const afford = credits >= cost;
           return (
-            <li key={def} className="flex flex-wrap items-center gap-3 py-3">
+            <li key={def} className="flex flex-wrap items-center gap-3 border-b-2 border-black/40 py-2.5 short:py-2">
               <ItemCard def={def} qty={o.qty} size="sm" />
               <div className="min-w-0 flex-1">
                 <p className="text-sm tracking-wide text-white">
@@ -133,16 +135,18 @@ export function TraderJunker({
           );
         })}
       </ul>
-      <h3 className="mt-5 text-sm uppercase tracking-[0.12em] text-white/75">Bound gear</h3>
-      <p className="font-body mt-1 text-xs lg:text-[0.8125rem] text-white/70">
-        For CR. Bound gear can&apos;t be sold or traded and is destroyed when lost.
-      </p>
-      <ul className="mt-2 divide-y-2 divide-black/40">
+      <div className="pb-1 pt-3">
+        <h3 className="text-sm uppercase tracking-[0.12em] text-white/75">Bound gear</h3>
+        <p className="font-body mt-1 text-xs lg:text-[0.8125rem] text-white/70">
+          For CR. Bound gear can&apos;t be sold or traded and is destroyed when lost.
+        </p>
+      </div>
+      <ul className="paged-group">
         {BOUND_OFFERS.map((o) => {
           const locked = o.traderLevel > tl;
           const afford = credits >= o.cr;
           return (
-            <li key={`${o.def}:${o.rarity}`} className="flex flex-wrap items-center gap-3 py-3">
+            <li key={`${o.def}:${o.rarity}`} className="flex flex-wrap items-center gap-3 border-b-2 border-black/40 py-2.5 short:py-2">
               <ItemCard def={o.def} qty={1} size="sm" />
               <div className="min-w-0 flex-1">
                 <p className="text-sm tracking-wide text-white">{itemDef(o.def)?.name ?? o.def}</p>
@@ -160,8 +164,9 @@ export function TraderJunker({
           );
         })}
       </ul>
+      </Paged>
       {msg && (
-        <p role="status" className={msg.ok ? "font-body mt-2 text-sm text-zooa-lime" : "font-body mt-2 text-sm text-rose-300"}>
+        <p role="status" className={msg.ok ? "font-body mt-2 shrink-0 text-sm text-zooa-lime" : "font-body mt-2 shrink-0 text-sm text-rose-300"}>
           {msg.text}
         </p>
       )}
