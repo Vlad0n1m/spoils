@@ -485,6 +485,25 @@ html.game-lock *::-webkit-scrollbar {
   display: none;
 }
 
+/* Long reading panels (Info: How to play, Rules, Controls) keep an ordinary vertical scroll with a thin
+   visible scrollbar, on purpose (owner's call): reading is easier than paging there. */
+html.game-lock .read-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+html.game-lock .read-scroll::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+}
+html.game-lock .read-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+}
+
 /* Paged boxes (components/paged.tsx): content flows into page-tall columns, nothing scrolls. */
 .paged-flow {
   display: block;
@@ -496,7 +515,7 @@ html.game-lock *::-webkit-scrollbar {
 /* Keep the defaults otherwise: text-box-trim: none on the columns made Chrome hang re-laying them
    out on a resize. Tiles page with PagedTiles (a grid), not with columns. */
 .paged-flow > :not(.paged-group),
-.paged-group > :not(.paged-group) {
+.paged-flow .paged-group > :not(.paged-group) {
   break-inside: avoid;
   margin-bottom: var(--paged-gap, 8px);
 }
@@ -506,7 +525,7 @@ html.game-lock *::-webkit-scrollbar {
   break-inside: auto;
 }
 /* A wrapper whose children page one by one (a section of an Info tab). */
-.paged-group {
+.paged-flow .paged-group {
   display: contents;
 }
 
