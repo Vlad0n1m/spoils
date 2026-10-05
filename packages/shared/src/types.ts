@@ -151,6 +151,12 @@ export interface PlayerExitReport {
    */
   killedBy?: string;
   killedByRole?: number;
+  /**
+   * ALPHA LOOT (alpha-loot.ts): uids in `extracted` that the server minted this match (alpha
+   * container / floor / supply-drop finds, ledger origin "alpha"). They have no web item row yet:
+   * the web creates them in the extractor's stash (origin 'alpha', bound). Optional for older servers.
+   */
+  alphaFound?: string[];
 }
 
 export interface MatchEndParticipant {

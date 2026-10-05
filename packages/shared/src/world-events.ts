@@ -10,7 +10,8 @@
  *   target, Corpse id "sd<n>") lands with a flare / smoke column and a loud world sound. Contents:
  *   SUPPLY_DROP_LOOT (CR economy) plus, at most, ONE lost-pool unique placed by the normal pool
  *   placement (it is a pool target like a T3/T4 container while nobody has touched it): never
- *   minted. Opening takes DROP.OPEN_MS and is interrupted by damage.
+ *   minted — except the ALPHA LOOT layer (alpha-loot.ts, on by default), which adds a minted rare+
+ *   weapon and an armor piece. Opening takes DROP.OPEN_MS and is interrupted by damage.
  * - HOT ZONE: one POI every ~15 min is "hot" for 8 min (announced 60 s ahead). At its start the
  *   POI's EMPTIED containers (at most HOT.MAX_REFILL) refill from HOT_ZONE_LOOT (CR economy only,
  *   never a pool target), and container XP inside it pays × HOT.XP_MULT while it lasts.

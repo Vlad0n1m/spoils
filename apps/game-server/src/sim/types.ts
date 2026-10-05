@@ -54,8 +54,11 @@ export interface RosterEntry {
   loadoutId?: string;
 }
 
-/** Where a known unique uid came from (ledger, inventory memo §2.6). */
-export type UidOrigin = "loadout" | "pool" | "minted";
+/**
+ * Where a known unique uid came from (ledger, inventory memo §2.6). "alpha" = minted by the ALPHA LOOT
+ * layer (alpha-loot.ts): reported in PlayerExitReport.alphaFound when extracted, so the web creates it.
+ */
+export type UidOrigin = "loadout" | "pool" | "minted" | "alpha";
 /**
  * How one life of a known uid left the match; every life ends in exactly one of these.
  * WORLD v6: "returned" = an entry's pool item never placed (extract before POOL.APPLY_AFTER_MS,
@@ -125,6 +128,14 @@ export interface PlayerRuntime {
    * first attach, or its last detach; -1 while connected. Bounds how long it holds a seat (WORLD.IDLE_SEAT_MS).
    */
   idleSince: number;
+  /** Match clock of the last damage this runtime dealt or took (disconnect shelter: "in combat"). */
+  combatAt: number;
+  /**
+   * Disconnect shelter (WORLD.DISCONNECT_SHELTER_MS, Match.detach): match clock when it ends, or -1
+   * when not sheltered. A sheltered human is hidden from every vision row, takes no damage, does not
+   * stop bullets and its extraction channel is paused.
+   */
+  shelterUntil: number;
   /** Match clock of the last INV_ERR "rate" sent to this client (at most one per second, security audit). */
   rateErrAt: number;
   loadoutId: string;

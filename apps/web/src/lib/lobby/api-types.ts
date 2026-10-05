@@ -158,7 +158,8 @@ export interface EconomyStatsDto {
  * - loadout codes: `key` = the offending slot.
  */
 export interface WorldJoinErrorBody {
-  error: WorldJoinError | "conflict" | "no_user" | "guest_play_disabled";
+  /** not_on_map: a `rejoinOnly` join found no active entry to rejoin (nothing was locked). */
+  error: WorldJoinError | "conflict" | "no_user" | "guest_play_disabled" | "not_on_map";
   message: string;
   serverTime: number;
   openAt?: number;

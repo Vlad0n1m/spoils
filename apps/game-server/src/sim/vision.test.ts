@@ -146,9 +146,9 @@ test("vision: rows are by roster index and survive a reconnect re-key; NPCs use 
   npc2.pub.aim = -Math.PI / 2;
   m.step(SERVER_TICK_MS);
   const ra = rtOf(m, a!).rosterIndex, rb = rtOf(m, b!).rosterIndex;
-  assert.equal(NPC.VIEW_RANGE_CAP, 800);
+  assert.equal(NPC.VIEW_RANGE_CAP, 650);
   assert.equal(m.vision.sees(ra, rb), true, "a human sees 900 px");
-  assert.equal(m.vision.sees(npc.rosterIndex, rb), false, "an NPC is capped at 800 px");
+  assert.equal(m.vision.sees(npc.rosterIndex, rb), false, "an NPC is capped at 650 px");
   assert.equal(m.vision.sees(npc.rosterIndex, ra), true, "an NPC sees a human up close");
   assert.equal(m.vision.sees(ra, npc.rosterIndex), true, "humans see NPCs");
   assert.equal(m.vision.sees(npc2.rosterIndex, npc.rosterIndex), false, "NPC → NPC is never computed");

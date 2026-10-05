@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import {
+  ALPHA_LOOT,
   BOSS_KINDS,
   DOG_TAG,
   FREE_KIT,
@@ -26,6 +27,8 @@ import {
 } from "@extract/shared";
 import {
   dogTagPayouts,
+  itemEvents,
+  items,
   loadouts,
   matchResults,
   pvpKills,
@@ -182,6 +185,8 @@ function utcDayStart(now: Date): Date {
  *   and the first extract of the UTC day, plus the daily tasks this exit finished (lib/quests, the
  *   "quest" line, not in xp_grind); users.xp / level / matches_played; the entry's loadout →
  *   settled; the entry → exited.
+ * - ALPHA LOOT: an extracted unique listed in `alphaFound` (minted by the server this match, live
+ *   raids, registered users) gets a new item row in the stash (createAlphaItem).
  * A report without entryId (pre-v6 roster matches, removed in S8) is `unknown_entry` (HTTP 409).
  * Refused (status voided → HTTP 409) once the raid was voided.
  */
@@ -271,6 +276,9 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
     const allocated = bindPool ? await poolAllocatedIds(tx, report.matchId) : new Set<string>();
     const onMapMs = Number.isFinite(report.enteredAtMs) ? Math.max(0, Math.floor(report.atMs - Number(report.enteredAtMs))) : 0;
     const lockRaidsDelta = onMapMs >= WORLD.MIN_EXPOSURE_MS ? -1 : 0;
+    // ALPHA LOOT: uniques the server minted this match (no item row yet). Live raids of registered
+    // users only (demo mints never persist; a guest keeps nothing); capped as a bug guard.
+    const alphaFound = new Set(!guest && live ? (report.alphaFound ?? []).slice(0, ALPHA_LOOT.MAX_PER_EXIT).map((u) => u.toLowerCase()) : []);
 
     for (const s of report.extracted) {
       const d = itemDef(s.def);
@@ -279,6 +287,10 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
         if (!s.uid) continue;
         if (guest) {
           pool.push({ id: s.uid, reportedPct: fromRaidDur(s.def, s.dur), broke: false, reason: "guest", refId: ref });
+          continue;
+        }
+        if (alphaFound.has(s.uid.toLowerCase()) && isUuid(s.uid)) {
+          if (!(await createAlphaItem(tx, s, user!.id, report.matchId, ref))) skipped.push(s.uid);
           continue;
         }
         const it = await lockItem(tx, s.uid);
@@ -493,6 +505,37 @@ export async function grantBossTrophies(tx: Tx, userId: string, kinds: readonly 
  * last 24 h, earlier victims of this report included. Idempotent through the raid_exits insert of
  * the same transaction. Returns the ranked count.
  */
+/**
+ * ALPHA LOOT: the item row of an extracted alpha find (alpha-loot.ts), straight into `userId`'s stash
+ * with the server's uid: origin 'alpha', bound (never listable; on a later loss destroyed instead of
+ * pooled), so a free mint never reaches the SOL market or the lost pool. One item_events row
+ * (reason alpha_found, ref entryId). False when the uid already exists (never overwritten).
+ */
+async function createAlphaItem(tx: Tx, s: SettledItem, userId: string, matchId: string, ref: string): Promise<boolean> {
+  const durability = Math.max(0, Math.min(100, fromRaidDur(s.def, s.dur)));
+  const rows = await tx
+    .insert(items)
+    .values({
+      id: s.uid,
+      defId: s.def,
+      rarity: s.rarity,
+      durability,
+      maxDurability: 100,
+      state: "in_stash",
+      ownerId: userId,
+      origin: "alpha",
+      bound: true,
+      lockRaids: 0,
+    })
+    .onConflictDoNothing()
+    .returning({ id: items.id });
+  if (rows.length === 0) return false;
+  await tx
+    .insert(itemEvents)
+    .values({ itemId: s.uid, toState: "in_stash", toOwner: userId, matchId, reason: "alpha_found", refId: ref, durability });
+  return true;
+}
+
 async function recordPvpKills(
   tx: Tx,
   a: { killerId: string; victims: readonly string[]; matchId: string; entryId: string; cycleId: number; now: Date },

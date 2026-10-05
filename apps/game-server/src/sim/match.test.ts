@@ -159,12 +159,13 @@ test("an idle human in sight of a squad but outside its post is never shot in th
   for (let seed = 1; seed <= 10; seed++) {
     const m = new Match({ ...npcWorld(600 + seed, 3), roster: humans(1), rng: mulberry32(seed * 7919), newUid: counterUid, strictLedger: true });
     const human = m.allRuntimes()[0]!;
-    // Post 0 is a low post (leash 500): 700 px is outside it and beyond NPC.PEACE_CLOSE_PX, inside
-    // sight — and the spot must be outside every other post too (an intruder is fought).
-    nearPost(m, human, 700);
+    // Post 0 is a low post (leash 500): 630 px is outside it and beyond NPC.PEACE_CLOSE_PX (600), inside
+    // the calm sight cap (NPC.VIEW_RANGE_CAP 650 since the alpha softening; was 700 px of 800) — and
+    // the spot must be outside every other post too (an intruder is fought).
+    nearPost(m, human, 630);
     const intruding = m.npcs.squads.some((sq) => {
       const p = sq.post!;
-      return Math.hypot(p.x - human.pub.x, p.y - human.pub.y) < Math.max(m.npcs.info(sq.members[0]!)!.leash, NPC.PEACE_CLOSE_PX) + 50;
+      return Math.hypot(p.x - human.pub.x, p.y - human.pub.y) < Math.max(m.npcs.info(sq.members[0]!)!.leash, NPC.PEACE_CLOSE_PX) + 25;
     });
     if (intruding) continue;
     tested++;

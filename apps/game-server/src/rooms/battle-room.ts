@@ -32,7 +32,7 @@ import { spectateEnd, spectateTarget, spectatorBatch } from "../sim/spectate.js"
 import type { MatchEvent } from "../sim/types.js";
 import { ViewSync } from "../sim/views.js";
 import { worldNow } from "../world/clock.js";
-import { worldDirectory, type ShardRoom, type WorldCreateOptions } from "../world/directory.js";
+import { alphaLootEnabled, worldDirectory, type ShardRoom, type WorldCreateOptions } from "../world/directory.js";
 import { startShardReplay } from "../world/replay-upload.js";
 import type { ReplayRecorder } from "../sim/replay-recorder.js";
 import { TickStats, fmtTickSummary, perfLogEnabled } from "./tick-stats.js";
@@ -196,6 +196,7 @@ export class BattleRoom extends Room<BattleState, unknown, unknown, JoinTicket> 
       lootSeed: world.lootSeed,
       envSeed: world.envSeed,
       mode: world.mode,
+      alphaLoot: alphaLootEnabled(),
       now: worldNow,
       world: {
         cycleId: world.cycleId,

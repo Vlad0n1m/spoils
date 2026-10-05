@@ -77,6 +77,8 @@ interface Pre extends VisionViewer, VisionTarget {
   dormant: boolean;
   /** NPC viewer sight cap (PlayerRuntime.viewCap: calm NPC.VIEW_RANGE_CAP, alerted NPC.VIEW_RANGE_ALERT). */
   viewCap: number;
+  /** Disconnect shelter (PlayerRuntime.shelterUntil): nobody sees this target. */
+  hidden: boolean;
 }
 
 export class VisionSystem {
@@ -95,7 +97,7 @@ export class VisionSystem {
     this.lastSeen = new Float64Array(n * n).fill(-Infinity);
     this.published = new Uint8Array(n * n);
     this.pre = Array.from({ length: n }, () => ({
-      x: 0, y: 0, aim: 0, vx: 0, vy: 0, inBush: false, stillMs: 0, sinceShotMs: Infinity, onMap: false, npc: false, dormant: false, viewCap: 0,
+      x: 0, y: 0, aim: 0, vx: 0, vy: 0, inBush: false, stillMs: 0, sinceShotMs: Infinity, onMap: false, npc: false, dormant: false, viewCap: 0, hidden: false,
     }));
   }
 
@@ -123,6 +125,7 @@ export class VisionSystem {
       }
       const p = rt.pub;
       q.onMap = p.alive;
+      q.hidden = rt.shelterUntil >= 0;
       q.npc = rt.isNpc;
       q.dormant = rt.dormant;
       q.viewCap = rt.viewCap;
@@ -147,7 +150,9 @@ export class VisionSystem {
         const t = this.pre[j]!;
         // NPCs only ever look at humans (published stays 0 for NPC → NPC).
         if (v.npc && t.npc) continue;
-        if (t.onMap && canSee(env, v, t)) this.lastSeen[k] = clock;
+        // A sheltered raider (Match.detach) drops out of every row at once, no hysteresis.
+        if (t.hidden) this.lastSeen[k] = -Infinity;
+        else if (t.onMap && canSee(env, v, t)) this.lastSeen[k] = clock;
         // A human's target that left the server cone drops at once (the client cone is narrower,
         // so it is not drawn anyway): hysteresis bridges LOS flicker, never a cone swept past it.
         else if (!v.npc && t.onMap && outsideCone(v, t)) this.lastSeen[k] = -Infinity;

@@ -7,6 +7,7 @@ import { PlayProvider, useLobby, useNow, type PlayValue } from "@/lib/lobby/lobb
 import { flushDraft } from "@/lib/lobby/draft-flush";
 import { readArmedCycle, writeArmedCycle } from "@/lib/lobby/news-seen";
 import { classifyJoinFailure, derivePlayState, playAction, type PlayError } from "@/lib/lobby/play-state";
+import { autoRejoinStep } from "@/lib/lobby/reconnect";
 import type { WorldJoinErrorBody } from "@/lib/lobby/api-types";
 import { worldView } from "@/lib/lobby/world-clock";
 import { autoFollow } from "@/lib/social/menu";
@@ -48,6 +49,9 @@ function isJoinResponse(v: unknown): v is WorldJoinResponse {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+
+/** The page-load auto-rejoin ran its one decision (module scope: once per page load, not per mount). */
+let autoRejoinDecided = false;
 
 /**
  * PLAY logic (WORLD v6 spec §6.5) around the pure derivePlayState: POST /api/world/join and its
@@ -278,9 +282,19 @@ export function PlayController({
     document.title = `▶ Map open — ${BRAND.name}`;
     playUi("coin");
   }, [armed, joining, status, now, visible, join, setArmedCycle]);
+  const baseKind = state.kind === "error" ? state.base.kind : state.kind;
+  // Page reload mid-raid: back on the map without a press, once per page load (lib/lobby/reconnect.ts).
+  // The server keeps an out-of-combat raider hidden for WORLD.DISCONNECT_SHELTER_MS meanwhile; if this
+  // join fails, REJOIN stays on the button.
+  useEffect(() => {
+    if (autoRejoinDecided) return;
+    const step = autoRejoinStep(baseKind, visible);
+    if (step === "wait") return;
+    autoRejoinDecided = true;
+    if (step === "join") void join();
+  }, [baseKind, visible, join]);
   // Party "Follow leader": once per drop, while PLAY could join; a hidden tab is pinged instead.
   const followed = useRef<string | null>(null);
-  const baseKind = state.kind === "error" ? state.base.kind : state.kind;
   const partyDrop = party.state?.drop ?? null;
   const following = party.state?.party?.follow ?? false;
   useEffect(() => {

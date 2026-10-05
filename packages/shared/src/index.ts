@@ -22,3 +22,4 @@ export * from "./replay.js";
 export * from "./pass.js";
 export * from "./world-events.js";
 export * from "./objectives.js";
+export * from "./alpha-loot.js";

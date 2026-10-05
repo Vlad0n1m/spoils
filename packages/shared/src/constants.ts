@@ -87,6 +87,17 @@ export const WORLD = {
    * world for a whole cycle). The body stays on the map and its owner can always rejoin it.
    */
   IDLE_SEAT_MS: 90_000,
+  /**
+   * Disconnect shelter (page reload protection, game server Match.detach): a raider who drops out of
+   * combat — no damage dealt or taken and no shot fired for SHELTER_COMBAT_MS — is hidden for up to
+   * this long: invisible to everyone (players and NPCs), untargetable, takes no damage, doesn't block
+   * bullets, and its extraction channel pauses. Rejoining within the window, or the window running
+   * out, puts it back on the same spot (vulnerable again). In combat at the drop it stays as it was:
+   * visible and killable (no combat logging). A sheltered raider still holds its place for the wipe
+   * (MIA counts as usual).
+   */
+  DISCONNECT_SHELTER_MS: 180_000,
+  SHELTER_COMBAT_MS: 10_000,
   /** v6 launches with one shard; overflow shards are later. */
   MAX_SHARDS: 1,
   /** Vision is allocated for this many runtimes (humans + NPCs, never reused) per shard. */

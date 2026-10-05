@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ALPHA_LOOT,
   BOSS_KINDS,
   MAP_IDS,
   WORLD,
@@ -87,6 +88,8 @@ export const playerExitReportSchema = z.object({
   /** Death recap: who killed this entry (nickname / NPC role display key) and their NPC_ROLE. */
   killedBy: z.string().max(64).optional(),
   killedByRole: z.number().int().min(0).max(3).optional(),
+  /** ALPHA LOOT: extracted uids the server minted this match (applyExit creates their item rows). */
+  alphaFound: z.array(uuid).max(ALPHA_LOOT.MAX_PER_EXIT).optional(),
 }) as unknown as z.ZodType<PlayerExitReport>;
 
 export const matchEndReportSchema = z.object({

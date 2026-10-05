@@ -20,7 +20,8 @@
  *
  * Economy: crate, hot-zone and late refill rolls share one junk-CR budget per cycle
  * (EVENT_BUDGET.JUNK_CR; late refills at most LATE_REFILL.JUNK_CR_MAX of it); a crate's lost-pool
- * unique comes only from pool-place.ts (dropPoolCandidates), never minted.
+ * unique comes only from pool-place.ts (dropPoolCandidates), never minted; with Match.alphaLoot the
+ * crate also gets the ALPHA LOOT rare+ weapon and armor (rollAlphaDropUniques, ledger origin "alpha").
  */
 
 import {
@@ -51,6 +52,7 @@ import {
   planSupplyDrops,
   quantizeFight,
   resolveCircle,
+  rollAlphaDropUniques,
   rollEventLoot,
   rollEventLootCapped,
   supplyDropId,
@@ -230,6 +232,8 @@ export class WorldEvents {
     const m = this.m;
     const rng = mulberry32(eventSeed(m.lootSeed, DROP_LOOT_SALT, d.plan.n));
     const items: ItemLike[] = rollEventLoot(rng, SUPPLY_DROP_LOOT, DROP.ROLLS, this.budget).map((f) => this.count(makeItem(f.def, { qty: f.qty })));
+    // ALPHA LOOT: a guaranteed rare+ weapon and an armor piece, drawn after the crate's own rolls.
+    if (m.alphaLoot) items.push(...rollAlphaDropUniques(rng).map((u) => m.mintAlpha(u)));
     d.target = m.containers.addSupplyDrop(supplyDropId(d.plan.n), d.x, d.y, items);
     d.state = WEV_STATE.ACTIVE;
     this.rolled.crates++;

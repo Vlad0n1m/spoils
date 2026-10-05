@@ -123,10 +123,17 @@ import { Walker } from "./walker.js";
 
 /** During the peace window an NPC shoots back only at someone who hit it this recently. */
 export const NPC_RETALIATE_MS = 3_000;
-/** Chance to roll when hit (÷ sloppiness, capped 0.6), guards and marauders; the boss never rolls. */
-export const NPC_ROLL_ON_HIT = 0.35;
-/** Chance to roll when a gunshot cracks right next to the NPC (÷ sloppiness). */
-const ROLL_ON_BURST = 0.2;
+/**
+ * Chance to roll when hit (÷ sloppiness, capped NPC_ROLL_CAP), guards and marauders; the boss never
+ * rolls. Alpha softening (2026-10): 0.35 → 0.175, cap 0.6 → 0.3.
+ */
+export const NPC_ROLL_ON_HIT = 0.175;
+/** Cap of every NPC roll chance (on hit and on a crack). */
+export const NPC_ROLL_CAP = 0.3;
+/** Chance to roll when a gunshot cracks right next to the NPC (÷ sloppiness). Alpha softening: 0.2 → 0.1. */
+const ROLL_ON_BURST = 0.1;
+/** Strafe direction holds this long (ms) before a new coin flip. Alpha softening: [500, 1300] → [1200, 2500]. */
+const STRAFE_FLIP_MS: readonly [number, number] = [1200, 2500];
 /** Aim error half-width: base + per 1000 px of distance + extra for a target moving at full speed. */
 const AIM_ERR_BASE = 0.1;
 const AIM_ERR_PER_1000PX = 0.12;
@@ -793,7 +800,7 @@ export class NpcBrain {
   ) {
     this.walker = new Walker(m, rt);
     this.walker.onGiveUp = () => this.giveUp();
-    this.rollChance = info.role === "boss" ? 0 : Math.min(0.6, NPC_ROLL_ON_HIT / info.sloppiness);
+    this.rollChance = info.role === "boss" ? 0 : Math.min(NPC_ROLL_CAP, NPC_ROLL_ON_HIT / info.sloppiness);
     this.aim = rt.pub.aim;
   }
 
@@ -990,7 +997,7 @@ export class NpcBrain {
         if (s.kind === SoundKind.shot) {
           if (d <= alertPx) this.sys.alert(this.info.squad, src.pub.x, src.pub.y);
           // A visible shotgun blast right next to us: dive aside.
-          if (s.variant === SHOTGUN_VARIANT && d < 300) this.tryRoll(Math.atan2(src.pub.y - p.y, src.pub.x - p.x), ROLL_ON_BURST / this.info.sloppiness);
+          if (s.variant === SHOTGUN_VARIANT && d < 300) this.tryRoll(Math.atan2(src.pub.y - p.y, src.pub.x - p.x), Math.min(NPC_ROLL_CAP, ROLL_ON_BURST / this.info.sloppiness));
           urgent = true;
         }
         // Seen sources are handled by sight.
@@ -1011,7 +1018,7 @@ export class NpcBrain {
       if (!h || prio > h.prio || (prio === h.prio && dist < h.dist)) this.heard = { kind: s.kind, prio, angle, dist, x, y, at: clock };
       if (prio >= 3 && s.b === 0) urgent = true;
       // A gunshot cracking right next to us from someone we cannot see: dive for cover.
-      if (s.kind === SoundKind.shot && s.b === 0) this.tryRoll(angle, ROLL_ON_BURST / this.info.sloppiness);
+      if (s.kind === SoundKind.shot && s.b === 0) this.tryRoll(angle, Math.min(NPC_ROLL_CAP, ROLL_ON_BURST / this.info.sloppiness));
     }
     return urgent;
   }
@@ -1668,7 +1675,7 @@ export class NpcBrain {
     }
     if (clock >= this.strafeUntil) {
       this.strafe = this.m.rng() < 0.5 ? -1 : 1;
-      this.strafeUntil = clock + this.rand(500, 1300);
+      this.strafeUntil = clock + this.rand(STRAFE_FLIP_MS[0], STRAFE_FLIP_MS[1]);
     }
     // Preferred band: the shotgun (and the SMG) closes in, the sniper keeps its distance.
     const [near, farBand] =

@@ -595,6 +595,42 @@ describe("raid exit", () => {
     assert.deepEqual(r.skipped, [ghost]);
     assert.equal(await itemCount(), 0);
   });
+
+  test("alpha loot: uids listed in alphaFound become bound 'alpha' stash items once; unlisted stay skipped; guests keep nothing; the end sweep leaves them alone", async () => {
+    const u = await makeUser(db);
+    const { shard, e } = await enterNew(u);
+    const gun = randomUUID();
+    const vest = randomUUID();
+    const ghost = randomUUID();
+    const rep = wExit(e, 9, {
+      extracted: [
+        { uid: gun, def: "smg", qty: 1, rarity: 1, dur: 80 },
+        { uid: vest, def: "armor_3", qty: 1, rarity: 2, dur: ARMOR[3].durability * 0.5 },
+        { uid: ghost, def: "sniper", qty: 1, rarity: 3, dur: 100 },
+      ],
+      alphaFound: [gun, vest],
+    });
+    const r = await applyExit(db, rep);
+    assert.equal(r.status, "applied");
+    assert.deepEqual(r.skipped, [ghost], "only listed uids are created");
+    const g = await item(gun);
+    assert.deepEqual([g.state, g.ownerId, g.matchId, g.defId, g.rarity, g.durability, g.origin, g.bound], ["in_stash", u, null, "smg", 1, 80, "alpha", true]);
+    assert.equal((await item(vest)).durability, 50, "armor points → %");
+    assert.deepEqual((await events(gun)).map((x) => x.reason), ["alpha_found"]);
+    assert.equal((await applyExit(db, rep)).status, "duplicate");
+    assert.equal(await itemCount(), 2, "a replayed report creates nothing");
+    // A guest's alpha find is not kept.
+    const eg = wEntry(shard.matchId, randomUUID());
+    await enterOk(eg);
+    const gGun = randomUUID();
+    await applyExit(db, wExit(eg, 9, { extracted: [{ uid: gGun, def: "pistol", qty: 1, rarity: 0, dur: 100 }], alphaFound: [gGun] }));
+    assert.equal(await itemCount(), 2);
+    // The wipe neither pools nor sweeps them.
+    const end = await applyEnd(db, endReport(shard.matchId, { cycleId: shard.cycleId, shard: shard.shard, entries: [e.entryId, eg.entryId] }));
+    assert.equal(end.status, "applied");
+    assert.equal(end.swept, 0);
+    assert.equal((await item(gun)).state, "in_stash");
+  });
 });
 
 describe("raid end and conservation", () => {
