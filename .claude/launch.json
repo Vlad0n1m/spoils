@@ -12,6 +12,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "web", "dev"],
       "port": 3001
+    },
+    {
+      "name": "idos-shell",
+      "runtimeExecutable": "deploy/idos-shell/node_modules/.bin/vite",
+      "runtimeArgs": ["preview", "deploy/idos-shell", "--port", "4173", "--strictPort"],
+      "port": 4173
     }
   ]
 }
