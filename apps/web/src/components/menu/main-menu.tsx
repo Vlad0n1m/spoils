@@ -103,6 +103,12 @@ export function MainMenu({ initialPanel }: { initialPanel: PanelState }) {
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+  // A game, not a web page: the document never scrolls or bounces while the menu or a raid is up.
+  useEffect(() => {
+    const html = document.documentElement;
+    html.classList.add("game-lock");
+    return () => html.classList.remove("game-lock");
+  }, []);
 
   const battle = user && stage.kind === "battle" ? stage : null;
   const onBattle = useCallback((b: BattleStart) => setStage({ kind: "battle", ...b }), []);
@@ -504,7 +510,7 @@ function MenuScreen({
                     if (e.target === e.currentTarget) dismissCard();
                   }}
                 >
-                  <div className="max-h-[calc(100dvh-2rem)] w-[min(26rem,100%)] overflow-y-auto animate-pop-in motion-reduce:animate-none">
+                  <div className="max-h-[calc(100dvh-2rem)] w-[min(26rem,100%)] overflow-hidden animate-pop-in motion-reduce:animate-none">
                     <LastRaidCard raid={lastRaid} onDismiss={dismissCard} />
                   </div>
                 </div>,
