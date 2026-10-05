@@ -23,7 +23,8 @@ const VARIANT: Record<PanelVariant, string> = {
  * its button's side (Info left; News, Leaderboards right). Full screen from the bottom on phones.
  * role=dialog + aria-modal; the menu behind is `inert`, which is the focus trap. Focus lands on the
  * title on open; Escape (unless a dialog inside the panel is open), the × and the backdrop close
- * it. Tabs: role=tablist, ←/→ switch.
+ * it. Tabs: role=tablist, ←/→ switch. The body never scrolls: it is a flex column of the free height
+ * and each tab fits it by layout or pages its lists (components/paged.tsx).
  */
 export function Panel({
   title,
@@ -57,7 +58,7 @@ export function Panel({
     heading.current?.focus({ preventScroll: true });
   }, []);
 
-  // A new tab starts at its top, not at the scroll position of the previous tab.
+  // Nothing in the body scrolls (every tab fits or pages); undo a focus scroll the browser made.
   useEffect(() => {
     body.current?.scrollTo({ top: 0 });
   }, [tab]);
@@ -133,7 +134,7 @@ export function Panel({
             <div
               role="tablist"
               aria-label={`${title} sections`}
-              className="flex w-full gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5 [@media(max-height:500px)]:order-1 [@media(max-height:500px)]:w-auto [@media(max-height:500px)]:min-w-0 [@media(max-height:500px)]:flex-1"
+              className="flex w-full gap-2 overflow-hidden px-0.5 pb-1.5 pt-0.5 [@media(max-height:500px)]:order-1 [@media(max-height:500px)]:w-auto [@media(max-height:500px)]:min-w-0 [@media(max-height:500px)]:flex-1"
             >
               {tabs.map((t, i) => {
                 const on = t === tab;
@@ -168,7 +169,10 @@ export function Panel({
           ref={body}
           id={`${id}-body`}
           role={tabs.length > 1 ? "tabpanel" : undefined}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:p-6 [@media(max-height:500px)]:p-3"
+          onScroll={(e) => {
+            e.currentTarget.scrollTop = 0;
+          }}
+          className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:p-6 [@media(max-height:500px)]:px-3 [@media(max-height:500px)]:py-2"
         >
           {children}
         </div>

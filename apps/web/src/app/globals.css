@@ -458,3 +458,68 @@ a.menu-chip:active {
     display: none;
   }
 }
+
+/*
+ * No-scroll game shell (/play, menu and raid): the page itself never scrolls, bounces, pulls to
+ * refresh or slides sideways, and no native scrollbar shows anywhere. `game-lock` goes on <html>
+ * while the main menu is mounted (main-menu.tsx).
+ */
+html.game-lock,
+html.game-lock body {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+html.game-lock body {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+html.game-lock * {
+  overscroll-behavior: none;
+  scrollbar-width: none;
+}
+html.game-lock *::-webkit-scrollbar {
+  display: none;
+}
+
+/* Paged boxes (components/paged.tsx): content flows into page-tall columns, nothing scrolls. */
+.paged-flow {
+  display: block;
+  column-fill: auto;
+  /* One line may end or start a page: with the default 2 a second row of tiles overflowed the box. */
+  orphans: 1;
+  widows: 1;
+}
+/* Keep the defaults otherwise: text-box-trim: none on the columns made Chrome hang re-laying them
+   out on a resize. Tiles page with PagedTiles (a grid), not with columns. */
+.paged-flow > :not(.paged-group),
+.paged-group > :not(.paged-group) {
+  break-inside: avoid;
+  margin-bottom: var(--paged-gap, 8px);
+}
+/* A long card that may split across columns (it would leave a column half empty otherwise). No
+   box-decoration-break: clone here: Chrome hangs re-laying out cloned fragments on a resize. */
+.paged-flow .paged-split {
+  break-inside: auto;
+}
+/* A wrapper whose children page one by one (a section of an Info tab). */
+.paged-group {
+  display: contents;
+}
+
+/*
+ * The few scroll areas left (a long receipt, a dialog on a tiny screen): no scrollbar, the edges
+ * fade out so the player sees there is more.
+ */
+.scroll-fade {
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 14px, #000 calc(100% - 22px), transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0, #000 14px, #000 calc(100% - 22px), transparent 100%);
+}
+.scroll-fade::-webkit-scrollbar {
+  display: none;
+}
