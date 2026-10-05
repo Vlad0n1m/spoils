@@ -76,6 +76,7 @@ import {
 import { COLORS, destroyTextures, loadTextures, type Textures } from "./assets";
 import { Effects } from "./effects";
 import { ContainerLayer, CorpseView, ExtractView, IconCache, ItemView, PlayerView, containerSprite } from "./entities";
+import { ANIM } from "./char-anim";
 import { FogOfWar, PLAYER_PAD, entityVisibility, fadeToward, fogLook, fogRange, type FogEye, type FogLook } from "./fog";
 import { buildHud, extractAllowed, personalExtractStatus, stickyCounts, type PlayerCounts } from "./hud";
 import { EXPIRE_FADE_TAU_MS, expiryBlink, expiryFading } from "./expiry";
@@ -97,6 +98,9 @@ import { EMPTY_TALLY, bossKindOfLabel, corpseNpcRole, npcDisplayName, npcRoleNam
 import { getGameAudio } from "./audio/game-audio";
 import { feedAimPointer, getCameraRig, setTouchSticksActive } from "./camera";
 import { SPRITE_RECOIL_PX } from "./combat-fx";
+
+/** A falling body hands over to its corpse when the fall lands (the body then crossfades out). */
+const CORPSE_HANDOVER_MS = ANIM.DEATH_MS;
 
 /** About this many world units are visible (by area), whatever the window size. */
 const VIEW_W = 1600;
@@ -776,6 +780,14 @@ export class GameRenderer implements GameRendererApi {
     const look = this.corpseLook(id, c.label);
     view.sync(c, look.npc, look.name);
     view.root.alpha = 0;
+    // A body we watch fall (char-anim death) hands over to its corpse only when the fall is over.
+    const now = performance.now();
+    for (const pe of this.players.values()) {
+      const pv = pe.view;
+      if (pv.dyingAt(now) && Math.abs(pv.x - c.x) < 64 && Math.abs(pv.y - c.y) < 64) {
+        view.holdUntil = Math.max(view.holdUntil, pv.deathAt + CORPSE_HANDOVER_MS);
+      }
+    }
     this.corpseLayer.addChild(view.root);
     this.corpses.set(id, { state: c, view, removing: false });
   }
@@ -967,7 +979,7 @@ export class GameRenderer implements GameRendererApi {
       }
       fx.hitBurst(m.x, m.y, !!m.ar, t, dx, dy);
       const tv = this.players.get(m.t)?.view;
-      if (m.d > 0 || m.ar) tv?.flashHit(t);
+      if (m.d > 0 || m.ar) tv?.flashHit(t, dx, dy);
       if (m.t === this.selfId) {
         if (m.d > 0) fx.damageNumber(m.t, m.x, m.y, m.d, false, true, t);
         fx.hurtFlash(m.d);
@@ -1217,8 +1229,10 @@ export class GameRenderer implements GameRendererApi {
       const p = e.state;
       const v = e.view;
       if (id === this.selfId) {
-        const onMap = p.alive && (!self || self.extractedAt === 0) && !e.removing;
         const pos = this.selfRender ?? { x: p.x, y: p.y };
+        // Death: our body tips over before the corpse takes over (char-anim, presentation only).
+        if (v.setAlive(p.alive, now, controllable ? this.aim : p.aim)) this.holdCorpseNear(v);
+        const onMap = (p.alive || v.dyingAt(now)) && (!self || self.extractedAt === 0) && !e.removing;
         v.setAct(this.selfAct(self, clock), now);
         v.place(pos.x, pos.y, controllable ? this.aim : p.aim, now);
         v.root.visible = onMap;
@@ -1227,14 +1241,16 @@ export class GameRenderer implements GameRendererApi {
         v.setColor(p.color);
         v.setSkin(p.skin ?? 0);
         v.setNickname(p.nickname);
-        v.setWeapon(p.weapon);
+        v.setWeapon(p.weapon, now);
         v.setBackpack(p.bp);
         continue;
       }
       const s = v.buffer.sample(renderT) ?? { x: p.x, y: p.y, aim: p.aim };
+      if (v.setAlive(p.alive, now, s.aim)) this.holdCorpseNear(v);
       v.setAct(p.act, now);
       v.place(s.x, s.y, s.aim, now);
-      const target = e.removing || !p.alive ? 0 : vis(v.x, v.y, PLAYER_PAD);
+      // A body still falling (char-anim death) stays up; the corpse fades in as it finishes.
+      const target = (e.removing || !p.alive) && !v.dyingAt(now) ? 0 : vis(v.x, v.y, PLAYER_PAD);
       v.alpha = fadeToward(v.alpha, target, dt);
       if (e.removing && v.alpha <= 0) {
         this.retirePlayer(id, e);
@@ -1252,7 +1268,7 @@ export class GameRenderer implements GameRendererApi {
       v.setColor(p.color);
       v.setSkin(p.skin ?? 0);
       v.setNickname(p.nickname);
-      v.setWeapon(p.weapon);
+      v.setWeapon(p.weapon, now);
       v.setBackpack(p.bp);
       const armorMax = p.armor >= 1 && p.armor <= 3 ? ARMOR[p.armor as 1 | 2 | 3].durability : 0;
       v.setBars(p.hp, p.armor, p.armorDur, armorMax, p.maxHp || undefined, now);
@@ -1284,7 +1300,7 @@ export class GameRenderer implements GameRendererApi {
     for (const [id, e] of this.corpses) {
       const c = e.state;
       const v = e.view;
-      const target = e.removing ? 0 : inView(c.x, c.y) ? vis(c.x, c.y, PLAYER_PAD) : 0;
+      const target = e.removing || now < v.holdUntil ? 0 : inView(c.x, c.y) ? vis(c.x, c.y, PLAYER_PAD) : 0;
       v.alpha = fadeToward(v.alpha, target, dt, e.removing && expiryFading(c.expiresAt, clock) ? EXPIRE_FADE_TAU_MS : undefined);
       if (e.removing && v.alpha <= 0) {
         v.destroy();
@@ -1370,6 +1386,17 @@ export class GameRenderer implements GameRendererApi {
   }
 
   /** Hide a faded-out remote player and keep its view for the next one that comes into view. */
+  /** A body started to fall: its corpse (often decoded first) waits until the fall lands. */
+  private holdCorpseNear(v: PlayerView) {
+    for (const ce of this.corpses.values()) {
+      const cv = ce.view;
+      if (cv.alpha < 0.5 && Math.abs(ce.state.x - v.x) < 64 && Math.abs(ce.state.y - v.y) < 64) {
+        cv.holdUntil = Math.max(cv.holdUntil, v.deathAt + CORPSE_HANDOVER_MS);
+        cv.alpha = 0;
+      }
+    }
+  }
+
   private retirePlayer(id: string, e: Fading<Player, PlayerView>) {
     this.players.delete(id);
     const v = e.view;

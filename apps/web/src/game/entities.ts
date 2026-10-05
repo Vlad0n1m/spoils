@@ -13,10 +13,8 @@ import { Container, Graphics, GraphicsContext, ImageSource, Sprite, Text, Textur
 import {
   ACT,
   CONTAINER_STATE,
-  INPUT_DT_MS,
   PLAYER,
   RARITY_COLORS,
-  ROLL,
   WEAPONS,
   WORLD,
   isSupplyDropId,
@@ -40,6 +38,8 @@ import {
 } from "./assets";
 import { BOSS_COLOR, BOSS_SCALE, GUARD_SCALE, GUARD_TINT, MARAUDER_TINT, hpFraction, kindOfNpc, npcNameTag, npcRole, type NpcRole } from "./boss";
 import { guardBadgeContext, npcBadgeContext } from "./boss-icons";
+import { reducedMotion } from "./camera";
+import { ANIM, CharAnimator, ROLL_MS, rollSpin } from "./char-anim";
 import { chipFraction, hitFlashAlpha, hpBarAlpha, recoilOffset } from "./combat-fx";
 import { NPC_CORPSE_TINT, NPC_RING_COLOR, NPC_TAG_COLOR, type NpcRoleName } from "./npc-labels";
 import type { KnownEmpty } from "./known-empty";
@@ -110,17 +110,12 @@ function iconTexture(tex: Textures, icons: IconCache, name: string): Texture | n
 
 /* ---------------------------------------------------------------------------- players */
 
-/** Roll animation length (one full spin): ROLL.TICKS inputs. */
-export const ROLL_ANIM_MS = ROLL.TICKS * INPUT_DT_MS;
+/** Roll animation length (one full spin): ROLL.TICKS inputs (char-anim.ts owns the curves). */
+export const ROLL_ANIM_MS = ROLL_MS;
+export { rollSpin };
 
 /** Backpack sprite width on the player's back per level (1..3). */
 const BACKPACK_W = [0, 28, 34, 40] as const;
-
-/** Body spin while rolling: one turn over the roll, eased so it starts and ends gently. */
-export function rollSpin(sinceMs: number): number {
-  const t = Math.max(0, Math.min(1, sinceMs / ROLL_ANIM_MS));
-  return 2 * Math.PI * (t * t * (3 - 2 * t));
-}
 
 /** Shared status icon geometry (one GraphicsContext each, reused by every PlayerView). */
 let statusCtx: { heal: GraphicsContext; loot: GraphicsContext; extract: GraphicsContext } | null = null;
@@ -138,6 +133,39 @@ function statusContexts() {
   const extract = new GraphicsContext().circle(0, 0, PLAYER.RADIUS + 10).stroke({ width: 3, color: COLORS.extractOpen, alpha: 0.9 });
   statusCtx = { heal, loot, extract };
   return statusCtx;
+}
+
+/**
+ * Character animation parts (char-anim.ts), one GraphicsContext each shared by every PlayerView:
+ * a boot (toe toward +x), a magazine and a heal sparkle.
+ */
+let animCtx: { boot: GraphicsContext; mag: GraphicsContext; spark: GraphicsContext } | null = null;
+function animContexts() {
+  if (animCtx) return animCtx;
+  const boot = new GraphicsContext()
+    .roundRect(-8, -4.5, 16, 9, 4.5).fill(0x34312c).stroke({ width: 1.8, color: 0x141414 })
+    .roundRect(2, -3, 5, 6, 3).fill({ color: 0x5a554c, alpha: 0.9 });
+  const mag = new GraphicsContext()
+    .roundRect(-6, -3.4, 12, 6.8, 2).fill(0x3c4045).stroke({ width: 1.6, color: 0x111111 })
+    .rect(-3.5, -1.3, 7, 2.6).fill({ color: 0xc9a227, alpha: 0.95 });
+  const spark = new GraphicsContext()
+    .rect(-2, -6, 4, 12).fill(0x3fd14a).stroke({ width: 1.2, color: 0x0d3b12 })
+    .rect(-6, -2, 12, 4).fill(0x3fd14a).stroke({ width: 1.2, color: 0x0d3b12 })
+    .rect(-1.6, -5.6, 3.2, 11.2).fill(0x3fd14a)
+    .circle(0, 0, 1.8).fill(0xeaffea);
+  animCtx = { boot, mag, spark };
+  return animCtx;
+}
+
+const HEAL_SPARKS = 4;
+
+/** Guns loaded by hand (shells, cylinder, bolts) show no magazine swap, only the dip and the hands working. */
+const NO_MAG: ReadonlySet<string> = new Set(["shotgun", "revolver", "crossbow"]);
+
+/** `tint` darkened by `k` (0 = unchanged, 1 = black). */
+function darken(tint: number, k: number): number {
+  const m = 1 - k;
+  return (Math.round(((tint >> 16) & 255) * m) << 16) | (Math.round(((tint >> 8) & 255) * m) << 8) | Math.round((tint & 255) * m);
 }
 
 /** Alpha Veteran skin (Alpha Pass tier 8): mint tint, light enough to keep the sprite's shading. */
@@ -186,6 +214,20 @@ export class PlayerView {
   /** Role badge left of the name tag: guard shield (v4) or marauder "NPC" chevron (v5). */
   private readonly badge = new Graphics(guardBadgeContext());
   readonly buffer = new SnapshotBuffer();
+  /** Character animation (char-anim.ts): gait, roll, reload, heal, swap, flinch, death. */
+  readonly anim = new CharAnimator();
+  /** Boots under the body (world-oriented to the walking heading), the magazine, heal sparkles. */
+  private readonly legs = new Container();
+  private readonly footL = new Graphics(animContexts().boot);
+  private readonly footR = new Graphics(animContexts().boot);
+  private readonly mag = new Graphics(animContexts().mag);
+  private sparks: Container | null = null;
+  /** The gun thrown from the hands on death (lazily created). */
+  private dropGun: Sprite | null = null;
+  /** sprite.tint without the death darkening (skin / NPC tint). */
+  private baseTint = 0xffffff;
+  private darkApplied = 0;
+  private seenAlive = false;
 
   private weaponId = "";
   private barsKey = "";
@@ -202,7 +244,6 @@ export class PlayerView {
   private statusY = -PLAYER.RADIUS - 44;
   private bpLevel = -1;
   private act = 0;
-  private rollStartedAt = -Infinity;
   private statusKind: "" | "heal" | "loot" = "";
   /** Combat feel (combat-fx.ts): recoil, the white hit flash, the HP bar reveal and its chip. */
   private weaponBaseX = 0;
@@ -241,7 +282,12 @@ export class PlayerView {
     this.backpack.rotation = Math.PI / 2;
     this.backpack.visible = false;
     // The gun goes under the body so the arms/hands sit on top of its grip; the pack under both.
-    this.body.addChild(this.backpack, this.weapon, this.sprite);
+    this.mag.visible = false;
+    // The mag is changed in the hands: drawn over the arms so the swap reads.
+    this.body.addChild(this.backpack, this.weapon, this.sprite, this.mag);
+    this.footL.y = -ANIM.FOOT_SPREAD;
+    this.footR.y = ANIM.FOOT_SPREAD;
+    this.legs.addChild(this.footL, this.footR);
 
     this.name = new Text({
       text: nickname,
@@ -263,7 +309,7 @@ export class PlayerView {
     this.status.visible = false;
     this.extractRing.visible = false;
 
-    this.root.addChild(this.extractRing, this.ring, this.body, this.label, this.status);
+    this.root.addChild(this.extractRing, this.ring, this.legs, this.body, this.label, this.status);
   }
 
   /** Reuse a pooled view for another (or the same, re-added) player. */
@@ -277,7 +323,9 @@ export class PlayerView {
     this.lastK = -1;
     if (this.flash) this.flash.visible = false;
     this.act = 0;
-    this.rollStartedAt = -Infinity;
+    this.anim.reset();
+    this.seenAlive = false;
+    this.resetDeathLook();
     this.setStatus("");
     this.extractRing.visible = false;
     this.alpha = 0;
@@ -306,7 +354,7 @@ export class PlayerView {
     const c = code === 1 ? 1 : 0;
     if (c === this.skinCode) return;
     this.skinCode = c;
-    this.sprite.tint = c === 1 ? ALPHA_VETERAN_TINT : 0xffffff;
+    this.setTint(c === 1 ? ALPHA_VETERAN_TINT : 0xffffff);
   }
 
   setNickname(nick: string) {
@@ -335,12 +383,14 @@ export class PlayerView {
     this.scaleK = r === "boss" ? BOSS_SCALE : r === "guard" ? GUARD_SCALE : 1;
     this.sprite.texture = r === "boss" && ready ? bossTex! : this.tex.player;
     // Until boss.png decoded, a red tint keeps the boss readable.
-    this.sprite.tint =
-      r === "guard" ? GUARD_TINT : r === "marauder" ? MARAUDER_TINT : r === "boss" && this.sprite.texture === this.tex.player ? 0xff8a80 : 0xffffff;
+    this.setTint(
+      r === "guard" ? GUARD_TINT : r === "marauder" ? MARAUDER_TINT : r === "boss" && this.sprite.texture === this.tex.player ? 0xff8a80 : 0xffffff,
+    );
     this.sprite.width = PLAYER_SPRITE_SIZE * this.scaleK;
     this.sprite.height = PLAYER_SPRITE_SIZE * this.scaleK;
     // The boss sprite carries its own pack.
     if (r === "boss") this.backpack.visible = false;
+    this.legs.scale.set(this.scaleK);
     this.bpLevel = -1;
     // Bigger body: the hands sit further forward, so does the gun.
     const id = this.weaponId;
@@ -371,13 +421,16 @@ export class PlayerView {
     return this.role;
   }
 
-  setWeapon(weapon: string) {
+  /** `nowMs`: a change from one real weapon to another plays the draw (char-anim swap). */
+  setWeapon(weapon: string, nowMs = Number.NaN) {
     if (weapon === this.weaponId) return;
+    if (Number.isFinite(nowMs) && isWeaponId(this.weaponId) && isWeaponId(weapon)) this.anim.swap(nowMs);
     this.weaponId = weapon;
     if (!isWeaponId(weapon)) {
       this.weapon.visible = false;
       return;
     }
+    this.anim.reloadMs = WEAPONS[weapon].reloadMs;
     this.weapon.visible = true;
     this.weapon.texture = this.tex[weapon];
     const len = WEAPON_HELD_LENGTH[weapon];
@@ -392,9 +445,10 @@ export class PlayerView {
     this.kickPx = px;
   }
 
-  /** This player was hit: a short white flash over the sprite. */
-  flashHit(nowMs: number) {
+  /** This player was hit (bullet travelling along unit dx, dy): a white flash and a flinch. */
+  flashHit(nowMs: number, dx = 0, dy = 0) {
     this.hitAt = nowMs;
+    this.anim.hit(nowMs, dx, dy);
     const tex = this.sprite.texture;
     const sil = whiteSilhouette(tex);
     if (!sil) return;
@@ -495,10 +549,9 @@ export class PlayerView {
 
   /**
    * ACT flags of this frame (remote: Player.act; self: derived from the predicted roll and own
-   * timers). The roll start is remembered when the flag first appears so the spin plays once.
+   * timers). The animator (place) picks up the roll / reload edges itself.
    */
   setAct(act: number, nowMs: number) {
-    if (act & ACT.ROLL && !(this.act & ACT.ROLL)) this.rollStartedAt = nowMs;
     this.act = act;
     this.setStatus(act & ACT.HEAL ? "heal" : act & ACT.LOOT ? "loot" : "");
     this.extractRing.visible = (act & ACT.EXTRACT) !== 0;
@@ -512,33 +565,162 @@ export class PlayerView {
     }
   }
 
+  /**
+   * Player.alive edge: alive → dead starts the fall (char-anim death; returns true on that edge);
+   * a respawn clears it. A view that never saw this player alive plays no fall.
+   */
+  setAlive(alive: boolean, nowMs: number, aim: number): boolean {
+    if (alive) {
+      this.seenAlive = true;
+      if (this.anim.dying) {
+        this.anim.revive();
+        this.resetDeathLook();
+      }
+      return false;
+    }
+    if (this.anim.dying || !this.seenAlive) return false;
+    this.anim.die(nowMs, aim);
+    return true;
+  }
+
+  /** The death fall is playing (the renderer keeps the view up and holds the corpse fade-in). */
+  dyingAt(nowMs: number): boolean {
+    return this.anim.dying && !this.anim.deathDone(nowMs);
+  }
+
+  /** When the fall started (−∞ while alive). */
+  get deathAt(): number {
+    return this.anim.deathAt;
+  }
+
+  private setTint(t: number) {
+    this.baseTint = t;
+    this.darkApplied = 0;
+    this.sprite.tint = t;
+  }
+
+  private resetDeathLook() {
+    this.body.alpha = 1;
+    this.ring.alpha = 1;
+    this.label.renderable = true;
+    this.status.renderable = true;
+    this.weapon.renderable = true;
+    if (this.dropGun) this.dropGun.visible = false;
+    if (this.darkApplied !== 0) this.setTint(this.baseTint);
+  }
+
+  private ensureSparks(): Container {
+    if (this.sparks) return this.sparks;
+    const c = new Container();
+    for (let i = 0; i < HEAL_SPARKS; i++) {
+      const g = new Graphics(animContexts().spark);
+      c.addChild(g);
+    }
+    c.eventMode = "none";
+    this.root.addChildAt(c, this.root.getChildIndex(this.label));
+    this.sparks = c;
+    return c;
+  }
+
   place(x: number, y: number, aim: number, nowMs = 0) {
     this.x = x;
     this.y = y;
     this.root.position.set(x, y);
-    let rot = aim;
-    let squash = 1;
-    const sinceRoll = nowMs - this.rollStartedAt;
-    if (this.act & ACT.ROLL || sinceRoll < ROLL_ANIM_MS) {
-      rot += rollSpin(sinceRoll);
-      squash = 0.88;
-    }
-    this.body.rotation = rot;
-    this.body.scale.set(squash);
+    const act = this.act;
+    const pose = this.anim.update({
+      x,
+      y,
+      aim,
+      nowMs,
+      rolling: (act & ACT.ROLL) !== 0,
+      reloading: (act & ACT.RELOAD) !== 0,
+      healing: (act & ACT.HEAL) !== 0,
+      walking: (act & ACT.WALK) !== 0,
+      reduced: reducedMotion(),
+    });
+    this.body.rotation = aim + pose.rot;
+    this.body.scale.set(pose.sx, pose.sy);
     // Recoil: the gun slides back in the hands, the body rocks back a little less.
     const kick = recoilOffset(nowMs - this.kickAt, this.kickPx);
-    this.body.position.set(-Math.cos(aim) * kick * 0.4, -Math.sin(aim) * kick * 0.4);
-    this.weapon.x = this.weaponBaseX - kick * 0.6;
+    const ca = Math.cos(aim);
+    const sa = Math.sin(aim);
+    this.body.position.set(pose.dx - ca * kick * 0.4, pose.dy - sa * kick * 0.4);
+    this.weapon.x = this.weaponBaseX - kick * 0.6 - pose.wPull;
+    this.weapon.y = pose.wY;
+    this.weapon.rotation = pose.wRot;
+    if (this.backpack.visible) this.backpack.rotation = Math.PI / 2 + pose.packRot;
     if (this.flash) {
       const fa = hitFlashAlpha(nowMs - this.hitAt);
       this.flash.visible = fa > 0;
       if (fa > 0) this.flash.alpha = fa;
     }
-    // Reload: the gun dips and swings toward the body while the mag is changed.
-    if (this.act & ACT.RELOAD) {
-      this.weapon.rotation = -0.65 + Math.sin(nowMs / 140) * 0.08;
-    } else if (this.weapon.rotation !== 0) {
-      this.weapon.rotation = 0;
+
+    // Boots: world-oriented to the walking heading, stepping fore / aft.
+    const legsOn = pose.feetAlpha > 0.02 && this.root.alpha > 0;
+    this.legs.visible = legsOn;
+    if (legsOn) {
+      this.legs.rotation = pose.legRot;
+      this.legs.alpha = pose.feetAlpha;
+      this.legs.position.set(pose.dx * 0.4, pose.dy * 0.4);
+      this.footL.x = pose.footL - ANIM.FOOT_BACK;
+      this.footR.x = pose.footR - ANIM.FOOT_BACK;
+    }
+
+    // Magazine: drops out to the right of the gun and fades, the new one slides in and seats.
+    const m = pose.mag;
+    this.mag.visible = m !== 0 && this.weapon.visible && !NO_MAG.has(this.weaponId);
+    if (this.mag.visible) {
+      const len = this.weapon.width;
+      const cr = Math.cos(pose.wRot);
+      const sr = Math.sin(pose.wRot);
+      const along = len * 0.5;
+      const off = m < 0 ? 5 + -m * ANIM.MAG_DROP_PX : 5 + (1 - m) * ANIM.MAG_DROP_PX;
+      this.mag.position.set(this.weapon.x + cr * along - sr * off, this.weapon.y + sr * along + cr * off);
+      this.mag.rotation = pose.wRot + (m < 0 ? -m * 0.9 : (1 - m) * -0.6);
+      this.mag.alpha = m < 0 ? 1 + m : Math.min(1, m * 2.5);
+    }
+
+    // Heal: green sparkles rising around the chest while the channel runs.
+    if (pose.heal > 0.01) {
+      const c = this.ensureSparks();
+      c.visible = true;
+      const k = this.scaleK;
+      for (let i = 0; i < HEAL_SPARKS; i++) {
+        const g = c.children[i]!;
+        const cyc = ((nowMs / 760 + i / HEAL_SPARKS) % 1 + 1) % 1;
+        const a = i * 2.4 + Math.floor(nowMs / 760 + i / HEAL_SPARKS) * 1.3;
+        g.position.set(Math.cos(a) * 20 * k, Math.sin(a) * 12 * k - cyc * 26 * k);
+        g.alpha = pose.heal * Math.sin(Math.PI * cyc) * 0.95;
+        g.scale.set(0.55 + 0.5 * (1 - cyc));
+        g.rotation = 0;
+      }
+    } else if (this.sparks?.visible) this.sparks.visible = false;
+
+    // Death: the body tips over and darkens, the gun leaves the hands and skids away.
+    if (this.anim.dying) {
+      this.body.alpha = pose.alpha;
+      this.ring.alpha = Math.max(0, 1 - pose.dark * 4);
+      this.label.renderable = false;
+      this.status.renderable = false;
+      if (pose.dark !== this.darkApplied) {
+        this.darkApplied = pose.dark;
+        this.sprite.tint = darken(this.baseTint, pose.dark);
+      }
+      this.weapon.renderable = false;
+      if (this.weapon.visible) {
+        if (!this.dropGun) {
+          this.dropGun = new Sprite(this.weapon.texture);
+          this.dropGun.anchor.set(0.35, 0.5);
+          this.root.addChildAt(this.dropGun, this.root.getChildIndex(this.legs));
+        }
+        const g = this.dropGun;
+        if (g.texture !== this.weapon.texture) g.texture = this.weapon.texture;
+        g.scale.copyFrom(this.weapon.scale);
+        g.visible = true;
+        g.position.set(pose.wDropX, pose.wDropY);
+        g.rotation = aim + pose.wDropRot;
+        g.alpha = pose.alpha;
+      }
     }
   }
 
@@ -623,6 +805,8 @@ export class CorpseView {
   private labelKey = "";
   /** Fog alpha (0..1), eased by the renderer. */
   alpha = 0;
+  /** performance.now() before which the corpse stays hidden (a body still falling over it). */
+  holdUntil = 0;
 
   constructor(private readonly icons: IconCache) {
     this.sprite.anchor.set(0.5);
