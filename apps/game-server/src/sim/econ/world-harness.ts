@@ -629,11 +629,12 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
   res.respawn.consumablesCr = Math.round(res.respawn.consumablesCr);
   res.users = usedUsers.size;
   res.wallMs = Math.round(performance.now() - t0);
-  // WORLD v6 map events (world-events.ts): what the drops and hot zones added to this cycle.
+  // WORLD v6 map events (world-events.ts): what the drops, hot zones and late refills added to this cycle.
   const we = m.worldEvents;
   console.log(
     `[world] seed ${o.seed} events: drops ${we.drops.map((d) => `${d.plan.n}@${Math.round(d.plan.landAt / 60_000)}m ${d.zone?.name ?? "-"}${d.target ? ` searched ${d.target.searchedBy.size} pool ${d.poolItems}` : ""}`).join(", ") || "-"} · ` +
       `hot ${we.hots.map((h) => `${h.plan.n}@${Math.round(h.plan.startAt / 60_000)}m ${h.zone?.name ?? "-"} refilled ${h.refilled.length}`).join(", ") || "-"} · ` +
+      `late refills ${we.rolled.lateRefills} (junk ${we.rolled.lateJunkCr} CR) · ` +
       `rolled junk ${we.rolled.junkCr} CR in ${we.rolled.items} stacks (budget left ${we.budget.left})`,
   );
   return { result: res, entries: records };

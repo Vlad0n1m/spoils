@@ -14,8 +14,13 @@
  * The crate itself is a Corpse search target ("sd<n>", containers.ts addSupplyDrop) and goes
  * through AOI like any body. Replays get a `wev` MatchEvent per transition (replay-recorder.ts).
  *
- * Economy: crate and refill rolls share one junk-CR budget per cycle (EVENT_BUDGET.JUNK_CR); a
- * crate's lost-pool unique comes only from pool-place.ts (dropPoolCandidates), never minted.
+ * Late refill (late joiners): from LATE_REFILL.START_MS a seeded share of the EMPTIED, unguarded
+ * T0–T2 containers refills once, LATE_REFILL.COOLDOWN_* after being emptied, while no living human is
+ * within LATE_REFILL.HUMAN_MIN_PX (stepLate; containers.ts refill).
+ *
+ * Economy: crate, hot-zone and late refill rolls share one junk-CR budget per cycle
+ * (EVENT_BUDGET.JUNK_CR; late refills at most LATE_REFILL.JUNK_CR_MAX of it); a crate's lost-pool
+ * unique comes only from pool-place.ts (dropPoolCandidates), never minted.
  */
 
 import {
@@ -24,6 +29,8 @@ import {
   FIGHT,
   HOT,
   HOT_ZONE_LOOT,
+  LATE_REFILL,
+  LATE_REFILL_LOOT,
   SUPPLY_DROP_LOOT,
   SoundKind,
   WEV_KIND,
@@ -31,18 +38,21 @@ import {
   WorldEvent,
   CONTAINER_STATE,
   centreWeight,
+  containerGuarded,
   encodeHeat,
   eventJunkCr,
   eventSeed,
   fightCellCentre,
   fightCellOf,
   heatLevel,
+  lateRefillPlan,
   mulberry32,
   planHotZones,
   planSupplyDrops,
   quantizeFight,
   resolveCircle,
   rollEventLoot,
+  rollEventLootCapped,
   supplyDropId,
   walkCellOf,
   type DropPlan,
@@ -61,6 +71,7 @@ const DROP_POINT_SALT = 0x0d20_9a11;
 const DROP_LOOT_SALT = 0x0d20_7007;
 const HOT_PICK_SALT = 0x4072_1c4e;
 const HOT_LOOT_SALT = 0x4072_7007;
+const LATE_LOOT_SALT = 0x1a7e_7007;
 
 /** One supply drop of this cycle. */
 export interface DropRt {
@@ -104,7 +115,14 @@ export class WorldEvents {
   /** Junk CR the event tables may still add this cycle. */
   readonly budget = { left: EVENT_BUDGET.JUNK_CR as number };
   /** Junk CR / consumable units rolled into crates and refills so far (tests, logs, the harness). */
-  readonly rolled = { junkCr: 0, items: 0, crates: 0, refills: 0 };
+  readonly rolled = { junkCr: 0, items: 0, crates: 0, refills: 0, lateRefills: 0, lateJunkCr: 0 };
+  /** Junk CR late refills may still take out of `budget` this cycle (LATE_REFILL.JUNK_CR_MAX). */
+  readonly lateCap = { left: LATE_REFILL.JUNK_CR_MAX as number };
+  /** Late refills of this cycle: container index → match clock (once per container per cycle). */
+  readonly late = new Map<number, number>();
+  /** Containers that may late-refill at all (tier, unguarded, seeded share) and their cooldowns. */
+  private lateEligible: Array<{ idx: number; cooldownMs: number }> | null = null;
+  private nextLateAt = LATE_REFILL.START_MS as number;
   /** Fight cells with a shot / blast in the signal window: cell → last clock and the sources. */
   private readonly recent = new Map<number, { at: number; srcs: Set<number> }>();
   /** Heat buckets (HEAT_BUCKET_MS each, ring over HEAT_WINDOW_MS): bucket start and cell counts. */
@@ -135,6 +153,10 @@ export class WorldEvents {
     const clock = this.m.clock;
     this.stepDrops(clock);
     this.stepHots(clock);
+    if (clock >= this.nextLateAt) {
+      this.nextLateAt = clock + LATE_REFILL.SWEEP_MS;
+      this.stepLate(clock);
+    }
     if (clock >= this.nextSignalAt) {
       this.nextSignalAt = clock + FIGHT.SIGNAL_EVERY_MS;
       this.signals(clock);
@@ -308,6 +330,61 @@ export class WorldEvents {
     h.state = WEV_STATE.DONE;
     h.ev!.state = WEV_STATE.DONE;
     this.m.emit({ type: "wev", ev: "hot_end", n: h.plan.n, x: h.ev!.x, y: h.ev!.y, r: 0, zone: h.zone?.name ?? "" });
+  }
+
+  // ---------------------------------------------------------------- late refill (late joiners)
+
+  /** Eligible containers of the map (LATE_REFILL rules that never change within a cycle). */
+  private lateList(): Array<{ idx: number; cooldownMs: number }> {
+    if (this.lateEligible) return this.lateEligible;
+    const m = this.m;
+    const out: Array<{ idx: number; cooldownMs: number }> = [];
+    m.map.containers.forEach((c, idx) => {
+      if (c.tier > LATE_REFILL.MAX_TIER || containerGuarded(c, m.map.bosses)) return;
+      const plan = lateRefillPlan(m.lootSeed, idx);
+      if (plan.refills) out.push({ idx, cooldownMs: plan.cooldownMs });
+    });
+    this.lateEligible = out;
+    return out;
+  }
+
+  /**
+   * One late refill sweep (every LATE_REFILL.SWEEP_MS from START_MS): eligible containers EMPTIED
+   * at least their cooldown ago, not refilled late this cycle, with no living human within
+   * HUMAN_MIN_PX, oldest emptied first, at most PER_SWEEP now and MAX_PER_CYCLE per cycle.
+   */
+  private stepLate(clock: number): void {
+    const m = this.m;
+    const end = m.world?.durationMs ?? 0;
+    if (end > 0 && clock > end - LATE_REFILL.STOP_BEFORE_END_MS) return;
+    if (this.late.size >= LATE_REFILL.MAX_PER_CYCLE) return;
+    const due: Array<{ idx: number; at: number }> = [];
+    for (const e of this.lateList()) {
+      if (this.late.has(e.idx)) continue;
+      const at = m.containers.emptiedAt(e.idx);
+      if (at < 0 || clock - at < e.cooldownMs) continue;
+      due.push({ idx: e.idx, at });
+    }
+    if (due.length === 0) return;
+    const humans: Array<{ x: number; y: number }> = [];
+    for (const rt of m.allRuntimes()) if (!rt.isNpc && rt.pub.alive) humans.push(rt.pub);
+    const r2 = LATE_REFILL.HUMAN_MIN_PX * LATE_REFILL.HUMAN_MIN_PX;
+    due.sort((a, b) => a.at - b.at || a.idx - b.idx);
+    let done = 0;
+    for (const { idx } of due) {
+      if (done >= LATE_REFILL.PER_SWEEP || this.late.size >= LATE_REFILL.MAX_PER_CYCLE) break;
+      const c = m.map.containers[idx]!;
+      if (humans.some((h) => (h.x - c.x) ** 2 + (h.y - c.y) ** 2 < r2)) continue;
+      const rng = mulberry32(eventSeed(m.lootSeed, LATE_LOOT_SALT, idx));
+      const before = this.budget.left;
+      const items = rollEventLootCapped(rng, LATE_REFILL_LOOT, LATE_REFILL.ROLLS, this.budget, this.lateCap)
+        .map((f) => this.count(makeItem(f.def, { qty: f.qty })));
+      if (!m.containers.refill(idx, items)) continue;
+      this.late.set(idx, clock);
+      this.rolled.lateRefills++;
+      this.rolled.lateJunkCr += before - this.budget.left;
+      done++;
+    }
   }
 
   /** The active hot zone containing (x, y), if any (container XP × HOT.XP_MULT). */

@@ -18,8 +18,13 @@
  *   (sector, band) "fight nearby" marker computed from the fight's FIGHT.CELL cell centre (moving
  *   the shooter anywhere inside the cell gives the same payload); the full map shows the last
  *   60 s of fights as coarse HEAT_CELL heat (a cell needs HEAT_MIN events to show at all).
- * - BUDGET: the junk CR these events add to a cycle is capped (EVENT_BUDGET.JUNK_CR); past it the
- *   event tables roll consumables only.
+ * - LATE REFILL (late joiners): from minute LATE_REFILL.START_MS a seeded share of the map's
+ *   EMPTIED, unguarded T0–T2 containers refill LATE_REFILL.COOLDOWN_MIN..MAX_MS after they were
+ *   emptied, only while no living human is within LATE_REFILL.HUMAN_MIN_PX, at most once each per
+ *   cycle, from LATE_REFILL_LOOT (cheap junk + consumables; never a pool target, never minted).
+ * - BUDGET: the junk CR these events add to a cycle is capped (EVENT_BUDGET.JUNK_CR, shared by
+ *   crates, hot-zone refills and late refills; late refills may take at most LATE_REFILL.JUNK_CR_MAX
+ *   of it); past it the event tables roll consumables only.
  */
 
 import { SOUND, type Band } from "./sound.js";
@@ -150,6 +155,83 @@ export const HOT_ZONE_LOOT: readonly EventLootEntry[] = [
   { def: "bandage", weight: 12, qty: 1 },
   { def: "grenade", weight: 4, qty: 1 },
 ];
+
+/**
+ * Late refill (late joiners, GAME_DESIGN §7b): the map is stripped by minute ~15 and containers
+ * never refill on their own, so a late entry found almost nothing. A seeded SHARE of the T0–MAX_TIER
+ * containers outside every boss's guarded radius (POOL.GUARDED_RADIUS_PX) refills once per cycle,
+ * COOLDOWN_MIN..MAX_MS (seeded per container) after it was emptied, once the cycle clock is past
+ * START_MS and before the last STOP_BEFORE_END_MS, and only while no living human is within
+ * HUMAN_MIN_PX (nobody watches a box fill itself). Checked every SWEEP_MS, at most PER_SWEEP
+ * containers per sweep and MAX_PER_CYCLE per cycle.
+ * Economy: its junk comes out of the SAME per-cycle event budget (EVENT_BUDGET.JUNK_CR) and at most
+ * JUNK_CR_MAX of it, so the cycle's event junk cap does not move; past either cap it rolls
+ * consumables only. EV ≈ 24 junk CR + ≈ 7 CR-eq consumables per roll (× ROLLS per container).
+ */
+export const LATE_REFILL = {
+  START_MS: 15 * 60_000,
+  STOP_BEFORE_END_MS: 5 * 60_000,
+  COOLDOWN_MIN_MS: 10 * 60_000,
+  COOLDOWN_MAX_MS: 12 * 60_000,
+  /** Share of the eligible containers that ever refill (seeded per cycle and container). */
+  SHARE: 0.5,
+  /** Highest container tier that refills (T3/T4 pool tiers never do). */
+  MAX_TIER: 2,
+  /** No living human this close to the container. */
+  HUMAN_MIN_PX: 1_500,
+  SWEEP_MS: 5_000,
+  PER_SWEEP: 4,
+  MAX_PER_CYCLE: 80,
+  /** Rolls of LATE_REFILL_LOOT per refilled container (no empty rolls). */
+  ROLLS: 2,
+  /** Most junk CR late refills may take out of EVENT_BUDGET.JUNK_CR in one cycle. */
+  JUNK_CR_MAX: 400,
+} as const;
+
+/** Late refill: the cheapest junk (≤ 55 CR) and a few consumables, never mid junk. */
+export const LATE_REFILL_LOOT: readonly EventLootEntry[] = [
+  { def: "junk_apple", weight: 30, qty: 1 },
+  { def: "junk_water", weight: 25, qty: 1 },
+  { def: "junk_canned", weight: 20, qty: 1 },
+  { def: "junk_bolts", weight: 20, qty: 1 },
+  { def: "junk_wires", weight: 12, qty: 1 },
+  { def: "ammo_light", weight: 25, qty: 15 },
+  { def: "ammo_shell", weight: 12, qty: 5 },
+  { def: "bandage", weight: 14, qty: 1 },
+];
+
+const LATE_PICK_SALT = 0x1a7e_5e1f;
+
+/**
+ * Late refill plan of container `idx` in the cycle of `lootSeed` (secret seed): whether it is in
+ * the refilling SHARE and its cooldown after being emptied. Tier / guard checks are the caller's.
+ */
+export function lateRefillPlan(lootSeed: number, idx: number): { refills: boolean; cooldownMs: number } {
+  const rng = mulberry32(eventSeed(lootSeed, LATE_PICK_SALT, idx));
+  const refills = rng() < LATE_REFILL.SHARE;
+  const cooldownMs = Math.round(LATE_REFILL.COOLDOWN_MIN_MS + rng() * (LATE_REFILL.COOLDOWN_MAX_MS - LATE_REFILL.COOLDOWN_MIN_MS));
+  return { refills, cooldownMs };
+}
+
+/**
+ * rollEventLoot charged against the shared `budget` but never past `cap.left` either (a sub-cap of
+ * one event kind inside the shared budget). Both are reduced by the junk CR actually rolled.
+ */
+export function rollEventLootCapped(
+  rng: Rng,
+  table: readonly EventLootEntry[],
+  rolls: number,
+  budget: { left: number },
+  cap: { left: number },
+): Array<{ def: string; qty: number }> {
+  const view = { left: Math.max(0, Math.min(budget.left, cap.left)) };
+  const before = view.left;
+  const out = rollEventLoot(rng, table, rolls, view);
+  const spent = before - view.left;
+  budget.left -= spent;
+  cap.left -= spent;
+  return out;
+}
 
 /** Junk CR of one entry (0 for consumables). */
 export function eventJunkCr(def: string, qty: number): number {

@@ -161,10 +161,13 @@ export class ContainerSystem {
    * a hidden player's live position.
    */
   private readonly truth: Uint8Array;
+  /** Match clock when the truth of each container last turned EMPTIED (-1 = not emptied; late refill cooldown). */
+  private readonly emptiedClock: Float64Array;
 
   constructor(private readonly m: Match) {
     const n = m.map.containers.length;
     this.truth = new Uint8Array(n).fill(CONTAINER_STATE.UNTOUCHED);
+    this.emptiedClock = new Float64Array(n).fill(-1);
     for (let i = 0; i < n; i++) m.state.containerState.push(CONTAINER_STATE.UNTOUCHED);
   }
 
@@ -173,9 +176,15 @@ export class ContainerSystem {
     return this.truth[idx] ?? CONTAINER_STATE.UNTOUCHED;
   }
 
+  /** Match clock when container `idx` was emptied (truth), or -1 while it is not EMPTIED. */
+  emptiedAt(idx: number): number {
+    return this.truth[idx] === CONTAINER_STATE.EMPTIED ? (this.emptiedClock[idx] ?? -1) : -1;
+  }
+
   private setState(idx: number, st: number, actors: Iterable<PlayerRuntime>): void {
     if (this.truth[idx] === st) return;
     this.truth[idx] = st;
+    if (st === CONTAINER_STATE.EMPTIED) this.emptiedClock[idx] = this.m.clock;
     const spot = this.m.map.containers[idx]!;
     this.m.disclosure.defer(`c${idx}`, spot.x, spot.y, actors, () => {
       const v = this.truth[idx]!;
@@ -425,10 +434,10 @@ export class ContainerSystem {
   }
 
   /**
-   * WORLD v6 hot zone (world-events.ts): an EMPTIED container goes back to UNTOUCHED holding
-   * exactly `items` (event fungibles). Its old search target is dropped (it held nothing: emptied),
-   * the public state flips at once (the hot zone is public), and it never becomes a pool target.
-   * Returns false when the container is not emptied.
+   * WORLD v6 hot zone / late refill (world-events.ts): an EMPTIED container goes back to UNTOUCHED
+   * holding exactly `items` (event fungibles). Its old search target is dropped (it held nothing:
+   * emptied), the public state flips at once (a hot zone is public; a late refill happens only with
+   * no human near), and it never becomes a pool target. Returns false when the container is not emptied.
    */
   refill(idx: number, items: ItemLike[]): boolean {
     const spot = this.m.map.containers[idx];
@@ -442,6 +451,7 @@ export class ContainerSystem {
       this.m.state.loot.delete(key);
     }
     this.truth[idx] = CONTAINER_STATE.UNTOUCHED;
+    this.emptiedClock[idx] = -1;
     if (this.m.state.containerState[idx] !== CONTAINER_STATE.UNTOUCHED) this.m.state.containerState[idx] = CONTAINER_STATE.UNTOUCHED;
     this.refilled.add(idx);
     this.refillItems.set(idx, items);

@@ -62,4 +62,28 @@ describe("KnownEmpty", () => {
     k.observe(lootMap({ k5: entry(1, 1, []) }));
     assert.equal(interactHint({ state: st, map, x: 190, y: 0, known: k }), null);
   });
+  it("forgets a container only when its public state goes past UNTOUCHED and back (a hot-zone / late refill)", () => {
+    const U = CONTAINER_STATE.UNTOUCHED, O = CONTAINER_STATE.OPENED, E = CONTAINER_STATE.EMPTIED;
+    const k = new KnownEmpty();
+    // We opened and emptied a fresh box: its public flip still waits for us to walk away (UNTOUCHED).
+    k.observe(lootMap({ c2: entry(1, 1, []) }), [U, U, U]);
+    assert.equal(k.containerState(2, U), E, "known empty although the public copy still says untouched");
+    // The search panel closes while we stand there: no loot entry, public still UNTOUCHED — keep it.
+    k.observe(lootMap({}), [U, U, U]);
+    assert.equal(k.container(2), true, "not a refill: the public copy never left UNTOUCHED");
+    // We walk away: the public copy flips (OPENED, then EMPTIED); still known empty.
+    k.observe(lootMap({}), [U, U, O]);
+    k.observe(lootMap({}), [U, U, E]);
+    assert.equal(k.container(2), true);
+    // Minutes later a late refill turns it UNTOUCHED again: forgotten, it draws untouched.
+    const v = k.version;
+    k.observe(lootMap({}), [U, U, U]);
+    assert.equal(k.container(2), false, "refilled");
+    assert.equal(k.containerState(2, U), U);
+    assert.ok(k.version > v, "views redraw");
+    // A box marked while its public copy already said EMPTIED is armed at once.
+    k.observe(lootMap({ c1: entry(0, 0, []) }), [U, E, U]);
+    k.observe(lootMap({}), [U, U, U]);
+    assert.equal(k.container(1), false);
+  });
 });
