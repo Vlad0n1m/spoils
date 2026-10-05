@@ -1,7 +1,7 @@
 /**
  * WORLD v6 map events (world-events.ts): schedule determinism, supply-drop placement, the crate as
  * a lost-pool target (never minted), the damage-interrupted channel, hot-zone refill bounds and XP,
- * fog safety of the combat signals, and the replay WEV record.
+ * fog safety of the combat signals, the replay WEV record, and the late refill for late joiners.
  */
 
 import { test } from "node:test";
@@ -13,23 +13,28 @@ import {
   FIGHT,
   HOT,
   HOT_ZONE_LOOT,
+  LATE_REFILL,
+  LATE_REFILL_LOOT,
   POOL,
   SUPPLY_DROP_LOOT,
   SoundKind,
   WEV_KIND,
   WEV_STATE,
   WORLD,
+  containerGuarded,
   decodeReplayChunk,
   encodeReplayChunk,
   eventJunkCr,
   fightCellCentre,
   fightCellOf,
   isSupplyDropKey,
+  lateRefillPlan,
   mulberry32,
   planHotZones,
   planSupplyDrops,
   REPLAY,
   rollEventLoot,
+  rollEventLootCapped,
   xpForExit,
   type ContainerSpot,
   type MapData,
@@ -314,4 +319,121 @@ test("world events: WEV replay records round-trip", () => {
   };
   const back = decodeReplayChunk(encodeReplayChunk(chunk));
   assert.deepEqual(back.events, chunk.events);
+});
+
+// ---------------------------------------------------------------- late refill (late joiners)
+
+/** Open, reveal and take everything from container `i` standing next to it (then it is EMPTIED). */
+function emptyContainer(m: Match, wall: { t: number }, rt: PlayerRuntime, i: number): void {
+  const c = m.map.containers[i]!;
+  put(rt, c.x + 40, c.y);
+  assert.ok(m.openSearch(rt.id, `c${i}`), `open c${i}`);
+  jump(m, wall, 3_000);
+  jump(m, wall, 3_000);
+  m.invTakeAll(rt.id);
+  jump(m, wall, 50);
+  assert.equal(m.containers.stateOf(i), CONTAINER_STATE.EMPTIED, `c${i} emptied`);
+}
+
+/** Step the world in sweep-sized jumps until the cycle clock reaches `ms`. */
+function sweepTo(m: Match, wall: { t: number }, ms: number): void {
+  while (m.clock < ms) jump(m, wall, Math.min(LATE_REFILL.SWEEP_MS, ms - m.clock));
+}
+
+test("late refill: from minute 15 a seeded share of emptied, unguarded T0–T2 containers refills after its cooldown from the cheap table, once, never a pool target", () => {
+  const spots: ContainerSpot[] = [];
+  for (let i = 0; i < 16; i++) spots.push({ x: 2800 + (i % 8) * 180, y: 700 + Math.floor(i / 8) * 260, kind: "safe", tier: (i % 3) as 0 | 1 | 2, zone: null });
+  spots.push({ x: 2800, y: 1300, kind: "safe", tier: 3, zone: null }); // T3: never
+  spots.push({ x: 4000, y: 4000, kind: "safe", tier: 1, zone: null }); // next to a boss spot: never
+  const map = testMap({ containers: spots });
+  map.bosses = [{ kind: "foreman", zone: "", x: 4100, y: 4100, guards: [], chance: 0 }];
+  const { m, wall } = worldMatch({ map, mode: "live", worldEvents: true, worldEventsOverride: { drops: [], hots: [] } });
+  const a = enter(m, "alice");
+  spots.forEach((_, i) => emptyContainer(m, wall, a, i));
+  put(a, 500, 4400);
+  const eligible = spots
+    .map((c, i) => ({ c, i, plan: lateRefillPlan(m.lootSeed, i) }))
+    .filter(({ c, plan }) => c.tier <= LATE_REFILL.MAX_TIER && !containerGuarded(c, map.bosses) && plan.refills);
+  assert.ok(eligible.length >= 3 && eligible.length < 16, `a share refills (${eligible.length} of 16)`);
+
+  sweepTo(m, wall, LATE_REFILL.START_MS - 1_000);
+  assert.equal(m.worldEvents.late.size, 0, "nothing before minute 15, whatever the cooldown");
+  sweepTo(m, wall, LATE_REFILL.START_MS + 60_000);
+  const late = [...m.worldEvents.late.keys()].sort((x, y) => x - y);
+  assert.deepEqual(late, eligible.map((e) => e.i), "exactly the eligible share (all emptied ≥ 12 min ago)");
+  for (let i = 0; i < spots.length; i++) {
+    const want = late.includes(i) ? CONTAINER_STATE.UNTOUCHED : CONTAINER_STATE.EMPTIED;
+    assert.equal(m.containers.stateOf(i), want, `c${i} truth`);
+    assert.equal(m.state.containerState[i], want, `c${i} public (refill flips at once, nobody near)`);
+  }
+  for (const i of late) assert.equal(m.containers.poolTargetOk(i), false, "a refilled container is never a pool target");
+  const we = m.worldEvents;
+  assert.equal(we.rolled.lateRefills, late.length);
+  assert.ok(we.rolled.lateJunkCr <= LATE_REFILL.JUNK_CR_MAX, "late refills stay under their share");
+  assert.ok(we.rolled.junkCr <= EVENT_BUDGET.JUNK_CR && we.budget.left >= 0, "inside the shared event budget");
+  assert.equal(we.budget.left, EVENT_BUDGET.JUNK_CR - we.rolled.junkCr);
+
+  // Contents: the late table only (no uniques), and a search counts again.
+  const i = late[0]!;
+  const b = enter(m, "bob");
+  put(b, spots[i]!.x + 40, spots[i]!.y);
+  assert.ok(m.openSearch(b.id, `c${i}`));
+  jump(m, wall, 3_000);
+  jump(m, wall, 3_000);
+  const t = m.containers.targets.get(`c${i}`)!;
+  assert.ok(t.loot.total >= 1);
+  for (const { item } of lootItems(t)) assert.ok(LATE_REFILL_LOOT.some((e) => e.def === item.def) && !item.uid, `${item.def} from the late table`);
+  // Emptied again: never a second late refill this cycle.
+  m.invTakeAll(b.id);
+  jump(m, wall, 50);
+  assert.equal(m.containers.stateOf(i), CONTAINER_STATE.EMPTIED);
+  put(b, 500, 4300);
+  sweepTo(m, wall, m.clock + LATE_REFILL.COOLDOWN_MAX_MS + 30_000);
+  assert.equal(m.containers.stateOf(i), CONTAINER_STATE.EMPTIED, "once per container per cycle");
+});
+
+test("late refill: waits while a living human is within HUMAN_MIN_PX, respects the cooldown and stops before the wipe", () => {
+  const spots: ContainerSpot[] = [];
+  for (let i = 0; i < 12; i++) spots.push({ x: 2600 + i * 150, y: 800, kind: "safe", tier: 1, zone: null });
+  const { m, wall } = worldMatch({ map: testMap({ containers: spots }), worldEvents: true, worldEventsOverride: { drops: [], hots: [] } });
+  const idx = spots.findIndex((_, i) => lateRefillPlan(m.lootSeed, i).refills);
+  assert.ok(idx >= 0);
+  const a = enter(m, "alice");
+  // Emptied at minute 8: due at 18–20 min, not at 15.
+  sweepTo(m, wall, 8 * 60_000);
+  emptyContainer(m, wall, a, idx);
+  const due = m.containers.emptiedAt(idx) + lateRefillPlan(m.lootSeed, idx).cooldownMs;
+  // A human camps 1 000 px away.
+  put(a, spots[idx]!.x, spots[idx]!.y + 1_000);
+  sweepTo(m, wall, due - 1_000);
+  assert.equal(m.containers.stateOf(idx), CONTAINER_STATE.EMPTIED, "cooldown not over");
+  sweepTo(m, wall, due + 60_000);
+  assert.equal(m.containers.stateOf(idx), CONTAINER_STATE.EMPTIED, "a human within 1 500 px: no refill");
+  put(a, spots[idx]!.x, spots[idx]!.y + 1_600);
+  sweepTo(m, wall, m.clock + LATE_REFILL.SWEEP_MS + 50);
+  assert.equal(m.containers.stateOf(idx), CONTAINER_STATE.UNTOUCHED, "refilled once nobody is near");
+
+  // Late in the cycle nothing refills any more.
+  const { m: m2, wall: w2 } = worldMatch({ map: testMap({ containers: spots }), worldEvents: true, worldEventsOverride: { drops: [], hots: [] } });
+  const b = enter(m2, "bob");
+  // Emptied so late that its cooldown ends inside the last STOP_BEFORE_END_MS: it stays empty.
+  sweepTo(m2, w2, WORLD.CYCLE_MS - LATE_REFILL.STOP_BEFORE_END_MS - LATE_REFILL.COOLDOWN_MIN_MS + 30_000);
+  emptyContainer(m2, w2, b, idx);
+  put(b, 400, 4400);
+  sweepTo(m2, w2, WORLD.CYCLE_MS - 30_000);
+  assert.equal(m2.worldEvents.late.has(idx), false, "no refill in the last minutes");
+  assert.equal(m2.containers.stateOf(idx), CONTAINER_STATE.EMPTIED);
+});
+
+test("late refill: rollEventLootCapped charges the shared budget and its own cap by the same junk CR", () => {
+  const budget = { left: 1_000 };
+  const cap = { left: 100 };
+  const out = rollEventLootCapped(mulberry32(3), LATE_REFILL_LOOT, 200, budget, cap);
+  const junk = out.reduce((s, f) => s + eventJunkCr(f.def, f.qty), 0);
+  assert.ok(junk <= 100 && junk > 0);
+  assert.equal(1_000 - budget.left, junk);
+  assert.equal(100 - cap.left, junk);
+  const none = rollEventLootCapped(mulberry32(4), LATE_REFILL_LOOT, 50, { left: 0 }, { left: 400 });
+  assert.ok(none.every((f) => eventJunkCr(f.def, f.qty) === 0), "no shared budget → consumables only");
+  for (const e of LATE_REFILL_LOOT) assert.ok(eventJunkCr(e.def, e.qty) <= 55, `${e.def}: cheap junk only`);
 });
