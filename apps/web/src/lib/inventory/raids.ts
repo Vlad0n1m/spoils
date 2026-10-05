@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import {
+  BOSS_KINDS,
   DOG_TAG,
   FREE_KIT,
   MATCH,
@@ -10,8 +11,11 @@ import {
   dogTagPairMult,
   itemDef,
   junkSellCr,
+  bossTrophyId,
+  cosmeticDef,
   levelForXp,
   xpForExit,
+  type BossKind,
   type ExitType,
   type GameServerBoot,
   type JunkSellLine,
@@ -410,6 +414,8 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
       );
       // Alpha Pass (lib/pass): AP for the tasks above, weekly and tester tasks. Cosmetics only, no XP.
       await advancePassForExit(tx, user!.id, { report, onMapMs, npcKills, guardKills, bossKills, daily: quests.completed }, entryId, now);
+      // Boss trophies (BOSS_FIGHT): a permanent title per boss kind, once (pass_unlocks primary key).
+      await grantBossTrophies(tx, user!.id, report.bossTrophies ?? [], now);
       xp = r.total + quests.xp;
       xpLines = quests.completed.length > 0 ? [...r.lines, { key: "quest", qty: quests.completed.length, xp: quests.xp }] : r.lines;
       xpGrind = r.grind;
@@ -458,6 +464,26 @@ export async function applyExit(db: Db, report: PlayerExitReport, now = new Date
       levelUp: !guest && level > levelBefore,
     };
   });
+}
+
+/**
+ * Boss trophies: the bossTrophyId title of every boss kind the report names (the killer and the
+ * party mates who damaged it, game server boss-fight.ts), as a pass_unlocks row with source
+ * 'trophy' — cosmetic only (no CR, items or SOL), permanent, idempotent (primary key: a repeat kill
+ * or a retried report changes nothing). Registered users only. Returns the ids newly granted.
+ */
+export async function grantBossTrophies(tx: Tx, userId: string, kinds: readonly BossKind[], now: Date): Promise<string[]> {
+  const out: string[] = [];
+  for (const kind of new Set(kinds)) {
+    if (!(BOSS_KINDS as readonly string[]).includes(kind)) continue;
+    const id = bossTrophyId(kind);
+    if (!cosmeticDef(id)) continue;
+    const r = await tx.execute<{ reward_id: string }>(sql`
+      insert into pass_unlocks (user_id, reward_id, source, at) values (${userId}, ${id}, 'trophy', ${now})
+      on conflict do nothing returning reward_id`);
+    if (r.rows.length > 0) out.push(id);
+  }
+  return out;
 }
 
 /**

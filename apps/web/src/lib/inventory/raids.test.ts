@@ -58,6 +58,7 @@ import {
   RAID_VOID_GRACE_MS,
 } from "./raids";
 import { enterRaid, openShard } from "./world";
+import { meWorld } from "../world/me";
 import { buyStarterKit, kitsBoughtToday } from "./starter";
 import { getStash } from "./stash";
 import { seedEconomy } from "../economy/seed";
@@ -483,6 +484,28 @@ describe("raid exit", () => {
     const lo = (await db.select().from(loadouts).where(eq(loadouts.id, p.loadoutId)))[0]!;
     assert.equal(lo.status, "settled");
     await assertCreditsConserved();
+  });
+
+  test("boss trophies: the report's kinds become permanent titles once (pass_unlocks 'trophy'); retries and repeat kills change nothing; the last-raid card lists them", async () => {
+    const userId = await makeUser(db);
+    const owned = async () =>
+      (await db.execute<{ reward_id: string; source: string }>(sql`select reward_id, source from pass_unlocks where user_id = ${userId} order by reward_id`)).rows.map((r) => `${r.reward_id}:${r.source}`);
+    const { e } = await enterNew(userId);
+    const rep = wExit(e, 12, { bossTrophies: ["foreman"], stats: { shotsFired: 30, dmgDealt: 400, containersSearched: 0, corpsesSearched: 0, bossKills: 1 } });
+    assert.equal((await applyExit(db, rep)).status, "applied");
+    assert.deepEqual(await owned(), ["t-foreman-slayer:trophy"]);
+    assert.equal((await applyExit(db, rep)).status, "duplicate");
+    assert.deepEqual(await owned(), ["t-foreman-slayer:trophy"], "a retried report grants nothing new");
+    const me = await meWorld(db, userId, W_CYCLE * WORLD.CYCLE_MS + 20 * 60_000);
+    assert.deepEqual(me.lastRaid?.trophies, ["Foreman Slayer"]);
+    // Another raid: the Foreman again (a party mate's share) and the Warden.
+    const second = await enterNew(userId, "", {}, wShard({ shard: 1, roomId: "room2" }));
+    assert.equal((await applyExit(db, wExit(second.e, 9, { bossTrophies: ["foreman", "warden"] }))).status, "applied");
+    assert.deepEqual(await owned(), ["t-foreman-slayer:trophy", "t-warden-slayer:trophy"]);
+    // No trophy: nothing listed.
+    const third = await enterNew(userId, "", {}, wShard({ shard: 2, roomId: "room3" }));
+    await applyExit(db, wExit(third.e, 5));
+    assert.equal((await meWorld(db, userId, W_CYCLE * WORLD.CYCLE_MS + 30 * 60_000)).lastRaid?.trophies, undefined);
   });
 
   test("death: broken gear enters the pool at −8 with no owner; corpse gear stays in_raid", async () => {

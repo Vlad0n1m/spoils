@@ -80,6 +80,8 @@ export const playerExitReportSchema = z.object({
   unplaced: z.array(settledItemSchema).max(64).optional(),
   /** Alpha Pass: the entry joined on touch controls (the "phone" tester task). */
   touch: z.boolean().optional(),
+  /** Boss fights: bosses this entry killed or helped kill (party) → bossTrophyId titles at settlement. */
+  bossTrophies: z.array(bossKind).max(BOSS_KINDS.length).optional(),
 }) as unknown as z.ZodType<PlayerExitReport>;
 
 export const matchEndReportSchema = z.object({

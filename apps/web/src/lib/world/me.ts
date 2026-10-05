@@ -1,5 +1,8 @@
 import { sql } from "drizzle-orm";
 import {
+  BOSS_KINDS,
+  bossTrophyId,
+  cosmeticDef,
   levelForXp,
   mapNumber,
   worldCycleAt,
@@ -22,7 +25,8 @@ import { worldNow } from "./clock";
  * - lastRaid: their newest raid_exits row that belongs to an entry (world exits; legacy exits have
  *   no raid_entries row). `levelBefore = levelForXp(users.xp − row.xp)` is valid because that exit is
  *   the newest XP change. `kills.npcs` counts every NPC (marauders, guards and bosses);
- *   `kills.bosses` is the boss part of it; `kills.players` = human kills of the report.
+ *   `kills.bosses` is the boss part of it; `kills.players` = human kills of the report;
+ *   `trophies` = the boss trophy titles of the report (bossTrophies), by name.
  * Guests (no users row) get level 0.
  */
 export async function meWorld(db: Db, userId: string, now = worldNow()): Promise<MeWorldDto> {
@@ -88,6 +92,11 @@ export async function meWorld(db: Db, userId: string, now = worldNow()): Promise
       level: xpNow === null ? 0 : levelForXp(xpNow),
       kills: { players, npcs: npcs + bosses, bosses },
     };
+    // Boss trophies earned this raid (the titles granted at settlement), by name.
+    const trophies = (Array.isArray(report?.bossTrophies) ? report.bossTrophies : [])
+      .map((k) => (BOSS_KINDS.includes(k) ? cosmeticDef(bossTrophyId(k))?.name : undefined))
+      .filter((n): n is string => !!n);
+    if (trophies.length > 0) lastRaid.trophies = trophies;
   }
   return { serverTime: now, activeEntry, lastRaid };
 }
