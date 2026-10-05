@@ -9,12 +9,14 @@
  */
 
 import { Container, Graphics, Text } from "pixi.js";
-import { BOSSES, type BossKind, type EventsMsg, type MapData, type Player } from "@extract/shared";
+import { BOSSES, BOSS_FIGHT, BOSS_TELL, type BossKind, type EventsMsg, type MapData, type Player } from "@extract/shared";
 import { AudioEngine, type Voice } from "./audio/engine";
 import {
   BOSS_COLOR,
   BossAlertTracker,
   TENSION_REPEAT_MS,
+  bossBeatText,
+  heldBarBoss,
   bossTurfAt,
   easeBar,
   hpFraction,
@@ -38,15 +40,18 @@ const BAR_W_SHORT = 260;
 const BAR_H = 12;
 /** "FOREMAN DOWN" banner on the bar after a known boss dies. */
 const DOWN_MS = 3500;
+/** Boss fight beat toast under the bar ("FOREMAN IS ENRAGED"). */
+const BEAT_MS = 2800;
+const TELL_COLOR = 0xff3b30;
 
 /**
- * Screen bar top: below the React HUD's top-centre timer, above the zone toast (16% of h). On a
- * short landscape phone (< 480 px) also below the compact extract compass, which ends at ~70 px
- * there (the touch top stack is scaled to 80 %, hud.tsx).
+ * Screen bar top: below the React HUD's top-centre stack (timer ≈ 12–58 px, extract compass
+ * ≈ 68–106 px), its name label clear of the compass; the zone toast sits under it (fullmap.ts
+ * zoneToastY). On a short landscape phone (< 480 px) the touch top stack is scaled to 80 % and the
+ * compact compass ends at ~80 px (hud.tsx), so the name label sits just under it.
  */
 export function bossBarY(screenH: number): number {
-  if (screenH < 480) return 96;
-  return Math.round(Math.max(64, Math.min(118, screenH * 0.095)));
+  return screenH < 480 ? 106 : 136;
 }
 
 interface SeenBoss {
@@ -58,6 +63,8 @@ interface SeenBoss {
   maxHp: number;
   armor: number;
   armorDur: number;
+  /** Player.bossPhase (1 / 2; 0 = an older server). */
+  phase: number;
 }
 
 class BossBar {
@@ -72,6 +79,13 @@ class BossBar {
   private fillKey = -1;
   private kind: BossKind | null = null;
   private downUntil = 0;
+  /** Phase pips (two diamonds right of the bar); the second fills in phase 2. */
+  private readonly pips = new Graphics();
+  private phase = -1;
+  private stale = false;
+  private readonly beat: Text;
+  private beatUntil = 0;
+  private barShown = false;
 
   constructor() {
     this.name = new Text({
@@ -79,7 +93,13 @@ class BossBar {
       style: { fontFamily: FONT, fontSize: 15, fontWeight: "900", fill: 0xffffff, stroke: { color: 0x101010, width: 4 }, letterSpacing: 3 },
     });
     this.name.anchor.set(0.5, 1);
-    this.root.addChild(this.back, this.fill, this.skull, this.name);
+    this.beat = new Text({
+      text: "",
+      style: { fontFamily: FONT, fontSize: 14, fontWeight: "900", fill: 0xffc93c, stroke: { color: 0x101010, width: 4 }, letterSpacing: 2 },
+    });
+    this.beat.anchor.set(0.5, 0);
+    this.beat.visible = false;
+    this.root.addChild(this.back, this.fill, this.skull, this.name, this.pips, this.beat);
     this.root.visible = false;
     this.root.eventMode = "none";
     this.root.interactiveChildren = false;
@@ -96,15 +116,21 @@ class BossBar {
     this.back.roundRect(-w / 2 - 4, -4, w + 8, BAR_H + 8, 6).fill({ color: 0x140606, alpha: 0.8 }).stroke({ width: 2, color: BOSS_COLOR, alpha: 0.7 });
     this.skull.position.set(-w / 2 - 18, BAR_H / 2);
     this.name.position.set(0, -6);
+    this.pips.position.set(w / 2 + 18, BAR_H / 2);
+    this.beat.position.set(0, BAR_H + 10);
+    this.phase = -1;
     this.root.position.set(Math.round(screenW / 2 + 9), bossBarY(screenH));
   }
 
-  show(b: SeenBoss | null, nowMs: number) {
+  show(b: SeenBoss | null, nowMs: number, stale = false) {
+    this.barShown = !!b;
     if (!b) {
-      // Keep the "DOWN" banner up for a moment after the kill.
-      this.root.visible = nowMs < this.downUntil;
+      // Keep the "DOWN" banner (or a fight beat toast) up for a moment.
+      this.root.visible = nowMs < this.downUntil || nowMs < this.beatUntil;
       return;
     }
+    this.stale = stale;
+    this.setPhase(b.phase);
     if (b.kind !== this.kind || !this.root.visible) {
       this.kind = b.kind;
       this.name.text = (b.kind ? BOSSES[b.kind].name : "Boss").toUpperCase();
@@ -113,6 +139,28 @@ class BossBar {
     }
     this.downUntil = 0;
     this.target = hpFraction(b.hp, b.maxHp);
+    this.root.visible = true;
+  }
+
+  /** Two pips: phase 1 = first filled, phase 2 = both (drawn only on change). */
+  private setPhase(phase: number) {
+    if (phase === this.phase) return;
+    this.phase = phase;
+    const g = this.pips.clear();
+    if (phase <= 0) return;
+    for (let i = 0; i < 2; i++) {
+      const x = i * 14;
+      g.poly([x, -6, x + 5, 0, x, 6, x - 5, 0]);
+      g.fill(i < phase ? { color: i === 1 ? 0xffc93c : BOSS_COLOR } : { color: 0x3a1414 });
+      g.stroke({ width: 2, color: i < phase ? 0x101010 : BOSS_COLOR, alpha: i < phase ? 1 : 0.7 });
+    }
+  }
+
+  /** A fight beat toast under the bar (shown even without the bar). */
+  beatToast(text: string, nowMs: number) {
+    this.beat.text = text;
+    this.beat.visible = true;
+    this.beatUntil = nowMs + BEAT_MS;
     this.root.visible = true;
   }
 
@@ -134,7 +182,11 @@ class BossBar {
       this.fill.clear();
       if (px > 0) this.fill.roundRect(-this.w / 2, 0, px, BAR_H, 4).fill({ color: BOSS_COLOR });
     }
-    this.root.alpha = this.downUntil > 0 ? Math.max(0, Math.min(1, (this.downUntil - nowMs) / 600)) : 1;
+    this.root.alpha = this.downUntil > 0 ? Math.max(0, Math.min(1, (this.downUntil - nowMs) / 600)) : this.stale ? 0.6 : 1;
+    if (this.beat.visible && nowMs >= this.beatUntil) this.beat.visible = false;
+    // A toast alone (no boss in view, no banner): only the toast line shows.
+    const barOn = this.barShown || this.downUntil > nowMs;
+    this.back.visible = this.fill.visible = this.skull.visible = this.name.visible = this.pips.visible = barOn;
   }
 
   destroy() {
@@ -158,11 +210,20 @@ class BossHudSystem implements GameSystem {
   private nextTensionAt = 0;
   private lastFrameAt = 0;
   private disposed = false;
+  /** Last boss the bar showed and when (BAR_HOLD_MS after it leaves view, if engaged). */
+  private lastBar: { boss: SeenBoss; at: number } | null = null;
+  /** Boss id → when the local player last hit it or was hit by it (performance.now()). */
+  private readonly engaged = new Map<string, number>();
+  /** World-space telegraphs of the bosses in view (charge lane, throw wind-up, radio call). */
+  private tells: Graphics | null = null;
 
   init(ctx: GameContext): void {
     this.eng = AudioEngine.get();
     this.bar = new BossBar();
     ctx.layers.screen.addChild(this.bar.root);
+    this.tells = new Graphics();
+    this.tells.eventMode = "none";
+    ctx.layers.worldTop.addChild(this.tells);
     const cam = ctx.camera();
     this.bar.layout(cam.width, cam.height);
   }
@@ -187,8 +248,11 @@ class BossHudSystem implements GameSystem {
     const cam = ctx.camera();
     // Bosses roughly on screen (server LOS already filtered state.players).
     const reach = Math.max(cam.width, cam.height) / Math.max(0.1, cam.zoom) / 2 + 120;
-    this.bar.show(pickBarBoss(this.seen, cam, reach), now);
+    const pick = heldBarBoss(pickBarBoss(this.seen, cam, reach), this.lastBar, (id) => this.engaged.get(id), now);
+    if (pick && !pick.stale) this.lastBar = { boss: pick.boss, at: now };
+    this.bar.show(pick?.boss ?? null, now, pick?.stale ?? false);
     this.bar.frame(dtMs, now);
+    this.drawTells(ctx, now);
     this.tensionTick(ctx, map, now);
   }
 
@@ -211,10 +275,63 @@ class BossHudSystem implements GameSystem {
       const sting = this.alert.sight(id, role, k.kind, now);
       if (sting) this.sting(sting);
       if (role === "boss") {
-        this.seen.push({ id, kind: k.kind, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, armor: p.armor, armorDur: p.armorDur });
+        this.seen.push({ id, kind: k.kind, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, armor: p.armor, armorDur: p.armorDur, phase: p.bossPhase ?? 0 });
       }
     });
     this.alert.prune(now);
+  }
+
+  /**
+   * Telegraphs (Player.bossTell) of the bosses in view, drawn where the boss is drawn: the Warden's
+   * charge lane along its locked aim (pulsing while it winds up, solid while it dashes), the
+   * Foreman's wind-up ring before a throw (the grenade's own warning ring follows), the
+   * Commander's radio arcs. Only bosses this client sees carry a tell at all.
+   */
+  private drawTells(ctx: GameContext, now: number) {
+    const g = this.tells;
+    if (!g) return;
+    g.clear();
+    const state = ctx.state();
+    if (!state) return;
+    const pulse = 0.5 + 0.5 * Math.sin(now / 70);
+    for (const b of this.seen) {
+      const p = state.players.get(b.id);
+      if (!p || !p.alive || !p.bossTell) continue;
+      const seen = ctx.lastSeen(b.id);
+      const x = seen?.x ?? p.x;
+      const y = seen?.y ?? p.y;
+      const tell = p.bossTell;
+      if (tell === BOSS_TELL.CHARGE || tell === BOSS_TELL.DASH) {
+        const len = BOSS_FIGHT.WARDEN.MAX_PX;
+        const ca = Math.cos(p.aim);
+        const sa = Math.sin(p.aim);
+        const w = 26;
+        const nx = -sa * w;
+        const ny = ca * w;
+        const ex = x + ca * len;
+        const ey = y + sa * len;
+        const a = tell === BOSS_TELL.DASH ? 0.6 : 0.3 + 0.35 * pulse;
+        g.poly([x + nx, y + ny, ex + nx * 0.6, ey + ny * 0.6, ex - nx * 0.6, ey - ny * 0.6, x - nx, y - ny])
+          .fill({ color: TELL_COLOR, alpha: a })
+          .stroke({ width: 3, color: 0xffd0c8, alpha: 0.55 + 0.35 * pulse });
+        // Chevrons along the lane: "it is coming this way".
+        for (let d = 90; d < len - 20; d += 110) {
+          const cx = x + ca * d;
+          const cy = y + sa * d;
+          g.moveTo(cx - ca * 14 + nx * 0.5, cy - sa * 14 + ny * 0.5).lineTo(cx, cy).lineTo(cx - ca * 14 - nx * 0.5, cy - sa * 14 - ny * 0.5);
+        }
+        g.stroke({ width: 4, color: 0xffffff, alpha: 0.35 + 0.4 * pulse });
+      } else if (tell === BOSS_TELL.THROW) {
+        g.circle(x, y, 46 + 10 * pulse).stroke({ width: 5, color: 0xffa630, alpha: 0.85 });
+        g.circle(x, y - 62, 11).fill({ color: 0xffa630, alpha: 0.9 }).stroke({ width: 3, color: 0x101010 });
+      } else if (tell === BOSS_TELL.CALL) {
+        for (let i = 0; i < 3; i++) {
+          const r = 40 + ((now / 6 + i * 40) % 120);
+          g.moveTo(x + Math.cos(-Math.PI * 0.8) * r, y + Math.sin(-Math.PI * 0.8) * r);
+          g.arc(x, y, r, -Math.PI * 0.8, -Math.PI * 0.2).stroke({ width: 4, color: 0x7fd3ff, alpha: Math.max(0, 1 - (r - 40) / 120) });
+        }
+      }
+    }
   }
 
   private sting(role: NpcRole) {
@@ -252,11 +369,22 @@ class BossHudSystem implements GameSystem {
     const now = performance.now();
     if (ev.hits) {
       for (const h of ev.hits) {
+        // "Recently engaged" for the bar hold: we hit a boss, or a boss hit us.
+        if (h.s === sid && h.t && this.known.get(h.t)?.role === "boss") this.engaged.set(h.t, now);
+        if (h.t === sid && h.s && this.known.get(h.s)?.role === "boss") this.engaged.set(h.s, now);
         if (h.t !== sid || !h.s) continue;
         const k = this.known.get(h.s);
         const role = k?.role ?? npcRole(ctx.state()?.players.get(h.s)?.role);
         const sting = this.alert.shotBy(role, now);
         if (sting) this.sting(sting);
+      }
+    }
+    if (ev.boss) {
+      // Fight beats for the arena (server boss-fight.ts): a roar / the radio, and a toast.
+      for (const b of ev.boss) {
+        if (!(b.k in BOSSES)) continue;
+        this.bar?.beatToast(bossBeatText(b.k, b.e), this.lastFrameAt || now);
+        this.eng?.play(b.e === "phase2" ? "boss_roar" : "boss_radio", { priority: 5 });
       }
     }
     if (ev.kills) {
@@ -269,6 +397,7 @@ class BossHudSystem implements GameSystem {
           this.stopTension(2.5);
         }
         this.bar?.down(k.kind, this.lastFrameAt || now);
+        this.lastBar = null;
       }
     }
   }
@@ -279,6 +408,9 @@ class BossHudSystem implements GameSystem {
     this.stopTension(0.3);
     this.bar?.destroy();
     this.bar = null;
+    this.tells?.destroy();
+    this.tells = null;
+    this.engaged.clear();
     this.known.clear();
     this.seen.length = 0;
   }

@@ -686,6 +686,39 @@ export const misc = {
     metal(c, out, r, 0.01, 420 + r() * 40, 0.25, 0.6);
   },
   /**
+   * Boss phase 2 roar, ~1.8 s: a growled vocal-ish formant (two detuned saws through a wobbling
+   * bandpass that sweeps down), a sub drop and a breathy noise tail. Non-spatial, loud.
+   */
+  boss_roar(c, out, r) {
+    const bp = filt(c, "bandpass", 700, 3);
+    bp.frequency.setValueAtTime(900, 0);
+    bp.frequency.exponentialRampToValueAtTime(260, 1.5);
+    const g = gain(c);
+    g.gain.setValueAtTime(0, 0);
+    g.gain.linearRampToValueAtTime(0.7, 0.08);
+    g.gain.linearRampToValueAtTime(0.5, 0.9);
+    g.gain.exponentialRampToValueAtTime(EPS, 1.7);
+    g.gain.setValueAtTime(0, 1.71);
+    chain(bp, g, out);
+    const wob = gain(c, 0.35);
+    chain(osc(c, "sine", 18 + r() * 6, 0, 1.8), gain(c, 120), bp.frequency);
+    for (const f of [92, 97.5, 184]) {
+      const o = osc(c, "sawtooth", f * (0.99 + r() * 0.02), 0, 1.75);
+      o.frequency.setValueAtTime(f, 0);
+      o.frequency.exponentialRampToValueAtTime(f * 0.62, 1.6);
+      chain(o, wob, bp);
+    }
+    tone(c, out, 0, { f0: 70, f1: 28, glide: 0.6, a: 0.01, d: 1.2, peak: 0.8 });
+    burst(c, out, r, 0.02, { type: "bandpass", f: 1400, Q: 0.8, a: 0.05, d: 1.1, peak: 0.35, color: "pink" });
+  },
+  /** Commander's radio call, ~0.9 s: two squelch clicks around a band-limited static burst. */
+  boss_radio(c, out, r) {
+    burst(c, out, r, 0, { f: 2600, Q: 4, a: 0.001, d: 0.02, peak: 0.6 });
+    burst(c, out, r, 0.04, { type: "bandpass", f: 1800, Q: 1.2, a: 0.01, d: 0.7, peak: 0.35, color: "white" });
+    tone(c, out, 0.08, { f0: 880, f1: 860, glide: 0.5, a: 0.01, d: 0.55, peak: 0.08 });
+    burst(c, out, r, 0.82, { f: 2400, Q: 4, a: 0.001, d: 0.02, peak: 0.5 });
+  },
+  /**
    * Boss-turf tension swell, ~6 s, no melody: a low two-tone drone (a minor-sixth apart) with a
    * slow tremolo, a rumble bed that breathes in and out, and two muffled heartbeat thumps.
    */
@@ -884,6 +917,9 @@ export const SFX = {
   // Boss presentation (boss-hud.ts): the alert sting and the boss-turf tension swell.
   boss_sting: ui(misc.boss_sting, 1.6, -6),
   boss_tension: sfx(misc.boss_tension, 6, -14, "extract", 2, { jitter: 0 }),
+  // Boss fights (BOSS_FIGHT): the phase-2 roar and the Commander's reinforcement radio.
+  boss_roar: ui(misc.boss_roar, 1.8, -5),
+  boss_radio: ui(misc.boss_radio, 0.9, -8),
 
   ui_click: ui(misc.ui_click, 0.08, -14),
   ui_hover: ui(misc.ui_hover, 0.05, -24),
