@@ -1151,9 +1151,10 @@ function TouchMenu({ onLeave }: { onLeave: () => void }) {
         {open && (
           <div
             id="hud-touch-menu"
-            className="toon-panel pointer-events-auto absolute left-0 top-12 z-10 max-h-[calc(100dvh-5rem)] w-72 overflow-y-auto overscroll-contain p-3"
+            className="toon-panel scroll-fade pointer-events-auto absolute left-0 top-12 z-10 max-h-[calc(100dvh-5rem)] w-72 overflow-y-auto overscroll-contain p-3 short:w-[min(34rem,calc(100vw-6rem))]"
           >
-            <ul className="space-y-1.5">
+            {/* Landscape phones: two columns, so the list fits without scrolling. */}
+            <ul className="space-y-1.5 short:grid short:grid-cols-2 short:gap-x-5 short:gap-y-1.5 short:space-y-0">
               {TOUCH_CONTROLS.map(([k, v]) => (
                 <li key={k} className="flex items-baseline justify-between gap-3">
                   <span className="toon-text-thin shrink-0 text-xs tracking-wide text-zooa-lime">{k}</span>

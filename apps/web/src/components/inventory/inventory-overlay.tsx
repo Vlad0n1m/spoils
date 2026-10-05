@@ -185,7 +185,7 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
   return (
     <div
       ref={rootRef}
-      className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto p-3 pt-[8vh] sm:p-6 sm:pt-[10vh] [@media(max-height:500px)]:p-2"
+      className="fixed inset-0 z-[70] flex items-start justify-center overflow-hidden p-3 pt-[8vh] sm:p-6 sm:pt-[10vh] [@media(max-height:500px)]:items-center [@media(max-height:500px)]:p-2"
       onKeyDown={onKeyDown}
       onKeyUp={(e) => {
         if (e.code === "Space") e.preventDefault();
@@ -208,13 +208,14 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
         </div>
       )}
 
-      {/* Landscape phones (≤ 500 px tall): inventory (24 rem) and the search panel (20 rem) side by
-          side from ~732 px wide, so the loot is on screen next to the bag; narrower, the loot comes first. */}
+      {/* Landscape phones (≤ 500 px tall): the inventory (two columns: weapons and gear | pockets and
+          backpack) and the search panel (five columns of loot) side by side, smaller tiles; both fit
+          the height, nothing scrolls. */}
       {/* The margins keep the panels out of a landscape phone's camera cutout (viewport-fit=cover). */}
-      <div className="relative ml-[env(safe-area-inset-left,0px)] mr-[env(safe-area-inset-right,0px)] flex flex-wrap items-start justify-center gap-4 [@media(max-height:500px)]:gap-3">
-        <section aria-label="Inventory" className="toon-panel w-[min(92vw,25rem)] bg-[#1d2333]/95 p-4 [@media(max-height:500px)]:w-[24rem] [@media(max-height:500px)]:p-3">
+      <div className="relative ml-[env(safe-area-inset-left,0px)] mr-[env(safe-area-inset-right,0px)] flex flex-wrap items-start justify-center gap-4 [@media(max-height:500px)]:flex-nowrap [@media(max-height:500px)]:gap-3">
+        <section aria-label="Inventory" className="toon-panel w-[min(92vw,25rem)] bg-[#1d2333]/95 p-4 [@media(max-height:500px)]:w-auto [@media(max-height:500px)]:p-2.5">
           <header className="flex items-center justify-between">
-            <h2 className="toon-text text-2xl tracking-wide text-white">Inventory</h2>
+            <h2 className="toon-text text-2xl tracking-wide text-white short:text-xl">Inventory</h2>
             {touch ? (
               <button
                 type="button"
@@ -222,7 +223,7 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
                   // Closes the search first, then the inventory (both when both are open).
                   for (let i = 0; i < 3 && actions.escape(); i++);
                 }}
-                className="toon-btn-ghost h-11 min-w-11 shrink-0 px-3 text-sm"
+                className="toon-btn-ghost h-11 min-w-11 shrink-0 px-3 text-sm short:h-9"
                 aria-label="Close inventory"
               >
                 <span className="optical-center">Close</span>
@@ -234,15 +235,16 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
             )}
           </header>
 
-          <div className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3">
-            <div className="flex flex-col gap-2">
+          <div className="short:mt-2 short:flex short:gap-4">
+          <div className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 short:mt-0 short:grid-cols-1 short:content-start short:gap-y-2">
+            <div className="flex flex-col gap-2 short:gap-1.5">
               <SectionLabel>Weapons</SectionLabel>
               <div className="flex gap-2">
                 {ownTile("w1", { size: "lg", hotkey: "1" })}
                 {ownTile("w2", { size: "lg", hotkey: "2" })}
               </div>
             </div>
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2 short:gap-1.5">
               <SectionLabel>Gear</SectionLabel>
               <div className="flex gap-2">
                 {ownTile("armor", { size: "lg" })}
@@ -251,12 +253,13 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
             </div>
           </div>
 
-          <div className="mt-4">
+          <div className="short:flex short:flex-col">
+          <div className="mt-4 short:mt-0">
             <SectionLabel>Pockets</SectionLabel>
-            <div className="mt-2 grid grid-cols-4 gap-2.5">{pockets.map((k) => ownTile(k))}</div>
+            <div className="mt-2 grid grid-cols-4 gap-2.5 short:mt-1.5 short:w-fit short:grid-cols-5 short:gap-1.5">{pockets.map((k) => ownTile(k))}</div>
           </div>
 
-          <div className="mt-4">
+          <div className="mt-4 short:mt-2">
             <SectionLabel>
               {snap.slots.bp ? describeItem(snap.slots.bp).name : "Backpack"}
               <span className="ml-2 tabular-nums text-white/40">
@@ -264,15 +267,17 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
               </span>
             </SectionLabel>
             {bag.length > 0 ? (
-              <div className="mt-2 grid grid-cols-4 gap-2.5">{bag.map((k) => ownTile(k))}</div>
+              <div className="mt-2 grid grid-cols-4 gap-2.5 short:mt-1.5 short:grid-cols-5 short:gap-1.5">{bag.map((k) => ownTile(k))}</div>
             ) : (
-              <p className="font-body mt-2 rounded-xl border-2 border-dashed border-white/20 px-3 py-3 text-sm text-white/55">
+              <p className="font-body mt-2 rounded-xl border-2 border-dashed border-white/20 px-3 py-3 text-sm text-white/55 short:w-[15rem] short:py-2">
                 No backpack — find one to carry more loot out.
               </p>
             )}
           </div>
+          </div>
+          </div>
 
-          <footer className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t-[3px] border-black/50 pt-3">
+          <footer className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t-[3px] border-black/50 pt-3 short:mt-2 short:pt-1.5">
             <span className="text-sm text-white/70" title="Auto-sale value of carried junk if you extract (before market multiplier)">
               Junk value <span className="toon-text-thin ml-1 text-lg text-amber-300">{fmtCr(snap.carry.junkCr)}</span>
             </span>
@@ -280,7 +285,7 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
               Slots {snap.carry.used}/{snap.carry.cap}
             </span>
           </footer>
-          <p className="font-body mt-2 text-[0.7rem] leading-snug text-white/45">
+          <p className="font-body mt-2 text-[0.7rem] leading-snug text-white/45 short:hidden">
             {touch
               ? "Tap to equip / use · drag to move · drag onto the dark area to drop"
               : "Click to equip / use · drag to move · right-click or Del to drop"}

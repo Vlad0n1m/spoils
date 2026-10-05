@@ -75,12 +75,12 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
     <section
       data-drop="loot"
       aria-label={`Searching ${search.title}`}
-      className="toon-panel flex w-[min(92vw,22rem)] flex-col bg-[#1d2333]/95 p-4 [@media(max-height:500px)]:w-[20rem] [@media(max-height:500px)]:p-3 [@media(max-height:500px)_and_(max-width:731px)]:order-first"
+      className="toon-panel flex w-[min(92vw,22rem)] flex-col bg-[#1d2333]/95 p-4 [@media(max-height:500px)]:w-auto [@media(max-height:500px)]:p-2.5"
     >
       <header className="flex items-center gap-3">
-        <div className="relative grid h-14 w-14 shrink-0 place-items-center rounded-xl border-[3px] border-black bg-[#2b3142]">
+        <div className="relative grid h-14 w-14 shrink-0 place-items-center rounded-xl border-[3px] border-black bg-[#2b3142] short:h-11 short:w-11">
           {/* eslint-disable-next-line @next/next/no-img-element -- static sprite */}
-          <img src={searchIcon(search, empty)} alt="" className="h-11 w-11 object-contain" draggable={false} />
+          <img src={searchIcon(search, empty)} alt="" className="h-11 w-11 object-contain short:h-8 short:w-8" draggable={false} />
           {opening && <OpenRing progress={openP} />}
         </div>
         <div className="min-w-0 flex-1">
@@ -111,7 +111,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
       </header>
 
       {/* Reveal progress: one bar for the whole container. */}
-      <div className="mt-3 h-2.5 overflow-hidden rounded-full border-2 border-black bg-black/50" aria-hidden>
+      <div className="mt-3 h-2.5 shrink-0 overflow-hidden rounded-full border-2 border-black bg-black/50 short:mt-2" aria-hidden>
         <div
           className="h-full bg-zooa-lime transition-[width] duration-150"
           style={{
@@ -120,7 +120,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
         />
       </div>
 
-      <div className="mt-4 grid grid-cols-4 gap-2.5" role="list">
+      <div className="mt-4 grid grid-cols-4 gap-2.5 short:mt-2 short:grid-cols-5 short:gap-1.5" role="list">
         {search.cells.map((c, i) => {
           if (c.kind === "item") {
             const it = c.item;
@@ -148,7 +148,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
           );
         })}
         {search.loaded && search.total === 0 && (
-          <p className="font-body col-span-4 py-4 text-center text-sm text-white/55">Empty.</p>
+          <p className="font-body col-span-4 py-4 text-center text-sm text-white/55 short:col-span-5">Empty.</p>
         )}
         {!search.loaded &&
           Array.from({ length: 4 }, (_, i) => (
@@ -162,7 +162,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
         type="button"
         onClick={onTakeAll}
         disabled={opening || search.takeable === 0 || allPending}
-        className="toon-btn mt-4 min-h-12 w-full gap-2 text-lg tracking-wide"
+        className="toon-btn mt-4 min-h-12 w-full gap-2 text-lg tracking-wide short:mt-2 short:min-h-11 short:text-base"
       >
         <span className="optical-center">Take all</span>
         {!touch && <span className="toon-key">T</span>}

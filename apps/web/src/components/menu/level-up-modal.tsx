@@ -7,6 +7,7 @@ import type { RewardItem } from "@/lib/lobby/levels";
 import { playUi } from "@/game/audio/ui-sounds";
 import { LevelBadge } from "./level-badge";
 import { Confetti, RewardCard, WearButton } from "./reward-art";
+import { PagerArrow, useCarousel } from "@/components/paged";
 
 const WEARABLE = new Set<string>(["title", "color", "frame", "skin"]);
 
@@ -33,6 +34,7 @@ export function LevelUpModal({
   onRewards?: () => void;
 }) {
   const ok = useRef<HTMLButtonElement>(null);
+  const { ref: track, edge, by, handlers } = useCarousel<HTMLDivElement>();
   useEffect(() => {
     playUi("coin");
     ok.current?.focus();
@@ -46,7 +48,7 @@ export function LevelUpModal({
   return (
     <div className="fixed inset-0 z-[70] grid place-items-center p-4 short:p-2" role="dialog" aria-modal="true" aria-labelledby="levelup-title">
       <div className="absolute inset-0 bg-black/75" onClick={onClose} aria-hidden />
-      <div className="toon-panel relative max-h-[calc(100dvh-2rem)] w-full max-w-[56rem] overflow-y-auto overflow-x-hidden overscroll-contain bg-[radial-gradient(circle_at_50%_18%,#2b3a1a,#161b28_60%)] px-5 pb-5 pt-6 text-center animate-pop-in motion-reduce:animate-none short:max-h-[calc(100dvh-1rem)] short:px-3 short:pb-3 short:pt-3">
+      <div className="toon-panel relative max-h-[calc(100dvh-2rem)] w-full max-w-[56rem] overflow-hidden bg-[radial-gradient(circle_at_50%_18%,#2b3a1a,#161b28_60%)] px-5 pb-5 pt-6 text-center animate-pop-in motion-reduce:animate-none short:max-h-[calc(100dvh-1rem)] short:px-3 short:pb-3 short:pt-3">
         {/* Rays turning behind the shield, and a one-off burst. */}
         <div className="pointer-events-none absolute left-1/2 top-[4.5rem] h-0 w-0 short:top-8" aria-hidden>
           <span
@@ -74,7 +76,11 @@ export function LevelUpModal({
             <p className="font-body relative mt-3 text-sm font-semibold text-white/85 short:sr-only">
               {rewards.length === 1 ? "You unlocked" : `You unlocked ${rewards.length} rewards`}
             </p>
-            <div className="rw-track relative -mx-5 mt-2 overflow-x-auto px-5 pb-2 pt-3 short:-mx-3 short:mt-1 short:px-3">
+            {/* A carousel when the cards don't fit the width: ‹ › and swipe, never a scrollbar. */}
+            <div className="relative -mx-5 mt-2 short:-mx-3 short:mt-1">
+            <PagerArrow dir={-1} disabled={edge.start} onClick={() => by(-1)} className="absolute left-1 top-1/2 z-[3] -translate-y-1/2 shadow-[0_4px_0_#000] disabled:hidden" />
+            <PagerArrow dir={1} disabled={edge.end} onClick={() => by(1)} className="absolute right-1 top-1/2 z-[3] -translate-y-1/2 shadow-[0_4px_0_#000] disabled:hidden" />
+            <div ref={track} {...handlers} className="rw-track relative overflow-hidden px-5 pb-2 pt-3 [touch-action:pan-y] short:px-3">
               <div className="mx-auto flex w-max gap-3">
                 {rewards.map((it, i) => (
                   <RewardCard
@@ -89,6 +95,7 @@ export function LevelUpModal({
                   />
                 ))}
               </div>
+            </div>
             </div>
           </>
         ) : (
