@@ -466,16 +466,17 @@ export function boundOffer(def: string): BoundOffer | null {
 }
 
 /**
- * The game's own CR price for `def`: what the bound traders ask for it (the cheapest offer if a def
- * were ever sold twice), or null when no trader sells it. Rarity-agnostic on purpose: a trader sells
- * one fixed rarity of a def, and a player lot of that def must never cost more CR than the game's own
- * shelf (the anti-arbitrage cap of the player market, apps/web lib/market/market.ts). Otherwise gear
- * that entered the game outside the CR loop (the iDos edition's SPOILS crates) could be resold for
- * more CR than any raider pays the trader for the same def.
+ * The game's own CR price for `def` at `rarity`: what the bound traders ask for it (the cheapest offer
+ * if a def were ever sold twice), or null when no trader sells that def at this rarity or better. A
+ * player lot must never cost more CR than the game's own shelf for the same thing (the anti-arbitrage
+ * cap of the player market, apps/web lib/market/market.ts), so gear that entered the game outside the
+ * CR loop (the iDos edition's SPOILS crates) can't be resold above the trader. A rarer copy than the
+ * trader's is not the same thing: an epic rifle is not capped at the common rifle's price and keeps
+ * the ordinary market band.
  */
-export function traderPriceCap(def: string): bigint | null {
+export function traderPriceCap(def: string, rarity = 0): bigint | null {
   let best: number | null = null;
-  for (const o of BOUND_OFFERS) if (o.def === def && (best === null || o.cr < best)) best = o.cr;
+  for (const o of BOUND_OFFERS) if (o.def === def && rarity <= o.rarity && (best === null || o.cr < best)) best = o.cr;
   return best === null ? null : BigInt(best);
 }
 

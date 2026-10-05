@@ -288,18 +288,19 @@ test("price band: once the index is valid, far-off prices are refused", async ()
   assert.ok(buyer);
 });
 
-test("a lot never asks more than the traders' CR price for its def (any rarity); other defs keep the band", async () => {
+test("a lot never asks more than the traders' CR price for the same def and rarity; rarer copies and other defs keep the band", async () => {
   const seller = await user(10_000n, 10);
   const cap = boundOffer("shotgun")!.cr;
-  for (const rarity of [0, 2]) {
-    const sg = await makeItem(db, { def: "shotgun", rarity, ownerId: seller });
-    const over = await createListing(db, seller, sg, BigInt(cap + 1), OPTS);
-    assert.equal(!over.ok && over.code, "above_trader_price");
-    assert.equal(!over.ok && over.traderCap, String(cap));
-    assert.deepEqual(!over.ok && over.band, { min: "1", max: String(cap) });
-    assert.equal((await itemRow(sg)).state, "in_stash", "nothing listed, no fee");
-    assert.ok((await createListing(db, seller, sg, BigInt(cap), OPTS)).ok, "exactly the trader price is fine");
-  }
+  const sg = await makeItem(db, { def: "shotgun", rarity: 0, ownerId: seller });
+  const over = await createListing(db, seller, sg, BigInt(cap + 1), OPTS);
+  assert.equal(!over.ok && over.code, "above_trader_price");
+  assert.equal(!over.ok && over.traderCap, String(cap));
+  assert.deepEqual(!over.ok && over.band, { min: "1", max: String(cap) });
+  assert.equal((await itemRow(sg)).state, "in_stash", "nothing listed, no fee");
+  assert.ok((await createListing(db, seller, sg, BigInt(cap), OPTS)).ok, "exactly the trader price is fine");
+  // An epic shotgun is not the trader's common one: the ordinary band, no cap.
+  const epic = await makeItem(db, { def: "shotgun", rarity: 2, ownerId: seller });
+  assert.ok((await createListing(db, seller, epic, BigInt(cap * 3), OPTS)).ok, "rarer than the trader's: above the shelf is fine");
   // The pistol is not sold by the traders: no cap.
   const p = await makeItem(db, { def: "pistol", rarity: 0, ownerId: seller });
   assert.ok((await createListing(db, seller, p, 9_000n, OPTS)).ok);

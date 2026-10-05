@@ -121,9 +121,9 @@ export async function createListing(
 
       const index = await priceIndex(tx, template, now);
       const band = priceBand(index, MARKET_HARD_FLOOR_MINOR[clampRarity(it.rarity)]);
-      // "A listing may not exceed the game's own price": a def the bound traders sell is capped at
-      // their CR price, so no lot ever asks more than the shelf (traderPriceCap, anti-arbitrage).
-      const cap = traderPriceCap(it.defId);
+      // "A listing may not exceed the game's own price": a def the bound traders sell at this rarity is
+      // capped at their CR price, so no lot ever asks more than the shelf (traderPriceCap).
+      const cap = traderPriceCap(it.defId, it.rarity);
       const allowed = capBandAtTrader(band, cap);
       const shown = { min: allowed.min.toString(), max: allowed.max?.toString() ?? null };
       if (cap !== null && price > cap) return { ok: false, code: "above_trader_price", band: shown, traderCap: cap.toString() } as const;
@@ -516,7 +516,7 @@ export async function marketHistory(
  */
 export async function bandFor(db: Db, template: string, rarity: number, now = new Date()) {
   const index = await priceIndex(db, template, now);
-  const traderCap = traderPriceCap(defOfTemplate(template));
+  const traderCap = traderPriceCap(defOfTemplate(template), rarity);
   const band = capBandAtTrader(priceBand(index, MARKET_HARD_FLOOR_MINOR[clampRarity(rarity)]), traderCap);
   return { index, band, traderCap };
 }

@@ -154,7 +154,12 @@ test("trader price cap: the bound traders' CR price per def caps the listing ban
   assert.equal(traderPriceCap("shotgun"), 1500n);
   assert.equal(traderPriceCap("armor_2"), 2600n);
   assert.equal(traderPriceCap("pistol"), null, "not sold by a trader");
-  for (const o of BOUND_OFFERS) assert.equal(traderPriceCap(o.def), BigInt(o.cr), o.def);
+  assert.equal(traderPriceCap("rifle", 0), 1800n, "the trader's own rarity");
+  assert.equal(traderPriceCap("rifle", 2), null, "an epic rifle is not the trader's common one: no cap");
+  assert.equal(traderPriceCap("armor_2", 1), 2600n);
+  assert.equal(traderPriceCap("lmg", 1), 4500n);
+  assert.equal(traderPriceCap("lmg", 3), null);
+  for (const o of BOUND_OFFERS) assert.equal(traderPriceCap(o.def, o.rarity), BigInt(o.cr), o.def);
 
   assert.deepEqual(capBandAtTrader({ min: 1n, max: null }, 1500n), { min: 1n, max: 1500n });
   assert.deepEqual(capBandAtTrader({ min: 500n, max: 4000n }, 1500n), { min: 500n, max: 1500n });
