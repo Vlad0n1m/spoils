@@ -89,6 +89,48 @@ export function frameAncestorsDirective(sources) {
   return ["frame-ancestors", "'self'", ...sources].join(" ");
 }
 
+/** iDos Title id: 8 characters of [A-Z0-9], optionally with the DEV sandbox suffix `-DEV`. */
+const TITLE_ID = /^[A-Z0-9]{8}(-DEV)?$/;
+
+/**
+ * IDOS_TITLE_IDS: the iDos Titles whose shell may sign players in, separated by spaces or commas,
+ * e.g. "ABCD1234" (prod) or "ABCD1234-DEV" (the DEV sandbox) or both. Uppercased; anything else is
+ * dropped. Empty → [] (the iDos sign-in bridge stays off).
+ * @param {string | undefined | null} raw
+ * @returns {string[]}
+ */
+export function parseIdosTitleIds(raw) {
+  /** @type {string[]} */
+  const out = [];
+  for (const token of (raw ?? "").split(/[\s,]+/)) {
+    const t = token.trim().toUpperCase();
+    if (TITLE_ID.test(t) && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Where iDos hosts a Title's static build (its shell): `https://{titleid}.idos.games`, the DEV copy at
+ * `https://{titleid}-dev.idos.games` (lowercase: hostnames are case-insensitive and that is how the
+ * platform's game host spells them).
+ * @param {string} titleId
+ * @returns {string}
+ */
+export function titleShellOrigin(titleId) {
+  return `https://${titleId.toLowerCase()}.idos.games`;
+}
+
+/**
+ * Shell origins of IDOS_TITLE_IDS: the only parents the edition accepts an iDos session from
+ * (components/idos/idos-bridge.tsx), and frame-ancestors next to the defaults when
+ * IDOS_FRAME_ANCESTORS is unset.
+ * @param {Record<string, string | undefined>} env
+ * @returns {string[]}
+ */
+export function idosShellOrigins(env) {
+  return parseIdosTitleIds(env.IDOS_TITLE_IDS).map(titleShellOrigin);
+}
+
 /**
  * The edition's frame-ancestors rule (security-headers.mjs adds the common headers). Main build: none.
  * Edition: a CSP that only sets frame-ancestors (it restricts nothing else). No X-Frame-Options is
@@ -98,7 +140,9 @@ export function frameAncestorsDirective(sources) {
  */
 export function editionHeaders(env) {
   if (!isIdosBuildEnv(env)) return [];
-  const { sources } = parseFrameAncestors(env.IDOS_FRAME_ANCESTORS);
+  const { sources, usedDefault } = parseFrameAncestors(env.IDOS_FRAME_ANCESTORS);
+  // No explicit list: the defaults plus the exact shell origins of our own Titles (never a wildcard).
+  if (usedDefault) for (const o of idosShellOrigins(env)) if (!sources.includes(o)) sources.push(o);
   return [
     {
       source: "/:path*",
@@ -108,10 +152,15 @@ export function editionHeaders(env) {
 }
 
 /**
- * next.config `env`: the flag inlined into the client and the server bundles. Main build: {}.
+ * next.config `env`: the flag inlined into the client and the server bundles, plus the shell origins of
+ * IDOS_TITLE_IDS (NEXT_PUBLIC_IDOS_SHELL_ORIGINS, space-separated) when set. Main build: {}.
  * @param {Record<string, string | undefined>} env
  * @returns {Record<string, string>}
  */
 export function editionPublicEnv(env) {
-  return isIdosBuildEnv(env) ? { NEXT_PUBLIC_IDOS_BUILD: "1" } : {};
+  if (!isIdosBuildEnv(env)) return {};
+  const shells = idosShellOrigins(env);
+  return shells.length > 0
+    ? { NEXT_PUBLIC_IDOS_BUILD: "1", NEXT_PUBLIC_IDOS_SHELL_ORIGINS: shells.join(" ") }
+    : { NEXT_PUBLIC_IDOS_BUILD: "1" };
 }

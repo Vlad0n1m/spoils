@@ -108,7 +108,8 @@ describe("checkApiMutation (middleware.ts, every /api route)", () => {
   it("the middleware answers 403 with the guard's error and passes the app's own calls", async () => {
     const { middleware, config } = await import("../middleware");
     const { NextRequest } = await import("next/server");
-    assert.deepEqual(config.matcher, ["/api/:path*"]);
+    // /wallet and /economy only feed the iDos edition gate (lib/edition.ts editionBlock).
+    assert.deepEqual(config.matcher, ["/api/:path*", "/wallet/:path*", "/economy/:path*"]);
     const attack = new NextRequest("https://idos.example/api/market/buy", {
       method: "POST",
       headers: { host: "idos.example", origin: "https://evil.example", "sec-fetch-site": "cross-site", "content-type": "text/plain" },
@@ -125,5 +126,23 @@ describe("checkApiMutation (middleware.ts, every /api route)", () => {
       }),
     );
     assert.equal(ok.headers.get("x-middleware-next"), "1");
+  });
+
+  it("the main build passes its SOL pages through and hides the edition-only iDos bridge", async () => {
+    const { middleware } = await import("../middleware");
+    const { NextRequest } = await import("next/server");
+    for (const path of ["/wallet", "/economy"]) {
+      const res = middleware(new NextRequest(`https://spoils.example${path}`, { method: "GET", headers: { host: "spoils.example" } }));
+      assert.equal(res.headers.get("x-middleware-next"), "1", path);
+    }
+    const bridge = middleware(
+      new NextRequest("https://spoils.example/api/idos/session", {
+        method: "POST",
+        headers: { host: "spoils.example", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
+    assert.equal(bridge.status, 404);
+    assert.deepEqual(await bridge.json(), { error: "not_found" });
   });
 });
