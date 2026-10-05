@@ -56,6 +56,9 @@ export function ListDialog({
   const price = parsePrice(text);
   const br = price ? saleBreakdown(price, market.feeBps) : null;
   const band = hist?.band;
+  // The game's own price caps every lot of a def the traders sell (the band already includes it).
+  const traderCap = hist?.traderCap ? BigInt(hist.traderCap) : null;
+  const aboveTrader = price !== null && traderCap !== null && price > traderCap;
   const outOfBand = price !== null && band ? price < BigInt(band.min) || (band.max !== null && price > BigInt(band.max)) : false;
   const canAffordFee = credits >= feeCr;
 
@@ -141,6 +144,8 @@ export function ListDialog({
                     </>
                   )}
                 </>
+              ) : traderCap !== null ? (
+                `no price index yet — any price up to ${formatPrice(traderCap)}.`
               ) : !templateRefPriced(template) ? (
                 "new item — no reference price yet, any price goes."
               ) : (
@@ -154,7 +159,16 @@ export function ListDialog({
             )}
           </div>
         )}
-        {outOfBand && <p className="font-body mt-2 text-sm text-rose-300">That price is outside the allowed band.</p>}
+        {traderCap !== null && (
+          <p className="font-body mt-2 text-sm text-white/75">
+            Max price <span className="tabular-nums text-amber-300">{formatPrice(traderCap)}</span>: the traders&apos; price for this item.
+          </p>
+        )}
+        {aboveTrader ? (
+          <p className="font-body mt-2 text-sm text-rose-300">A lot can&apos;t ask more than the traders&apos; price.</p>
+        ) : (
+          outOfBand && <p className="font-body mt-2 text-sm text-rose-300">That price is outside the allowed band.</p>
+        )}
         {err && (
           <p className="font-body mt-3 text-sm font-semibold text-rose-300" role="alert">
             {err}
@@ -165,7 +179,7 @@ export function ListDialog({
           <button type="button" onClick={onClose} className="toon-btn-ghost min-h-12 flex-1 text-base">
             <span className="optical-center">Cancel</span>
           </button>
-          <button type="submit" disabled={!price || busy || outOfBand || !canAffordFee} className="toon-btn min-h-12 flex-1 text-lg">
+          <button type="submit" disabled={!price || busy || outOfBand || aboveTrader || !canAffordFee} className="toon-btn min-h-12 flex-1 text-lg">
             <span className="optical-center">{busy ? "Listing…" : "List for sale"}</span>
           </button>
         </div>

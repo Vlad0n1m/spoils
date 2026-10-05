@@ -16,13 +16,15 @@ export async function GET(req: Request) {
   const template = raw && TEMPLATE_RE.test(raw) ? raw : null;
   const h = await marketHistory(db, template);
   let band: HistoryResponse["band"] = null;
+  let traderCap: string | null = null;
   if (template) {
     const rarity = template.startsWith("weapon:") ? Number(template.split(":")[2]) : 0;
     const b = await bandFor(db, template, rarity);
     band = { min: b.band.min.toString(), max: b.band.max?.toString() ?? null };
+    traderCap = b.traderCap?.toString() ?? null;
   }
   return json<HistoryResponse>(
-    { template, trades: h.trades, daily: h.daily, index: h.index?.toString() ?? null, band },
+    { template, trades: h.trades, daily: h.daily, index: h.index?.toString() ?? null, band, traderCap },
     { cache: "public, max-age=0, s-maxage=60" },
   );
 }
