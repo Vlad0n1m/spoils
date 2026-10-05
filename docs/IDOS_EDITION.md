@@ -511,7 +511,13 @@ SOL-рынок и казна (`lib/inventory`, `api/market`), девнет по 
   `/root/spoils-idos.conf.full`, ставится после сертификата.
 - Ждём: домен `spoils.gg` в реестре .gg (A-записи `idos`, `game-idos`, `game`, `@` → VPS заведены у
   регистратора), затем `certbot certonly --webroot -w /var/www/certbot -d idos.spoils.gg -d game-idos.spoils.gg`.
-- Оболочка с `VITE_SPOILS_EDITION_URL=https://idos.spoils.gg/play` собрана локально, ещё не залита.
+- 05.10 12:26 UTC домен появился в зоне .gg; сертификат Let's Encrypt (`idos.spoils.gg`, `game-idos.spoils.gg`,
+  продление certbot.timer + reload nginx), полный конфиг nginx включён, проверки снаружи зелёные.
+- Оболочка v3 (`https://idos.spoils.gg/play`) — Live: https://8yechsd4.idos.games/ и
+  https://idosgames.com/app/8YECHSD4/. Проверено: вход iDos SSO и гостем, мост создаёт аккаунт,
+  повторный вход — `same`; подменённый `userId` с настоящим билетом → 401 `invalid_session` (9.6.3).
+- Известно: свой выстрел рисуется по эху сервера (+RTT +≤50 мс), звук — сразу; исправление — предсказание
+  эффектов выстрела в клиенте.
 
 ### 9.1 Тайтл и доступ агента (Влад)
 
@@ -645,9 +651,9 @@ Superteam Earn (трек Superteam KZ × iDos) и Colosseum, дедлайн 13.1
 
 | Что | Значение | Статус |
 |---|---|---|
-| Страница тайтла на idosgames.com | — | после 9.4 |
-| Прямой адрес оболочки | `https://<id>.idos.games` | после 9.3 |
-| Сайт издания | `https://idos.<домен>/play` | после 9.2 |
+| Страница тайтла на idosgames.com | https://idosgames.com/app/8YECHSD4/ | live 05.10 |
+| Прямой адрес оболочки | https://8yechsd4.idos.games/ | live 05.10 (оболочка v3) |
+| Сайт издания | https://idos.spoils.gg/play | live 05.10 |
 | Токен (mint, Solscan) | SPOILS / `SPOILS`, mint `2jWPc277xY4HQSnqNBJK9Md6YGaxQBwas3ofjJURidos`, https://solscan.io/token/2jWPc277xY4HQSnqNBJK9Md6YGaxQBwas3ofjJURidos | выпущен 05.10 10:02 UTC (mainnet); привязку к тайтлу проверить |
 | GitHub | — | нет remote, создать репозиторий |
 | Трейлер | https://www.youtube.com/watch?v=MunQ4wpESBk | есть |
