@@ -25,6 +25,15 @@ function resolveTitleId(): string {
   return `${m[1]!.toUpperCase()}${m[2] ? "-DEV" : ""}`;
 }
 
+/** The SDK's own storage keys for a remembered login (@idosgames/core 0.21.1). */
+function hasSavedSession(titleID: string): boolean {
+  try {
+    return !!localStorage.getItem(`Saved_AuthType_${titleID}`) || !!localStorage.getItem(`Saved_Auth_RefreshToken_${titleID}`);
+  } catch {
+    return false;
+  }
+}
+
 const app = document.getElementById("app")!;
 
 function card(title: string, text: string): HTMLDivElement {
@@ -87,9 +96,13 @@ async function main(): Promise<void> {
     const r = await client.auth.loginWithSsoCode(sso.code);
     if (r.ok) return play();
   }
-  // 2. A remembered session (refresh token, or a replayable guest / email login).
-  const resumed = await client.auth.autoLogin();
-  if (resumed.ok) return play();
+  // 2. A remembered session (refresh token, or a replayable guest / email login). Only when one was
+  // saved: on a first visit autoLogin() replays the default method, Device, and silently makes a
+  // guest, so the player would never see the choice below (checked on 8YECHSD4-DEV, 05.10).
+  if (hasSavedSession(titleID)) {
+    const resumed = await client.auth.autoLogin();
+    if (resumed.ok) return play();
+  }
 
   // 3. Ask.
   const inner = card("SPOILS", "Top-down extraction shooter. Sign in to keep your raider, stash and rank.");

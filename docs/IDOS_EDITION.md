@@ -291,6 +291,14 @@ id — экран «Continue with iDos Games» / «Play as guest», гость �
 `api.idosgames.com` и текст ошибки. Не проверено: вход на живом тайтле, поведение в фрейме
 idosgames.com (вложенный iframe, звук, полноэкранный режим, cookie на iPhone).
 
+На живом тайтле 05.10: `8YECHSD4` (DEV `8YECHSD4-DEV`), версии 1–2 залиты с `deploy: false`
+(TestUrl `https://8yechsd4-dev.idos.games/v/<build>/index.html`). Найдено и исправлено: на первом
+визите `autoLogin()` повторяет способ по умолчанию (Device) и молча создаёт гостя — экран выбора не
+показывался; теперь `autoLogin()` только при сохранённой сессии (`Saved_AuthType_<id>` /
+`Saved_Auth_RefreshToken_<id>`). Проверено: экран выбора → «Continue with iDos Games» →
+`idosgames.com/sso/?title=8YECHSD4-DEV`; гость (Device) входит. Возврат после SSO и мост — после
+боевого адреса игры.
+
 ### 3.3 Мост входа (auth bridge) — сделано, вариант Б
 
 1. Оболочка (3.2) входит в iDos.
