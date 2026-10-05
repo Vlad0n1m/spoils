@@ -137,6 +137,8 @@ export function equipBoss(m: Match, rt: PlayerRuntime, kind: BossKind, pool: Ite
   if (def.meds.medkit > 0) placeItem(rt, makeItem("medkit", { qty: def.meds.medkit }));
   if (def.meds.bandage > 0) placeItem(rt, makeItem("bandage", { qty: def.meds.bandage }));
   for (const j of rollBossJunk(m.lootSeed, kind)) placeItem(rt, makeItem(j.def, { qty: j.qty, rarity: j.rarity }));
+  // In-raid objectives: the key of its POI's locked room, when this boss holds it this cycle.
+  for (const k of m.objectives.takeBossKeys(kind)) placeItem(rt, k);
   rt.self.active = "w1";
   fixActive(rt);
   syncPublic(rt);

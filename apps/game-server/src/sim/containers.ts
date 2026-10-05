@@ -28,6 +28,7 @@
 
 import {
   BACKPACK_SLOTS,
+  CACHE,
   CHEST_TABLES,
   CONTAINER,
   CONTAINER_STATE,
@@ -92,8 +93,11 @@ export function demoChestRarity(spot: ContainerSpot): Rarity {
 export interface SearchTarget {
   /** Loot map key: c<idx> / k<corpseId>. */
   key: string;
-  /** "drop" = a WORLD v6 supply crate (world-events.ts): a corpse-like target (Corpse "sd<n>"). */
-  kind: "container" | "corpse" | "drop";
+  /**
+   * "drop" = a WORLD v6 supply crate (world-events.ts): a corpse-like target (Corpse "sd<n>").
+   * "cache" = a hidden cache (objectives.ts, Corpse "hc<n>"): only its finders see / open it.
+   */
+  kind: "container" | "corpse" | "drop" | "cache";
   /** MapData.containers index; -1 for corpses. */
   idx: number;
   corpse: Corpse | null;
@@ -316,6 +320,8 @@ export class ContainerSystem {
     for (const f of rollContainerFungibles(m.lootSeed, idx, spot)) {
       out.push(makeItem(f.def, { qty: f.qty, rarity: f.rarity }));
     }
+    // In-raid objectives: a key or clue note placed here this cycle, the strongroom rolls.
+    out.push(...m.objectives.extraItems(idx));
     return out;
   }
 
@@ -419,6 +425,32 @@ export class ContainerSystem {
     return t;
   }
 
+  /**
+   * In-raid objectives: a hidden cache (Corpse "hc<n>", objectives.ts). Hidden from every view
+   * (aoi.hide) until a human finds it; never expires before the wipe; no pool items.
+   */
+  addHiddenCache(id: string, x: number, y: number, items: ItemLike[]): SearchTarget {
+    const c = new Corpse();
+    c.id = id;
+    c.x = x;
+    c.y = y;
+    c.label = "Hidden cache";
+    c.color = 0;
+    c.rot = 0;
+    const t = this.createTarget({
+      key: corpseLootKey(id), kind: "cache", idx: -1, corpse: c, owner: -1, x, y, openMs: CACHE.OPEN_MS, items,
+    });
+    this.corpseList.push(t);
+    this.m.state.corpses.set(id, c);
+    this.m.aoi.hide(c);
+    return t;
+  }
+
+  /** May `rt` see / open target `t`? (Hidden caches: only their finders.) */
+  private visibleTo(rt: PlayerRuntime, t: SearchTarget): boolean {
+    return t.kind !== "cache" || this.m.objectives.cacheKnown(t, rt);
+  }
+
   /** Nobody has searched `t` yet and nothing is revealed (a crate may still take a pool item). */
   untouchedTarget(t: SearchTarget): boolean {
     return !t.emptied && t.searchers.size === 0 && t.searchedBy.size === 0 && t.loot.revealed === 0;
@@ -518,7 +550,7 @@ export class ContainerSystem {
       consider(i, c.x, c.y);
     }
     this.corpseList.forEach((t, k) => {
-      if (!t.emptied && !this.ownBody(rt, t)) consider(n + k, t.x, t.y);
+      if (!t.emptied && !this.ownBody(rt, t) && this.visibleTo(rt, t)) consider(n + k, t.x, t.y);
     });
     return best;
   }
@@ -559,7 +591,7 @@ export class ContainerSystem {
     } else {
       const k = this.corpseList.findIndex((t) => t.key === key);
       const t = this.corpseList[k];
-      if (!t || t.emptied) return false;
+      if (!t || t.emptied || !this.visibleTo(rt, t)) return false;
       if (this.ownBody(rt, t)) {
         invErr(m, rt, "own_body", key);
         return false;
@@ -578,6 +610,8 @@ export class ContainerSystem {
   /** F on what nearestOpenable returned: start (or keep) a search session. */
   open(rt: PlayerRuntime, n: number): void {
     const nc = this.m.map.containers.length;
+    // A safe that still needs cracking: the crack channel instead of a search (objectives.ts).
+    if (n < nc && this.m.objectives.interceptOpen(rt, n)) return;
     const t = n < nc ? this.containerTarget(n, rt) : this.corpseList[n - nc];
     if (t) this.startSession(rt, t);
   }
@@ -654,6 +688,7 @@ export class ContainerSystem {
     if (t.searchedBy.has(who)) return;
     t.searchedBy.add(who);
     if (t.kind === "corpse") rt.stats.corpsesSearched++;
+    else if (t.kind === "cache") this.m.objectives.onCacheOpened(rt);
     else {
       rt.stats.containersSearched++;
       // WORLD v6 hot zone: a counted container inside the active hot POI pays × HOT.XP_MULT.
@@ -739,7 +774,9 @@ export function stepSearches(m: Match): void {
 }
 
 /** Close a player's search session, if any. Called on roll, fire, death, extract, leave, close. */
-export function closeSearch(m: Match, rt: PlayerRuntime, _reason: string): void {
+export function closeSearch(m: Match, rt: PlayerRuntime, reason: string): void {
+  // Firing, rolling, dying, leaving … also break an unlock / crack channel (objectives.ts).
+  (m.objectives as Match["objectives"] | undefined)?.onCloseSearch(rt, reason);
   const sess = rt.search;
   if (!sess) return;
   rt.search = null;

@@ -60,6 +60,8 @@ import {
   itemDef,
   junkCredits,
   legacyMapData,
+  hasLockOverlay,
+  matchCollisionIndex,
   mulberry32,
   readRoll,
   pickWeighted,
@@ -116,6 +118,7 @@ import { VisionSystem, followAim } from "./vision.js";
 import { mapRuntime, warmMap, type MapRuntime } from "./nav.js";
 import { PathPlanner } from "./planner.js";
 import { WorldEvents, type WorldEventsOverride } from "./world-events.js";
+import { Objectives } from "./objectives.js";
 
 // ---------------------------------------------------------------- map boot (WP-M2 owns this section)
 
@@ -248,6 +251,11 @@ export interface MatchOptions {
   worldEvents?: boolean;
   /** Tests / the dev visual check: these drop / hot-zone timings instead of the seeded schedule. */
   worldEventsOverride?: WorldEventsOverride;
+  /**
+   * In-raid objectives (objectives.ts: locked rooms + keys, safe cracking, hidden caches). Default:
+   * on in world mode unless emptyWorld; tests may force it either way.
+   */
+  objectives?: boolean;
 }
 
 /** MatchOptions.world. */
@@ -303,6 +311,8 @@ export class Match {
   readonly bots: ReadonlyArray<{ rt: PlayerRuntime; role: string }> = [];
   /** WORLD v6 supply drops, hot zones and combat signals (inactive outside world mode). */
   readonly worldEvents: WorldEvents;
+  /** In-raid objectives: locked rooms, safe cracking, hidden caches (inactive outside world mode). */
+  readonly objectives: Objectives;
   /** Exit reports of every participant (humans are also emitted as `exit` events), in exit order. */
   readonly exitReports: PlayerExitReport[] = [];
 
@@ -348,7 +358,8 @@ export class Match {
     this.map = opts.map ?? matchMap(seed, opts.mapId);
     // Room creation at the latest (process boot for the Steppe): nothing static is built in a tick.
     this.mapRt = mapRuntime(this.map);
-    this.idx = this.mapRt.idx;
+    // Own flag copy when the map has locked-room gates (objectives.ts toggles them per match).
+    this.idx = hasLockOverlay(this.mapRt.idx, this.map) ? matchCollisionIndex(this.mapRt.idx) : this.mapRt.idx;
     this.bushIndex = this.mapRt.bushIndex;
     this.planner = new PathPlanner(this.mapRt.regions, () => this.state.clockMs);
     this.ground = new GroundStore(this.map.width, this.map.height);
@@ -391,6 +402,10 @@ export class Match {
     }
     this.containers = new ContainerSystem(this);
     this.worldEvents = new WorldEvents(this, !!this.world && (opts.worldEvents ?? !opts.emptyWorld), opts.worldEventsOverride);
+    this.objectives = new Objectives(this, opts.objectives ?? (!!this.world && !opts.emptyWorld), {
+      bosses: bossSpawns.map((b) => ({ kind: b.kind, zone: b.zone })),
+      squads,
+    });
     this.npcs = new NpcSystem(this);
     if (opts.containerLoot && this.mode === "live") this.containers.allocatePool(opts.containerLoot);
 
@@ -828,6 +843,8 @@ export class Match {
     const rt = this.actor(id);
     if (!rt || rt.isNpc) return false;
     const c = this.containers.nearestOpenable(rt);
+    // A locked gate nearer than any container: unlock it (or "Requires: <key>").
+    if (this.objectives.interact(rt, c)) return true;
     if (c >= 0) {
       this.containers.open(rt, c);
       return true;
@@ -1000,6 +1017,7 @@ export class Match {
     }
 
     stepSearches(this);
+    this.objectives.step();
     stepBullets(this, dt);
     stepGrenades(this);
 

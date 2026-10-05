@@ -155,7 +155,9 @@ export function poolCandidates(m: Match, minHumanPx: number): Candidate[] {
   const out: Candidate[] = [];
   m.map.containers.forEach((spot, idx) => {
     if (!m.containers.poolTargetOk(idx) || !far(spot.x, spot.y)) return;
-    out.push({ x: spot.x, y: spot.y, weight: poolContainerWeight({ tier: spot.tier, guarded: containerGuarded(spot, guardSpots) }), container: idx, npc: null });
+    // In-raid objectives: an eligible container in a locked room weighs × LOCK.POOL_WEIGHT_MULT.
+    const weight = poolContainerWeight({ tier: spot.tier, guarded: containerGuarded(spot, guardSpots) }) * m.objectives.poolWeightMult(idx);
+    out.push({ x: spot.x, y: spot.y, weight, container: idx, npc: null });
   });
   for (const sq of m.npcs.squads) {
     const post = sq.post;

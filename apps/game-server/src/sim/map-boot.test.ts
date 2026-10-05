@@ -48,7 +48,10 @@ test("map boot: the Steppe is the default, built once per process, and its hash 
   // Shared static runtime: the same collision index, walk grid, region graph and bush index.
   assert.equal(a.mapRt, boot);
   assert.equal(b.mapRt, boot);
-  assert.equal(a.idx, b.idx);
+  // In-raid objectives: each match owns its gate flags (locked-room gates), the geometry is shared.
+  assert.notEqual(a.idx, b.idx);
+  assert.equal(a.idx.rects, boot.idx.rects);
+  assert.equal(a.idx.rectCells, boot.idx.rectCells);
   assert.equal(a.bushIndex, boot.bushIndex);
   assert.notEqual(a.planner, b.planner, "per-match planner (queue + budget), shared graph");
   assert.equal(a.planner.regions, boot.regions);

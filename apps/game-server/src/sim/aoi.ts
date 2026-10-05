@@ -77,6 +77,19 @@ export class AoiSystem {
     this.restricted.set(e, { kind, actors: new Set([actor]), knowers: new Set(knowers) });
   }
 
+  /**
+   * In-raid objectives (objectives.ts): a hidden cache is shown to nobody until reveal() names a
+   * viewer (no actors: vision never adds knowers on its own). Never unrestricted.
+   */
+  hide(e: AoiEntity): void {
+    if (!this.restricted.has(e)) this.restricted.set(e, { kind: "spawn", actors: new Set(), knowers: new Set() });
+  }
+
+  /** Let viewer `i` see a hidden entity from now on (sticky). */
+  reveal(e: AoiEntity, i: number): void {
+    this.restricted.get(e)?.knowers.add(i);
+  }
+
   unrestrict(e: AoiEntity): void {
     if (this.restricted.delete(e)) this.released.add(e);
   }
