@@ -26,7 +26,7 @@ import {
   listingPda,
   marketPda,
 } from "./instructions";
-import { OpError, exportItem, prepareOp, settlePendingOps, submitOp, type ChainDeps } from "./ops";
+import { EXPORTS_PER_DAY, OpError, exportItem, prepareOp, settlePendingOps, submitOp, type ChainDeps } from "./ops";
 import { formatSol, parseSol } from "./sol";
 
 const IDL = JSON.parse(readFileSync(new URL("../../../../../programs/idl/spoils_market.json", import.meta.url), "utf8")) as {
@@ -206,6 +206,11 @@ test("export: epic item → minted to the linked wallet, item 'onchain' with its
   await assert.rejects(exportItem(db, deps(conn), userId, bound), (e) => e instanceof OpError && e.code === "not_eligible");
   const other = await makeUser(db);
   await assert.rejects(exportItem(db, deps(conn), other, epic), (e) => e instanceof OpError && e.code === "no_wallet");
+  // Server-paid sends are capped per day.
+  await db.execute(sql`insert into onchain_ops (user_id, wallet, action, message, status, last_valid_block_height)
+    select ${userId}, 'w', 'export', 'm', 'done', 0 from generate_series(1, ${EXPORTS_PER_DAY})`);
+  const more = await makeItem(db, { def: "rifle", rarity: 3, ownerId: userId });
+  await assert.rejects(exportItem(db, deps(conn), userId, more), (e) => e instanceof OpError && e.code === "daily_limit");
 });
 
 test("export that never lands: item returns to the stash and forgets the never-minted asset", async () => {

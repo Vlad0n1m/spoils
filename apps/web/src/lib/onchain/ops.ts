@@ -69,6 +69,8 @@ export interface ChainDeps {
 }
 
 const CONFIRM_TIMEOUT_MS = 25_000;
+/** Server-paid sends per player per UTC day (each costs the authority a fee, a first mint ~0.003 SOL). */
+export const EXPORTS_PER_DAY = 20;
 const POLL_MS = 900;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -109,6 +111,14 @@ export async function exportItem(db: Db, deps: ChainDeps, userId: string, itemId
   if (!isUuid(itemId)) throw new OpError("not_found", "That item is not in your stash.");
   const wallet = await walletOf(db, userId);
   const { cfg, connection: conn, authority } = deps;
+  const now = deps.now?.() ?? new Date();
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const today = await db.execute<{ n: number }>(
+    sql`select count(*)::int as n from onchain_ops where user_id = ${userId} and action = 'export' and created_at >= ${dayStart.toISOString()}`,
+  );
+  if (Number(today.rows[0]?.n ?? 0) >= EXPORTS_PER_DAY) {
+    throw new OpError("daily_limit", `You can send up to ${EXPORTS_PER_DAY} items to your wallet a day.`);
+  }
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
 
   const op = await db.transaction(async (tx) => {
