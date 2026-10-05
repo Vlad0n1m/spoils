@@ -11,6 +11,9 @@
  *   $T programs/scripts/onchain-admin.ts smoke <collection>
  *        end-to-end on devnet with two throwaway wallets: mint → list → buy → list → cancel → into
  *        the game vault, checking the asset owner after every step
+ *   $T programs/scripts/onchain-admin.ts e2e <collection>
+ *        the web server's own code (lib/onchain/ops.ts) against devnet and the TEST database
+ *        (extract_test): export → list → buy → import → kit, two throwaway player wallets
  * Options: --url <rpc> (default https://api.devnet.solana.com).
  */
 import { readFileSync } from "node:fs";
@@ -19,6 +22,11 @@ import { explorerUrl, parseSecretKey } from "../../apps/web/src/lib/chain/config
 import { discriminator, programDataAddress } from "../../apps/web/src/lib/chain/program";
 import { chainConnection } from "../../apps/web/src/lib/chain/sender";
 import { createCollectionIxs, mintItemIxs } from "../../apps/web/src/lib/onchain/core";
+import { eq, sql } from "drizzle-orm";
+import { users } from "../../apps/web/src/db/schema";
+import { closeTestDb, makeItem, makeUser, openTestDb } from "../../apps/web/src/lib/inventory/test-db";
+import type { OnchainConfig } from "../../apps/web/src/lib/onchain/config";
+import { exportItem, prepareOp, submitOp, type ChainDeps } from "../../apps/web/src/lib/onchain/ops";
 import {
   buyIx,
   cancelIx,
@@ -150,11 +158,79 @@ async function smoke() {
   console.log(`asset ${explorerUrl("address", asset.toBase58())}`);
 }
 
+async function e2e() {
+  if (!/devnet|localhost|127\.0\.0\.1/.test(RPC)) throw new Error("e2e is for devnet only");
+  const collection = new PublicKey(arg ?? "");
+  const auth = key("authority");
+  const deploy = key("deploy");
+  const cfg: OnchainConfig = {
+    rpcUrl: RPC,
+    cluster: "devnet",
+    collection,
+    marketProgram: program(),
+    vault: auth.publicKey,
+    treasury: auth.publicKey,
+    minRarity: 2,
+    kitLamports: 5_000_000n,
+  };
+  const deps: ChainDeps = { connection: conn, cfg, authority: auth, origin: "https://spoils.gg" };
+  const { db, pool } = openTestDb();
+  try {
+    const a = Keypair.generate();
+    const b = Keypair.generate();
+    await send(
+      [
+        SystemProgram.transfer({ fromPubkey: deploy.publicKey, toPubkey: a.publicKey, lamports: 30_000_000 }),
+        SystemProgram.transfer({ fromPubkey: deploy.publicKey, toPubkey: b.publicKey, lamports: 60_000_000 }),
+      ],
+      [deploy],
+    );
+    const ua = await makeUser(db);
+    const ub = await makeUser(db);
+    await db.update(users).set({ walletPubkey: a.publicKey.toBase58() }).where(eq(users.id, ua));
+    await db.update(users).set({ walletPubkey: b.publicKey.toBase58() }).where(eq(users.id, ub));
+    const item = await makeItem(db, { def: "rifle", rarity: 2, ownerId: ua });
+    const sign = (txB64: string, kp: Keypair) => {
+      const t = Transaction.from(Buffer.from(txB64, "base64"));
+      t.partialSign(kp);
+      return t.serialize().toString("base64");
+    };
+    const state = async () => (await db.execute<{ state: string; owner_id: string; chain_asset: string }>(sql`select state, owner_id, chain_asset from items where id = ${item}`)).rows[0]!;
+    const step = async (label: string, r: { status: string; signature: string; error?: string }) => {
+      if (r.status !== "done") throw new Error(`${label}: ${r.status} ${r.error ?? ""}`);
+      console.log(`✓ ${label}: ${show(r.signature)}`);
+    };
+
+    await step("export (mint into A's wallet)", await exportItem(db, deps, ua, item));
+    const asset = (await state()).chain_asset;
+    if ((await ownerOf(new PublicKey(asset))) !== a.publicKey.toBase58()) throw new Error("asset not in A's wallet");
+    let p = await prepareOp(db, deps, ua, "list", { asset, price: "0.01" });
+    await step("A lists for 0.01 SOL", await submitOp(db, deps, ua, p.opId, sign(p.tx, a)));
+    p = await prepareOp(db, deps, ub, "buy", { asset });
+    await step("B buys", await submitOp(db, deps, ub, p.opId, sign(p.tx, b)));
+    if ((await ownerOf(new PublicKey(asset))) !== b.publicKey.toBase58()) throw new Error("asset not in B's wallet");
+    p = await prepareOp(db, deps, ub, "import", { asset });
+    await step("B brings it into the game", await submitOp(db, deps, ub, p.opId, sign(p.tx, b)));
+    const s = await state();
+    if (s.state !== "in_stash" || s.owner_id !== ub) throw new Error(`item not in B's stash: ${JSON.stringify(s)}`);
+    console.log("  ✓ item is in B's stash in the game");
+    await step("B sends it out again (vault → wallet)", await exportItem(db, deps, ub, item));
+    p = await prepareOp(db, deps, ub, "kit", {});
+    await step("B pays 0.005 SOL for a starter kit", await submitOp(db, deps, ub, p.opId, sign(p.tx, b)));
+    const kit = await db.execute<{ n: number }>(sql`select count(*)::int as n from items where owner_id = ${ub} and origin = 'giveaway'`);
+    console.log(`  ✓ kit granted: ${kit.rows[0]!.n} items`);
+    console.log(`asset ${explorerUrl("address", asset)}`);
+  } finally {
+    await closeTestDb(pool);
+  }
+}
+
 const run: Record<string, () => Promise<void>> = {
   "create-collection": createCollection,
   "init-market": initMarket,
   status,
   smoke,
+  e2e,
 };
 const f = cmd ? run[cmd] : undefined;
 if (!f) {
