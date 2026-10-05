@@ -148,7 +148,7 @@ bar and `/economy`). Code: `apps/web/src/lib/onchain`, program `programs/spoils-
 |---|---|
 | Collection (Metaplex Core) | `GpKomKhahD93PDJB9jhz6v32Y8oMgVKcjrBWXu2kDBhX` — [Explorer (devnet)](https://explorer.solana.com/address/GpKomKhahD93PDJB9jhz6v32Y8oMgVKcjrBWXu2kDBhX?cluster=devnet) |
 | Market program `spoils_market` | `3eu7K4GkLw1CA74Z4JSadBjsxZHNpaauWTtky6u52eGB` — [Explorer (devnet)](https://explorer.solana.com/address/3eu7K4GkLw1CA74Z4JSadBjsxZHNpaauWTtky6u52eGB?cluster=devnet) |
-| Market config PDA (seed `market`) | fee 5 %, treasury = the server authority `AHgx…NPgU` |
+| Market config PDA (seed `market`) | fee 5 %, treasury = the server authority `AHgxhkN5Qu9T9nuV5yBaSU2oR6Xk7XA1QkrYRcUiPgNN` |
 | Status (2026-10-05) | Deployed and initialized on devnet; `onchain-admin.ts smoke` and `e2e` pass on devnet |
 
 How it works:
