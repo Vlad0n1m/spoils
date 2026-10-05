@@ -628,7 +628,7 @@ Superteam Earn (трек Superteam KZ × iDos) и Colosseum, дедлайн 13.1
 | Страница тайтла на idosgames.com | — | после 9.4 |
 | Прямой адрес оболочки | `https://<id>.idos.games` | после 9.3 |
 | Сайт издания | `https://idos.<домен>/play` | после 9.2 |
-| Токен (mint, Solscan) | — | после 9.5 |
+| Токен (mint, Solscan) | SPOILS / `SPOILS`, mint `2jWPc277xY4HQSnqNBJK9Md6YGaxQBwas3ofjJURidos`, https://solscan.io/token/2jWPc277xY4HQSnqNBJK9Md6YGaxQBwas3ofjJURidos | выпущен 05.10 10:02 UTC (mainnet); привязку к тайтлу проверить |
 | GitHub | — | нет remote, создать репозиторий |
 | Трейлер | https://www.youtube.com/watch?v=MunQ4wpESBk | есть |
 | Демо-видео с входом через iDos | — | снять после 9.6 |
