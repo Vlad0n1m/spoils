@@ -8,6 +8,7 @@ import { AccountWalletEntry } from "@/components/wallet/account-wallet-entry";
 import { BRAND } from "@/lib/brand";
 import { useIdosFramed } from "./use-idos-frame";
 import { EDITION_UI, isIdosAccountEmail } from "@/lib/edition";
+import { playPageUrl } from "@/lib/play-url";
 
 const item =
   "font-body flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold text-white/85 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zooa-lime";
@@ -52,7 +53,7 @@ export function AccountMenu() {
       await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     } finally {
       // A full reload drops every per-account resource (stash, me/world, tickets) at once.
-      window.location.assign("/play");
+      window.location.assign(playPageUrl());
     }
   }, []);
 
