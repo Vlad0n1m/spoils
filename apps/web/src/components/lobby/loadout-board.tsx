@@ -26,6 +26,7 @@ import { ItemCard, EmptySlot } from "./item-card";
 import { StashList } from "./stash-list";
 import { Paged } from "@/components/paged";
 import { api } from "./use-lobby";
+import { EDITION_UI } from "@/lib/edition";
 
 const SLOT_LABEL: Record<string, string> = { w1: "Weapon 1", w2: "Weapon 2", armor: "Armor", bp: "Backpack" };
 const SAVE_DEBOUNCE_MS = 600;
@@ -154,7 +155,7 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
   const pickUnique = (u: StashResponse["uniques"][number]) => {
     if (readOnly) return;
     if (u.state !== "in_stash") {
-      setToast(u.state === "listed" ? "That item is listed on the market. Cancel the lot to equip it." : "That item is locked in a raid.");
+      setToast(u.state === "listed" && EDITION_UI.market ? "That item is listed on the market. Cancel the lot to equip it." : u.state === "listed" ? "That item is not in your stash right now." : "That item is locked in a raid.");
       return;
     }
     const r = placeUnique(entries, u);
@@ -241,12 +242,21 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
             emptyHint={
               <>
                 Your stash is empty.{" "}
-                <Link
-                  href={panelHref({ panel: "inventory", tab: "stash" })}
-                  className="inline-flex min-h-11 items-center text-zooa-lime underline-offset-4 hover:underline"
-                >
-                  Buy a starter kit
-                </Link>
+                {EDITION_UI.starterKitSale ? (
+                  <Link
+                    href={panelHref({ panel: "inventory", tab: "stash" })}
+                    className="inline-flex min-h-11 items-center text-zooa-lime underline-offset-4 hover:underline"
+                  >
+                    Buy a starter kit
+                  </Link>
+                ) : (
+                  <Link
+                    href={panelHref({ panel: "shop", tab: "traders" })}
+                    className="inline-flex min-h-11 items-center text-zooa-lime underline-offset-4 hover:underline"
+                  >
+                    Buy gear from the traders
+                  </Link>
+                )}
               </>
             }
           />

@@ -17,7 +17,7 @@ import {
 } from "@extract/shared";
 import { MARKET_CURRENCY } from "@/lib/market/config";
 import { BRAND } from "@/lib/brand";
-import { EDITION_UI } from "@/lib/edition";
+import { EDITION_UI, SOL_ECONOMY } from "@/lib/edition";
 
 const min = (ms: number) => Math.round(ms / 60_000);
 const CYCLE_MIN = min(WORLD.CYCLE_MS);
@@ -30,6 +30,8 @@ const ROLL_CD_S = Math.round((ROLL.COOLDOWN_TICKS * INPUT_DT_MS) / 1000);
 const BAGS = BACKPACK_SLOTS.filter((n) => n > 0).join(" / ");
 const BREAK_PCT = Math.round(BREAK_CHANCE_ON_DEATH * 100);
 const CUR = MARKET_CURRENCY.code;
+/** Where expired valuables go: the treasury (main build), back to the lost pool in the iDos edition (no market). */
+const VALUABLES = SOL_ECONOMY ? "valuables go to the treasury" : "valuables go back to the lost pool";
 
 /** World rules, short enough to read in the lobby. Every number comes from the shared constants. */
 const STEPS: { title: string; body: string; icon: string }[] = [
@@ -94,7 +96,7 @@ export function PlayerInstructions() {
         ))}
       </ol>
       <p className="font-body rounded-xl border-2 border-black bg-amber-300 px-3 py-2 text-sm font-bold text-black">
-        Items left on the ground vanish after {GROUND_MIN} min, bodies after {CORPSE_MIN} min — valuables go to the treasury.
+        Items left on the ground vanish after {GROUND_MIN} min, bodies after {CORPSE_MIN} min — {VALUABLES}.
       </p>
     </section>
   );
@@ -155,7 +157,7 @@ export function RulesSection() {
           with real gear. Basic gear risks nothing and brings nothing back.
         </p>
         <p className="mt-2">
-          Items left on the ground vanish after {GROUND_MIN} min, bodies after {CORPSE_MIN} min — valuables go to the treasury.
+          Items left on the ground vanish after {GROUND_MIN} min, bodies after {CORPSE_MIN} min — {VALUABLES}.
         </p>
       </Block>
       <Block title="Experience">
@@ -181,9 +183,11 @@ export function RulesSection() {
       <Block title="Leaderboards">
         <p>Level (all time), Raider kills and NPC kills, for this map, this week or all time. Guests aren&apos;t ranked. No prizes: the boards are for bragging.</p>
       </Block>
-      <Link href="/economy" className="font-body block w-fit rounded-lg px-1 text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline">
-        Live economy stats →
-      </Link>
+      {EDITION_UI.economyLinks && (
+        <Link href="/economy" className="font-body block w-fit rounded-lg px-1 text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline">
+          Live economy stats →
+        </Link>
+      )}
     </div>
   );
 }
