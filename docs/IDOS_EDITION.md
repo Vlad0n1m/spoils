@@ -519,6 +519,13 @@ SOL-рынок и казна (`lib/inventory`, `api/market`), девнет по 
 - Известно: свой выстрел рисуется по эху сервера (+RTT +≤50 мс), звук — сразу; исправление — предсказание
   эффектов выстрела в клиенте.
 
+- Основная версия на том же VPS (05.10): проект `extract`, `/opt/spoils/.env` (секреты сгенерированы на сервере;
+  `CHAIN_AUTHORITY_SECRET` — из `programs/.keys/authority.json`), Solana **devnet**, тестовое пополнение
+  включено (`NEXT_PUBLIC_WALLET_DEV_TOPUP=1`, `WALLET_DEV_TOPUP_PRODUCTION=1`), гостевая игра включена, вывод
+  выключен (нет `HOT_WALLET_SECRET_B58`). https://spoils.gg и `wss://game.spoils.gg`, сертификат `spoils.gg`.
+  Ключ программы `AHgxhkN5Qu9T9nuV5yBaSU2oR6Xk7XA1QkrYRcUiPgNN` на devnet с балансом 0 — пополнить через
+  https://faucet.solana.com, иначе события остаются в очереди.
+
 ### 9.1 Тайтл и доступ агента (Влад)
 
 1. idosgames.com → дашборд издателя → создать тайтл: web3, сеть Solana. Записать **Title ID**
