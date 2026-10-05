@@ -7,6 +7,7 @@ import type { WorldEventDto, WorldEventsDto } from "@extract/shared";
 import { NEWS_POSTS } from "@/content/news";
 import { fmtLocalHm, mapLabel } from "@/lib/lobby/world-clock";
 import { timeAgo } from "@/components/lobby/use-lobby";
+import { Paged } from "@/components/paged";
 
 const FEED_LIMIT = 20;
 
@@ -63,7 +64,7 @@ function Feed() {
   }
   if (!events) {
     return (
-      <ul className="flex flex-col gap-2" aria-busy="true" aria-label="Loading the world feed">
+      <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden" aria-busy="true" aria-label="Loading the world feed">
         {Array.from({ length: 5 }, (_, i) => (
           <li key={i} className="h-16 animate-pulse rounded-2xl border-[3px] border-black/50 bg-white/[0.06] motion-reduce:animate-none" />
         ))}
@@ -74,7 +75,7 @@ function Feed() {
     return <p className="font-body rounded-2xl border-[3px] border-black bg-[#161b28]/95 p-6 text-center text-white/75">Quiet on the Outskirts. No events yet.</p>;
   }
   return (
-    <ul className="flex flex-col gap-2">
+    <Paged as="ul" minCol={320} maxCols={2} label="World feed pages">
       {events.map((e) => (
         <li key={e.id} className="flex items-start gap-3 rounded-2xl border-[3px] border-black bg-[#161b28]/95 p-3 shadow-[0_3px_0_#000]">
           <span className={clsx("mt-0.5 shrink-0 rounded-md border-2 border-black px-1.5 py-1 text-xs lg:text-[0.8125rem] tracking-[0.15em]", TAG[e.kind].tone)}>{TAG[e.kind].label}</span>
@@ -86,15 +87,16 @@ function Feed() {
           </div>
         </li>
       ))}
-    </ul>
+    </Paged>
   );
 }
 
 function PatchNotes() {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <Paged gap={12} minCol={340} maxCols={2} label="Patch note pages">
       {NEWS_POSTS.map((p) => (
-        <article key={p.id} className="toon-panel bg-[#161b28]/95 p-4 md:p-5">
+        <article key={p.id} className="paged-split toon-panel bg-[#161b28]/95 p-4 md:p-5">
           <p className="flex items-center gap-2 text-xs lg:text-[0.8125rem] tracking-[0.12em] text-white/75">
             <span className="rounded-md border-2 border-black bg-zooa-lime px-1.5 py-0.5 text-black">{p.tag.toUpperCase()}</span>
             {p.date}
@@ -107,14 +109,15 @@ function PatchNotes() {
           </ul>
         </article>
       ))}
-      <Link href="/news" className="font-body self-end text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline">
+      </Paged>
+      <Link href="/news" className="font-body mt-1 shrink-0 self-end text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline">
         All patch notes →
       </Link>
     </div>
   );
 }
 
-/** News (WORLD v6 spec §6.3, D27): the world feed from /api/world/events and the static patch notes. */
+/** News (WORLD v6 spec §6.3, D27): the world feed from /api/world/events and the static patch notes, both paged. */
 export function NewsPanel({ tab }: { tab: string }) {
-  return tab === "patch" ? <PatchNotes /> : <Feed />;
+  return <div className="flex min-h-0 flex-1 flex-col">{tab === "patch" ? <PatchNotes /> : <Feed />}</div>;
 }

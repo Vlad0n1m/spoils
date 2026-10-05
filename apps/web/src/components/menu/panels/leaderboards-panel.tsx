@@ -10,6 +10,7 @@ import { LB_PERIODS, type LbPeriod } from "@/lib/lobby/panels";
 import { LevelBadge } from "../level-badge";
 import { FounderBadge } from "../pass-tab";
 import { fmtInt } from "../xp-bar";
+import { Paged } from "@/components/paged";
 
 const REFRESH_MS = 30_000;
 const PERIOD_LABEL: Record<LbPeriod, string> = { map: "This map", week: "This week", all: "All time" };
@@ -32,7 +33,7 @@ function Rank({ rank }: { rank: number }) {
   return (
     <span
       className={clsx(
-        "grid h-9 min-w-9 shrink-0 place-items-center rounded-full border-[3px] border-black px-1 text-sm tabular-nums",
+        "grid h-9 min-w-9 shrink-0 place-items-center rounded-full border-[3px] border-black px-1 text-sm tabular-nums short:h-8 short:min-w-8",
         medal ? "text-black shadow-[0_2px_0_#000]" : "border-transparent text-white/70",
       )}
       style={medal ? { background: medal } : undefined}
@@ -63,7 +64,8 @@ async function loadBadges(nicks: readonly string[]): Promise<Badges> {
  * map / this week / all time. Public top 100 from /api/leaderboards; the caller's own rank from
  * /api/leaderboards/me, pinned at the bottom when outside the list. Refreshes every 30 s while open
  * and visible. Guests are not ranked. Rows show each player's equipped title, name colour and badge
- * frame (earn-only rewards) from /api/quests/badges.
+ * frame (earn-only rewards) from /api/quests/badges. The rows page (two columns on wide screens)
+ * instead of scrolling and open on the page with your own row.
  */
 export function LeaderboardsPanel({ board, period, onPeriod }: { board: LeaderboardBoard; period: LbPeriod; onPeriod: (p: LbPeriod) => void }) {
   const { user, sessionKind, visible } = useLobby();
@@ -120,11 +122,11 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
   const meListed = myNick !== null && rows.some((r) => r.nickname === myNick);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 short:gap-2">
       {board === "level" ? (
-        <p className="font-body text-sm text-white/75">Total XP, all time.</p>
+        <p className="font-body shrink-0 text-sm text-white/75">Total XP, all time.</p>
       ) : (
-        <div role="group" aria-label="Period" className="flex gap-1.5">
+        <div role="group" aria-label="Period" className="flex shrink-0 gap-1.5">
           {LB_PERIODS.map((p) => (
             <button
               key={p}
@@ -150,7 +152,7 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
           </button>
         </div>
       ) : !data ? (
-        <ul className="flex flex-col gap-1.5" aria-busy="true" aria-label="Loading the board">
+        <ul className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden" aria-busy="true" aria-label="Loading the board">
           {Array.from({ length: 8 }, (_, i) => (
             <li key={i} className="h-12 animate-pulse rounded-xl bg-white/[0.06] motion-reduce:animate-none" />
           ))}
@@ -158,7 +160,7 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
       ) : rows.length === 0 ? (
         <p className="font-body rounded-2xl border-[3px] border-black bg-[#161b28]/95 p-6 text-center text-white/75">{emptyText(board, effPeriod)}</p>
       ) : (
-        <ol className="flex flex-col gap-1.5">
+        <Paged as="ol" gap={6} minCol={320} maxCols={2} resetKey={`${board}:${effPeriod}`} seek={'[aria-current="true"]'} label="Leaderboard pages">
           {rows.map((r) => {
             const mine = myNick !== null && r.nickname === myNick;
             const worn = badges[r.nickname];
@@ -168,7 +170,7 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
               <li
                 key={`${r.rank}-${r.nickname}`}
                 className={clsx(
-                  "flex min-h-12 items-center gap-3 rounded-xl border-[3px] px-2 py-1",
+                  "flex min-h-12 items-center gap-3 rounded-xl border-[3px] px-2 py-1 short:min-h-10 short:gap-2 short:py-0.5",
                   mine ? "border-black bg-zooa-lime/90 text-black shadow-[0_3px_0_#000]" : "border-transparent bg-white/[0.04] text-white",
                 )}
                 aria-current={mine ? "true" : undefined}
@@ -192,11 +194,11 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
               </li>
             );
           })}
-        </ol>
+        </Paged>
       )}
 
       {data && sessionKind === "user" && !meListed && (
-        <p className="font-body sticky bottom-0 rounded-xl border-[3px] border-black bg-zooa-lime px-3 py-2.5 text-sm font-bold text-black shadow-[0_3px_0_#000]">
+        <p className="font-body shrink-0 rounded-xl border-[3px] border-black bg-zooa-lime px-3 py-2.5 text-sm font-bold short:py-1.5 short:text-xs text-black shadow-[0_3px_0_#000]">
           {me === "error"
             ? "Couldn't load your rank."
             : me
@@ -207,7 +209,7 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
         </p>
       )}
       {sessionKind === "guest" && (
-        <p className="font-body text-sm text-white/75">
+        <p className="font-body shrink-0 text-sm text-white/75">
           Guests aren&apos;t ranked —{" "}
           <Link href={`/auth/register?next=${encodeURIComponent("/play?panel=leaderboards")}`} className="font-semibold text-zooa-lime underline-offset-4 hover:underline">
             register to get on the board
@@ -216,7 +218,7 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
         </p>
       )}
       {sessionKind === "anon" && (
-        <p className="font-body text-sm text-white/75">
+        <p className="font-body shrink-0 text-sm text-white/75">
           <Link href={`/auth/register?next=${encodeURIComponent("/play?panel=leaderboards")}`} className="font-semibold text-zooa-lime underline-offset-4 hover:underline">
             Register to get ranked
           </Link>

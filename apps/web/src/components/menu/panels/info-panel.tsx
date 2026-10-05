@@ -5,24 +5,31 @@ import { QUEST } from "@extract/shared";
 import { ControlsSection, PlayerInstructions, RulesSection } from "@/components/play-instructions";
 import { useLobby } from "@/lib/lobby/lobby-context";
 import { markRewardTable, rewardTable } from "@/lib/lobby/levels";
+import { Paged } from "@/components/paged";
 
-/** Info (WORLD v6 spec §6.3): How to play, Rules (currencies, risk, XP table, levels and tasks), Controls. */
+/**
+ * Info (WORLD v6 spec §6.3): How to play, Rules (currencies, risk, XP table, levels and tasks),
+ * Controls. No scrolling: each tab flows into page-tall columns (two or three on wide screens) and
+ * pages with ‹ › / swipe.
+ */
 export function InfoPanel({ tab }: { tab: string }) {
-  if (tab === "rules") {
-    return (
-      <>
-        <AlphaRulesLink />
-        <RulesSection />
-        <LevelsInfo />
-      </>
-    );
-  }
-  if (tab === "controls") return <ControlsSection />;
   return (
-    <>
-      <AlphaRulesLink />
-      <PlayerInstructions />
-    </>
+    <Paged gap={14} colGap={18} minCol={300} maxCols={3} resetKey={tab} label="Info pages">
+      {tab === "rules" ? (
+        <>
+          <AlphaRulesLink />
+          <RulesSection />
+          <LevelsInfo />
+        </>
+      ) : tab === "controls" ? (
+        <ControlsSection />
+      ) : (
+        <>
+          <AlphaRulesLink />
+          <PlayerInstructions />
+        </>
+      )}
+    </Paged>
   );
 }
 
@@ -31,7 +38,7 @@ function AlphaRulesLink() {
   return (
     <Link
       href="/alpha"
-      className="toon-panel mb-4 flex min-h-[44px] items-center justify-between gap-3 bg-amber-300 px-4 py-2.5 text-black hover:bg-amber-200"
+      className="toon-panel flex min-h-[44px] items-center justify-between gap-3 bg-amber-300 px-4 py-2.5 text-black hover:bg-amber-200"
     >
       <span className="font-body text-sm font-semibold leading-snug">
         Alpha test: a test balance, nothing to earn, one item wipe at the end. Level, cosmetics and pass rewards stay.
@@ -47,7 +54,7 @@ function LevelsInfo() {
   const sell = stash.data?.market.sellUnlockLevel;
   return (
     // The same card as the Rules blocks above it (play-instructions Block), not a bare heading.
-    <section aria-labelledby="info-levels" className="toon-panel mt-4 flex flex-col gap-3 bg-[#161b28]/95 p-4 md:p-5">
+    <section aria-labelledby="info-levels" className="paged-split toon-panel flex flex-col gap-3 bg-[#161b28]/95 p-4 md:p-5">
       <h3 id="info-levels" className="toon-text-thin text-xl tracking-wide text-white">
         Levels and daily tasks
       </h3>

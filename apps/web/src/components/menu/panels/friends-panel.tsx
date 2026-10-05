@@ -10,6 +10,7 @@ import { fmtClockS } from "@/lib/lobby/world-clock";
 import { PRESENCE_LABEL, canInvite, inviteBlockReason, memberChip, secondsLeft, type ChipTone } from "@/lib/social/menu";
 import type { FriendDto, FriendsDto, PartyDto, PartyInviteDto, Presence } from "@/lib/social/types";
 import { playUi } from "@/game/audio/ui-sounds";
+import { Paged } from "@/components/paged";
 import { LevelBadge } from "../level-badge";
 import { useParty, type ActResult } from "../party-context";
 
@@ -81,8 +82,8 @@ export function FriendsPanel({ tab, onTab }: { tab: string; onTab: (t: string) =
 
   const party = state?.party ?? null;
   return (
-    <div className="flex flex-col gap-4">
-      <p className="font-body min-h-5 text-sm" role="status" aria-live="polite">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 short:gap-2">
+      <p className="font-body min-h-5 shrink-0 text-sm" role="status" aria-live="polite">
         {note && <span className={note.ok ? "text-zooa-lime" : "text-rose-300"}>{note.text}</span>}
       </p>
       {tab === "requests" ? (
@@ -102,15 +103,15 @@ function SocialGate({ loading, guest, tab }: { loading: boolean; guest: boolean;
   if (loading) return <div className="py-6" aria-busy="true" />;
   const back = encodeURIComponent(panelHref({ panel: "friends", tab }));
   return (
-    <div className="py-6">
-      <div className="toon-panel mx-auto max-w-xl bg-[#161b28]/95 p-8 text-center">
+    <div className="my-auto py-6 short:py-0">
+      <div className="toon-panel mx-auto max-w-xl bg-[#161b28]/95 p-8 text-center short:p-4">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/sprites/player.png" alt="" className="mx-auto h-20 w-20 object-contain" draggable={false} />
-        <h2 className="toon-text mt-4 text-3xl tracking-wide text-zooa-lime">Register to add friends</h2>
+        <img src="/sprites/player.png" alt="" className="mx-auto h-20 w-20 object-contain short:h-12 short:w-12" draggable={false} />
+        <h2 className="toon-text mt-4 text-3xl tracking-wide text-zooa-lime short:mt-2 short:text-2xl">Register to add friends</h2>
         <p className="font-body mx-auto mt-3 max-w-[44ch] text-base text-white/75">
           Friends and parties are for registered raiders: add friends by nickname, see who&apos;s online and drop in together.
         </p>
-        <div className="mt-6 flex flex-wrap justify-center gap-3">
+        <div className="mt-6 flex flex-wrap justify-center gap-3 short:mt-3">
           <Link href={`/auth/register?next=${back}`} className="toon-btn min-h-12 px-6 text-lg">
             <span className="optical-center">Register</span>
           </Link>
@@ -137,7 +138,7 @@ function LoadState({ error, onRetry }: { error: boolean; onRetry: () => void }) 
     );
   }
   return (
-    <ul className="flex flex-col gap-1.5" aria-busy="true" aria-label="Loading">
+    <ul className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden" aria-busy="true" aria-label="Loading">
       {Array.from({ length: 5 }, (_, i) => (
         <li key={i} className="h-14 animate-pulse rounded-xl bg-white/[0.06] motion-reduce:animate-none" />
       ))}
@@ -146,7 +147,7 @@ function LoadState({ error, onRetry }: { error: boolean; onRetry: () => void }) 
 }
 
 function Row({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <li className={clsx("flex min-h-14 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-white/[0.04] px-2 py-1.5", className)}>{children}</li>;
+  return <li className={clsx("flex min-h-14 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-white/[0.04] px-2 py-1.5 short:min-h-12 short:py-1", className)}>{children}</li>;
 }
 
 function Who({ nickname, level, sub, presence }: { nickname: string; level: number; sub?: string; presence?: Presence }) {
@@ -201,7 +202,7 @@ function FriendsTab({
 
   return (
     <>
-      <form onSubmit={add} className="flex gap-2">
+      <form onSubmit={add} className="flex shrink-0 gap-2">
         <label htmlFor={inputId} className="sr-only">
           Raider nickname
         </label>
@@ -215,15 +216,15 @@ function FriendsTab({
           spellCheck={false}
           maxLength={17}
           enterKeyHint="send"
-          className="font-body min-h-12 min-w-0 flex-1 rounded-xl border-[3px] border-black bg-white px-3 text-base text-black placeholder:text-black/45 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70"
+          className="font-body min-h-12 min-w-0 flex-1 rounded-xl border-[3px] border-black bg-white px-3 text-base short:min-h-10 text-black placeholder:text-black/45 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70"
         />
-        <button type="submit" disabled={busy || nick.trim().length < 2} className={clsx(BTN_LIME, "min-h-12 px-4 text-base")}>
+        <button type="submit" disabled={busy || nick.trim().length < 2} className={clsx(BTN_LIME, "min-h-12 px-4 text-base short:min-h-10")}>
           Add
         </button>
       </form>
 
       {requests > 0 && (
-        <button type="button" onClick={onRequests} className={clsx(BTN_DARK, "w-full justify-between")}>
+        <button type="button" onClick={onRequests} className={clsx(BTN_DARK, "w-full shrink-0 justify-between")}>
           <span>
             {requests} friend {requests === 1 ? "request" : "requests"} waiting
           </span>
@@ -239,14 +240,14 @@ function FriendsTab({
         </p>
       ) : (
         <>
-          <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">
+          <p className="font-body shrink-0 text-xs lg:text-[0.8125rem] text-white/70">
             {data.friends.length}/{data.limits.maxFriends} friends · {data.friends.filter((f) => f.presence !== "offline").length} online
           </p>
-          <ul className="flex flex-col gap-1.5">
+          <Paged as="ul" gap={6} minCol={340} maxCols={2} label="Friend pages">
             {data.friends.map((f) => (
               <FriendRow key={f.nickname} f={f} party={party} run={run} />
             ))}
-          </ul>
+          </Paged>
         </>
       )}
     </>
@@ -309,15 +310,15 @@ function RequestsTab({ data, error, onRetry, run }: { data: FriendsDto | null; e
   };
   if (!data) return <LoadState error={error} onRetry={onRetry} />;
   return (
-    <>
-      <section aria-labelledby="req-in" className="flex flex-col gap-2">
+    <Paged gap={6} minCol={340} maxCols={2} label="Request pages">
+      <section aria-labelledby="req-in" className="paged-group">
         <h3 id="req-in" className="text-lg tracking-wide text-white">
           Incoming
         </h3>
         {data.incoming.length === 0 ? (
           <p className="font-body text-sm text-white/75">No requests waiting.</p>
         ) : (
-          <ul className="flex flex-col gap-1.5">
+          <ul className="paged-group">
             {data.incoming.map((r) => (
               <Row key={r.nickname}>
                 <Who nickname={r.nickname} level={r.level} sub="Wants to be friends" />
@@ -334,14 +335,14 @@ function RequestsTab({ data, error, onRetry, run }: { data: FriendsDto | null; e
           </ul>
         )}
       </section>
-      <section aria-labelledby="req-out" className="flex flex-col gap-2">
-        <h3 id="req-out" className="text-lg tracking-wide text-white">
+      <section aria-labelledby="req-out" className="paged-group">
+        <h3 id="req-out" className="pt-2 text-lg tracking-wide text-white">
           Sent <span className="font-body text-sm font-normal text-white/70">{data.outgoing.length}/{data.limits.maxPending}</span>
         </h3>
         {data.outgoing.length === 0 ? (
           <p className="font-body text-sm text-white/75">Nothing sent. Add raiders from the Friends tab.</p>
         ) : (
-          <ul className="flex flex-col gap-1.5">
+          <ul className="paged-group">
             {data.outgoing.map((r) => (
               <Row key={r.nickname}>
                 <Who nickname={r.nickname} level={r.level} sub="Waiting for an answer" />
@@ -353,7 +354,7 @@ function RequestsTab({ data, error, onRetry, run }: { data: FriendsDto | null; e
           </ul>
         )}
       </section>
-    </>
+    </Paged>
   );
 }
 
@@ -381,13 +382,13 @@ function PartyTab({
   };
 
   return (
-    <>
+    <Paged gap={6} minCol={340} maxCols={2} label="Party pages">
       {invites.length > 0 && (
-        <section aria-labelledby="party-inv" className="flex flex-col gap-2">
+        <section aria-labelledby="party-inv" className="paged-group">
           <h3 id="party-inv" className="text-lg tracking-wide text-white">
             Invites
           </h3>
-          <ul className="flex flex-col gap-1.5">
+          <ul className="paged-group">
             {invites.map((i) => (
               <Row key={i.partyId} className="bg-zooa-lime/10">
                 <span className="font-body min-w-0 flex-1 text-sm text-white">
@@ -416,11 +417,11 @@ function PartyTab({
           </button>
         </div>
       ) : (
-        <section aria-labelledby="party-members" className="flex flex-col gap-2">
-          <h3 id="party-members" className="text-lg tracking-wide text-white">
+        <section aria-labelledby="party-members" className="paged-group">
+          <h3 id="party-members" className="pt-1 text-lg tracking-wide text-white">
             Your party <span className="font-body text-sm font-normal text-white/70">{party.members.length}/{party.maxSize}</span>
           </h3>
-          <ul className="flex flex-col gap-1.5">
+          <ul className="paged-group">
             {party.members.map((m) => {
               const chip = memberChip(m);
               return (
@@ -501,14 +502,18 @@ function PartyTab({
         </section>
       )}
 
-      <div className="font-body rounded-2xl border-[3px] border-black bg-[#161b28]/95 p-4 text-sm leading-relaxed text-white/75">
-        <p className="font-display mb-1 text-base tracking-wide text-white">How parties work</p>
-        <ul className="list-disc space-y-1 pl-5">
+      {/* Collapsed by default: the rules are one tap away instead of a block of text to scroll past. */}
+      <details className="font-body group rounded-2xl border-[3px] border-black bg-[#161b28]/95 px-4 text-sm leading-relaxed text-white/75">
+        <summary className="font-display flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-base tracking-wide text-white [&::-webkit-details-marker]:hidden">
+          How parties work
+          <span aria-hidden className="transition-transform group-open:rotate-90">›</span>
+        </summary>
+        <ul className="list-disc space-y-1 pb-3 pl-5">
           <li>When the leader presses PLAY, the party has {PARTY.DROP_TTL_MS / 1000} s to drop in next to them.</li>
           <li>Party members see each other on the map and can&apos;t hurt each other.</li>
           <li>Everyone locks their own loadout and keeps their own loot — nothing is shared or split.</li>
         </ul>
-      </div>
-    </>
+      </details>
+    </Paged>
   );
 }
