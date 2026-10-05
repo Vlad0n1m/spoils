@@ -14,6 +14,7 @@ import {
   itemDef,
   type CosmeticKind,
 } from "@extract/shared";
+import { solEconomyEnabled } from "../edition";
 
 /** Level badge colour (spec §6.2): 1–4 grey, 5–9 lime, 10–14 blue, 15–19 violet, 20+ gold. */
 export function levelColor(level: number): string {
@@ -41,7 +42,7 @@ export interface RewardItem {
   feature?: FeatureKind;
 }
 
-/** Market selling, a bound-trader tier, a new level badge colour. */
+/** Market selling (main build only), a bound-trader tier, a new level badge colour. */
 export type FeatureKind = "market" | "trader" | "band";
 
 /** Which feature a feature-unlock line is ("Market selling unlocked", "Traders tier 2: …", "Level badge turns lime"). */
@@ -65,10 +66,20 @@ export function cosmeticItem(id: string): RewardItem | null {
   return d ? { kind: d.kind, label: cosmeticLabel(id), id, ...(d.hex ? { hex: d.hex } : {}) } : null;
 }
 
+/**
+ * Level that unlocks market selling, as the reward lines show it: MARKET.SELL_UNLOCK_LEVEL in the
+ * main build, null in the iDos edition (no market, docs/IDOS_EDITION.md §3.5), so no level promises
+ * "Market selling unlocked" there. A level passed by the caller (the server's demo rule, from
+ * /api/stash) wins; `undefined` means "use this default".
+ */
+export function defaultSellUnlockLevel(sol: boolean = solEconomyEnabled()): number | null {
+  return sol ? MARKET.SELL_UNLOCK_LEVEL : null;
+}
+
 /** Feature unlocks of exactly `level`: market selling, a new bound-trader tier with offers, badge colour. */
-function featureUnlocks(l: number, sellUnlockLevel: number): string[] {
+function featureUnlocks(l: number, sellUnlockLevel: number | null): string[] {
   const out: string[] = [];
-  if (l === sellUnlockLevel) out.push("Market selling unlocked");
+  if (sellUnlockLevel !== null && l === sellUnlockLevel) out.push("Market selling unlocked");
   if (l > 1) {
     const tier = boundTraderLevel(l);
     if (tier > boundTraderLevel(l - 1)) {
@@ -89,7 +100,7 @@ function featureUnlocks(l: number, sellUnlockLevel: number): string[] {
 }
 
 /** Everything reaching `level` gives: feature unlocks first, then cosmetics (LEVEL_REWARDS). */
-export function levelRewards(level: number, sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL): RewardItem[] {
+export function levelRewards(level: number, sellUnlockLevel: number | null = defaultSellUnlockLevel()): RewardItem[] {
   const l = Math.floor(level);
   const out: RewardItem[] = featureUnlocks(l, sellUnlockLevel).map((label) => ({ kind: "feature" as const, label, feature: featureKindOf(label) }));
   for (const id of LEVEL_REWARDS.find((r) => r.level === l)?.ids ?? []) {
@@ -100,19 +111,19 @@ export function levelRewards(level: number, sellUnlockLevel: number = MARKET.SEL
 }
 
 /** What reaching `level` unlocks, as lines for the LEVEL N window (empty for most levels). */
-export function levelUnlocks(level: number, sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL): string[] {
+export function levelUnlocks(level: number, sellUnlockLevel: number | null = defaultSellUnlockLevel()): string[] {
   return levelRewards(level, sellUnlockLevel).map((r) => r.label);
 }
 
 /** Unlocks of every level in (from, to]. */
-export function unlocksBetween(from: number, to: number, sellUnlockLevel?: number): string[] {
+export function unlocksBetween(from: number, to: number, sellUnlockLevel?: number | null): string[] {
   const out: string[] = [];
   for (let l = Math.floor(from) + 1; l <= Math.floor(to); l++) out.push(...levelUnlocks(l, sellUnlockLevel));
   return out;
 }
 
 /** Rewards of every level in (from, to], as items (the LEVEL N window's cards). */
-export function rewardsBetween(from: number, to: number, sellUnlockLevel?: number): RewardItem[] {
+export function rewardsBetween(from: number, to: number, sellUnlockLevel?: number | null): RewardItem[] {
   const out: RewardItem[] = [];
   for (let l = Math.floor(from) + 1; l <= Math.floor(to); l++) out.push(...levelRewards(l, sellUnlockLevel));
   return out;
@@ -122,7 +133,7 @@ export function rewardsBetween(from: number, to: number, sellUnlockLevel?: numbe
 export const REWARD_TABLE_TOP = Math.max(...LEVEL_REWARDS.map((r) => r.level));
 
 /** Every level from 2 to REWARD_TABLE_TOP that gives something, in order (the Rewards view). */
-export function rewardTable(sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL): Array<{ level: number; items: RewardItem[] }> {
+export function rewardTable(sellUnlockLevel: number | null = defaultSellUnlockLevel()): Array<{ level: number; items: RewardItem[] }> {
   const out: Array<{ level: number; items: RewardItem[] }> = [];
   for (let l = 2; l <= REWARD_TABLE_TOP; l++) {
     const items = levelRewards(l, sellUnlockLevel);
@@ -132,7 +143,7 @@ export function rewardTable(sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL):
 }
 
 /** The next level above `level` that gives something, or null past the table. */
-export function nextReward(level: number, sellUnlockLevel: number = MARKET.SELL_UNLOCK_LEVEL): { level: number; items: RewardItem[] } | null {
+export function nextReward(level: number, sellUnlockLevel: number | null = defaultSellUnlockLevel()): { level: number; items: RewardItem[] } | null {
   return rewardTable(sellUnlockLevel).find((r) => r.level > Math.floor(level)) ?? null;
 }
 
