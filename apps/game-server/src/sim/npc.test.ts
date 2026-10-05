@@ -7,12 +7,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CONTAINER_STATE, INPUT_HZ, ITEM_FLAG, MARAUDER, NPC, SERVER_TICK_MS, SOLID, hasLineOfSight, mulberry32, rollMarauderKit, type NpcPost } from "@extract/shared";
+import { BOSS_AI, CONTAINER_STATE, INPUT_HZ, ITEM_FLAG, MARAUDER, NPC, NPC_PERCEPTION, NPC_SIGHT_ALERT, NPC_SIGHT_CALM, SERVER_TICK_MS, phoneViewHalf, SOLID, hasLineOfSight, mulberry32, rollMarauderKit, type NpcPost } from "@extract/shared";
 import { damagePlayer } from "./combat.js";
 import { spawnGroundItem } from "./inventory.js";
 import { makeItem } from "./items.js";
 import type { Match } from "./match.js";
-import type { NpcBrain } from "./npc.js";
+import { npcAimSpread, npcMayFire, type NpcBrain } from "./npc.js";
 import { WORLD_T0, addExtract, advance, enter, ids, jump, npcOpts, npcsOf, rtOf, run, testMap, testMatch, testPost, worldMatch, type TestMapOpts, type Timed } from "./test-utils.js";
 import type { PlayerRuntime } from "./types.js";
 
@@ -51,18 +51,19 @@ test("NPC input accumulator: exactly INPUT_HZ samples per second while awake, al
 test("peace: an NPC never starts a fight with a human outside its post, but returns fire at a recent attacker", () => {
   const { m, h, human, npcs } = arena([testPost(0, 1500, 1500)]);
   const npc = npcs[0]!;
-  // Outside the low leash (500) and beyond NPC.PEACE_CLOSE_PX, inside sight and pistol range.
-  human.pub.x = 1500;
-  human.pub.y = 2160;
+  // Outside the low leash (500) and beyond NPC.PEACE_CLOSE_PX, inside the calm sight ellipse
+  // (NPC_SIGHT_CALM rx ≈ 635: east of the post) and pistol range.
+  human.pub.x = 2120;
+  human.pub.y = 1500;
   human.pub.hp = 1e6;
-  brain(m, npc).tune({ aim: Math.PI / 2, rollChance: 0 });
+  brain(m, npc).tune({ aim: 0, rollChance: 0 });
   const calm = run(m, 8000);
   assert.ok(m.vision.sees(npc.rosterIndex, human.rosterIndex), "it sees the human");
   assert.equal(shotsOf(calm, [npc]).length, 0, "no fire in the peace window");
   assert.notEqual(brain(m, npc).state, "combat");
   // The human shoots first: the NPC answers at once (still inside the peace window).
   assert.ok(m.clock < NPC.PEACE_MS);
-  const ev = run(m, 4000, { [h]: { aim: -Math.PI / 2, fire: true } });
+  const ev = run(m, 4000, { [h]: { aim: Math.PI, fire: true } });
   assert.ok(npc.lastHitAt > 0, "the human hit it");
   assert.ok(shotsOf(ev, [npc]).length > 0, "it returns fire");
 });
@@ -70,10 +71,10 @@ test("peace: an NPC never starts a fight with a human outside its post, but retu
 test("peace: a human walking into the post (inside the leash) is fought even in the peace window", () => {
   const { m, human, npcs } = arena([testPost(0, 1500, 1500)]);
   const npc = npcs[0]!;
-  human.pub.x = 1500;
-  human.pub.y = 1850;
+  human.pub.x = 1850;
+  human.pub.y = 1500;
   human.pub.hp = 1e6;
-  brain(m, npc).tune({ aim: Math.PI / 2, rollChance: 0 });
+  brain(m, npc).tune({ aim: 0, rollChance: 0 });
   const ev = run(m, 4000);
   assert.ok(m.clock < NPC.PEACE_MS);
   assert.ok(shotsOf(ev, [npc]).length > 0, "an intruder is shot at");
@@ -84,10 +85,10 @@ test("engage: the first shot comes ≥ reactMs[0] after the first sighting; neve
   const { m, human, npcs } = arena([testPost(0, 1500, 1500)]);
   const npc = npcs[0]!;
   skipPeace(m);
-  human.pub.x = 1500;
-  human.pub.y = 1900;
+  human.pub.x = 1900;
+  human.pub.y = 1500;
   human.pub.hp = 1e6;
-  brain(m, npc).tune({ aim: Math.PI / 2, rollChance: 0 });
+  brain(m, npc).tune({ aim: 0, rollChance: 0 });
   let seenAt = -1;
   let shotAt = -1;
   for (let t = 0; t < 4000 && shotAt < 0; t += SERVER_TICK_MS) {
@@ -162,21 +163,21 @@ test("chase inside leash + CHASE_EXTRA, search the last-known spot, then return 
   assert.equal(npc.stats.containersSearched + npc.stats.corpsesSearched, 0);
 });
 
-test("alerted sight: an NPC shot at sees to NPC.VIEW_RANGE_ALERT (calm cap NPC.VIEW_RANGE_CAP); a muzzle flash beats the calm cap", () => {
+test("alerted sight: an NPC shot at sees inside NPC_SIGHT_ALERT (calm: NPC_SIGHT_CALM), both inside a landscape phone screen", () => {
   const { m, human, npcs } = arena([testPost(0, 1500, 1500, { tier: 2 })]);
   const npc = npcs[0]!;
   skipPeace(m);
-  human.pub.x = 1500 + 800;
+  human.pub.x = 1500 + 720;
   human.pub.y = 1500;
   human.pub.hp = 1e6;
   brain(m, npc).tune({ aim: 0, rollChance: 0 });
   run(m, 1000);
-  assert.ok(!m.vision.sees(npc.rosterIndex, human.rosterIndex), "calm: 800 px is beyond the 650 px cap");
+  assert.ok(!m.vision.sees(npc.rosterIndex, human.rosterIndex), `calm: 720 px is beyond the calm rx ${NPC_SIGHT_CALM.rx}`);
   assert.equal(npc.viewCap, NPC.VIEW_RANGE_CAP);
   damagePlayer(m, npc, 5, human, "rifle", npc.pub.x, npc.pub.y);
   run(m, NPC.THINK_MS + 2 * SERVER_TICK_MS);
   assert.equal(npc.viewCap, NPC.VIEW_RANGE_ALERT);
-  assert.ok(m.vision.sees(npc.rosterIndex, human.rosterIndex), "alerted: seen at 800 px (alert cap 850)");
+  assert.ok(m.vision.sees(npc.rosterIndex, human.rosterIndex), `alerted: seen at 720 px (alert rx ${NPC_SIGHT_ALERT.rx})`);
 });
 
 test("cover: hit by a human beyond its sight, an NPC leaves the line of fire inside its chase radius, never fires blind, then returns to its post", () => {
@@ -218,16 +219,16 @@ test("outranged: a shotgun marauder carries a FREE pistol sidearm and switches t
   assert.equal(w2?.def, "pistol");
   assert.ok(w2!.flags & ITEM_FLAG.FREE, "the sidearm is FREE (never in a corpse)");
   skipPeace(m);
-  human.pub.x = 1500;
-  human.pub.y = 1500 + 620;
+  human.pub.x = 1500 + 620;
+  human.pub.y = 1500;
   human.pub.hp = 1e6;
-  brain(m, npc).tune({ aim: Math.PI / 2, rollChance: 0 });
+  brain(m, npc).tune({ aim: 0, rollChance: 0 });
   damagePlayer(m, npc, 1, human, "pistol", npc.pub.x, npc.pub.y);
   let shots = 0;
   for (let t = 0; t < 6000; t += SERVER_TICK_MS) {
     // The human backs off to keep ~620 px (beyond shotgun range 420).
     const d = Math.hypot(npc.pub.x - human.pub.x, npc.pub.y - human.pub.y);
-    shots += shotsOf(run(m, SERVER_TICK_MS, { [ids(m)[0]!]: { mx: 0, my: d < 600 ? 1 : 0, aim: -Math.PI / 2 } }), [npc]).length;
+    shots += shotsOf(run(m, SERVER_TICK_MS, { [ids(m)[0]!]: { mx: d < 600 ? 1 : 0, my: 0, aim: Math.PI } }), [npc]).length;
   }
   assert.equal(npc.self.active, "w2", "switched to the pistol");
   assert.ok(shots > 0, "it fires back at 600+ px");
@@ -298,10 +299,10 @@ test("an NPC never opens a container, picks up an item or extracts (200 seeds, i
     spawnGroundItem(m, makeItem("medkit", { qty: 1 }), post.x + 20, post.y);
     addExtract(m, post.x, post.y, 0, 0, 200);
     skipPeace(m, 0);
-    human.pub.x = post.x;
-    human.pub.y = post.y + 450;
+    human.pub.x = post.x + 450;
+    human.pub.y = post.y;
     human.pub.hp = 1e6;
-    const ev = run(m, 8000, { [h]: { aim: -Math.PI / 2, fire: seed % 2 === 0 } });
+    const ev = run(m, 8000, { [h]: { aim: Math.PI, fire: seed % 2 === 0 } });
     if (shotsOf(ev, npcs).length > 0) fights++;
     assert.equal(m.containers.stateOf(0), CONTAINER_STATE.UNTOUCHED, `seed ${seed}: container untouched`);
     assert.equal(ev.filter((e) => e.type === "chest").length, 0);
@@ -322,14 +323,128 @@ test("T13 peace per human (WORLD v6): a human entering at minute 20 next to a sq
   assert.equal(m.clock, wall.t - WORLD_T0);
   const h = enter(m, "late");
   // Outside the low leash (500) and beyond NPC.PEACE_CLOSE_PX, inside sight and pistol range.
-  h.pub.x = h.prevX = 1500;
-  h.pub.y = h.prevY = 2160;
+  h.pub.x = h.prevX = 2120;
+  h.pub.y = h.prevY = 1500;
   h.pub.hp = 1e6;
-  brain(m, npc).tune({ aim: Math.PI / 2, rollChance: 0 });
+  brain(m, npc).tune({ aim: 0, rollChance: 0 });
   const calm = advance(m, wall, NPC.PEACE_MS - 1000);
   assert.ok(m.vision.sees(npc.rosterIndex, h.rosterIndex), "it sees the human");
   assert.equal(shotsOf(calm, [npc]).length, 0, "no fire inside the entrant's own peace window");
   const ev = advance(m, wall, 6000);
   assert.ok(m.clock - h.enteredAtMs > NPC.PEACE_MS);
   assert.ok(shotsOf(ev, [npc]).length > 0, "fired at once the window is over");
+});
+
+// ---------------------------------------------------------------- fair perception (NPC_PERCEPTION)
+
+test("fair perception: the NPC sight ellipses fit inside a landscape phone's screen, below the old radial caps", () => {
+  const half = phoneViewHalf();
+  assert.ok(Math.abs(half.hx - 882.6) < 1 && Math.abs(half.hy - 407.9) < 1, `phone half-extent ${half.hx.toFixed(1)} × ${half.hy.toFixed(1)}`);
+  for (const e of [NPC_SIGHT_CALM, NPC_SIGHT_ALERT]) {
+    assert.ok(e.rx < half.hx * 0.95 && e.ry < half.hy * 0.95, `ellipse ${e.rx} × ${e.ry} keeps a margin inside the phone view`);
+  }
+  assert.ok(NPC_SIGHT_CALM.rx <= NPC.VIEW_RANGE_CAP && NPC_SIGHT_ALERT.rx <= NPC.VIEW_RANGE_ALERT, "never farther than before");
+  assert.ok(NPC_SIGHT_CALM.rx < NPC_SIGHT_ALERT.rx && NPC_SIGHT_CALM.ry < NPC_SIGHT_ALERT.ry);
+  // Every role's first-sighting delay respects the floor; long range is less accurate than before.
+  for (const r of [...Object.values(MARAUDER).map((d) => d.reactMs), BOSS_AI.REACT_MS]) assert.ok(r[1] >= NPC_PERCEPTION.REACT_MIN_MS);
+  assert.ok(npcAimSpread(700, 0) > 0.1 + 0.7 * 0.12 + 0.04, `spread at 700 px ${npcAimSpread(700, 0).toFixed(3)}`);
+  assert.equal(npcAimSpread(300, 0), 0.1 + 0.3 * 0.12, "unchanged up close");
+});
+
+test("fair perception: the fire gate needs a raw line of sight (walls block, windows do not) inside the alert ellipse", () => {
+  const { m } = arena([], { walls: [{ x: 1700, y: 1400, w: 40, h: 200 }], windows: [{ x: 1700, y: 1900, w: 20, h: 200 }] });
+  const from = { x: 1500, y: 1500 };
+  assert.equal(npcMayFire(m.idx, from, { x: 1900, y: 1500 }), false, "a wall between");
+  assert.equal(npcMayFire(m.idx, { x: 1500, y: 2000 }, { x: 1900, y: 2000 }), true, "a window is see-through");
+  assert.equal(npcMayFire(m.idx, from, { x: 1500 + 300, y: 1200 }), true, "clear, inside the ellipse");
+  assert.equal(npcMayFire(m.idx, from, { x: 1500, y: 1500 + NPC_SIGHT_ALERT.ry + 20 }), false, "south beyond the ellipse (still on a desktop screen)");
+  assert.equal(npcMayFire(m.idx, { x: 1000, y: 3700 }, { x: 1000 + NPC_SIGHT_ALERT.rx + 20, y: 3700 }), false, "east beyond the ellipse");
+});
+
+test("fair perception: a human the phone would not show (beyond the ellipse) is never acquired or shot, even when they hit the NPC or fire", () => {
+  const { m, h, human, npcs } = arena([testPost(0, 1500, 1500, { tier: 3 })]);
+  const npc = npcs[0]!;
+  skipPeace(m);
+  // 400 px south: inside the old 650 / 850 px circles, beyond the phone's ≈ 408 px half-height margin.
+  human.pub.x = 1500;
+  human.pub.y = 1500 + NPC_SIGHT_ALERT.ry + 30;
+  human.pub.hp = 1e6;
+  brain(m, npc).tune({ aim: Math.PI / 2, rollChance: 0 });
+  let shots = 0;
+  let seen = false;
+  for (let t = 0; t < 6000; t += SERVER_TICK_MS) {
+    if (t % 1000 === 0) damagePlayer(m, npc, 1, human, "rifle", npc.pub.x, npc.pub.y);
+    // Keep the human outside the ellipse whatever the NPC does (it may step toward the threat).
+    const dy = Math.max(human.pub.y - npc.pub.y, NPC_SIGHT_ALERT.ry + 30);
+    human.pub.x = npc.pub.x;
+    human.pub.y = npc.pub.y + dy;
+    shots += shotsOf(run(m, SERVER_TICK_MS, { [h]: { aim: -Math.PI / 2, fire: t % 400 === 0 } }), [npc]).length;
+    if (m.vision.sees(npc.rosterIndex, human.rosterIndex)) seen = true;
+  }
+  assert.ok(npc.lastHitAt > 0, "the human hit it");
+  assert.equal(seen, false, "never in its vision row (muzzle flash included)");
+  assert.equal(shots, 0, "never fired");
+});
+
+test("fair perception: no shot through a wall after line of sight breaks; the NPC searches the last-known spot", () => {
+  // A long wall east of the post; the human peeks from its north end, then steps behind it.
+  const { m, h, human, npcs } = arena([testPost(0, 1500, 1500, { tier: 2 })], { walls: [{ x: 1800, y: 1450, w: 40, h: 2000 }] });
+  const npc = npcs[0]!;
+  skipPeace(m);
+  human.pub.x = 1950;
+  human.pub.y = 1300;
+  human.pub.hp = 1e6;
+  brain(m, npc).tune({ aim: -0.4, rollChance: 0 });
+  let first = 0;
+  for (let t = 0; t < 4000 && first === 0; t += SERVER_TICK_MS) first += shotsOf(run(m, SERVER_TICK_MS), [npc]).length;
+  assert.ok(first > 0, "it fought the visible human");
+  // Behind the wall (and keeps hitting the NPC through a gap it cannot see: still no return fire).
+  human.pub.x = 2000;
+  human.pub.y = 1900;
+  let blind = 0;
+  for (let t = 0; t < 5000; t += SERVER_TICK_MS) {
+    if (t % 1000 === 0) damagePlayer(m, npc, 1, human, "rifle", npc.pub.x, npc.pub.y);
+    for (const e of shotsOf(run(m, SERVER_TICK_MS, { [h]: { aim: Math.PI } }), [npc])) {
+      // A shot is only fair with a raw line of sight at that moment.
+      if (!hasLineOfSight(m.idx, npc.pub.x, npc.pub.y, human.pub.x, human.pub.y, SOLID.SIGHT)) blind++;
+      void e;
+    }
+  }
+  assert.equal(blind, 0, "never fired without a line of sight");
+  assert.ok(["search", "cover", "combat"].includes(brain(m, npc).state), `state ${brain(m, npc).state}`);
+});
+
+test("fair perception: a peek re-sighting the same enemy still waits NPC_PERCEPTION.REACQUIRE_MS before the next shot", () => {
+  const { m, human, npcs } = arena([testPost(0, 1500, 1500, { tier: 2 })]);
+  const npc = npcs[0]!;
+  skipPeace(m);
+  human.pub.hp = 1e6;
+  brain(m, npc).tune({ aim: 0, rollChance: 0 });
+  // Visible north-east, until the first shot.
+  const peek = () => {
+    human.pub.x = npc.pub.x + 350;
+    human.pub.y = npc.pub.y - 150;
+  };
+  peek();
+  let first = 0;
+  for (let t = 0; t < 4000 && first === 0; t += SERVER_TICK_MS) {
+    peek();
+    first += shotsOf(run(m, SERVER_TICK_MS), [npc]).length;
+  }
+  assert.ok(first > 0, "first engagement");
+  // Out of sight for ~1 s (far away, inside the enemy memory), then back in view.
+  human.pub.x = 4200;
+  human.pub.y = 4200;
+  run(m, 1000);
+  assert.ok(!m.vision.sees(npc.rosterIndex, human.rosterIndex));
+  peek();
+  let seenAt = -1;
+  let shotAt = -1;
+  for (let t = 0; t < 3000 && shotAt < 0; t += SERVER_TICK_MS) {
+    m.step(SERVER_TICK_MS);
+    if (seenAt < 0 && m.vision.sees(npc.rosterIndex, human.rosterIndex)) seenAt = m.clock;
+    for (const e of m.drainEvents()) if (e.type === "shot" && e.src === npc.rosterIndex && shotAt < 0) shotAt = m.clock;
+  }
+  assert.ok(seenAt >= 0 && shotAt >= 0, `seen ${seenAt}, shot ${shotAt}`);
+  assert.ok(shotAt - seenAt >= NPC_PERCEPTION.REACQUIRE_MS[0], `re-acquire ${shotAt - seenAt} ms ≥ ${NPC_PERCEPTION.REACQUIRE_MS[0]}`);
 });

@@ -55,7 +55,9 @@ export const NPC = {
   PEACE_CLOSE_PX: 600,
   /**
    * NPC sight cap while calm (was VISION.BOT_RANGE_CAP, 800): a careful human gets the first look.
-   * Alpha softening (2026-10): 800 → 650.
+   * Alpha softening (2026-10): 800 → 650. Fair perception (2026-10): the sight shape is now the
+   * NPC_SIGHT_CALM / NPC_SIGHT_ALERT ellipse (≤ these radii); these two stay as the calm / alert
+   * flag values of PlayerRuntime.viewCap.
    */
   VIEW_RANGE_CAP: 650,
   /**
@@ -121,6 +123,87 @@ export const NPC = {
    */
   CHATTER: { ENABLED: true, EVERY_MS: [20_000, 40_000] as const, RADIUS_PX: 900 },
 } as const;
+
+/**
+ * Fair NPC perception (2026-10, Vlad: "NPCs see you and shoot you while you cannot see them").
+ * Every tunable of who an NPC may see / shoot lives here; all NPC roles (marauders, guards, bosses)
+ * use the same rules.
+ *
+ * Sight shape: the camera keeps REF_VIEW_W × REF_VIEW_H of world area on every screen (renderer.ts
+ * baseZoom), so the smallest view is the landscape phone (PHONE_W × PHONE_H CSS px): ≈ 1765 × 816
+ * world px, half-extent ≈ 883 × 408. An NPC sees a human only inside an ellipse with those
+ * half-axes × ALERT_FRAC (alerted / under fire / a muzzle flash) or × CALM_FRAC (calm), so the
+ * human always has the NPC on screen first — on a phone too. Weather / night shrink it further
+ * (VISION.RANGE × env), walls / fences block it (SIGHT rays, shared canSee).
+ *
+ * Firing: only at a target inside the current sight ellipse with a raw line of sight (SIGHT mask,
+ * not the 300 ms published hysteresis) and a clear line of fire (SHOT mask) at this decision. A
+ * first sighting waits the role's reactMs (never below REACT_MIN_MS); a re-sighting of the same
+ * enemy within the NPC's enemy memory waits REACQUIRE_MS. Lost line of sight = search the
+ * last-known position, never shooting through the wall. Being hit alerts (widened ellipse, cover,
+ * squad search) but never lets it fire without a line of sight.
+ */
+export const NPC_PERCEPTION = {
+  REF_VIEW_W: 1600,
+  REF_VIEW_H: 900,
+  PHONE_W: 844,
+  PHONE_H: 390,
+  /** Was a 850 px circle (alerted) and VISION.RANGE 1000 for a muzzle flash. */
+  ALERT_FRAC: 0.9,
+  /** Was a 650 px circle. */
+  CALM_FRAC: 0.72,
+  /** Floor of the first-sighting reaction delay (every role, boss phase 2 included). */
+  REACT_MIN_MS: 400,
+  /** Re-sighting the same enemy within ENEMY_MEMORY_MS (was 0: it fired at once after a peek). */
+  REACQUIRE_MS: [250, 400] as readonly [number, number],
+  ENEMY_MEMORY_MS: 3000,
+  /** Aim error half-width (rad, × sloppiness): base + per 1000 px + a moving target at full speed… */
+  AIM_ERR_BASE: 0.1,
+  AIM_ERR_PER_1000PX: 0.12,
+  AIM_ERR_MOVING: 0.1,
+  /** …plus this per 1000 px beyond AIM_ERR_FAR_FROM_PX (long range a little less accurate; new). */
+  AIM_ERR_FAR_FROM_PX: 400,
+  AIM_ERR_FAR_PER_1000PX: 0.15,
+} as const;
+
+/** World half-extent of a landscape phone screen (the smallest in-match view). */
+export function phoneViewHalf(): { hx: number; hy: number } {
+  const P = NPC_PERCEPTION;
+  const zoom = Math.sqrt((P.PHONE_W * P.PHONE_H) / (P.REF_VIEW_W * P.REF_VIEW_H));
+  return { hx: P.PHONE_W / zoom / 2, hy: P.PHONE_H / zoom / 2 };
+}
+
+/** NPC sight ellipse (world-axis half-axes, px). */
+export interface NpcSightEllipse {
+  rx: number;
+  ry: number;
+}
+
+const PHONE_HALF = phoneViewHalf();
+/** Alerted / under fire / muzzle flash: ≈ 794 × 367 px. */
+export const NPC_SIGHT_ALERT: NpcSightEllipse = {
+  rx: Math.round(PHONE_HALF.hx * NPC_PERCEPTION.ALERT_FRAC),
+  ry: Math.round(PHONE_HALF.hy * NPC_PERCEPTION.ALERT_FRAC),
+};
+/** Calm: ≈ 635 × 294 px. */
+export const NPC_SIGHT_CALM: NpcSightEllipse = {
+  rx: Math.round(PHONE_HALF.hx * NPC_PERCEPTION.CALM_FRAC),
+  ry: Math.round(PHONE_HALF.hy * NPC_PERCEPTION.CALM_FRAC),
+};
+
+/** Offset (dx, dy) from the NPC to its target lies inside the ellipse. */
+export function inSightEllipse(e: NpcSightEllipse, dx: number, dy: number): boolean {
+  const u = dx / e.rx, v = dy / e.ry;
+  return u * u + v * v <= 1;
+}
+
+/** Distance to the ellipse edge in the direction of (dx, dy) (its rx for a zero offset). */
+export function sightReach(e: NpcSightEllipse, dx: number, dy: number): number {
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-9) return e.rx;
+  const c = dx / d, s = dy / d;
+  return 1 / Math.sqrt((c * c) / (e.rx * e.rx) + (s * s) / (e.ry * e.ry));
+}
 
 /** Bit flags every NPC gear item carries (weapon, armor, backpack, reserve ammo): FREE. */
 export const NPC_GEAR_FLAGS = ITEM_FLAG.FREE;

@@ -12,8 +12,9 @@
  *
  * The published matrix is the single truth for every consumer: StateView rows (views.ts), event
  * audiences (audience.ts), visible-vs-hidden sound entries (sound.ts) and NPC sight (npc.ts).
- * NPC viewers use NPC.VIEW_RANGE_CAP while calm and NPC.VIEW_RANGE_ALERT while alerted / under fire
- * (PlayerRuntime.viewCap; a muzzle flash is seen to VISION.RANGE either way), look at humans only (NPCs never fight each other, so
+ * NPC viewers see only inside NPC_SIGHT_CALM while calm and NPC_SIGHT_ALERT while alerted / under
+ * fire (PlayerRuntime.viewCap; a muzzle flash widens a calm row to NPC_SIGHT_ALERT, never beyond: fair
+ * perception, a human on a landscape phone has the NPC on screen first), look at humans only (NPCs never fight each other, so
  * NPC → NPC pairs are never computed) and skip their row entirely while dormant.
  *
  * Cost (32 players clustered on the Steppe): well under the 0.2 ms budget — most pairs are rejected
@@ -24,6 +25,8 @@ import {
   COS_SERVER_CONE,
   INPUT_DT_MS,
   NPC,
+  NPC_SIGHT_ALERT,
+  NPC_SIGHT_CALM,
   VISION,
   bushIndexAt,
   canSee,
@@ -109,8 +112,9 @@ export class VisionSystem {
     const clock = m.clock;
     const rangeMult = visionRangeMult(envNow(m).vis);
     const human: VisionEnv = { idx: m.idx, rangeMult };
-    const npcCalm: VisionEnv = { idx: m.idx, rangeMult, rangeCap: NPC.VIEW_RANGE_CAP };
-    const npcAlert: VisionEnv = { idx: m.idx, rangeMult, rangeCap: NPC.VIEW_RANGE_ALERT };
+    // Fair perception (NPC_PERCEPTION): NPC rows see only inside a landscape phone's screen ellipse.
+    const npcCalm: VisionEnv = { idx: m.idx, rangeMult, rangeCap: NPC.VIEW_RANGE_CAP, sight: NPC_SIGHT_CALM, flashSight: NPC_SIGHT_ALERT };
+    const npcAlert: VisionEnv = { idx: m.idx, rangeMult, rangeCap: NPC.VIEW_RANGE_ALERT, sight: NPC_SIGHT_ALERT, flashSight: NPC_SIGHT_ALERT };
     const rts = m.allRuntimes();
     // WORLD v6: capacity is fixed (WORLD.MAX_RUNTIMES_PER_SHARD) and runtimes are appended as
     // entries arrive; slots past the last runtime are never on the map (perf only).

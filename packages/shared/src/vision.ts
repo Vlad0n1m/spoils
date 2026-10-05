@@ -83,6 +83,13 @@ export interface VisionEnv {
   rangeMult: number;
   /** NPC viewers: NPC.VIEW_RANGE_CAP (calm) or NPC.VIEW_RANGE_ALERT (alerted); a muzzle flash ignores it. */
   rangeCap?: number;
+  /**
+   * NPC viewers (fair perception, npc.ts NPC_PERCEPTION): the target must also lie inside this
+   * world-axis ellipse (inside a landscape phone's screen around the target), and a muzzle flash
+   * widens it only to `flashSight` — never to the full VISION.RANGE.
+   */
+  sight?: { rx: number; ry: number };
+  flashSight?: { rx: number; ry: number };
 }
 
 /** Environment vis → range multiplier, clamped to [MIN_RANGE_MULT, 1]. */
@@ -100,8 +107,15 @@ export function canSee(env: VisionEnv, v: VisionViewer, t: VisionTarget): boolea
   let R = VISION.RANGE * env.rangeMult;
   if (env.rangeCap !== undefined) R = Math.min(R, env.rangeCap);
   // Muzzle flash: a shooter is seen to the full VISION.RANGE by every viewer — weather / night and
-  // the NPC sight cap included (v5 review fix: the cap used to hide a firing human from NPCs).
-  if (t.sinceShotMs < VISION.FLASH_MS) R = VISION.RANGE;
+  // the NPC sight cap included (v5 review fix: the cap used to hide a firing human from NPCs). An
+  // NPC viewer still only sees it inside its flash ellipse (fair perception).
+  const flash = t.sinceShotMs < VISION.FLASH_MS;
+  if (flash) R = VISION.RANGE;
+  const ell = flash ? env.flashSight ?? env.sight : env.sight;
+  if (ell) {
+    const u = dx / ell.rx, w = dy / ell.ry;
+    if (u * u + w * w > 1) return false;
+  }
   if (t.inBush && t.sinceShotMs > VISION.SHOT_REVEAL_MS) {
     R = t.stillMs >= VISION.BUSH_STILL_MS ? Math.min(R, VISION.BUSH_REVEAL_R) : R * VISION.BUSH_MOVING_RANGE_MULT;
   }

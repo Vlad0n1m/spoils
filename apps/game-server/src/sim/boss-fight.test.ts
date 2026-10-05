@@ -113,7 +113,8 @@ test("phase 2 at half HP: once, announced only to the humans in the arena; a med
 
 test("Foreman: telegraphs THROW for TELL_MS, then a grenade lands at the telegraphed spot (server path); stock is FREE and finite", () => {
   const { m, wall, boss } = fight("foreman");
-  const h = raider(m, "h", 2400, 2780);
+  // East of the boss: inside its calm sight ellipse (NPC_SIGHT_CALM, wider than tall).
+  const h = raider(m, "h", 2780, 2400);
   h.pub.hp = 1e6;
   h.pub.maxHp = 1e6;
   let tellAt = -1;

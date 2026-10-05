@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CONTAINER_STATE, ITEM_FLAG, MATCH, NPC, SERVER_TICK_MS, SOLID, bushIndexAt, circleIsFree, hasLineOfSight, mulberry32, type LoadoutSnapshot } from "@extract/shared";
+import { CONTAINER_STATE, ITEM_FLAG, MATCH, NPC, NPC_SIGHT_CALM, SERVER_TICK_MS, SOLID, bushIndexAt, circleIsFree, hasLineOfSight, inSightEllipse, mulberry32, type LoadoutSnapshot, type NpcSightEllipse } from "@extract/shared";
 import { groundUniques } from "./inventory.js";
 import { Match, matchMap } from "./match.js";
 import { counterUid, humans, legacyNpcPosts } from "./test-utils.js";
@@ -14,17 +14,21 @@ function npcWorld(mapSeed: number, n = 6) {
 }
 
 /** Put a human next to the first post: free open ground (no bush) with a clear line of sight to it. */
-function nearPost(m: Match, rt: PlayerRuntime, dist = 450): void {
+function nearPost(m: Match, rt: PlayerRuntime, dist = 450, sight?: NpcSightEllipse): boolean {
   const post = m.npcs.squads[0]!.post!;
-  for (let k = 0; k < 32; k++) {
-    const a = (k * Math.PI) / 16;
+  // With a sight ellipse (fair perception): only spots inside it, on a finer ring of angles.
+  const steps = sight ? 128 : 32;
+  for (let k = 0; k < steps; k++) {
+    const a = (k * 2 * Math.PI) / steps;
     const x = post.x + Math.cos(a) * dist, y = post.y + Math.sin(a) * dist;
+    if (sight && !inSightEllipse(sight, x - post.x, y - post.y)) continue;
     if (!circleIsFree(m.idx, x, y, 20) || !hasLineOfSight(m.idx, post.x, post.y, x, y, SOLID.ALL) || bushIndexAt(m.bushIndex, x, y) >= 0) continue;
     rt.pub.x = rt.prevX = x;
     rt.pub.y = rt.prevY = y;
     rt.pub.aim = a + Math.PI;
-    return;
+    return true;
   }
+  if (sight) return false;
   assert.fail("no clear spot next to the post");
 }
 
@@ -160,9 +164,9 @@ test("an idle human in sight of a squad but outside its post is never shot in th
     const m = new Match({ ...npcWorld(600 + seed, 3), roster: humans(1), rng: mulberry32(seed * 7919), newUid: counterUid, strictLedger: true });
     const human = m.allRuntimes()[0]!;
     // Post 0 is a low post (leash 500): 630 px is outside it and beyond NPC.PEACE_CLOSE_PX (600), inside
-    // the calm sight cap (NPC.VIEW_RANGE_CAP 650 since the alpha softening; was 700 px of 800) — and
-    // the spot must be outside every other post too (an intruder is fought).
-    nearPost(m, human, 630);
+    // the calm sight ellipse (NPC_SIGHT_CALM ≈ 635 × 294 since fair perception: east / west of the
+    // post) — and the spot must be outside every other post too (an intruder is fought).
+    if (!nearPost(m, human, 630, NPC_SIGHT_CALM)) continue;
     const intruding = m.npcs.squads.some((sq) => {
       const p = sq.post!;
       return Math.hypot(p.x - human.pub.x, p.y - human.pub.y) < Math.max(m.npcs.info(sq.members[0]!)!.leash, NPC.PEACE_CLOSE_PX) + 25;

@@ -22,12 +22,12 @@
  *
  * NpcBrain drives its Player through exactly the same pipeline as a client (InputSamples at
  * INPUT_HZ, reload / switch / heal intents) and gets no extra powers: sight is the server vision
- * matrix (m.vision, NPC rows capped at NPC.VIEW_RANGE_CAP while calm and NPC.VIEW_RANGE_ALERT while
- * alerted or under fire; a muzzle flash is seen to VISION.RANGE), hearing is the per-listener
+ * matrix (m.vision, NPC rows limited to the NPC_SIGHT_CALM ellipse while calm and NPC_SIGHT_ALERT
+ * while alerted or under fire or at a muzzle flash — fair perception, NPC_PERCEPTION), hearing is the per-listener
  * quantized delivery (sound.ts heardBy), a hit comes with the quantized "damage from" direction.
  *
- * v5 review fixes (no free kills from outside an NPC's reach): an alerted NPC sees as far as a
- * human, engages to its weapon's full range, a shotgun NPC carries a FREE pistol sidearm for targets
+ * v5 review fixes (no free kills from outside an NPC's reach): an alerted NPC sees farther than a
+ * calm one (fair perception 2026-10: still only inside the human's phone screen), engages to its weapon's full range, a shotgun NPC carries a FREE pistol sidearm for targets
  * beyond shotgun range, and an NPC hit by someone it cannot see or cannot reach breaks line of sight
  * (COVER) instead of standing at its chase edge; the boss only heals when nobody hit it recently;
  * during the peace window a human walking into the post is fought, not just watched.
@@ -37,8 +37,9 @@
  *   SUSPICIOUS  a heard step / roll / reload / loot / search sound, a shot beyond the alert radius,
  *               or a sighting during the peace window: turn to the source and step toward it
  *               (inside the leash) for NPC.SUSPICIOUS_MS.
- *   COMBAT      a visible enemy: fire only with a confirmed line of sight (never at a sound), react
- *               after reactMs, aim error × sloppiness, rifle bursts; shotgun closes in, sniper keeps
+ *   COMBAT      a visible enemy: fire only with a confirmed line of sight (never at a sound) inside
+ *               the sight ellipse (NPC_PERCEPTION: a landscape phone's screen), react after reactMs
+ *               (≥ REACT_MIN_MS; REACQUIRE_MS after a peek), aim error × sloppiness, rifle bursts; shotgun closes in, sniper keeps
  *               distance; chase up to leash + NPC.CHASE_EXTRA_PX while the target is in sight.
  *   COVER       under fire from someone it cannot see, or out of its reach (beyond weapon range and
  *               the chase radius): move to the nearest spot within NPC.COVER_SEARCH_PX (inside the
@@ -73,6 +74,8 @@ import {
   MARAUDER,
   NPC,
   NPC_CARRIER,
+  NPC_PERCEPTION,
+  NPC_SIGHT_ALERT,
   NPC_ROLE,
   PLAYER,
   SOLID,
@@ -84,6 +87,7 @@ import {
   baseSoundRadius,
   circleIsFree,
   hasLineOfSight,
+  inSightEllipse,
   itemDef,
   mulberry32,
   npcCarrierKey,
@@ -94,6 +98,7 @@ import {
   rollMarauderKit,
   rollNpcLoot,
   sectorAngle,
+  sightReach,
   weaponVariant,
   zoneAt,
   type BossKind,
@@ -134,10 +139,6 @@ export const NPC_ROLL_CAP = 0.3;
 const ROLL_ON_BURST = 0.1;
 /** Strafe direction holds this long (ms) before a new coin flip. Alpha softening: [500, 1300] → [1200, 2500]. */
 const STRAFE_FLIP_MS: readonly [number, number] = [1200, 2500];
-/** Aim error half-width: base + per 1000 px of distance + extra for a target moving at full speed. */
-const AIM_ERR_BASE = 0.1;
-const AIM_ERR_PER_1000PX = 0.12;
-const AIM_ERR_MOVING = 0.1;
 /** Semi-auto NPCs never press faster than this, whatever the weapon allows. */
 const MIN_PRESS_INTERVAL_MS = 420;
 /** A hit / shot older than this no longer keeps the boss from healing. */
@@ -149,8 +150,8 @@ const SNEAK_RANGE = 650;
 const ARRIVE_PX = 90;
 /** Suspicious: how far toward a noise an NPC steps (inside its leash). */
 const SUSPICIOUS_STEP_PX = 260;
-/** A re-sighting of the same enemy within this keeps the NPC's reaction (no new reactMs delay). */
-const ENEMY_MEMORY_MS = 3000;
+/** A re-sighting of the same enemy within this waits only NPC_PERCEPTION.REACQUIRE_MS (not reactMs). */
+const ENEMY_MEMORY_MS = NPC_PERCEPTION.ENEMY_MEMORY_MS;
 /** Engage range as a share of the active weapon's range (bullets fly the full range). */
 const ENGAGE_RANGE_FRAC = 1;
 /** COVER: re-pick the spot at most this often (threat moved / spot no longer covered). */
@@ -707,6 +708,26 @@ export function respawnBag(seed: number, postId: number, member: number, cls: Np
 }
 
 /** (x, y) pulled back onto the circle of radius r around `a` when it lies outside. */
+/**
+ * Aim error half-width (rad, before sloppiness) at `dist` px for a target moving at `moving` × full
+ * speed (0..1): NPC_PERCEPTION base + per-1000 px + moving, plus the long-range extra beyond
+ * AIM_ERR_FAR_FROM_PX.
+ */
+export function npcAimSpread(dist: number, moving: number): number {
+  const P = NPC_PERCEPTION;
+  const far = Math.max(0, dist - P.AIM_ERR_FAR_FROM_PX);
+  return P.AIM_ERR_BASE + (dist / 1000) * P.AIM_ERR_PER_1000PX + (far / 1000) * P.AIM_ERR_FAR_PER_1000PX + moving * P.AIM_ERR_MOVING;
+}
+
+/**
+ * Fair-perception fire gate (NPC_PERCEPTION): the target is inside the NPC's alert sight ellipse
+ * (a landscape phone's screen, so the human could see the NPC) and in a raw line of sight (SIGHT
+ * mask: walls and fences block, windows and sandbags do not). The caller also needs a SHOT line.
+ */
+export function npcMayFire(idx: Match["idx"], from: Pt, to: Pt): boolean {
+  return inSightEllipse(NPC_SIGHT_ALERT, to.x - from.x, to.y - from.y) && hasLineOfSight(idx, from.x, from.y, to.x, to.y, SOLID.SIGHT);
+}
+
 function clampTo(a: Pt, x: number, y: number, r: number): Pt {
   const d = Math.hypot(x - a.x, y - a.y);
   if (d <= r) return { x, y };
@@ -1586,13 +1607,11 @@ export class NpcBrain {
     const angle = Math.atan2(dy, dx);
     this.state = "combat";
     if (ert.id !== this.enemyId) {
-      // The same enemy seen again within ENEMY_MEMORY_MS (a flash, a peek): no new reaction delay.
-      const remembered = ert.id === this.lastEnemyId && clock - this.lastEnemyAt < ENEMY_MEMORY_MS;
+      this.reactAt = clock + this.reactionMs(ert.id === this.lastEnemyId && clock - this.lastEnemyAt < ENEMY_MEMORY_MS);
       this.enemyId = ert.id;
       this.lastEnemyId = ert.id;
       this.enemySeen = null;
       this.enemySpeed = 0;
-      if (!remembered) this.reactAt = clock + this.rand(info.reactMs[0], info.reactMs[1]) * this.phaseMult(BOSS_FIGHT.PHASE2_REACT_MULT);
     }
     this.lastEnemyAt = clock;
     this.search = null;
@@ -1606,18 +1625,21 @@ export class NpcBrain {
     this.enemySeen = { x: e.x, y: e.y, at: clock };
     if (clock >= this.aimErrUntil) {
       const moving = Math.min(1, this.enemySpeed / PLAYER.SPEED);
-      const spread = (AIM_ERR_BASE + (dist / 1000) * AIM_ERR_PER_1000PX + moving * AIM_ERR_MOVING) * info.sloppiness;
+      const spread = npcAimSpread(dist, moving) * info.sloppiness;
       this.aimErr = (this.m.rng() * 2 - 1) * spread;
       this.aimErrUntil = clock + this.rand(180, 380);
     }
     this.aim = angle + this.aimErr;
 
     const def = weaponDefOf(activeWeapon(this.rt)) ?? WEAPONS.pistol;
-    // Engage to (almost) the weapon's full range, within what it can see right now.
-    const engage = Math.min(def.range * ENGAGE_RANGE_FRAC, Math.max(this.rt.viewCap, NPC.VIEW_RANGE_CAP));
-    // Fire only with a confirmed line of fire right now (the published row has hysteresis).
+    // Engage to (almost) the weapon's full range, within what it can see right now (its sight
+    // ellipse toward the target: never beyond a landscape phone's screen, NPC_PERCEPTION).
+    // A fighting NPC's squad is alerted (think() raised it), so the alert ellipse applies.
+    const engage = Math.min(def.range * ENGAGE_RANGE_FRAC, sightReach(NPC_SIGHT_ALERT, dx, dy));
+    // Fire only with a confirmed line of fire AND a raw line of sight right now (the published row
+    // has 300 ms hysteresis): never through a wall / fence it cannot see through.
     const los = hasLineOfSight(this.m.idx, p.x, p.y, e.x, e.y, SOLID.SHOT);
-    this.wantFire = dist <= engage && clock >= this.reactAt && los;
+    this.wantFire = clock >= this.reactAt && los && npcMayFire(this.m.idx, p, e) && dist <= engage;
     // Out of reach: beyond its engage range and it may not close in far enough (chase radius; a
     // guard never leaves its leash). Under fire from there: break line of sight instead of standing
     // at the edge as a target (v5 review: kiting at 870 px / a pistol at 520 px got 0 return fire).
@@ -1779,6 +1801,18 @@ export class NpcBrain {
   // ------------------------------------------------------------------ boss fights
 
   /** `mult` in boss phase 2, else 1. */
+  /**
+   * Delay before the first shot at a newly acquired enemy: the role's reactMs (boss phase 2 × its
+   * mult), never below NPC_PERCEPTION.REACT_MIN_MS; the same enemy re-sighted within
+   * ENEMY_MEMORY_MS (a peek, a flash) waits NPC_PERCEPTION.REACQUIRE_MS instead.
+   */
+  private reactionMs(remembered: boolean): number {
+    const P = NPC_PERCEPTION;
+    if (remembered) return this.rand(P.REACQUIRE_MS[0], P.REACQUIRE_MS[1]);
+    const r = this.info.reactMs;
+    return Math.max(P.REACT_MIN_MS, this.rand(r[0], r[1]) * this.phaseMult(BOSS_FIGHT.PHASE2_REACT_MULT));
+  }
+
   private phaseMult(mult: number): number {
     return this.info.role === "boss" && this.info.group?.fight.phase === 2 ? mult : 1;
   }

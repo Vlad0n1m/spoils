@@ -120,6 +120,7 @@ export interface PlayerRuntime {
   /**
    * NPC viewers: sight cap of their vision row (npc.ts sets it each decision): NPC.VIEW_RANGE_CAP
    * while calm, NPC.VIEW_RANGE_ALERT while its squad is alerted or it is under fire. Humans: unused.
+   * The value is a calm / alert flag: the sight shape is NPC_SIGHT_CALM / NPC_SIGHT_ALERT (vision.ts).
    */
   viewCap: number;
   connected: boolean;
