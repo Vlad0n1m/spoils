@@ -103,6 +103,7 @@ services:
       # Boss schedule secret; unset → derived from GAME_SERVER_HMAC_SECRET. Prefer its own value.
       WORLD_SEED_SECRET: ${WORLD_SEED_SECRET:-}
       ECONOMY_MODE: ${ECONOMY_MODE:-}
+      ALPHA_LOOT: ${ALPHA_LOOT:-}
       REPLAY_RECORD: ${REPLAY_RECORD:-}
       BATTLE_PERF_LOG: ${BATTLE_PERF_LOG:-}
       WEB_API_BASE_URL: http://web:3000

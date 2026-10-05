@@ -29,6 +29,7 @@
 import { randomInt, randomUUID } from "node:crypto";
 import { ServerError, matchMaker } from "@colyseus/core";
 import {
+  ALPHA_LOOT,
   PARTY,
   ROOMS,
   WORLD,
@@ -145,6 +146,16 @@ export interface DirectoryDeps {
 /** ECONOMY_MODE=demo → demo shards (free kits, server-minted uniques); anything else live. */
 export function economyMode(): RaidMode {
   return process.env.ECONOMY_MODE === "demo" ? "demo" : "live";
+}
+
+/**
+ * ALPHA LOOT layer (packages/shared alpha-loot.ts) on world shards, either economy mode: on unless
+ * ALPHA_LOOT is 0 / false / off / no; unset = ALPHA_LOOT.ENABLED (true). Off = the v4 loot exactly.
+ */
+export function alphaLootEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  const v = env.ALPHA_LOOT?.trim().toLowerCase();
+  if (!v) return ALPHA_LOOT.ENABLED;
+  return !["0", "false", "off", "no"].includes(v);
 }
 
 /** A room of cycle k still alive this long after its wipe is force-disposed. */

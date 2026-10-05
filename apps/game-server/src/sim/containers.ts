@@ -17,7 +17,8 @@
  * - fungibles (junk / ammo / meds) from the shared CONTAINER_LOOT tables (rollContainerFungibles);
  * - uniques: live mode = lost-pool items (legacy roster mode: the containerLoot allocation,
  *   registered in the ledger at match start; world maps: placed by pool-place.ts); demo mode = minted from CHEST_TABLES (registered as "minted" when rolled), only
- *   in containers of tier >= CONTAINER.DEMO_UNIQUE_MIN_TIER (v4 zoning, same as the live pool).
+ *   in containers of tier >= CONTAINER.DEMO_UNIQUE_MIN_TIER (v4 zoning, same as the live pool);
+ *   ALPHA LOOT (either mode, Match.alphaLoot) = minted from alpha-loot.ts on first open (ledger "alpha").
  * Boss pool items (containerLoot "boss:<kind>") and marauder carrier items ("npc:<post>.<member>") are held
  * here until npc.ts hands them to the NPC.
  *
@@ -59,6 +60,7 @@ import {
   planPlace,
   poolContainerEligible,
   revealMs,
+  rollAlphaContainerUniques,
   rollContainerFungibles,
   type BossKind,
   type ContainerSpot,
@@ -314,10 +316,12 @@ export class ContainerSystem {
         }
       }
     }
+    // ALPHA LOOT: a weapon / armor / backpack minted on first open, deterministic in (lootSeed, idx).
+    if (m.alphaLoot) for (const u of rollAlphaContainerUniques(m.lootSeed, idx, spot)) out.push(m.mintAlpha(u));
     // Live allocations, and (WORLD v6) server-placed pool items in either mode.
     out.push(...(this.pool.get(idx) ?? []));
     this.pool.delete(idx);
-    for (const f of rollContainerFungibles(m.lootSeed, idx, spot)) {
+    for (const f of rollContainerFungibles(m.lootSeed, idx, spot, { alpha: m.alphaLoot })) {
       out.push(makeItem(f.def, { qty: f.qty, rarity: f.rarity }));
     }
     // In-raid objectives: a key or clue note placed here this cycle, the strongroom rolls.

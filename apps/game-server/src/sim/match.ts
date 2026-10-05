@@ -66,7 +66,9 @@ import {
   readRoll,
   pickWeighted,
   rollBossSpawns,
+  rollAlphaFloorGun,
   rollFloorLoot,
+  type AlphaUnique,
   sanitizeInput,
   selfKeyOf,
   stepMovement,
@@ -209,6 +211,12 @@ export interface MatchOptions {
   matchId?: string;
   /** "demo" (default): the server mints container uniques itself. "live": uniques only from loadouts + pool. */
   mode?: RaidMode;
+  /**
+   * ALPHA LOOT (alpha-loot.ts): generous containers, weapons / gear in containers, supply-drop and
+   * floor guns, in either mode. Default false here so the sim tests and benches keep the v4 numbers;
+   * world shards pass the game server's ALPHA_LOOT env flag (on unless set to 0 / false / off).
+   */
+  alphaLoot?: boolean;
   /** Legacy roster mode (tests, harness): accepted loadouts (by userId, or as an array). World entries bring theirs via addHuman. */
   loadouts?: LoadoutMap | readonly LoadoutSnapshot[];
   /** Legacy roster mode (tests, harness): lost-pool allocation by container key. World shards place pool items themselves (pool-place.ts). */
@@ -288,6 +296,8 @@ export class Match {
   readonly newUid: () => string;
   readonly now: () => number;
   readonly mode: RaidMode;
+  /** ALPHA LOOT layer on (MatchOptions.alphaLoot). */
+  readonly alphaLoot: boolean;
   readonly ledger: Ledger;
   readonly ground: GroundStore;
   readonly containers: ContainerSystem;
@@ -352,6 +362,7 @@ export class Match {
     this.newUid = opts.newUid ?? randomUUID;
     this.now = opts.now ?? Date.now;
     this.mode = opts.mode ?? "demo";
+    this.alphaLoot = opts.alphaLoot ?? false;
     this.ledger = new Ledger(opts.strictLedger ?? false);
     const seed = (opts.mapSeed ?? Math.floor(this.rng() * 2 ** 32)) >>> 0;
 
@@ -497,11 +508,18 @@ export class Match {
    * Floor loot of one loot spot (v4 zoning, shared FLOOR_LOOT): most spots stay empty, the rest roll
    * their tier's table (wilds almost nothing, medkits only on T3/T4 spots). Demo mode: a common gun
    * with DEMO_GUN_CHANCE, only on spots of tier >= DEMO_GUN_MIN_TIER. Maps without zones (the v1
-   * legacy test layout) keep the v1 flat table and demo gun.
+   * legacy test layout) keep the v1 flat table and demo gun. ALPHA LOOT (zoned maps, either mode):
+   * an alpha floor gun (rollAlphaFloorGun) replaces the demo gun rule; no gun → the normal roll.
    */
   private rollFloorLoot(tier: number): ItemLike | null {
     // A map without zones (the v1 legacy test layout, every spot "tier 1") has no zoning: v1 rules.
     const zoneless = this.map.zones.length === 0;
+    if (this.alphaLoot && !zoneless) {
+      const gun = rollAlphaFloorGun(this.rng, tier);
+      if (gun) return this.mintAlpha(gun);
+      const roll = rollFloorLoot(this.rng, tier);
+      return roll ? makeItem(roll.def, { qty: roll.qty }) : null;
+    }
     if (this.mode === "demo" && (zoneless || tier >= FLOOR_LOOT.DEMO_GUN_MIN_TIER) && this.rng() < FLOOR_LOOT.DEMO_GUN_CHANCE) {
       const it = makeItem(this.rng() < 0.55 ? "rifle" : "shotgun", { uid: this.newUid(), rarity: 0 });
       this.ledger.register(it, "minted");
@@ -509,6 +527,13 @@ export class Match {
     }
     const roll = zoneless ? pickWeighted(this.rng, LEGACY_FLOOR_LOOT) : rollFloorLoot(this.rng, tier);
     return roll ? makeItem(roll.def, { qty: roll.qty }) : null;
+  }
+
+  /** A fresh ALPHA LOOT unique: a new uid, registered in the ledger as "alpha" (PlayerExitReport.alphaFound). */
+  mintAlpha(u: AlphaUnique): ItemLike {
+    const it = makeItem(u.def, { uid: this.newUid(), rarity: u.rarity });
+    this.ledger.register(it, "alpha");
+    return it;
   }
 
   private setupPlayers(roster: RosterEntry[], loadouts: LoadoutMap, npcAnchors: readonly NpcAnchor[] = []): void {
@@ -1195,6 +1220,8 @@ export class Match {
       report.unplaced = unplaced.map(toSettled);
     }
     if (rt.touch) report.touch = true;
+    const alphaFound = extracted.filter((it) => isTrackedUnique(it) && this.ledger.known.get(it.uid)?.origin === "alpha").map((it) => it.uid);
+    if (alphaFound.length > 0) report.alphaFound = alphaFound;
     if (rt.bossTrophies.size > 0) report.bossTrophies = [...rt.bossTrophies];
     if (exit === "dead" && rt.killedBy) {
       report.killedBy = rt.killedBy;

@@ -54,8 +54,11 @@ export interface RosterEntry {
   loadoutId?: string;
 }
 
-/** Where a known unique uid came from (ledger, inventory memo §2.6). */
-export type UidOrigin = "loadout" | "pool" | "minted";
+/**
+ * Where a known unique uid came from (ledger, inventory memo §2.6). "alpha" = minted by the ALPHA LOOT
+ * layer (alpha-loot.ts): reported in PlayerExitReport.alphaFound when extracted, so the web creates it.
+ */
+export type UidOrigin = "loadout" | "pool" | "minted" | "alpha";
 /**
  * How one life of a known uid left the match; every life ends in exactly one of these.
  * WORLD v6: "returned" = an entry's pool item never placed (extract before POOL.APPLY_AFTER_MS,

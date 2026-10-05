@@ -316,6 +316,8 @@ export const itemOriginEnum = pgEnum("item_origin", [
   "seed",
   "primary_sale",
   "trader",
+  /** ALPHA LOOT find (packages/shared alpha-loot.ts): minted by the game server, created on extract, always bound. */
+  "alpha",
 ]);
 
 export const loadoutStatusEnum = pgEnum("loadout_status", [

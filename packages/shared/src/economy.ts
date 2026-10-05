@@ -15,6 +15,7 @@
  * the top pool items and the high-value junk.
  */
 
+import { ALPHA_LOOT } from "./alpha-loot.js";
 import { DOG_TAG, ammoDefOf, dogTagCr, itemDef } from "./item-defs.js";
 import { ARMOR, WEAPONS, type Rarity, type WeaponId } from "./items.js";
 import { BOSS_CHANCE } from "./map/steppe.js";
@@ -92,6 +93,8 @@ export function dogTagPairMult(priorSamePair: number): 0 | 1 {
  * T2 pays a small wage, only T3/T4 hold high-value container loot.
  * - FILL_CHANCE: the container rolls empty otherwise; then ROLLS rolls, each empty with EMPTY_CHANCE.
  *   Empty rate ≈ 1 − FILL × (1 − EMPTY^ROLLS): T0 ≈ 85 %, T1 62 %, T2 58 %, T3 17 %, T4 12 %.
+ *   ALPHA LOOT (alpha-loot.ts, on by default) replaces FILL_CHANCE / EMPTY_CHANCE with its own and
+ *   adds weapons / gear: then T0 ≈ 58 %, T1 37 %, T2 27 %, T3 7 %, T4 2 % stay empty (Steppe ≈ 29 %, v4 ≈ 54 %).
  * - JUNK_VALUE_CAP: junk entries whose unit value is above the tier cap are dropped from the table
  *   (weights renormalise over what is left; the draw count stays the same).
  * - AMMO_QTY_MULT: ammo stacks are scaled, qty = max(1, round(qty × mult)) (30 → 10 rounds in T0).
@@ -138,7 +141,8 @@ export interface ContainerLootEntry {
  * Fungibles by container kind (map memo §7: "a fridge gives food and a PC gives computer parts").
  * v4: high-value junk (gold chain, GPU, cold wallet) left the ordinary containers — it drops from
  * bosses (BOSSES[kind].junk), and a little gold chain / GPU stays in safes (T3/T4 only on the
- * Steppe). Per-tier filtering and ammo scaling: containerLootFor. Uniques never come from here: in
+ * Steppe). Per-tier filtering and ammo scaling: containerLootFor. Uniques never come from here (ALPHA
+ * LOOT mints its own, alpha-loot.ts): in
  * live mode they come only from the lost pool (WORLD v6: placed by the server, D18), in demo mode from
  * CHEST_TABLES (tier >= CONTAINER.DEMO_UNIQUE_MIN_TIER).
  */
@@ -249,22 +253,26 @@ function addFungible(out: RolledFungible[], def: string, qty: number): void {
  * (critique) and deterministic in (matchSeed, idx) alone, so the order containers are opened in
  * never changes what is inside, and a ledger audit can re-roll any container. Draw order: fill roll,
  * then per roll an empty roll and a pickWeighted over containerLootFor(spot). Same-def rolls merge
- * up to the def's stack size.
+ * up to the def's stack size. `opts.alpha` (ALPHA LOOT, alpha-loot.ts) uses ALPHA_LOOT.FILL_CHANCE /
+ * EMPTY_CHANCE instead (same draws, same tables); without it the roll is exactly the v4 one.
  */
 export function rollContainerFungibles(
   matchSeed: number,
   idx: number,
   spot: { kind: ContainerKind; tier: LootTier },
+  opts: { alpha?: boolean } = {},
 ): RolledFungible[] {
   // Mix seed and index (FNV-style) so neighbouring indexes get unrelated streams.
   const rng = mulberry32((Math.imul((matchSeed ^ 0x9e3779b9) >>> 0, 0x01000193) ^ Math.imul(idx + 1, 0x85ebca6b)) >>> 0);
   const tier = Math.max(0, Math.min(4, spot.tier));
-  if (rng() >= CONTAINER.FILL_CHANCE[tier]!) return [];
+  const fill = opts.alpha ? ALPHA_LOOT.FILL_CHANCE : CONTAINER.FILL_CHANCE;
+  const emptyChance = opts.alpha ? ALPHA_LOOT.EMPTY_CHANCE : CONTAINER.EMPTY_CHANCE;
+  if (rng() >= fill[tier]!) return [];
   const table = containerLootFor({ kind: spot.kind, tier });
   if (table.length === 0) return [];
   const out: RolledFungible[] = [];
   for (let i = 0; i < CONTAINER.ROLLS[tier]!; i++) {
-    if (rng() < CONTAINER.EMPTY_CHANCE) continue;
+    if (rng() < emptyChance) continue;
     const e = pickWeighted(rng, table);
     addFungible(out, e.def, e.qty);
   }
