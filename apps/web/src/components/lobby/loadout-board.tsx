@@ -24,6 +24,7 @@ import { flushDraft, registerDraftFlush, trackDraftSave } from "@/lib/lobby/draf
 import { panelHref } from "@/lib/lobby/panels";
 import { ItemCard, EmptySlot } from "./item-card";
 import { StashList } from "./stash-list";
+import { Paged } from "@/components/paged";
 import { api } from "./use-lobby";
 
 const SLOT_LABEL: Record<string, string> = { w1: "Weapon 1", w2: "Weapon 2", armor: "Armor", bp: "Backpack" };
@@ -218,16 +219,18 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
   };
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-      <section className="toon-panel bg-[#161b28]/95 p-5 lg:col-span-5">
-        <header className="flex items-baseline justify-between gap-3">
-          <h2 className="toon-text-thin text-2xl tracking-wide text-white">Stash</h2>
+    // Landscape: stash | raid gear | summary side by side, each column fits the height (lists page,
+    // Save & close stays at the bottom); portrait phones stack them.
+    <div className="flex min-h-0 flex-1 flex-col gap-3 land:grid land:grid-cols-[minmax(0,1fr)_minmax(0,19rem)_minmax(0,14rem)] short:!grid-cols-[minmax(0,1fr)_minmax(0,17.5rem)_minmax(0,12rem)] land:grid-rows-[minmax(0,1fr)] land:gap-4 short:!gap-2">
+      <section className="toon-panel flex min-h-0 flex-1 flex-col bg-[#161b28]/95 p-5 short:p-3">
+        <header className="flex shrink-0 items-baseline justify-between gap-3">
+          <h2 className="toon-text-thin text-2xl tracking-wide text-white short:text-xl">Stash</h2>
           <p className="font-body text-xs lg:text-[0.8125rem] text-white/70">
             <span className="[@media(hover:none)]:hidden">Click to equip</span>
             <span className="hidden [@media(hover:none)]:inline">Tap to equip</span>
           </p>
         </header>
-        <div className="mt-4">
+        <div className="mt-3 flex min-h-0 flex-1 flex-col short:mt-2">
           <StashList
             uniques={stash.uniques.filter((u) => u.state === "in_stash")}
             stacks={free}
@@ -250,12 +253,13 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
         </div>
       </section>
 
-      <section className="toon-panel relative bg-[#161b28]/95 p-5 lg:col-span-4">
-        <header className="flex items-baseline justify-between gap-3">
-          <h2 className="toon-text-thin text-2xl tracking-wide text-white">Raid gear</h2>
+      <section className="toon-panel relative flex min-h-0 flex-col bg-[#161b28]/95 p-5 short:p-3">
+        <header className="flex shrink-0 items-baseline justify-between gap-3">
+          <h2 className="toon-text-thin text-2xl tracking-wide text-white short:text-xl">Raid gear</h2>
           {!readOnly && <SaveBadge state={save} />}
         </header>
-        <div className="mt-5 grid grid-cols-4 justify-items-center gap-2">
+        <Paged className="mt-3 short:mt-2" gap={12} label="Raid gear pages">
+        <div className="grid grid-cols-4 justify-items-center gap-2">
           {EQUIP_KEYS.map((k) => (
             <div key={k} className="flex flex-col items-center gap-1.5">
               {slot(k, "md")}
@@ -263,24 +267,29 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
             </div>
           ))}
         </div>
-        <h3 className="mt-6 text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">Pockets</h3>
-        <div className="mt-2 grid grid-cols-4 justify-items-center gap-2">
-          {Array.from({ length: POCKET_SLOTS }, (_, i) => (
-            <div key={i}>{slot(`p${i}`, "sm")}</div>
-          ))}
-        </div>
-        <h3 className="mt-6 text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">
-          Backpack <span className="tabular-nums text-white/70">{cap > 0 ? `${entries.filter((e) => /^b\d/.test(e.key)).length}/${cap}` : "— none"}</span>
-        </h3>
-        {cap > 0 ? (
+        <div>
+          <h3 className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">Pockets</h3>
           <div className="mt-2 grid grid-cols-4 justify-items-center gap-2">
-            {Array.from({ length: cap }, (_, i) => (
-              <div key={i}>{slot(`b${i}`, "sm")}</div>
+            {Array.from({ length: POCKET_SLOTS }, (_, i) => (
+              <div key={i}>{slot(`p${i}`, "sm")}</div>
             ))}
           </div>
-        ) : (
-          <p className="font-body mt-2 text-sm text-white/70">Equip a backpack for more slots. Loot you find goes into pockets and the pack.</p>
-        )}
+        </div>
+        <div>
+          <h3 className="text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/70">
+            Backpack <span className="tabular-nums text-white/70">{cap > 0 ? `${entries.filter((e) => /^b\d/.test(e.key)).length}/${cap}` : "— none"}</span>
+          </h3>
+          {cap > 0 ? (
+            <div className="mt-2 grid grid-cols-4 justify-items-center gap-2">
+              {Array.from({ length: cap }, (_, i) => (
+                <div key={i}>{slot(`b${i}`, "sm")}</div>
+              ))}
+            </div>
+          ) : (
+            <p className="font-body mt-2 text-sm text-white/70">Equip a backpack for more slots. Loot you find goes into pockets and the pack.</p>
+          )}
+        </div>
+        </Paged>
         {toast && (
           <p role="status" className="font-body absolute inset-x-5 bottom-4 rounded-xl border-2 border-black bg-amber-300 px-3 py-2 text-sm font-semibold text-black shadow-[0_3px_0_#000]">
             {toast}
@@ -288,8 +297,9 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
         )}
       </section>
 
-      <aside className="toon-panel flex flex-col gap-4 bg-[#161b28]/95 p-5 lg:col-span-3">
-        <h2 className="toon-text-thin text-2xl tracking-wide text-white">Summary</h2>
+      <aside className="toon-panel flex min-h-0 flex-col bg-[#161b28]/95 p-5 short:p-3">
+        <h2 className="toon-text-thin shrink-0 text-2xl tracking-wide text-white short:sr-only">Summary</h2>
+        <Paged className="mt-4 short:mt-0" gap={12} label="Summary pages">
         {locked ? (
           <div className="rounded-2xl border-2 border-black bg-amber-300 p-4 text-black">
             <p className="text-sm tracking-wide">{locked.status === "in_raid" ? "Gear is in a raid" : "Locked for your next drop"}</p>
@@ -323,14 +333,15 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
           <dt className="text-white/70">Grenades</dt>
           <dd className="text-right tabular-nums text-white">{entries.filter((e) => itemDef(e.def)?.cat === "throwable").reduce((s, e) => s + e.qty, 0)}</dd>
         </dl>
-        <p className="font-body text-sm leading-relaxed text-white/75">
+        <p className="font-body text-sm leading-relaxed text-white/75 short:text-xs short:leading-snug">
           {entries.length === 0
             ? `Empty loadout = basic gear: a pistol, ${FREE_KIT.AMMO_LIGHT} light ammo and a bandage. You can't lose it, but it adds no gear to the map's crates: only raiders who bring their own gear do.`
             : "Die and each item has a 50% chance to break into the lost pool; the rest stays in your body for whoever finds it. Extract to keep everything."}
         </p>
-        <div className="mt-auto flex flex-col gap-2">
+        </Paged>
+        <div className="mt-3 flex shrink-0 flex-col gap-2 short:mt-2">
           {!readOnly && entries.length > 0 && (
-            <button type="button" onClick={() => edit([])} className="toon-btn-ghost min-h-11 text-sm">
+            <button type="button" onClick={() => edit([])} className="toon-btn-ghost min-h-11 text-sm short:min-h-9">
               <span className="optical-center">Clear</span>
             </button>
           )}
@@ -339,7 +350,7 @@ export function LoadoutBoard({ stash, reload, onDone }: { stash: StashResponse; 
               type="button"
               onClick={saveAndClose}
               disabled={busy || (!v.ok && !readOnly)}
-              className="toon-btn min-h-14 text-xl tracking-wide"
+              className="toon-btn min-h-14 text-xl tracking-wide short:min-h-11 short:text-lg"
             >
               <span className="optical-center">{readOnly ? "Close" : busy ? "Saving…" : "Save & close"}</span>
             </button>
@@ -357,7 +368,7 @@ function StepBtn({ children, onClick, disabled, label }: { children: React.React
       aria-label={label}
       onClick={onClick}
       disabled={disabled}
-      className="grid h-6 w-6 place-items-center rounded-md border-2 border-black bg-white text-sm text-black shadow-[0_2px_0_#000] disabled:opacity-40 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11 [@media(pointer:coarse)]:text-lg"
+      className="grid h-6 w-6 place-items-center rounded-md border-2 border-black bg-white text-sm text-black shadow-[0_2px_0_#000] disabled:opacity-40 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11 [@media(pointer:coarse)]:text-lg short:[@media(pointer:coarse)]:h-9 short:[@media(pointer:coarse)]:w-9"
     >
       {children}
     </button>
