@@ -370,7 +370,8 @@ export function createPartySystem(): GameSystem {
     },
     frame(_dt, ctx: GameContext) {
       if (!root || disposed) return;
-      const mates = ctx.partyMates?.() ?? [];
+      // The death replay shows the past: live mate markers would sit beside their replayed sprites.
+      const mates = ctx.view?.() === "replay" ? [] : (ctx.partyMates?.() ?? []);
       live.clear();
       if (mates.length > 0) {
         const cam = ctx.camera();

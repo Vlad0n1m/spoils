@@ -574,7 +574,12 @@ class CinematicSystem implements GameSystem {
       }
     } else if (this.mode === "dead") {
       deathPose(now - this.startedAt, p);
-      this.updatePan(now, ctx);
+      // The death replay / a watched mate fill the screen: no fade, bars, grey or card over them.
+      if ((ctx.view?.() ?? "live") !== "live") {
+        p.bars = p.fade = p.desat = p.cardAlpha = 0;
+        if (this.panning) getCameraRig()?.clearFocus(0);
+        this.panning = false;
+      } else this.updatePan(now, ctx);
     } else {
       // Channel: bars creep in during the last seconds of the extract countdown.
       let bars = 0;

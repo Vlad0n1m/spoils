@@ -337,6 +337,8 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
   private snapB = emptySnap();
   private readonly cues: SelfCue[] = [];
   private alive = true;
+  /** Watching a party mate (ctx.view "spectate"): the death muffle is lifted meanwhile. */
+  private watching = false;
   private lowHp = false;
   private nextBeatAt = 0;
   private pendingReload: Array<{ v: Voice; startAt: number }> = [];
@@ -381,6 +383,12 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
     const clock = ctx.clockMs();
     const pos = ctx.selfPos();
     eng.listener.facing = ctx.aim();
+    // Watching a party mate after our death: hear their world unmuffled (the death muffle returns after).
+    const watching = ctx.view?.() === "spectate";
+    if (watching !== this.watching) {
+      this.watching = watching;
+      if (!this.alive) eng.setMuffleBase(watching ? 20000 : DEATH_MUFFLE.cutoff, 0.3);
+    }
 
     this.syncEnv(state, map);
     if (now >= this.nextAmbAt && this.envCfg) {
@@ -647,7 +655,14 @@ class GameAudioSystem implements GameSystem, GameAudioLocal {
 
     if (ev.shots) {
       this.wallImpacts(ev, map, pos.x, pos.y, sid, hear);
+      // Spectating: the watched mate's own shots are not in their ev.snd (a listener never hears
+      // itself from the server), so they play like ours did on their screen.
+      const watched = ctx.watchedId?.() ?? null;
       for (const s of ev.shots) {
+        if (watched && s.s === watched) {
+          this.playOwnShot(s.w);
+          continue;
+        }
         if (s.s !== sid) continue; // others' gunshots come from ev.snd
         if (this.consumeLocalShot(now)) continue;
         this.playOwnShot(s.w);

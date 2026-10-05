@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import clsx from "clsx";
 import type { Room } from "colyseus.js";
 import {
@@ -28,6 +28,7 @@ import { shouldUseTouch } from "@/game/touch-mode";
 import { Hud, useHud } from "./hud";
 import { InventoryOverlay } from "./inventory/inventory-overlay";
 import { MatchOutcomeOverlay } from "./match-outcome-overlay";
+import { ReplayOverlay, SpectateBar, nextMateKey } from "./spectate-replay";
 import { writeLastRaidSeen } from "@/lib/lobby/news-seen";
 import { TutorialOverlay } from "./tutorial-overlay";
 import { useTouchMode } from "./use-touch-mode";
@@ -255,6 +256,8 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
   })();
 
   return {
+    /** The renderer once booted (spectate / replay controls), else null. */
+    renderer: () => renderer,
     dispose() {
       disposed = true;
       renderer?.stop();
@@ -285,9 +288,33 @@ function screenSlice(s: HudSnapshot) {
 
 const killTallySlice = (s: HudSnapshot) => s.killTally ?? null;
 
+/** Death replay and spectate state the screen itself switches on. */
+function afterRunSlice(s: HudSnapshot) {
+  const sp = s.spectate;
+  return {
+    replayAvailable: s.replay?.available ?? false,
+    replayPlaying: s.replay?.playing ?? false,
+    replayAuto: s.replay?.autoPlay ?? true,
+    watching: sp?.watching?.key ?? null,
+    pending: sp?.pending ?? false,
+    // Joined to one string so the slice compares by value (the renderer builds a new array each push).
+    mates: sp ? sp.mates.map((m) => `${m.key}\u0001${m.name}`).join("\u0002") : "",
+    endedReason: sp?.ended?.reason ?? null,
+    endedName: sp?.ended?.name ?? "",
+  };
+}
+
+function parseMates(s: string): Array<{ key: string; name: string }> {
+  if (!s) return [];
+  return s.split("\u0002").map((x) => {
+    const [key = "", name = ""] = x.split("\u0001");
+    return { key, name };
+  });
+}
+
 export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry, earnsXp = true }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
-  const sessionRef = useRef<{ dispose: () => void } | null>(null);
+  const sessionRef = useRef<{ dispose: () => void; renderer: () => GameRendererApi | null } | null>(null);
   const disposeTimerRef = useRef<number | undefined>(undefined);
   // The renderer pushes HUD snapshots ~30×/s into this store; React reads throttled slices of it
   // (≤ 10 commits/s) instead of re-rendering the whole tree on every push.
@@ -355,8 +382,31 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
     const t = window.setTimeout(() => setHoldDone(true), holdMs);
     return () => window.clearTimeout(t);
   }, [cineExit, holdMs]);
+
+  // After the run: the death replay (once by itself, game/killcam.ts) and watching a party mate.
+  const after = useHud(hudStore, afterRunSlice, shallowEqual);
+  const mates = parseMates(after.mates);
+  const [replayAutoDone, setReplayAutoDone] = useState(false);
+  const replayDue =
+    cineExit === "death" && holdDone && !replayAutoDone && after.replayAvailable && after.replayAuto && !disconnected && phase !== "ended";
+  useEffect(() => {
+    if (!replayDue) return;
+    setReplayAutoDone(true);
+    sessionRef.current?.renderer()?.startReplay?.();
+  }, [replayDue]);
+  const watchingNow = after.watching !== null || after.pending;
+  const spectate = useCallback((key: string | null) => sessionRef.current?.renderer()?.spectate?.(key), []);
+  const skipReplay = useCallback(() => sessionRef.current?.renderer()?.stopReplay?.(), []);
+  const watchReplay = useCallback(() => {
+    sessionRef.current?.renderer()?.startReplay?.();
+  }, []);
+  const canWatchMates = !disconnected && phase !== "ended" && mates.length > 0;
+
   const overlayVisible =
-    phase === "ended" || disconnected || ((Boolean(outcome) || selfOut) && (holdMs === 0 || holdDone));
+    (phase === "ended" || disconnected || ((Boolean(outcome) || selfOut) && (holdMs === 0 || holdDone))) &&
+    !(after.replayPlaying && !disconnected) &&
+    !replayDue &&
+    !(watchingNow && !disconnected && phase !== "ended");
 
   return (
     <div
@@ -415,8 +465,32 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
         </>
       )}
 
+      {!err && after.replayPlaying && !disconnected && <ReplayOverlay store={hudStore} onSkip={skipReplay} />}
+      {!err && watchingNow && !disconnected && phase !== "ended" && (
+        <SpectateBar
+          store={hudStore}
+          touch={touch}
+          onNext={() => {
+            const k = nextMateKey(mates, after.watching);
+            if (k && k !== after.watching) spectate(k);
+          }}
+          onStop={() => spectate(null)}
+          onLeave={onLeave}
+        />
+      )}
+
       <MatchOutcomeOverlay
         visible={!err && overlayVisible}
+        spectate={
+          canWatchMates || after.endedReason
+            ? {
+                mates: canWatchMates ? mates : [],
+                ended: after.endedReason ? { reason: after.endedReason, name: after.endedName } : null,
+                onSpectate: spectate,
+              }
+            : null
+        }
+        onWatchReplay={after.replayAvailable && !disconnected && phase !== "ended" ? watchReplay : undefined}
         outcome={outcome}
         settlement={settlement}
         raidEnded={phase === "ended" || settlement !== null}

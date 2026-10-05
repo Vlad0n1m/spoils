@@ -23,6 +23,13 @@
  * - Party (party.ts): S2C.PARTY feeds a PartyTracker; its smoothed mates go to the minimap, and to
  *   the systems through GameContext.partyMates (world markers, the full map).
  *
+ * - Death replay (killcam.ts): every frame the renderer records what it drew (camera, fog eye,
+ *   player sprites, effects) into a bounded ring; after the death it can replay the last seconds
+ *   from that record alone (startReplay) — no server data, so nothing the client did not see.
+ * - Spectating a party mate (C2S / S2C.SPECTATE, server sim/spectate.ts): after the death or the
+ *   extraction the server mirrors the mate's view into this client's state; the camera, fog eye,
+ *   listener and systems' "self position" follow the mate's sprite (spectate()).
+ *
  * Used by battle-screen.tsx: `new GameRenderer({ mountEl, room, onHud, selfKey }); await r.start(); … r.stop()`.
  */
 
@@ -69,6 +76,8 @@ import {
   type Player,
   type SelfState,
   type ShotMsg,
+  type SpectateEndReason,
+  type SpectateMsg,
   type ThrowMsg,
   type WeaponId,
   type XpMsg,
@@ -96,8 +105,9 @@ import { KnownEmpty } from "./known-empty";
 import { WorldView, type ViewRect } from "./world";
 import { EMPTY_TALLY, bossKindOfLabel, corpseNpcRole, npcDisplayName, npcRoleName, tallyKill, type KillTally, type NpcRoleName } from "./npc-labels";
 import { getGameAudio } from "./audio/game-audio";
-import { feedAimPointer, getCameraRig, setTouchSticksActive } from "./camera";
+import { feedAimPointer, getCameraRig, reducedMotion, setTouchSticksActive } from "./camera";
 import { SPRITE_RECOIL_PX } from "./combat-fx";
+import { FX, KillcamPlayer, KillcamRecorder, entOf, lerpAngle, type FrameSnap, type FxSnap, type ReplaySample } from "./killcam";
 
 /** A falling body hands over to its corpse when the fall lands (the body then crossfades out). */
 const CORPSE_HANDOVER_MS = ANIM.DEATH_MS;
@@ -198,6 +208,8 @@ export class GameRenderer implements GameRendererApi {
   private readonly corpseLayer = new Container();
   private readonly itemLayer = new Container();
   private readonly playerLayer = new Container();
+  /** Sprites of the death replay (killcam.ts), shown instead of playerLayer while it plays. */
+  private readonly replayLayer = new Container();
   private readonly effectsSlot = new Container();
   private readonly canopySlot = new Container();
   private readonly floatSlot = new Container();
@@ -305,6 +317,28 @@ export class GameRenderer implements GameRendererApi {
   /** Last player counts taken while the raid was running (the end of the match clears "alive"). */
   private counts: PlayerCounts | null = null;
 
+  // Death replay (killcam.ts): what this client drew, replayed from that record only.
+  private readonly killcam = new KillcamRecorder();
+  private replay: KillcamPlayer | null = null;
+  private replayProgress = 0;
+  private replayPlayed = false;
+  private readonly replayViews = new Map<string, PlayerView>();
+  private readonly replaySeen = new Set<string>();
+  private readonly replayFx: FxSnap[] = [];
+  /** When each corpse entered this client's view (the replay hides the ones that came later). */
+  private readonly corpseAddedAt = new Map<string, number>();
+  /** The local player died (not extracted): the replay is offered. */
+  private diedHere = false;
+
+  // Spectating a party mate (S2C.SPECTATE).
+  private watch: { key: string; id: string; name: string } | null = null;
+  private watchPending: string | null = null;
+  private watchEnded: { reason: SpectateEndReason; name: string } | null = null;
+  /** Where the camera, fog eye and listener are this frame while replaying / spectating (null = self). */
+  private focus: { x: number; y: number } | null = null;
+  private readonly focusPt = { x: 0, y: 0 };
+  private focusAim = 0;
+
   constructor(private readonly opts: RendererOptions) {}
 
   private get selfId(): string {
@@ -397,6 +431,7 @@ export class GameRenderer implements GameRendererApi {
       this.corpseLayer,
       this.itemLayer,
       this.playerLayer,
+      this.replayLayer,
       this.effectsSlot,
       this.layers.worldFx,
       this.canopySlot,
@@ -499,6 +534,10 @@ export class GameRenderer implements GameRendererApi {
       m.clear();
     }
     for (const v of this.playerPool.splice(0)) v.destroy();
+    for (const v of this.replayViews.values()) v.destroy();
+    this.replayViews.clear();
+    this.replay = null;
+    this.killcam.clear();
     this.goneAt.clear();
     this.worldView?.destroy();
     this.worldView = null;
@@ -664,6 +703,69 @@ export class GameRenderer implements GameRendererApi {
     on<unknown>(S2C.PARTY, (m) => {
       this.party.ingest(m, performance.now());
     });
+    on<SpectateMsg>(S2C.SPECTATE, (m) => this.onSpectateMsg(m));
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Spectating a party mate and the death replay (battle-screen drives both).
+
+  /**
+   * Watch the party mate with this S2C.PARTY key (the server checks everything), or stop (null).
+   * A running replay ends first.
+   */
+  spectate(key: string | null): void {
+    if (key === null) {
+      if (this.watch || this.watchPending) this.send(C2S.SPECTATE, { key: null });
+      this.watch = null;
+      this.watchPending = null;
+      return;
+    }
+    if (this.replay) this.endReplay();
+    this.watchEnded = null;
+    if (this.send(C2S.SPECTATE, { key })) this.watchPending = key;
+  }
+
+  private onSpectateMsg(m: SpectateMsg) {
+    if (!m || typeof m !== "object") return;
+    if (typeof m.key === "string" && typeof m.id === "string" && m.id && m.id.length <= 64) {
+      const name = typeof m.name === "string" ? [...m.name].slice(0, 24).join("") : "Mate";
+      this.watch = { key: m.key, id: m.id, name };
+      this.watchPending = null;
+      this.watchEnded = null;
+      this.mateIds.add(m.id);
+      return;
+    }
+    const was = this.watch?.name ?? this.partyNow.find((p) => p.key === this.watchPending)?.name ?? "";
+    this.watch = null;
+    this.watchPending = null;
+    const reason = m.reason;
+    if (reason === "refused" || reason === "mate_down" || reason === "mate_out" || reason === "wipe") this.watchEnded = { reason, name: was };
+  }
+
+  /** Play the death replay (killcam.ts) from the start; false when there is nothing to replay. */
+  startReplay(): boolean {
+    if (!this.diedHere || this.watch || !this.tex || !this.icons) return false;
+    const win = this.killcam.window();
+    if (!win) return false;
+    this.endReplay();
+    this.replay = new KillcamPlayer(this.killcam, performance.now(), win);
+    this.replayProgress = 0;
+    return true;
+  }
+
+  /** Skip / end the replay (the live view comes back). */
+  stopReplay(): void {
+    this.endReplay();
+  }
+
+  private endReplay() {
+    if (!this.replay) return;
+    this.replay = null;
+    this.replayPlayed = true;
+    for (const v of this.replayViews.values()) v.destroy();
+    this.replayViews.clear();
+    this.replayLayer.visible = false;
+    this.playerLayer.visible = true;
   }
 
   /** Subscribe to collections; tolerates a room whose state has not arrived yet. */
@@ -790,6 +892,7 @@ export class GameRenderer implements GameRendererApi {
     }
     this.corpseLayer.addChild(view.root);
     this.corpses.set(id, { state: c, view, removing: false });
+    this.corpseAddedAt.set(id, now);
   }
 
   /** NPC look of a corpse (role + display name), cached per id until its label changes. */
@@ -892,6 +995,8 @@ export class GameRenderer implements GameRendererApi {
         const color = containerSprite(spot).color;
         this.effects.ring(spot.x, spot.y, color, 80, 450, now);
         this.effects.burst(spot.x, spot.y, color, 16, 320, now);
+        this.killcam.addFx(now, FX.RING, "", spot.x, spot.y, color, 80, 450, 5);
+        this.killcam.addFx(now, FX.SPARK, "", spot.x, spot.y, color, 16, 320, 5);
       }
     }
     const ctx = this.ctx;
@@ -926,6 +1031,8 @@ export class GameRenderer implements GameRendererApi {
       const y = cy + Math.sin(a) * muzzle;
       this.effects.shot(this.idx, m.s, w, cx, cy, x, y, m.a, true, now);
       this.players.get(m.s)?.view.kick(SPRITE_RECOIL_PX[w], now);
+      this.killcam.addFx(now, FX.SHOT, m.s, cx, cy, x, y, 0, 4, { w, arr: m.a, self: true });
+      this.killcam.addFx(now, FX.KICK, m.s, SPRITE_RECOIL_PX[w], 0, 0, 0, 0, 1);
       return;
     }
     // Walls are raycast from the shooter's centre, like the server's bullets. A clipped shot of a
@@ -933,8 +1040,12 @@ export class GameRenderer implements GameRendererApi {
     const c = shotCentre(m, muzzle);
     const play = (t: number) => {
       this.effects?.shot(this.idx, m.s, w, c.x, c.y, m.x, m.y, m.a, isSelf, t);
+      this.killcam.addFx(t, FX.SHOT, m.s, c.x, c.y, m.x, m.y, 0, 4, { w, arr: m.a, self: isSelf });
       // The shooter's gun kicks back (only a shooter we render; hidden ones have s = "").
-      if (m.s) this.players.get(m.s)?.view.kick(SPRITE_RECOIL_PX[w], t);
+      if (m.s) {
+        this.players.get(m.s)?.view.kick(SPRITE_RECOIL_PX[w], t);
+        this.killcam.addFx(t, FX.KICK, m.s, SPRITE_RECOIL_PX[w], 0, 0, 0, 0, 1);
+      }
     };
     // Other players are drawn INTERP_DELAY_MS in the past: show their shots on the same timeline.
     if (isSelf) play(now);
@@ -953,12 +1064,18 @@ export class GameRenderer implements GameRendererApi {
       if (remote) this.remoteFx.push(now + INTERP_DELAY_MS, fn);
       else fn(now);
     };
-    at(m.s !== this.selfId, () => this.effects?.stopTracer(m.s, m.x, m.y));
+    at(m.s !== this.selfId, (t) => {
+      this.effects?.stopTracer(m.s, m.x, m.y);
+      this.killcam.addFx(t, FX.STOP, m.s, m.x, m.y, 0, 0, 0, 2);
+    });
     // A target we do not see (in a bush, behind a fence, or the position-less "hit confirmed" of a
     // grenade, t = ""): no burst and no damage number on the map, only the hitmarker, the sound and
     // a neutral puff where our own tracer stopped (a point this client already drew).
     if (m.t !== this.selfId && (!m.t || !this.state?.players.has(m.t))) {
-      if (m.s === this.selfId && Number.isFinite(m.x) && Number.isFinite(m.y)) this.effects.confirmPuff(m.x, m.y, now);
+      if (m.s === this.selfId && Number.isFinite(m.x) && Number.isFinite(m.y)) {
+        this.effects.confirmPuff(m.x, m.y, now);
+        this.killcam.addFx(now, FX.PUFF, "", m.x, m.y, 0, 0, 0, 2);
+      }
       return;
     }
     at(m.t !== this.selfId, (t) => {
@@ -978,14 +1095,25 @@ export class GameRenderer implements GameRendererApi {
         } else dx = dy = 0;
       }
       fx.hitBurst(m.x, m.y, !!m.ar, t, dx, dy);
+      const kc = this.killcam;
+      kc.addFx(t, FX.BURST, m.t, m.x, m.y, dx, dy, 0, 4, { flag: !!m.ar });
       const tv = this.players.get(m.t)?.view;
-      if (m.d > 0 || m.ar) tv?.flashHit(t, dx, dy);
+      if (m.d > 0 || m.ar) {
+        tv?.flashHit(t, dx, dy);
+        kc.addFx(t, FX.FLASH, m.t, dx, dy, 0, 0, 0, 2);
+      }
       if (m.t === this.selfId) {
-        if (m.d > 0) fx.damageNumber(m.t, m.x, m.y, m.d, false, true, t);
+        if (m.d > 0) {
+          fx.damageNumber(m.t, m.x, m.y, m.d, false, true, t);
+          kc.addFx(t, FX.DMG, m.t, m.x, m.y, m.d, 0, 0, 3, { self: true });
+        }
         fx.hurtFlash(m.d);
       } else if (m.s === this.selfId) {
         tv?.revealBars(t);
-        if (m.d > 0) fx.damageNumber(m.t, m.x, m.y, m.d, !!m.ar, false, t);
+        if (m.d > 0) {
+          fx.damageNumber(m.t, m.x, m.y, m.d, !!m.ar, false, t);
+          kc.addFx(t, FX.DMG, m.t, m.x, m.y, m.d, 0, 0, 3, { flag: !!m.ar });
+        }
       }
     });
   }
@@ -1012,6 +1140,8 @@ export class GameRenderer implements GameRendererApi {
     if (v && v.alpha > 0.05 && this.effects) {
       this.effects.burst(v.x, v.y, 0xff3b3b, 22, 380, now);
       this.effects.ring(v.x, v.y, 0xffffff, 70, 400, now);
+      this.killcam.addFx(now, FX.SPARK, "", v.x, v.y, 0xff3b3b, 22, 380, 5);
+      this.killcam.addFx(now, FX.RING, "", v.x, v.y, 0xffffff, 70, 400, 5);
     }
   }
 
@@ -1056,8 +1186,11 @@ export class GameRenderer implements GameRendererApi {
       selfKey: () => this.selfKey(),
       self: () => this.selfState(),
       me: () => this.me(),
-      selfPos: () => this.selfRender ?? { x: this.camX, y: this.camY },
-      aim: () => this.aim,
+      // While replaying / spectating: the replayed self / the watched mate (listener, sound ring…).
+      selfPos: () => this.focus ?? this.selfRender ?? { x: this.camX, y: this.camY },
+      aim: () => (this.focus ? this.focusAim : this.aim),
+      view: () => (this.replay ? "replay" : this.watch ? "spectate" : "live"),
+      watchedId: () => this.watch?.id ?? null,
       camera: () => {
         cam.x = this.camX;
         cam.y = this.camY;
@@ -1120,7 +1253,8 @@ export class GameRenderer implements GameRendererApi {
     const resized = w !== this.screenW || h !== this.screenH;
     this.screenW = w;
     this.screenH = h;
-    this.zoom = Math.sqrt((w * h) / (VIEW_W * VIEW_H)) || 1;
+    const baseZoom = Math.sqrt((w * h) / (VIEW_W * VIEW_H)) || 1;
+    this.zoom = baseZoom;
     // Immersion camera (camera.ts): intro / cinematic zoom, look-ahead + focus offset, kick + shake.
     const rig = getCameraRig();
     if (rig) this.zoom *= rig.zoomMul;
@@ -1133,6 +1267,14 @@ export class GameRenderer implements GameRendererApi {
     const self = this.selfState();
     const controllable = !!this.idx && this.canAct();
     const pred = this.predictor;
+
+    // Death replay (killcam.ts): the recorded frames to draw now; it ends by itself.
+    let rp: ReplaySample | null = this.replay ? this.replay.at(now) : null;
+    if (rp) this.replayProgress = rp.progress;
+    if (rp?.done) {
+      this.endReplay();
+      rp = null;
+    }
 
     // Overlays (inventory / search panel, full map) own the mouse: no fire, aim frozen.
     const blocked = inputBlockedBy(this.opts.isInputBlocked, this.systemsReady ? this.systems : NO_SYSTEMS);
@@ -1176,10 +1318,36 @@ export class GameRenderer implements GameRendererApi {
     }
     // After death / extraction selfRender keeps the last position: the camera stays there.
 
-    if (this.selfRender) {
+    // Spectating: the watched mate's interpolated sprite (the same sample the players loop draws).
+    const renderT = now - INTERP_DELAY_MS;
+    const watchedE = !rp && this.watch ? this.players.get(this.watch.id) : undefined;
+    const watchedS = watchedE ? (watchedE.view.buffer.sample(renderT) ?? { x: watchedE.state.x, y: watchedE.state.y, aim: watchedE.state.aim }) : null;
+    this.focus = null;
+    if (rp) {
+      // The camera as it was (its zoom multiplier on today's screen size), no live rig on top.
+      const { a, b, k } = rp;
+      this.camX = a.camX + (b.camX - a.camX) * k;
+      this.camY = a.camY + (b.camY - a.camY) * k;
+      this.zoom = baseZoom * (a.zoom + (b.zoom - a.zoom) * k);
+      const me0 = entOf(a, this.selfId);
+      if (me0) {
+        const me1 = entOf(b, this.selfId) ?? me0;
+        this.focusPt.x = me0.x + (me1.x - me0.x) * k;
+        this.focusPt.y = me0.y + (me1.y - me0.y) * k;
+        this.focusAim = lerpAngle(me0.aim, me1.aim, k);
+        this.focus = this.focusPt;
+      }
+    } else if (watchedS) {
+      this.zoom = baseZoom;
+      this.camX = this.focusPt.x = watchedS.x;
+      this.camY = this.focusPt.y = watchedS.y;
+      this.focusAim = watchedS.aim;
+      this.focus = this.focusPt;
+    } else if (this.selfRender) {
       this.camX = this.selfRender.x + (rig?.offX ?? 0);
       this.camY = this.selfRender.y + (rig?.offY ?? 0);
     }
+    const liveRig = rp || watchedS ? null : rig;
     if (map) {
       // Never show the void past the map edge.
       const hw = w / 2 / this.zoom, hh = h / 2 / this.zoom;
@@ -1200,8 +1368,8 @@ export class GameRenderer implements GameRendererApi {
     this.remoteFx.flush(now);
     const shake = this.effects?.update(now, dt, w, h) ?? { x: 0, y: 0 };
     this.world.scale.set(this.zoom);
-    const sx = shake.x * (rig?.shakeScale ?? 1) + (rig?.shakeX ?? 0);
-    const sy = shake.y * (rig?.shakeScale ?? 1) + (rig?.shakeY ?? 0);
+    const sx = shake.x * (rig?.shakeScale ?? 1) + (liveRig?.shakeX ?? 0);
+    const sy = shake.y * (rig?.shakeScale ?? 1) + (liveRig?.shakeY ?? 0);
     this.world.position.set(w / 2 - this.camX * this.zoom + sx, h / 2 - this.camY * this.zoom + sy);
 
     const halfW = w / 2 / this.zoom + CULL_MARGIN;
@@ -1209,7 +1377,7 @@ export class GameRenderer implements GameRendererApi {
     const view: ViewRect = { x0: this.camX - halfW, y0: this.camY - halfH, x1: this.camX + halfW, y1: this.camY + halfH };
     const inView = (x: number, y: number) => x >= view.x0 && x <= view.x1 && y >= view.y0 && y <= view.y1;
 
-    const selfOnMap = controllable ? this.selfRender : null;
+    const selfOnMap = controllable ? this.selfRender : this.focus;
     this.worldView?.update(view, selfOnMap, dt);
     this.containers?.update(view.x0, view.y0, view.x1, view.y1, state.containerState as unknown as ArrayLike<number>, now, this.known);
 
@@ -1217,24 +1385,43 @@ export class GameRenderer implements GameRendererApi {
     this.updateEnv(state, clock);
     this.world.tint = this.look.tint;
     const fogOn = !!this.fog && !!this.selfRender;
-    this.eye = fogOn ? { x: this.selfRender!.x, y: this.selfRender!.y, aim: this.aim, range: fogRange(this.env) } : null;
+    if (rp) {
+      // The fog as it was drawn: the replay can never reveal more than the live frame did.
+      const { a, b, k } = rp;
+      this.eye = a.hasEye && this.fog
+        ? { x: a.eyeX + (b.eyeX - a.eyeX) * k, y: a.eyeY + (b.eyeY - a.eyeY) * k, aim: lerpAngle(a.eyeAim, b.eyeAim, k), range: a.eyeRange }
+        : null;
+    } else if (watchedS && this.fog) {
+      this.eye = { x: watchedS.x, y: watchedS.y, aim: watchedS.aim, range: fogRange(this.env) };
+    } else {
+      this.eye = fogOn ? { x: this.selfRender!.x, y: this.selfRender!.y, aim: this.aim, range: fogRange(this.env) } : null;
+    }
     const eye = this.eye;
     const vis = (x: number, y: number, pad: number) => (eye ? entityVisibility(this.idx, eye, x, y, pad) : 1);
 
     const selfBush = selfOnMap && this.bushes ? bushIndexAt(this.bushes, selfOnMap.x, selfOnMap.y) : -1;
 
-    // Players
-    const renderT = now - INTERP_DELAY_MS;
+    // Players. The replay draws its own sprites instead (replayLayer).
+    this.playerLayer.visible = !rp;
+    this.replayLayer.visible = !!rp;
+    // Ground decals (blood, casings, dust) are live, not recorded: they would show the death early.
+    this.layers.ground.visible = !rp;
+    if (rp) this.drawReplay(rp, now);
+    // Killcam: what this frame draws is recorded (only our own live view, never while replaying / watching).
+    const rec = rp || this.watch ? null : this.recordFrame(now, me, self, rig?.zoomMul ?? 1);
     for (const [id, e] of this.players) {
+      if (rp) break;
       const p = e.state;
       const v = e.view;
       if (id === this.selfId) {
         const pos = this.selfRender ?? { x: p.x, y: p.y };
+        const aimNow = controllable ? this.aim : p.aim;
         // Death: our body tips over before the corpse takes over (char-anim, presentation only).
-        if (v.setAlive(p.alive, now, controllable ? this.aim : p.aim)) this.holdCorpseNear(v);
+        if (v.setAlive(p.alive, now, aimNow)) this.holdCorpseNear(v);
         const onMap = (p.alive || v.dyingAt(now)) && (!self || self.extractedAt === 0) && !e.removing;
-        v.setAct(this.selfAct(self, clock), now);
-        v.place(pos.x, pos.y, controllable ? this.aim : p.aim, now);
+        const act = this.selfAct(self, clock);
+        v.setAct(act, now);
+        v.place(pos.x, pos.y, aimNow, now);
         v.root.visible = onMap;
         if (!onMap) continue;
         v.root.alpha = 1;
@@ -1243,6 +1430,7 @@ export class GameRenderer implements GameRendererApi {
         v.setNickname(p.nickname);
         v.setWeapon(p.weapon, now);
         v.setBackpack(p.bp);
+        if (rec) this.recEnt(rec, id, p, pos.x, pos.y, aimNow, 1, act, false);
         continue;
       }
       const s = v.buffer.sample(renderT) ?? { x: p.x, y: p.y, aim: p.aim };
@@ -1274,9 +1462,16 @@ export class GameRenderer implements GameRendererApi {
       v.setBars(p.hp, p.armor, p.armorDur, armorMax, p.maxHp || undefined, now);
       // Enemy HP bars show after the local player hits them (combat-fx HP_REVEAL); bosses and
       // party mates always show theirs.
-      v.updateBarsAlpha(now, p.role === NPC_ROLE.BOSS || this.mateIds.has(id));
+      const barsAlways = p.role === NPC_ROLE.BOSS || this.mateIds.has(id);
+      v.updateBarsAlpha(now, barsAlways);
       const bush = this.bushes ? bushIndexAt(this.bushes, v.x, v.y) : -1;
       v.setLabelVisible(bush < 0 || bush === selfBush);
+      if (rec) this.recEnt(rec, id, p, v.x, v.y, s.aim, v.alpha, p.act, barsAlways);
+    }
+    if (rec && me && !me.alive) {
+      // The death frame: the record stops here (the effects ring takes FX_TAIL_MS more).
+      this.killcam.freeze(now);
+      this.diedHere = true;
     }
 
     // Ground items and corpses: AOI-filtered by the server, faded by the fog here. WORLD v6 (A6):
@@ -1300,12 +1495,16 @@ export class GameRenderer implements GameRendererApi {
     for (const [id, e] of this.corpses) {
       const c = e.state;
       const v = e.view;
-      const target = e.removing || now < v.holdUntil ? 0 : inView(c.x, c.y) ? vis(c.x, c.y, PLAYER_PAD) : 0;
+      // The replay hides the bodies that were not there yet (our own included).
+      const later = !!rp && (this.corpseAddedAt.get(id) ?? 0) > rp.t;
+      if (later) v.alpha = 0;
+      const target = later || e.removing || now < v.holdUntil ? 0 : inView(c.x, c.y) ? vis(c.x, c.y, PLAYER_PAD) : 0;
       v.alpha = fadeToward(v.alpha, target, dt, e.removing && expiryFading(c.expiresAt, clock) ? EXPIRE_FADE_TAU_MS : undefined);
       if (e.removing && v.alpha <= 0) {
         v.destroy();
         this.corpses.delete(id);
         this.corpseNpc.delete(id);
+        this.corpseAddedAt.delete(id);
         continue;
       }
       v.root.alpha = v.alpha * (e.removing ? 1 : expiryBlink(c.expiresAt, clock));
@@ -1349,9 +1548,12 @@ export class GameRenderer implements GameRendererApi {
       this.minimap.layout(w, h);
       this.minimap.update(
         extractInfo,
-        this.selfRender && me?.alive && (!self || self.extractedAt === 0)
-          ? { x: this.selfRender.x, y: this.selfRender.y, aim: controllable ? this.aim : me.aim }
-          : null,
+        // Replaying / spectating: the minimap follows the replayed self / the watched mate.
+        this.focus
+          ? { x: this.focus.x, y: this.focus.y, aim: this.focusAim }
+          : this.selfRender && me?.alive && (!self || self.extractedAt === 0)
+            ? { x: this.selfRender.x, y: this.selfRender.y, aim: controllable ? this.aim : me.aim }
+            : null,
         now,
         state,
         this.partyNow,
@@ -1372,6 +1574,141 @@ export class GameRenderer implements GameRendererApi {
       this.emitHud(state, clock, now);
     }
   };
+
+  // ---------------------------------------------------------------------------------------
+  // Killcam: record what is drawn, replay it after the death (killcam.ts).
+
+  /** Start this frame's record (camera + fog eye), or null (frozen, too soon, not on the map). */
+  private recordFrame(now: number, me: Player | null, self: SelfState | null, zoomMul: number): FrameSnap | null {
+    const kc = this.killcam;
+    if (kc.frozen || !me || !this.mapData) return null;
+    if (self && self.extractedAt > 0) {
+      // Extracted: nothing to replay, stop recording.
+      kc.freeze(now);
+      return null;
+    }
+    // Never seen alive on this client (joined dead): nothing worth keeping.
+    if (!me.alive && kc.frames.size === 0) return null;
+    const f = kc.beginFrame(now, !me.alive);
+    if (!f) return null;
+    f.camX = this.camX;
+    f.camY = this.camY;
+    f.zoom = zoomMul;
+    const eye = this.eye;
+    if (eye) {
+      f.hasEye = true;
+      f.eyeX = eye.x;
+      f.eyeY = eye.y;
+      f.eyeAim = eye.aim;
+      f.eyeRange = eye.range;
+    }
+    return f;
+  }
+
+  /** One drawn player sprite into the frame's record (values only; strings by reference). */
+  private recEnt(f: FrameSnap, id: string, p: Player, x: number, y: number, aim: number, alpha: number, act: number, bars: boolean) {
+    const e = this.killcam.ent(f);
+    if (!e) return;
+    e.id = id;
+    e.self = id === this.selfId;
+    e.x = x;
+    e.y = y;
+    e.aim = aim;
+    e.alpha = alpha;
+    e.alive = p.alive;
+    e.act = act;
+    e.weapon = p.weapon;
+    e.color = p.color;
+    e.skin = p.skin ?? 0;
+    e.nick = p.nickname;
+    e.role = p.role ?? 0;
+    e.bp = p.bp;
+    e.hp = p.hp;
+    e.maxHp = p.maxHp || 0;
+    e.armor = p.armor;
+    e.armorDur = p.armorDur;
+    e.armorMax = p.armor >= 1 && p.armor <= 3 ? ARMOR[p.armor as 1 | 2 | 3].durability : 0;
+    e.bars = bars;
+  }
+
+  /** Draw one replay frame: recorded sprites blended between two samples, then the due effects. */
+  private drawReplay(rp: ReplaySample, now: number) {
+    const tex = this.tex;
+    const icons = this.icons;
+    if (!tex || !icons) return;
+    const { a, b, k } = rp;
+    const seen = this.replaySeen;
+    seen.clear();
+    for (let i = 0; i < a.n; i++) {
+      const ea = a.ents[i]!;
+      const eb = entOf(b, ea.id) ?? ea;
+      let v = this.replayViews.get(ea.id);
+      if (!v) {
+        v = new PlayerView(tex, icons, ea.id, ea.self, ea.nick);
+        v.reset(ea.id, ea.nick);
+        this.replayLayer.addChild(v.root);
+        this.replayViews.set(ea.id, v);
+      }
+      seen.add(ea.id);
+      const x = ea.x + (eb.x - ea.x) * k;
+      const y = ea.y + (eb.y - ea.y) * k;
+      const aim = lerpAngle(ea.aim, eb.aim, k);
+      v.setAlive(ea.alive, now, aim);
+      if (!ea.self) v.setRole(ea.role, ea.nick, this.mapData?.bosses, x, y);
+      v.setColor(ea.color);
+      v.setSkin(ea.skin);
+      v.setNickname(ea.nick);
+      v.setWeapon(ea.weapon, now);
+      v.setBackpack(ea.bp);
+      v.setAct(ea.act, now);
+      v.place(x, y, aim, now);
+      v.alpha = ea.alpha + (eb.alpha - ea.alpha) * k;
+      v.root.alpha = ea.self ? 1 : v.alpha;
+      v.root.visible = ea.self || v.alpha > 0.01;
+      if (!ea.self) {
+        v.setBars(ea.hp, ea.armor, ea.armorDur, ea.armorMax, ea.maxHp || undefined, now);
+        v.updateBarsAlpha(now, ea.bars);
+      }
+    }
+    for (const [id, v] of this.replayViews) if (!seen.has(id)) v.root.visible = false;
+    const fx = this.effects;
+    if (!fx || !this.replay) return;
+    for (const e of this.replay.dueFx(rp.t, rp.done, this.replayFx)) {
+      const n = e.a;
+      switch (e.k) {
+        case FX.SHOT:
+          if (e.arr && e.w in WEAPONS) fx.shot(this.idx, e.s, e.w as WeaponId, n[0]!, n[1]!, n[2]!, n[3]!, e.arr as number[], e.self, now);
+          break;
+        case FX.KICK:
+          this.replayViews.get(e.s)?.kick(n[0]!, now);
+          break;
+        case FX.STOP:
+          fx.stopTracer(e.s, n[0]!, n[1]!);
+          break;
+        case FX.BURST:
+          fx.hitBurst(n[0]!, n[1]!, e.flag, now, n[2]!, n[3]!);
+          break;
+        case FX.FLASH:
+          this.replayViews.get(e.s)?.flashHit(now, n[0]!, n[1]!);
+          break;
+        case FX.DMG:
+          if (!e.self) this.replayViews.get(e.s)?.revealBars(now);
+          fx.damageNumber(e.s, n[0]!, n[1]!, n[2]!, e.flag, e.self, now);
+          break;
+        case FX.PUFF:
+          fx.confirmPuff(n[0]!, n[1]!, now);
+          break;
+        case FX.RING:
+          fx.ring(n[0]!, n[1]!, n[2]!, n[3]!, n[4]!, now);
+          break;
+        case FX.SPARK:
+          fx.burst(n[0]!, n[1]!, n[2]!, n[3]!, n[4]!, now);
+          break;
+        default:
+          break;
+      }
+    }
+  }
 
   /** ACT flags of the local player, from the prediction and own timers (no round trip). */
   private selfAct(self: SelfState | null, clock: number): number {
@@ -1612,6 +1949,14 @@ export class GameRenderer implements GameRendererApi {
       // First-raid tutorial (tutorial.ts): the drawn position and the local aim.
       pose: this.selfRender ? { x: this.selfRender.x, y: this.selfRender.y, aim: this.aim } : null,
       xpGains: this.xpGains.map(({ receivedAt: _r, ...g }) => g),
+      spectate: this.spectateHud(state),
+      replay: {
+        available: this.diedHere && !!this.killcam.window(),
+        playing: !!this.replay,
+        progress: this.replay ? this.replayProgress : 0,
+        played: this.replayPlayed,
+        autoPlay: !reducedMotion(),
+      },
     };
     if (this.touch) {
       const s = snapshot.self;
@@ -1628,6 +1973,32 @@ export class GameRenderer implements GameRendererApi {
     } catch (err) {
       console.error("[game] onHud failed", err);
     }
+  }
+
+  /** Spectate part of the HUD: the living mates to offer, the watched mate's bars, why it ended. */
+  private spectateHud(state: BattleState): NonNullable<HudSnapshot["spectate"]> {
+    const mates: Array<{ key: string; name: string }> = [];
+    for (const m of this.partyNow) if (m.alive && m.key) mates.push({ key: m.key, name: m.name });
+    const w = this.watch;
+    const p = w ? state.players.get(w.id) : undefined;
+    return {
+      mates,
+      watching: w
+        ? {
+            key: w.key,
+            name: w.name,
+            alive: p?.alive ?? true,
+            hp: p ? Math.max(0, Math.round(p.hp)) : 0,
+            maxHp: p?.maxHp || 100,
+            armor: p?.armor ?? 0,
+            armorDur: p?.armorDur ?? 0,
+            armorMax: p && p.armor >= 1 && p.armor <= 3 ? ARMOR[p.armor as 1 | 2 | 3].durability : 0,
+            weapon: p?.weapon ?? "",
+          }
+        : null,
+      pending: this.watchPending !== null,
+      ended: this.watchEnded,
+    };
   }
 
   /** Debug / harness counters (fog cost, entity counts). */
