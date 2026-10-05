@@ -5,6 +5,7 @@ import { QUEST } from "@extract/shared";
 import { ControlsSection, PlayerInstructions, RulesSection } from "@/components/play-instructions";
 import { useLobby } from "@/lib/lobby/lobby-context";
 import { markRewardTable, rewardTable } from "@/lib/lobby/levels";
+import { alphaOneLine } from "@/content/alpha";
 
 /**
  * Info (WORLD v6 spec §6.3): How to play, Rules (currencies, risk, XP table, levels and tasks),
@@ -41,7 +42,7 @@ function AlphaRulesLink() {
       className="toon-panel flex min-h-[44px] items-center justify-between gap-3 bg-amber-300 px-4 py-2.5 text-black hover:bg-amber-200"
     >
       <span className="font-body text-sm font-semibold leading-snug">
-        Alpha test: a test balance, nothing to earn, one item wipe at the end. Level, cosmetics and pass rewards stay.
+        {alphaOneLine()}
       </span>
       <span className="whitespace-nowrap text-sm font-extrabold">Alpha rules →</span>
     </Link>

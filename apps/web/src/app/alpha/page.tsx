@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { TopBar } from "@/components/top-bar";
-import { ALPHA_BUG_CHANNEL_URL, ALPHA_WIPE_DATE, alphaWipeText } from "@/content/alpha";
+import { ALPHA_BUG_CHANNEL_URL, ALPHA_WIPE_DATE, alphaRulesCopy, alphaWipeText } from "@/content/alpha";
 import { BRAND } from "@/lib/brand";
 
-const DESCRIPTION = `${BRAND.name} alpha rules: a test balance with no real money, nothing to earn, one item wipe at the end, and what you keep after it.`;
+/** Build-dependent copy: the iDos edition has no market balance (content/alpha.ts). */
+const COPY = alphaRulesCopy();
+const DESCRIPTION = `${BRAND.name} ${COPY.description}`;
 
 export const metadata: Metadata = {
   title: `Alpha rules — ${BRAND.name}`,
@@ -35,7 +37,8 @@ const linkCls = "font-semibold text-zooa-lime underline decoration-2 underline-o
 /**
  * Public /alpha (docs/ALPHA_PLAN.md B12): the alpha rules in plain English. Server-rendered, no client
  * JS of its own. Linked from the register page and the menu's Info panel. The wipe date and the bug
- * channel come from content/alpha.ts.
+ * channel come from content/alpha.ts, and so does the money copy (no balance, market or Economy page in
+ * the iDos edition).
  */
 export default function AlphaRulesPage() {
   const wipe = alphaWipeText();
@@ -58,7 +61,7 @@ export default function AlphaRulesPage() {
         <div className="mt-6 rounded-xl border-[3px] border-black bg-amber-300 p-4 text-black md:p-5">
           <p className="text-xs font-bold uppercase tracking-[0.18em] lg:text-[0.8125rem]">In short</p>
           <ul className="font-body mt-2 list-disc space-y-2 pl-5 text-[0.95rem] font-semibold leading-relaxed md:text-base">
-            <li>It runs on a test balance. No real money goes in or out.</li>
+            <li>{COPY.shortFirst}</li>
             <li>Nothing here can be cashed out — only exclusive rewards.</li>
             <li>One item wipe at the end of the alpha ({wipe}).</li>
             <li>Your level, cosmetics and Alpha Pass rewards survive the wipe.</li>
@@ -67,7 +70,7 @@ export default function AlphaRulesPage() {
 
         <nav aria-label="Sections" className="font-body mt-6 flex flex-wrap gap-x-4 gap-y-2 text-sm">
           {[
-            ["balance", "Test balance"],
+            [COPY.money.id, COPY.money.nav],
             ["earn", "No earning"],
             ["wipe", "The wipe"],
             ["keep", "What you keep"],
@@ -82,28 +85,23 @@ export default function AlphaRulesPage() {
         </nav>
 
         <div className="mt-6 flex flex-col gap-5">
-          <Section
-            id="balance"
-            title="A test balance, not real money"
-            items={[
-              "Your market balance in the alpha is test money. You cannot deposit real money and you cannot withdraw any.",
-              "The starter kit and market trades are paid from that test balance, so the economy can be tested the way it will work later.",
-              "CR (credits) is the in-game currency for traders and fees. It never turns into money.",
-            ]}
-          />
+          <Section id={COPY.money.id} title={COPY.money.title} items={COPY.money.items} />
           <Section
             id="earn"
             title="No cash-out, only exclusive rewards"
             items={[
-              "The alpha has no payouts of any kind. Items, CR and the test balance have no cash value — what you earn are exclusive rewards: Alpha Pass titles, frames, name colours and the Alpha Veteran skin that stay with you forever.",
-              "The game never pays anyone from its own wallet. Everything it takes in is shown on the Economy page.",
-              <>
-                Do not buy or sell alpha accounts or items for real money: they will be wiped. See the open numbers on{" "}
-                <Link href="/economy" className={linkCls}>
-                  Economy
-                </Link>
-                .
-              </>,
+              ...COPY.earn,
+              COPY.economyLink ? (
+                <>
+                  Do not buy or sell alpha accounts or items for real money: they will be wiped. See the open numbers on{" "}
+                  <Link href="/economy" className={linkCls}>
+                    Economy
+                  </Link>
+                  .
+                </>
+              ) : (
+                "Do not buy or sell alpha accounts or items for real money: they will be wiped."
+              ),
             ]}
           />
           <Section
@@ -115,7 +113,7 @@ export default function AlphaRulesPage() {
                 At the end of the alpha we wipe once. Date: <strong className="font-extrabold text-white">{wipe}</strong>.
                 {ALPHA_WIPE_DATE ? null : " We announce it at least 7 days ahead in News and in the game menu."}
               </>,
-              "The wipe removes items (stash, gear, listings), stacks of ammo and meds, CR and the test balance.",
+              COPY.wipeRemoves,
               "There is only one wipe for the whole alpha. The 45-minute map resets are part of the game and are not wipes.",
             ]}
           />
@@ -169,7 +167,7 @@ export default function AlphaRulesPage() {
             id="data"
             title="What data we keep"
             items={[
-              "Your email, nickname and a password hash (never the password itself), a wallet address if you link one, and your raids, kills, extracts and leaderboard stats.",
+              COPY.dataAccount,
               "Every item and currency change, in a journal, so lost items can be returned and cheating can be found.",
               "Map replays: every map is recorded with each player's position, nickname and account id. Replays are visible only to the team (admins) and are deleted after 14 days.",
               "Bug reports and survey answers you send. We never sell your data.",
@@ -184,9 +182,11 @@ export default function AlphaRulesPage() {
           <Link href="/news" className="hover:text-zooa-lime">
             Patch notes →
           </Link>
-          <Link href="/economy" className="hover:text-zooa-lime">
-            Economy →
-          </Link>
+          {COPY.economyLink && (
+            <Link href="/economy" className="hover:text-zooa-lime">
+              Economy →
+            </Link>
+          )}
         </p>
       </main>
     </div>

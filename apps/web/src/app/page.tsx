@@ -2,7 +2,7 @@ import Link from "next/link";
 import { BREAK_CHANCE_ON_DEATH, MATCH, PARTY, RARITY_NAMES, WORLD, type WeaponId } from "@extract/shared";
 import { Reveal } from "@/components/reveal";
 import { Trailer } from "@/components/trailer";
-import { ALPHA_SHORT, alphaWipeText } from "@/content/alpha";
+import { ALPHA_SHORT, alphaBadge, alphaWipeText } from "@/content/alpha";
 import { BRAND } from "@/lib/brand";
 import { EDITION_UI } from "@/lib/edition";
 import { rarityHex } from "@/lib/items-ui";
@@ -109,7 +109,7 @@ function Hero() {
             className="mb-4 inline-flex items-center gap-2 rounded-full border-[3px] border-black bg-amber-300 px-4 py-1.5 text-sm font-bold tracking-wide text-black shadow-[0_3px_0_#000] md:text-base"
           >
             <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-rose-600" aria-hidden />
-            ALPHA TEST · free · test balance →
+            {alphaBadge()}
           </Link>
           <h1
             className="toon-text text-[clamp(4rem,15vw,11rem)] leading-none tracking-wide text-zooa-lime"
