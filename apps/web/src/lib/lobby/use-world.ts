@@ -4,9 +4,11 @@
  * Lobby data hooks (WORLD v6 spec §6.5): the public world status, the caller's /api/me/world, page
  * visibility and the one shared clock tick. Polling is light on purpose (the owner's laptop and the
  * CDN both matter): status every 15 s and me/world every 60 s, both only while the tab is visible.
+ * Each still fetches once on mount whatever the visibility (see poller.ts).
  */
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MeWorldDto, WorldStatusDto } from "@extract/shared";
+import { Poller } from "./poller";
 
 export const STATUS_POLL_MS = 15_000;
 export const ME_POLL_MS = 60_000;
@@ -38,18 +40,25 @@ export function useTicker(ms = 1000, active = true): number {
 }
 
 /**
- * setInterval that only runs while `active`, plus one immediate call when it (re)activates and the
- * last call is older than `ms`. A new `key` (another account) restarts it.
+ * Fetch once on mount (visible or not), then every `ms` while `active`, plus once when it turns
+ * active again (tab visible / battle over). A new `key` (another account) starts over.
  */
-function usePoll(fn: () => void, ms: number, active: boolean, lastAt: MutableRefObject<number>, key: string | null = null): void {
+function usePoll(fn: () => void, ms: number, active: boolean, key: string | null = null): void {
   const fnRef = useRef(fn);
   fnRef.current = fn;
+  const pollerRef = useRef<Poller | null>(null);
   useEffect(() => {
-    if (!active) return;
-    if (Date.now() - lastAt.current >= ms) fnRef.current();
-    const id = window.setInterval(() => fnRef.current(), ms);
-    return () => window.clearInterval(id);
-  }, [ms, active, lastAt, key]);
+    const p = new Poller(() => fnRef.current(), ms);
+    pollerRef.current = p;
+    p.start();
+    return () => {
+      p.dispose();
+      if (pollerRef.current === p) pollerRef.current = null;
+    };
+  }, [ms, key]);
+  useEffect(() => {
+    pollerRef.current?.setActive(active);
+  }, [active, ms, key]);
 }
 
 export interface WorldStatusResource {
@@ -65,20 +74,18 @@ function isStatus(v: unknown): v is WorldStatusDto {
 }
 
 /**
- * GET /api/world/status: on mount, every STATUS_POLL_MS while visible, and on `reload()`.
+ * GET /api/world/status: on mount (even in a hidden tab), every STATUS_POLL_MS while visible, and on `reload()`.
  * `onClock(serverTime, ageHeader)` gets every good response (the menu's clock offset).
  */
 export function useWorldStatus(visible: boolean, onClock: (serverTime: number, age: string | null) => void): WorldStatusResource {
   const [data, setData] = useState<WorldStatusDto | null>(null);
   const [fails, setFails] = useState(0);
-  const lastAt = useRef(0);
   const seq = useRef(0);
   const clockRef = useRef(onClock);
   clockRef.current = onClock;
 
   const reload = useCallback(async () => {
     const my = ++seq.current;
-    lastAt.current = Date.now();
     try {
       const res = await fetch("/api/world/status", { credentials: "omit" });
       const body: unknown = await res.json().catch(() => null);
@@ -92,7 +99,7 @@ export function useWorldStatus(visible: boolean, onClock: (serverTime: number, a
     }
   }, []);
 
-  usePoll(() => void reload(), STATUS_POLL_MS, visible, lastAt);
+  usePoll(() => void reload(), STATUS_POLL_MS, visible);
   return { data, error: fails >= STATUS_FAILS_OFFLINE, reload };
 }
 
@@ -109,11 +116,10 @@ function isMeWorld(v: unknown): v is MeWorldDto {
 
 /**
  * GET /api/me/world for a signed-in caller (`userKey` = their id; null = signed out → null): on
- * mount, every ME_POLL_MS while visible, and on `reload()` (after a battle).
+ * mount (even in a hidden tab), every ME_POLL_MS while visible, when the tab turns visible, and on `reload()` (after a battle).
  */
 export function useMeWorld(userKey: string | null, visible: boolean, onClock: (serverTime: number) => void): MeWorldResource {
   const [data, setData] = useState<MeWorldDto | null | undefined>(undefined);
-  const lastAt = useRef(0);
   const seq = useRef(0);
   const clockRef = useRef(onClock);
   clockRef.current = onClock;
@@ -124,7 +130,6 @@ export function useMeWorld(userKey: string | null, visible: boolean, onClock: (s
       setData(null);
       return;
     }
-    lastAt.current = Date.now();
     try {
       const res = await fetch("/api/me/world", { credentials: "include", cache: "no-store" });
       const body: unknown = await res.json().catch(() => null);
@@ -142,12 +147,11 @@ export function useMeWorld(userKey: string | null, visible: boolean, onClock: (s
   }, [userKey]);
 
   // A different account (sign in / out) starts from "loading" again. Declared before the poll so
-  // its reset runs first and the poll's immediate call sees lastAt = 0.
+  // its reset runs before the poll's first fetch for that account.
   useEffect(() => {
     setData(userKey ? undefined : null);
-    lastAt.current = 0;
   }, [userKey]);
 
-  usePoll(() => void reload(), ME_POLL_MS, visible && userKey !== null, lastAt, userKey);
+  usePoll(() => void reload(), ME_POLL_MS, visible && userKey !== null, userKey);
   return { data, reload };
 }
