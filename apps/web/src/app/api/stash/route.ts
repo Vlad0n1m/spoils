@@ -26,8 +26,9 @@ async function stashMoney(userId: string): Promise<StashMoneyDto> {
 }
 
 /**
- * Lobby stash: uniques, stacks, CR, level, active loadout, saved draft, junker multiplier; in the main
- * build also the market wallet, market rules and the starter-kit offer (left out in the iDos edition).
+ * Lobby stash: uniques, stacks, CR, level, active loadout, saved draft, junker multiplier and the CR
+ * market's rules; in the main build also the market wallet and the starter-kit offer (left out in
+ * the iDos edition).
  */
 export async function GET() {
   const c = await caller();
@@ -39,5 +40,5 @@ export async function GET() {
     getNumberParam(db, PARAM.AUTOSELL_MULT),
     SOL_ECONOMY ? stashMoney(c.userId) : Promise.resolve(null),
   ]);
-  return json<StashResponse>(stashResponse(stash, autosellMult, money));
+  return json<StashResponse>(stashResponse(stash, autosellMult, money, marketConfig()));
 }

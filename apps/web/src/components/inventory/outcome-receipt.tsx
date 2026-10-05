@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import type { SettledItem } from "@extract/shared";
 import { fmtCr, rarityHex, type Receipt } from "@/lib/items-ui";
-import { EDITION_UI } from "@/lib/edition";
+import { SOL_ECONOMY } from "@/lib/edition";
 import { InvSlot } from "./inv-slot";
 
 export function ItemStrip({
@@ -90,7 +90,7 @@ export function SellReceipt({
       <div className="flex items-baseline justify-between">
         <h3 className="text-sm uppercase tracking-[0.18em] text-black/60">{guest ? "Would sell for" : "Junk sold"}</h3>
         {receipt.mult !== 1 && (
-          <span className="font-body text-xs font-semibold text-black/55">{EDITION_UI.market ? "market" : "junker"} ×{receipt.mult.toFixed(2)}</span>
+          <span className="font-body text-xs font-semibold text-black/55">{SOL_ECONOMY ? "market" : "junker"} ×{receipt.mult.toFixed(2)}</span>
         )}
       </div>
       {n === 0 ? (

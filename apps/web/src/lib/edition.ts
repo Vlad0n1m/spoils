@@ -89,11 +89,11 @@ export function isIdosFramed(idosBuild: boolean = IDOS_BUILD, win?: FrameWindow)
 }
 
 /**
- * The SOL economy (docs/IDOS_EDITION.md §3.5): the player-to-player market and treasury lots, the paid
+ * The SOL economy (docs/IDOS_EDITION.md §3.5): treasury lots and the on-chain SOL escrow, the paid
  * starter kit, the custodial balance with deposit / withdraw / dev top-up, wallet linking (SIWS) and
- * the /economy money page. On in the main build; off in the iDos edition, whose economy is the iDos
- * Title's (its currencies, store and game token) and which keeps only the game loop (raids, loot,
- * CR traders, XP, levels, pass, friends, leaderboards).
+ * the /economy money page. On in the main build; off in the iDos edition, whose money is the iDos
+ * Title's (its store and the SPOILS game token, lib/idos/shop.ts) and which keeps the game loop (raids,
+ * loot, CR traders, the CR player market, XP, levels, pass, friends, leaderboards).
  */
 export function solEconomyEnabled(idosBuild: boolean = IDOS_BUILD): boolean {
   return !idosBuild;
@@ -112,13 +112,17 @@ export interface EditionUi {
   economyLinks: boolean;
   /** The paid starter kit card and "Buy starter kit" buttons. */
   starterKitSale: boolean;
-  /** Shop · Market tab, "Sell on market" in the stash, market lines in the rules. */
+  /**
+   * Shop · Market tab, "Sell on market" in the stash, market lines in the rules. On in both builds:
+   * the player market runs on CR (alpha decision 05.10, lib/market/market.ts), not SOL, so the
+   * edition keeps it, without any SOL wording (the SOL lines check SOL_ECONOMY instead).
+   */
   market: boolean;
 }
 
 export function editionUi(idosBuild: boolean = IDOS_BUILD): EditionUi {
   const sol = solEconomyEnabled(idosBuild);
-  return { walletBalance: sol, walletLinks: sol, economyLinks: sol, starterKitSale: sol, market: sol };
+  return { walletBalance: sol, walletLinks: sol, economyLinks: sol, starterKitSale: sol, market: true };
 }
 
 /** editionUi() of this bundle. */
@@ -127,9 +131,11 @@ export const EDITION_UI: EditionUi = editionUi();
 /**
  * API routes of the SOL economy: 404 in the edition (middleware.ts), whatever the UI shows.
  * Cron routes are not listed (the edition's cron keeps calling them; they hold no SOL path today).
+ * /api/market is not here: the player market is CR-only (lib/market/market.ts), and the edition's
+ * SPOILS shop sells into it under the trader price cap. SOL trading of items (the on-chain escrow)
+ * is /api/onchain, which stays off.
  */
 export const IDOS_DISABLED_API: readonly string[] = Object.freeze([
-  "/api/market",
   "/api/wallet",
   "/api/withdraw",
   "/api/stash/starter",
@@ -140,7 +146,7 @@ export const IDOS_DISABLED_API: readonly string[] = Object.freeze([
 /** Pages of the SOL economy: the edition redirects them to /play. */
 export const IDOS_DISABLED_PAGES: readonly string[] = Object.freeze(["/wallet", "/economy", "/onchain"]);
 
-/** Edition-only API (the iDos sign-in bridge): 404 in the main build. */
+/** Edition-only API (the iDos sign-in bridge, the SPOILS shop and balance): 404 in the main build. */
 export const MAIN_DISABLED_API: readonly string[] = Object.freeze(["/api/idos"]);
 
 /** `/api/market` covers `/api/market` and `/api/market/buy`, never `/api/marketing`. */

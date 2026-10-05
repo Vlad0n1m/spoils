@@ -5,7 +5,8 @@ import Link from "next/link";
 import type { StashItemDto, StashResponse } from "@/lib/lobby/api-types";
 import { fmtCr } from "@/lib/items-ui";
 import { panelHref } from "@/lib/lobby/panels";
-import { hasStashMoney } from "@/lib/lobby/stash-response";
+import { hasStashMarket } from "@/lib/lobby/stash-response";
+import { SOL_ECONOMY } from "@/lib/edition";
 import { ItemCard } from "./item-card";
 import { ListDialog } from "./list-dialog";
 import { MarketTable, RecentTrades } from "./market-table";
@@ -29,8 +30,8 @@ export function MarketTab({ stash, sessionLoading = false }: { stash: Resource<S
   const [refreshKey, setRefreshKey] = useState(0);
   const [selling, setSelling] = useState<StashItemDto | null>(null);
   const [side, setSide] = useState<Side>("sell");
-  // Market wallet and rules come with /api/stash in the main build only (absent in the iDos edition).
-  const s = stash?.data && hasStashMoney(stash.data) ? stash.data : null;
+  // The CR market rules come with /api/stash in both builds (the SOL wallet only in the main build).
+  const s = stash?.data && hasStashMarket(stash.data) ? stash.data : null;
   const bump = () => {
     setRefreshKey((k) => k + 1);
     void stash?.reload();
@@ -59,9 +60,12 @@ export function MarketTab({ stash, sessionLoading = false }: { stash: Resource<S
                     Lots are priced in CR · {(s.market.feeBps / 100).toFixed(s.market.feeBps % 100 ? 1 : 0)}% fee on sales
                   </p>
                 </div>
-                <Link href="/onchain" className="toon-btn-ghost min-h-10 shrink-0 whitespace-nowrap px-4 text-sm [@media(pointer:coarse)]:min-h-11 short:!min-h-9">
-                  <span className="optical-center">SOL market</span>
-                </Link>
+                {/* The on-chain SOL escrow is main-build only (the iDos edition blocks /onchain). */}
+                {SOL_ECONOMY && (
+                  <Link href="/onchain" className="toon-btn-ghost min-h-10 shrink-0 whitespace-nowrap px-4 text-sm [@media(pointer:coarse)]:min-h-11 short:!min-h-9">
+                    <span className="optical-center">SOL market</span>
+                  </Link>
+                )}
               </div>
             </section>
             <Segmented options={SIDE} value={side} onChange={setSide} label="Your market" className="self-start" />

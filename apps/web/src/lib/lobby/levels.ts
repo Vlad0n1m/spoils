@@ -14,7 +14,7 @@ import {
   itemDef,
   type CosmeticKind,
 } from "@extract/shared";
-import { solEconomyEnabled } from "../edition";
+import { EDITION_UI } from "../edition";
 
 /** Level badge colour (spec §6.2): 1–4 grey, 5–9 lime, 10–14 blue, 15–19 violet, 20+ gold. */
 export function levelColor(level: number): string {
@@ -67,13 +67,13 @@ export function cosmeticItem(id: string): RewardItem | null {
 }
 
 /**
- * Level that unlocks market selling, as the reward lines show it: MARKET.SELL_UNLOCK_LEVEL in the
- * main build, null in the iDos edition (no market, docs/IDOS_EDITION.md §3.5), so no level promises
- * "Market selling unlocked" there. A level passed by the caller (the server's demo rule, from
- * /api/stash) wins; `undefined` means "use this default".
+ * Level that unlocks market selling, as the reward lines show it: MARKET.SELL_UNLOCK_LEVEL wherever a
+ * build has the player market (both builds now: it runs on CR, lib/edition.ts EDITION_UI.market),
+ * null for a build without one, so no level promises "Market selling unlocked" there. A level passed
+ * by the caller (the server's demo rule, from /api/stash) wins; `undefined` means "use this default".
  */
-export function defaultSellUnlockLevel(sol: boolean = solEconomyEnabled()): number | null {
-  return sol ? MARKET.SELL_UNLOCK_LEVEL : null;
+export function defaultSellUnlockLevel(market: boolean = EDITION_UI.market): number | null {
+  return market ? MARKET.SELL_UNLOCK_LEVEL : null;
 }
 
 /** Feature unlocks of exactly `level`: market selling, a new bound-trader tier with offers, badge colour. */
