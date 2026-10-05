@@ -87,7 +87,7 @@ export function MenuTopBar({ onCredits, onRewards }: { onCredits: () => void; on
           {sessionKind === "user" && (
             <>
               <CreditsPill value={s ? fmtCr(s.credits) : null} onClick={onCredits} className="ml-3 port:ml-1" />
-              {EDITION_UI.walletBalance && <WalletPill value={s ? formatMinor(s.balance) : null} className="ml-3 port:hidden" />}
+              {EDITION_UI.walletBalance && <WalletPill value={s?.balance !== undefined ? formatMinor(s.balance) : null} className="ml-3 port:hidden" />}
             </>
           )}
           {sessionKind === "guest" && (

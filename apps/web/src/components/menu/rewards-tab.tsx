@@ -33,7 +33,7 @@ const VIEWS: ReadonlyArray<{ id: View; label: string }> = [
 export function RewardsTab({ loading, error }: { loading: React.ReactNode; error: React.ReactNode }) {
   const { data, error: failed } = useQuests();
   const { stash, user } = useLobby();
-  const sell = stash.data?.market.sellUnlockLevel;
+  const sell = stash.data?.market?.sellUnlockLevel;
   const [view, setView] = useState<View>("level");
   if (!data) return <>{failed ? error : loading}</>;
   const xp = stash.data?.xp ?? null;

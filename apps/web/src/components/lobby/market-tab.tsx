@@ -6,6 +6,7 @@ import type { StashItemDto, StashResponse } from "@/lib/lobby/api-types";
 import { fmtCr } from "@/lib/items-ui";
 import { formatMinor } from "@/lib/market/config";
 import { panelHref } from "@/lib/lobby/panels";
+import { hasStashMoney } from "@/lib/lobby/stash-response";
 import { ItemCard } from "./item-card";
 import { ListDialog } from "./list-dialog";
 import { MarketTable, RecentTrades } from "./market-table";
@@ -29,7 +30,8 @@ export function MarketTab({ stash, sessionLoading = false }: { stash: Resource<S
   const [refreshKey, setRefreshKey] = useState(0);
   const [selling, setSelling] = useState<StashItemDto | null>(null);
   const [side, setSide] = useState<Side>("sell");
-  const s = stash?.data ?? null;
+  // Market wallet and rules come with /api/stash in the main build only (absent in the iDos edition).
+  const s = stash?.data && hasStashMoney(stash.data) ? stash.data : null;
   const bump = () => {
     setRefreshKey((k) => k + 1);
     void stash?.reload();

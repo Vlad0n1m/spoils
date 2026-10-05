@@ -125,7 +125,11 @@ export function GearStrip({
   const entries = guest || !signedIn ? [] : loadoutOf(stash);
   if (entries.length === 0) {
     const hasGear = Boolean(stash?.uniques.some((u) => u.state === "in_stash"));
-    const buyKit = EDITION_UI.starterKitSale && signedIn && !guest && stash && !stash.uniques.some((u) => u.state === "in_stash" && itemDef(u.def)?.cat === "weapon");
+    // The kit offer is absent from /api/stash in the iDos edition (no paid kit there).
+    const kitPrice =
+      EDITION_UI.starterKitSale && signedIn && !guest && stash?.kit && !stash.uniques.some((u) => u.state === "in_stash" && itemDef(u.def)?.cat === "weapon")
+        ? formatMinor(stash.kit.priceMinor)
+        : null;
     return (
       <div className="flex items-end gap-3 short:gap-2">
         <div className="relative">
@@ -143,17 +147,17 @@ export function GearStrip({
             )}
           </ul>
         </div>
-        {buyKit && (
+        {kitPrice !== null && (
           <button
             type="button"
             onClick={onStarter}
-            aria-label={`Buy starter kit · ${formatMinor(stash.kit.priceMinor)}`}
+            aria-label={`Buy starter kit · ${kitPrice}`}
             className="menu-chip h-[4.6rem] max-w-[8.5rem] flex-col justify-center bg-[linear-gradient(180deg,#fff27a,#ffd91f_45%,#ffb800)] px-3 text-center text-black focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white/70 short:h-[4rem] short:max-w-[7.5rem]"
           >
             <span className="text-base leading-none tracking-wide short:text-sm">
               <span className="optical-center">Buy starter kit</span>
             </span>
-            <span className="font-body mt-1 text-xs font-bold leading-tight text-black/80">{formatMinor(stash.kit.priceMinor)}</span>
+            <span className="font-body mt-1 text-xs font-bold leading-tight text-black/80">{kitPrice}</span>
             <span className="absolute -right-2 -top-2 h-5 w-5 rounded-full border-[3px] border-black bg-rose-500" aria-hidden />
           </button>
         )}
