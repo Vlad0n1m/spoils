@@ -34,6 +34,7 @@ import {
 } from "@extract/shared";
 import { BOLT_DRAW_PX, COLORS } from "./assets";
 import { emptyEnvSource, rememberEnvSource, sameEnvSource } from "./audio/ambience";
+import { ANIM, ROLL_MS } from "./char-anim";
 import { DMG_NUM, damageNumberPose, damageNumberStyle } from "./combat-fx";
 import { tracerLengths } from "./shots";
 import type { GameContext, GameSystem } from "./systems";
@@ -1075,6 +1076,9 @@ export const PUFF = {
   ROLL_N: 7,
   ROLL_SIZE: [8, 26] as const,
   ROLL_LIFE_MS: 700,
+  /** Roll landing puff (smaller, thrown forward). */
+  ROLL_END_N: 5,
+  ROLL_END_SIZE: [7, 20] as const,
   BODY_N: 12,
   BODY_SIZE: [10, 34] as const,
   BODY_LIFE_MS: 900,
@@ -1220,7 +1224,10 @@ export class PuffField<P extends FxParticle> {
 // ------------------------------------------------------------------------------- delay queue
 
 /** Deferred world FX (remote events on the past timeline, pump / bolt casings). */
-export const FX_EV = { CASING: 1, BLOOD: 2, POOL: 3, BODY: 4, STEP: 5, ROLL: 6 } as const;
+export const FX_EV = { CASING: 1, BLOOD: 2, POOL: 3, BODY: 4, STEP: 5, ROLL: 6, ROLL_END: 7 } as const;
+
+/** The body dust lands when a falling body hits the ground (char-anim death, ~60 % of the fall). */
+export const BODY_IMPACT_MS = Math.round(ANIM.DEATH_MS * 0.6);
 
 /** Fixed-capacity unsorted queue in typed arrays; `drain` calls `fire` for each due entry. */
 export class FxQueue {
@@ -1544,6 +1551,10 @@ class WorldFxSystem implements GameSystem {
   private stride = 0;
   private foot = 1;
   private prevRoll = 0;
+  /** Remote rollers whose landing puff is queued (FX_EV.ROLL_END carries the slot). */
+  private readonly rollIds: string[] = ["", "", "", "", "", "", "", ""];
+  private rollSlot = 0;
+  private state: ReturnType<GameContext["state"]> = null;
 
   // Environment (wet ground: no dust).
   private cfg: EnvConfig | null = null;
@@ -1636,14 +1647,14 @@ class WorldFxSystem implements GameSystem {
         if (m.victimId === sid) {
           const p = ctx.selfPos();
           this.queue.push(now, FX_EV.POOL, p.x, p.y);
-          this.queue.push(now + 60, FX_EV.BODY, p.x, p.y);
+          this.queue.push(now + BODY_IMPACT_MS, FX_EV.BODY, p.x, p.y);
           continue;
         }
         // Only bodies this client can see (KILL is broadcast with names only).
         const v = state?.players.get(m.victimId);
         if (!v) continue;
         this.queue.push(now + FX_REMOTE_DELAY_MS, FX_EV.POOL, v.x, v.y);
-        this.queue.push(now + FX_REMOTE_DELAY_MS + 60, FX_EV.BODY, v.x, v.y);
+        this.queue.push(now + FX_REMOTE_DELAY_MS + BODY_IMPACT_MS, FX_EV.BODY, v.x, v.y);
       }
     }
 
@@ -1660,6 +1671,13 @@ class WorldFxSystem implements GameSystem {
         const variant = remoteDustVariant(kind, v[i + 2], p.act, ctx.map(), p.x, p.y);
         if (variant < 0) continue;
         this.queue.push(now + FX_REMOTE_DELAY_MS, kind === SoundKind.roll ? FX_EV.ROLL : FX_EV.STEP, p.x, p.y, p.aim, variant);
+        if (kind === SoundKind.roll) {
+          // Landing puff where the roll ends: looked up when it is due (the roll travels ~200 px).
+          const slot = this.rollSlot;
+          this.rollSlot = (slot + 1) % this.rollIds.length;
+          this.rollIds[slot] = id;
+          this.queue.push(now + FX_REMOTE_DELAY_MS + ROLL_MS, FX_EV.ROLL_END, p.x, p.y, slot, variant);
+        }
       }
     }
   }
@@ -1739,7 +1757,18 @@ class WorldFxSystem implements GameSystem {
         if (tint >= 0) puffs.burst(x, y + 8, PUFF.ROLL_N, a + Math.PI, 0.3, 55, PUFF.ROLL_SIZE, PUFF.ROLL_LIFE_MS, tint, PUFF.STEP_ALPHA, now);
         break;
       }
+      case FX_EV.ROLL_END: {
+        const tint = this.dustOf(b);
+        const p = this.state?.players.get(this.rollIds[a | 0] ?? "");
+        if (tint >= 0 && p) this.landingPuff(p.x, p.y, Math.atan2(p.y - y, p.x - x), tint, now);
+        break;
+      }
     }
+  }
+
+  /** Roll landing: a smaller puff thrown forward along the roll. */
+  private landingPuff(x: number, y: number, dir: number, tint: number, now: number): void {
+    this.puffs!.burst(x, y + 8, PUFF.ROLL_END_N, dir, 0.45, 45, PUFF.ROLL_END_SIZE, PUFF.ROLL_LIFE_MS * 0.8, tint, PUFF.STEP_ALPHA, now);
   }
 
   /** A few small dust puffs at the feet, kicked backward from the movement direction. */
@@ -1760,6 +1789,7 @@ class WorldFxSystem implements GameSystem {
     const now = performance.now();
     const map = ctx.map();
     const state = ctx.state();
+    this.state = state;
     if (map !== this.map) {
       this.map = map;
       this.lastX = Number.NaN;
@@ -1811,6 +1841,10 @@ class WorldFxSystem implements GameSystem {
     if (rolling && this.prevRoll === 0) {
       const tint = this.dustAt(map, p.x, p.y);
       if (tint >= 0) this.puffs!.burst(p.x, p.y + 8, PUFF.ROLL_N, Math.atan2(-self.rollDy, -self.rollDx), 0.3, 55, PUFF.ROLL_SIZE, PUFF.ROLL_LIFE_MS, tint, PUFF.STEP_ALPHA, now);
+    }
+    if (!rolling && this.prevRoll > 0) {
+      const tint = this.dustAt(map, p.x, p.y);
+      if (tint >= 0) this.landingPuff(p.x, p.y, Math.atan2(self.rollDy, self.rollDx), tint, now);
     }
     this.prevRoll = self.rollLeft;
     if (d > 200 || rolling) return; // teleport / respawn, or a roll (no steps, like the server)
