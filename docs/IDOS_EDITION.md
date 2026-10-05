@@ -283,8 +283,12 @@ lockfile основной сборки; собирается своим `npm`.
 4. На `postMessage` «hello» от iframe (проверка `origin` и `source`) отвечает
    `{ titleId, userId, ticket }` только в `origin` игры.
 
-Проверено: `tsc` по настоящим типам `@idosgames/core` 0.21.1 (скачаны только `.d.ts` с jsdelivr во
-временную папку). Не проверено: сборка Vite (зависимости не ставил), поведение в живом фрейме
+Проверено 05.10: `npm install` в папке (19 пакетов, свой `package-lock.json`; корневой lockfile и
+pnpm-workspace не тронуты; версия `@idosgames/core` 0.21.1 совпадает с манифестом iDos), `tsc` и
+`vite build` проходят: бандл 543 КБ (126 КБ gzip, почти весь — SDK), `build.zip` 123 КБ. Локально
+(`vite preview`): без тайтла — «This page only runs on its iDos Games address»; с временно подставленным
+id — экран «Continue with iDos Games» / «Play as guest», гость с несуществующим тайтлом получает 400 от
+`api.idosgames.com` и текст ошибки. Не проверено: вход на живом тайтле, поведение в фрейме
 idosgames.com (вложенный iframe, звук, полноэкранный режим, cookie на iPhone).
 
 ### 3.3 Мост входа (auth bridge) — сделано, вариант Б
@@ -478,6 +482,17 @@ SOL-рынок и казна (`lib/inventory`, `api/market`), девнет по 
 Агент сам задеплоить не может: OAuth MCP настроек тайтла, создание тайтла, VPS/DNS и кошелёк для
 токена — только Влад. Значения переменных в репозиторий не кладём, ниже только имена.
 
+### 9.0 Что нужно от Влада (сводка)
+
+1. Авторизовать MCP `idosgames-title` (`/mcp` в терминальном `claude`): тайтл SPOILS, права
+   `config:read`, `config:write`, `build:write`. После этого агент читает настройки и заливает
+   оболочку в DEV.
+2. VPS с Docker Compose 2.24.4+, nginx, certbot (можно тот же, что для основной версии).
+3. Домен и две `A`-записи на IP VPS: `idos.<домен>` (сайт издания) и `game-idos.<домен>` (WebSocket).
+4. `.env.idos.local` в корне репозитория на VPS — новые значения (п. 9.2.3), агенту их не показывать.
+5. Сказать агенту домен и Title ID — дальше он даёт команды с подставленными значениями.
+6. Публичный GitHub-репозиторий (сейчас у репозитория нет remote) — для сабмита (§10).
+
 ### 9.1 Тайтл и доступ агента (Влад)
 
 1. idosgames.com → дашборд издателя → создать тайтл: web3, сеть Solana. Записать **Title ID**
@@ -499,8 +514,9 @@ SOL-рынок и казна (`lib/inventory`, `api/market`), девнет по 
 1. VPS (тот же, что основной, если тянет; см. `SCALING.md`), Docker Compose 2.24.4+, nginx, certbot.
 2. DNS: `A`-записи `idos.<домен>` и `game-idos.<домен>` → IP VPS.
 3. На VPS из корня репозитория: `cp .env.example .env.idos.local`, заполнить **новыми** секретами
-   (не копировать основные): `SESSION_SECRET`, `CRON_SECRET`, `GAME_SERVER_HMAC_SECRET`,
-   `POSTGRES_PASSWORD`, `MASTER_SEED_HEX`, `CHAIN_HASH_SALT`. Обязательно:
+   (не копировать основные): `SESSION_SECRET`, `CRON_SECRET` (16+ символов), `GAME_SERVER_HMAC_SECRET`,
+   `WORLD_SEED_SECRET`, `POSTGRES_PASSWORD`, `MASTER_SEED_HEX` (64+ hex; без него `/api/idos/session` не
+   создаст аккаунт), `CHAIN_HASH_SALT`. Генерация, например: `openssl rand -hex 32`. Обязательно:
    - `IDOS_BUILD=1`
    - `IDOS_TITLE_IDS=<ID>-DEV` (на время теста), потом `<ID>` или `"<ID> <ID>-DEV"`
    - `NEXT_PUBLIC_GAME_SERVER_URL=wss://game-idos.<домен>`
@@ -538,7 +554,7 @@ SOL-рынок и казна (`lib/inventory`, `api/market`), девнет по 
 
 ```bash
 cd deploy/idos-shell
-npm install
+npm ci
 VITE_SPOILS_EDITION_URL=https://idos.<домен>/play npm run build
 cd dist && zip -r ../build.zip . && cd ..
 ```
@@ -550,6 +566,10 @@ cd dist && zip -r ../build.zip . && cd ..
 3. `finish_build_upload { title_id: "<ID>", build_id, deploy: false }` → `TestUrl` (DEV-адрес);
    если ещё распаковывается — `get_build`;
 4. проверить `TestUrl` (9.6), затем `finish_build_upload { …, deploy: true }` — живая версия.
+
+Пока домена нет, для проверки входа на DEV собирать с заглушкой
+`VITE_SPOILS_EDITION_URL=https://idos.spoils.invalid/play`: вход iDos / гость проходит, после него
+iframe пустой (адрес не существует). Перед боевой заливкой — пересобрать с настоящим адресом.
 
 Без MCP: то же через дашборд iDos (загрузка сборки), если там есть такая кнопка **[не проверено]**.
 
@@ -599,16 +619,40 @@ cd dist && zip -r ../build.zip . && cd ..
 ## 10. Сабмит: чек-лист
 
 Superteam Earn (трек Superteam KZ × iDos) и Colosseum, дедлайн 13.10.2026 06:59 UTC, сдаём 12.10 до
-18:00 UTC.
+18:00 UTC. Обновлено 05.10.
 
-- [ ] **Ссылка на игру**: страница тайтла на idosgames.com (и прямой `https://<id>.idos.games`)
-- [ ] **Built with iDos**: тайтл на iDos, вход через SDK `@idosgames/core` (оболочка), хостинг iDos
-- [ ] **Solana**: токен игры на Solana через iDos (mint, Solscan); в основной версии — SIWS,
-      программа событий на devnet (по желанию упомянуть)
-- [ ] **GitHub**: публичный репозиторий (или доступ судьям), README с описанием, архитектурой,
-      запуском обеих сборок, разделом про iDos
-- [ ] **Демо-видео** 2–3 мин: вход через iDos → лобби → рейд → лут → выход → торговцы/уровень →
-      токен на странице тайтла
-- [ ] **Описание проекта**, скриншоты, команда, контакты
-- [ ] Colosseum: отдельная форма (проект, видео, GitHub, ссылка) — вопрос с командой решён 04.10
+**Ссылки (заполнить по мере готовности):**
+
+| Что | Значение | Статус |
+|---|---|---|
+| Страница тайтла на idosgames.com | — | после 9.4 |
+| Прямой адрес оболочки | `https://<id>.idos.games` | после 9.3 |
+| Сайт издания | `https://idos.<домен>/play` | после 9.2 |
+| Токен (mint, Solscan) | — | после 9.5 |
+| GitHub | — | нет remote, создать репозиторий |
+| Трейлер | https://www.youtube.com/watch?v=MunQ4wpESBk | есть |
+| Демо-видео с входом через iDos | — | снять после 9.6 |
+
+**Superteam Earn:**
+
+- [ ] Ссылка на игру: страница тайтла на idosgames.com (и прямой `https://<id>.idos.games`)
+- [ ] Built with iDos: тайтл на iDos, вход через SDK `@idosgames/core` (оболочка `deploy/idos-shell`),
+      хостинг сборки на iDos, мост входа с проверкой билета на сервере
+- [ ] Solana: токен игры на Solana через iDos (mint, Solscan); в основной версии — SIWS и программа
+      событий на devnet (упомянуть как задел)
+- [ ] GitHub: публичный репозиторий или доступ судьям; README — раздел «iDos Games edition» есть
+      (05.10), английское вступление наверху README — сделать
+- [ ] Видео: трейлер (ссылка выше) + демо 2–3 мин: вход через iDos → лобби → рейд → лут → выход →
+      торговцы/уровень → токен на странице тайтла
+- [ ] Описание проекта (EN), 3–5 скриншотов из `docs/screens/`, команда, контакты
+
+**Colosseum** (отдельная форма; вопрос с командой решён 04.10):
+
+- [ ] Название, однострочник, описание (EN)
+- [ ] Ссылка на проект (тайтл iDos или основной сайт), GitHub, трейлер, демо-видео
+- [ ] Что на Solana: токен через iDos, SIWS, программа событий (devnet)
+
+**Перед отправкой:**
+
 - [ ] Ерасылу: ссылка на тайтл и mint до сабмита (подтвердить, что трек засчитывает такой вариант)
+- [ ] Прогнать 9.6 на живом адресе ещё раз в день сдачи

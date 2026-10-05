@@ -210,6 +210,35 @@ docker compose logs -f web game-server cron
   Bearer header (see `deploy/cron/schedule.json`). On Vercel the crons come from `apps/web/vercel.json` and Vercel sets
   `CRON_SECRET` itself.
 
+### iDos Games edition
+
+A separate build of the same game for [iDos Games](https://idosgames.com) (Superteam KZ × iDos side track). Full plan,
+platform notes and the step-by-step deploy: `docs/IDOS_EDITION.md` (§3 integration, §9 deploy, §10 submission).
+
+- **Build flag.** `IDOS_BUILD=1` (`apps/web/src/lib/edition.ts`, `middleware.ts`) turns the SOL economy off on the server
+  and in the UI: no market, wallet, SOL starter kit, deposits/withdrawals; treasury items go back to the loot pool. The
+  game loop stays: raids, loot, traders for CR, XP, levels, the alpha pass, friends, leaderboards.
+- **Shell on iDos.** `deploy/idos-shell` (Vite + `@idosgames/core` 0.21.1) is the static page iDos hosts at
+  `https://<titleid>.idos.games`. It signs the player in with the iDos Games account (SSO) or as a guest and shows the
+  edition from our server in a full-screen iframe. Built with its own `npm`, outside the pnpm workspace:
+
+  ```bash
+  cd deploy/idos-shell && npm ci
+  VITE_SPOILS_EDITION_URL=https://idos.<domain>/play npm run build
+  cd dist && zip -r ../build.zip . && cd ..
+  ```
+
+  The zip is uploaded with the iDos title MCP (`begin_build_upload` → `curl -T` → `finish_build_upload`).
+- **Sign-in bridge.** The shell passes the iDos UserID and session ticket to the edition by `postMessage` (exact origins);
+  `POST /api/idos/session` checks the ticket with iDos before signing anyone in (`users.idos_user_id`, migration 013).
+- **Own stack.** `deploy/idos.compose.yml`: project `spoils-idos`, its own database, ports 3100/2667, env file
+  `.env.idos.local` (names only in `docs/IDOS_EDITION.md` §9.2), nginx sample `deploy/nginx/spoils-idos.conf`:
+
+  ```bash
+  docker compose -p spoils-idos --env-file .env.idos.local \
+    -f docker-compose.yml -f deploy/idos.compose.yml up -d --build
+  ```
+
 ### Android app (TWA, WebView shell)
 
 Two wrappers, same web game:
@@ -257,7 +286,7 @@ The web manifest, the page theme colour, the TWA and the webshell all use `#0807
 - `GAME_SERVER_ID`
 - `GAME_SERVER_HMAC_SECRET`
 - `SESSION_SECRET`
-- `SIWS_ALLOWED_HOSTS` — публичный домен игры (для издания iDos — его поддомен в `.env.idos.local`); без него привязка кошелька работает только на localhost
+- `SIWS_ALLOWED_HOSTS` — публичный домен игры; без него привязка кошелька работает только на localhost (в издании iDos привязки кошелька нет, переменная не нужна)
 - `DATABASE_URL` (вне docker; в docker — `POSTGRES_PASSWORD`)
 - Ключи Solana: `HOT_WALLET_SECRET_B58`, `SOLANA_RPC_URL`, `SOLANA_CLUSTER`, `NEXT_PUBLIC_SOLANA_RPC_URL`, `NEXT_PUBLIC_SOLANA_CLUSTER`
 - Запись результатов в Solana (раздел On-chain): `CHAIN_AUTHORITY_SECRET` (содержимое `programs/.keys/authority.json`) и `CHAIN_HASH_SALT` (например, `openssl rand -hex 32`; после запуска не менять)
