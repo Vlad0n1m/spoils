@@ -178,11 +178,13 @@ export function toastAlpha(t: number, holdMs: number = TOAST.HOLD_MS): number {
 
 
 /**
- * Zone toast top (screen px): 16% of the height, but on a short landscape phone (< 480 px) below
- * the React HUD's timer + compass and the boss bar (bossBarY), which sit higher than 16% there.
+ * Zone toast top (screen px): 16% of the height (at least 176 px: under the boss bar and its beat
+ * toast), and on a short landscape phone (< 480 px) below the React HUD's timer + compass and the
+ * boss bar (bossBarY).
  */
 export function zoneToastY(screenH: number): number {
-  return screenH < 480 ? 116 : Math.round(screenH * 0.16);
+  // Never over the boss bar (boss-hud.ts bossBarY 136 on taller screens, beat toast under it).
+  return screenH < 480 ? 128 : Math.max(Math.round(screenH * 0.16), 176);
 }
 
 export class ZoneToast {

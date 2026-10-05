@@ -6,7 +6,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { BOSSES, BOSS_KINDS, NPC_ROLE, PLAYER, generateMap } from "@extract/shared";
 import {
+  BAR_ENGAGED_MS,
+  BAR_HOLD_MS,
   BOSS_HINT_NEAR_PX,
+  bossBeatText,
+  heldBarBoss,
   BossAlertTracker,
   RESIGHT_MS,
   STING_COOLDOWN_MS,
@@ -24,7 +28,7 @@ import {
   turfLine,
 } from "./boss";
 import { bossBarY } from "./boss-hud";
-import { toastAlpha } from "./fullmap";
+import { toastAlpha, zoneToastY } from "./fullmap";
 import { SFX } from "./audio/recipes";
 
 const map = generateMap("steppe");
@@ -195,7 +199,8 @@ describe("screen boss bar", () => {
   it("sits under the top HUD and above the zone toast", () => {
     for (const h of [500, 720, 900, 1440]) {
       const y = bossBarY(h);
-      assert.ok(y >= 64 && y < h * 0.16, `${h} → ${y}`);
+      // Label (~22 px above the bar) clear of the compass (ends ≈ 106 px); zone toast below the beat line.
+      assert.ok(y - 22 >= 108 && zoneToastY(h) >= y + 36, `${h} → ${y}`);
     }
   });
 });
@@ -211,5 +216,21 @@ describe("boss toast + sounds", () => {
     assert.equal(SFX.boss_sting.bus, "ui");
     assert.ok(!SFX.boss_tension.loop, "tension is a one-shot swell, re-triggered");
     assert.ok(SFX.boss_tension.dur * 1000 <= 7000, "a swell fits inside TENSION_REPEAT_MS");
+  });
+});
+
+describe("boss fight bar (BOSS_FIGHT)", () => {
+  const b = { id: "npc7" };
+  it("shows the boss in view; holds the last one BAR_HOLD_MS only when recently engaged, marked stale", () => {
+    assert.deepEqual(heldBarBoss(b, null, () => undefined, 1000), { boss: b, stale: false });
+    const last = { boss: b, at: 10_000 };
+    assert.equal(heldBarBoss(null, last, () => undefined, 11_000), null, "never engaged: gone with the boss");
+    assert.deepEqual(heldBarBoss(null, last, () => 9_000, 11_000), { boss: b, stale: true });
+    assert.equal(heldBarBoss(null, last, () => 9_000, 10_000 + BAR_HOLD_MS + 1), null, "hold expired");
+    assert.equal(heldBarBoss(null, last, () => 10_000 - BAR_ENGAGED_MS - 500, 10_500), null, "engaged too long ago");
+  });
+  it("beat toasts name the boss", () => {
+    assert.equal(bossBeatText("foreman", "phase2"), "FOREMAN IS ENRAGED");
+    assert.equal(bossBeatText("commander", "call"), "COMMANDER CALLS REINFORCEMENTS");
   });
 });

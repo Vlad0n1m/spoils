@@ -265,3 +265,36 @@ export function liveBossTurf(kind: BossKind | null, state: EventBossState | null
   if (!kind || !state || !(state.entryCloseMs > 0)) return kind;
   return eventBossAlive(state, kind) ? kind : null;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Boss fights (BOSS_FIGHT): bar hold, phase pips, beat toasts
+// ---------------------------------------------------------------------------------------------
+
+/** The bar stays up this long after the boss left view… */
+export const BAR_HOLD_MS = 4_000;
+/** …but only when the local player hit it or was hit by it this recently ("recently engaged"). */
+export const BAR_ENGAGED_MS = 8_000;
+
+/**
+ * Fog-safe bar choice: the boss in view (the server sends a boss's Player, phase and tell only to
+ * those who see it), else the last one shown for BAR_HOLD_MS when engaged within BAR_ENGAGED_MS —
+ * frozen at what this client last saw (`stale`), never newer data.
+ */
+export function heldBarBoss<T extends { id: string }>(
+  visible: T | null,
+  last: { boss: T; at: number } | null,
+  engagedAt: (id: string) => number | undefined,
+  nowMs: number,
+): { boss: T; stale: boolean } | null {
+  if (visible) return { boss: visible, stale: false };
+  if (!last || nowMs - last.at > BAR_HOLD_MS) return null;
+  const e = engagedAt(last.boss.id);
+  if (e === undefined || nowMs - e > BAR_ENGAGED_MS) return null;
+  return { boss: last.boss, stale: true };
+}
+
+/** Toast line of a boss fight beat (EventsMsg.boss). */
+export function bossBeatText(kind: BossKind, e: "phase2" | "call"): string {
+  const name = BOSSES[kind].name.toUpperCase();
+  return e === "phase2" ? `${name} IS ENRAGED` : `${name} CALLS REINFORCEMENTS`;
+}
