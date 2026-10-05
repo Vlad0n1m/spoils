@@ -76,7 +76,14 @@ export function ListDialog({
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby={`${id}-t`} onClick={onClose}>
-      <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="toon-panel max-h-[92dvh] w-full max-w-md overflow-y-auto bg-[#161b28] p-6">
+      {/* Landscape phones: two columns (item and price | breakdown and buttons), so it fits the height;
+          the faded scroll is only a fallback (e.g. under an on-screen keyboard). */}
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="toon-panel scroll-fade max-h-[92dvh] w-full max-w-md overflow-y-auto bg-[#161b28] p-6 short:grid short:max-w-3xl short:grid-cols-2 short:gap-x-5 short:p-4"
+      >
+        <div>
         <div className="flex items-center gap-4">
           <ItemCard def={item.def} rarity={item.rarity} dur={item.dur} size="lg" />
           <div className="min-w-0">
@@ -89,7 +96,7 @@ export function ListDialog({
           </div>
         </div>
 
-        <label htmlFor={`${id}-p`} className="mt-6 block text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/75">
+        <label htmlFor={`${id}-p`} className="mt-6 short:mt-4 block text-xs lg:text-[0.8125rem] uppercase tracking-[0.12em] text-white/75">
           Price ({market.currency})
         </label>
         <div className="mt-2 flex items-center gap-2">
@@ -106,8 +113,10 @@ export function ListDialog({
           <span className="text-lg text-white/70">{market.currency}</span>
         </div>
         {text && !price && <p className="font-body mt-1 text-sm text-rose-300">Enter an amount like 12.50 (max {market.decimals} decimals).</p>}
+        </div>
 
-        <dl className="font-body mt-5 grid grid-cols-[1fr_auto] gap-y-1.5 rounded-2xl border-2 border-black bg-black/30 p-4 text-sm">
+        <div>
+        <dl className="font-body mt-5 short:mt-0 grid grid-cols-[1fr_auto] gap-y-1.5 rounded-2xl border-2 border-black bg-black/30 p-4 text-sm">
           <dt className="text-white/75">Buyer pays</dt>
           <dd className="text-right tabular-nums text-white">{price ? formatMinor(price) : "—"}</dd>
           <dt className="text-white/75">Market fee ({(market.feeBps / 100).toFixed(market.feeBps % 100 ? 1 : 0)}%)</dt>
@@ -152,13 +161,14 @@ export function ListDialog({
           </p>
         )}
 
-        <div className="mt-6 flex gap-3">
+        <div className="mt-6 flex gap-3 short:mt-4">
           <button type="button" onClick={onClose} className="toon-btn-ghost min-h-12 flex-1 text-base">
             <span className="optical-center">Cancel</span>
           </button>
           <button type="submit" disabled={!price || busy || outOfBand || !canAffordFee} className="toon-btn min-h-12 flex-1 text-lg">
             <span className="optical-center">{busy ? "Listing…" : "List for sale"}</span>
           </button>
+        </div>
         </div>
       </form>
     </div>
