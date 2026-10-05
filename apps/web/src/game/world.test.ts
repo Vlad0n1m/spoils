@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 import { Texture } from "pixi.js";
 import { TREE_CANOPY_MULT, VISION, generateMap, mulberry32 } from "@extract/shared";
 import { SPRITE_NAMES, type Textures } from "./assets";
-import { CANOPY_INSIDE_ALPHA, CanopyLayer } from "./canopy";
+import { CANOPY_INSIDE_ALPHA, CONTAINER_REVEAL_R, CanopyLayer } from "./canopy";
 import { chunkGridOf } from "./ground-chunks";
 import { MINIMAP_WINDOW, minimapWindow } from "./minimap";
 
@@ -96,6 +96,37 @@ describe("canopy chunks", () => {
     for (let i = 0; i < 120; i++) layer.update(view, { x: tree.x + 900, y: tree.y + 500 }, 16.7);
     const still = sprites.filter((s) => s.alpha < 0.99);
     assert.equal(still.length, 0, "everything is opaque again after leaving");
+    layer.destroy();
+  });
+});
+
+describe("canopy over containers", () => {
+  it("fades a tree crown over a container while the player is next to the container", () => {
+    const under = (c: { x: number; y: number }, t: { x: number; y: number; r: number }) =>
+      (c.x - t.x) ** 2 + (c.y - t.y) ** 2 < (t.r * TREE_CANOPY_MULT + 30) ** 2;
+    let pick: { box: (typeof map.containers)[number]; tree: (typeof map.circles)[number] } | null = null;
+    for (const box of map.containers) {
+      const tree = map.circles.find((t) => t.k === "tree" && under(box, t));
+      if (tree) {
+        pick = { box, tree };
+        break;
+      }
+    }
+    assert.ok(pick, "the map has a container under a crown");
+    const { box, tree } = pick;
+    const layer = new CanopyLayer(map, tex, grid);
+    const view = { x0: box.x - 960, y0: box.y - 610, x1: box.x + 960, y1: box.y + 610 };
+    const sprites = () => layer.root.children.flatMap((sub) => sub.children.flatMap((n) => n.children));
+    // Approach from away from the trunk (the player is not under the crown) within reach of the box.
+    const ang = Math.atan2(box.y - tree.y, box.x - tree.x);
+    assert.ok(Math.hypot(box.x - tree.x, box.y - tree.y) + CONTAINER_REVEAL_R - 4 > tree.r * TREE_CANOPY_MULT * 0.85);
+    const self = { x: box.x + Math.cos(ang) * (CONTAINER_REVEAL_R - 4), y: box.y + Math.sin(ang) * (CONTAINER_REVEAL_R - 4) };
+    for (let i = 0; i < 60; i++) layer.update(view, self, 16.7);
+    const crown = sprites().find((s) => Math.abs(s.x - tree.x) < 1 && Math.abs(s.y - tree.y) < 1);
+    assert.ok(crown, "the crown sprite exists");
+    assert.ok(Math.abs(crown.alpha - CANOPY_INSIDE_ALPHA.tree) < 0.02, "the crown over the container is see-through");
+    for (let i = 0; i < 120; i++) layer.update(view, { x: box.x + 2000, y: box.y + 1500 }, 16.7);
+    assert.ok(crown.alpha > 0.99, "opaque again once the player walked away");
     layer.destroy();
   });
 });
