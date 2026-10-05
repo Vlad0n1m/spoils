@@ -1,21 +1,22 @@
 /**
- * SPOILS iDos Games edition shell (docs/IDOS_EDITION.md §3.2–3.3). iDos hosts this static page at
- * https://<titleid>.idos.games. It:
+ * SPOILS iDos Games edition client (docs/IDOS_EDITION.md §3.2–3.3). iDos hosts this static page at
+ * https://<titleid>.idos.games (the game must be hosted there, not framed from elsewhere). It:
  *   1. signs the player in with @idosgames/core: the iDos Games account (SSO from idosgames.com, the
  *      returned one-time code in the URL fragment), a remembered session (autoLogin, refresh token),
  *      or a guest account;
- *   2. shows the edition (our Next.js app + game server, VITE_SPOILS_EDITION_URL) in a full-screen
- *      iframe;
- *   3. answers the edition's hello (postMessage, exact origin both ways) with the player's iDos
- *      UserID and session ticket. The edition's server checks them with iDos before it signs anyone
- *      in (apps/web/src/lib/idos/verify.ts). Nothing goes into a URL.
+ *   2. trades the player's iDos UserID and session ticket for a session of our backend: POST
+ *      /api/idos/session checks them with iDos (apps/web/src/lib/idos/verify.ts) and answers with a
+ *      session token, which every API call then carries (api.ts);
+ *   3. runs the game itself: the web app's lobby and PixiJS client, built into this bundle (app.tsx),
+ *      talking to our API and game server.
  * The SDK calls follow the iDos skills "authentication" and "idosgames-getting-started" (core 0.21.1).
  */
-import { beginSsoRedirect, createIDosGamesClient, readSsoCodeFromUrl } from "@idosgames/core";
+import { beginSsoRedirect, createIDosGamesClient, readSsoCodeFromUrl, type IDosGamesClient } from "@idosgames/core";
+import { API_URL, authorization, installApiFetch, loadToken, saveToken } from "./api";
 import { IDOS_TITLE_ID } from "./idos.title";
-import { BRIDGE_VERSION, MSG_HELLO, MSG_SESSION } from "./protocol";
+import { installNavigation, playUrl } from "./nav";
 
-const EDITION_URL: string = import.meta.env.VITE_SPOILS_EDITION_URL ?? "";
+declare const __SPOILS_TITLE_IDS__: string[];
 
 /** {titleid}.idos.games → "TITLEID", {titleid}-dev.idos.games → "TITLEID-DEV" (iDos base config.ts). */
 function resolveTitleId(): string {
@@ -51,43 +52,58 @@ function card(title: string, text: string): HTMLDivElement {
   return inner;
 }
 
-function fail(text: string): void {
-  card("SPOILS", text);
+function fail(text: string, retry = false): void {
+  const inner = card("SPOILS", text);
+  if (!retry) return;
+  const b = document.createElement("button");
+  b.className = "primary";
+  b.textContent = "Try again";
+  b.onclick = () => window.location.assign(playUrl());
+  inner.append(b);
+}
+
+/** iDos player → our session token. True when the API accepted the player. */
+async function signInToGame(client: IDosGamesClient, titleId: string): Promise<boolean> {
+  const auth = client.auth.context;
+  if (!auth) return false;
+  const res = await fetch(`${API_URL}/api/idos/session`, {
+    method: "POST",
+    credentials: "omit",
+    headers: { "Content-Type": "application/json", Authorization: authorization() },
+    body: JSON.stringify({ titleId, userId: auth.userID, ticket: auth.clientSessionTicket }),
+  }).catch(() => null);
+  if (!res) return false;
+  const body = (await res.json().catch(() => null)) as { status?: string; token?: string; error?: string } | null;
+  if (!res.ok) {
+    console.warn("[idos] game sign-in refused:", res.status, body?.error);
+    // A stale or foreign token: forget it, the next attempt starts a fresh session.
+    if (res.status === 401) saveToken("");
+    return false;
+  }
+  if (body?.token) saveToken(body.token);
+  return body?.status === "same" || !!body?.token;
 }
 
 async function main(): Promise<void> {
   const titleID = resolveTitleId();
   if (!titleID) return fail("This page only runs on its iDos Games address.");
-  let edition: URL;
-  try {
-    edition = new URL(EDITION_URL);
-    if (edition.protocol !== "https:" && edition.hostname !== "localhost") throw new Error("not https");
-  } catch {
-    return fail("The game address is not set in this build.");
-  }
+  if (!__SPOILS_TITLE_IDS__.includes(titleID)) return fail("This build is not set up for this iDos Games title.");
+  installNavigation();
+  installApiFetch();
+  loadToken(titleID);
 
   const client = createIDosGamesClient({ titleID, throttleMs: 0 });
 
-  const play = (): void => {
-    const auth = client.auth.context;
-    if (!auth) return fail("Sign-in did not finish. Reload the page.");
-    app.replaceChildren();
-    const frame = document.createElement("iframe");
-    frame.src = edition.toString();
-    frame.title = "SPOILS";
-    frame.allow = "fullscreen; autoplay; gamepad; clipboard-write";
-    app.append(frame);
-    window.addEventListener("message", (e: MessageEvent) => {
-      if (e.origin !== edition.origin || e.source !== frame.contentWindow) return;
-      const d = e.data as { type?: unknown; v?: unknown } | null;
-      if (!d || d.type !== MSG_HELLO || d.v !== BRIDGE_VERSION) return;
-      const now = client.auth.context;
-      if (!now) return;
-      frame.contentWindow?.postMessage(
-        { type: MSG_SESSION, v: BRIDGE_VERSION, titleId: titleID, userId: now.userID, ticket: now.clientSessionTicket },
-        edition.origin,
-      );
-    });
+  const play = async (): Promise<void> => {
+    card("SPOILS", "Loading…");
+    if (!(await signInToGame(client, titleID))) {
+      // One retry with a fresh token session (an expired token was just dropped).
+      if (!(await signInToGame(client, titleID))) return fail("Could not reach the game server. Check your connection.", true);
+    }
+    // For the lobby's "back to the menu" reloads (apps/web lib/play-url.ts).
+    (window as { __SPOILS_PLAY_URL__?: string }).__SPOILS_PLAY_URL__ = playUrl();
+    const { mountGame } = await import("./app");
+    mountGame(app);
   };
 
   // 1. Back from idosgames.com with a one-time SSO code in the fragment (the SDK reads and clears it).

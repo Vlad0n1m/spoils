@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "SPOILS iDos Games edition shell: the static page iDos hosts at https://<titleid>.idos.games. It signs the player in with @idosgames/core and shows the edition (our own server) in a full-screen iframe. Not part of the pnpm workspace on purpose: build it with npm here (docs/IDOS_EDITION.md).",
+  "description": "SPOILS iDos Games edition client: the game's lobby and PixiJS client from apps/web, built as the static bundle iDos hosts at https://<titleid>.idos.games, signed in with @idosgames/core and talking to our API and game server. Not part of the pnpm workspace on purpose: build it with npm here after a root pnpm install (docs/IDOS_EDITION.md).",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit"
+    "build": "vite build",
+    "fonts": "node scripts/fetch-fonts.mjs"
   },
   "dependencies": {
     "@idosgames/core": "0.21.1"
