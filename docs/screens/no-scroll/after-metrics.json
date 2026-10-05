@@ -1,0 +1,904 @@
+[
+ {
+  "scenario": "menu",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "menu",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "menu",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "menu",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "inventory-loadout",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "inventory-loadout",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "inventory-loadout",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "inventory-loadout",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "inventory-stash",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "inventory-stash",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "inventory-stash",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "inventory-stash",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "shop-market",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "shop-market",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "shop-market",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "shop-market",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "shop-traders",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "shop-traders",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "shop-traders",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "shop-traders",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-howto",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-howto",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-howto",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-howto",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-rules",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-rules",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-rules",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-rules",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-controls",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-controls",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-controls",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "info-controls",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "news-feed",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "news-feed",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "news-feed",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "news-feed",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "news-patch",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "news-patch",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "news-patch",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "news-patch",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-level",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-level",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-level",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-level",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-kills",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-kills",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-kills",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-kills",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-npc",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-npc",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-npc",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "leaderboards-npc",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-friends",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-friends",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-friends",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-friends",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-requests",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-requests",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-requests",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-requests",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-party",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-party",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-party",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "friends-party",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-today",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-today",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-today",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-today",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "raid-inv",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "raid-inv",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "raid-inv",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "raid-inv",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "raid-search",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "raid-search",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "raid-search",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "raid-search",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "outcome-extract",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "outcome-extract",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "outcome-extract",
+  "size": "844x390",
+  "page": false,
+  "n": 1,
+  "out": [
+   "Y div .scroll-fade mt-6 min-h-0 flex-1 space-y-5 overflow-y-auto py-1 land:mt"
+  ]
+ },
+ {
+  "scenario": "outcome-extract",
+  "size": "740x360",
+  "page": false,
+  "n": 1,
+  "out": [
+   "Y div .scroll-fade mt-6 min-h-0 flex-1 space-y-5 overflow-y-auto py-1 land:mt"
+  ]
+ },
+ {
+  "scenario": "outcome-dead",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "outcome-dead",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "outcome-dead",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "outcome-dead",
+  "size": "740x360",
+  "page": false,
+  "n": 1,
+  "out": [
+   "Y div .scroll-fade mt-6 min-h-0 flex-1 space-y-5 overflow-y-auto py-1 land:mt"
+  ]
+ },
+ {
+  "scenario": "quests-rewards-marks",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards-marks",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards-marks",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards-marks",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards-locker",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards-locker",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards-locker",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-rewards-locker",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass-tasks",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass-tasks",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass-tasks",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass-tasks",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass-mypass",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass-mypass",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass-mypass",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "quests-pass-mypass",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "stash-item",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "stash-item",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "stash-item",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "stash-item",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "market-mine",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "market-mine",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "market-mine",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "market-mine",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "last-raid",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "last-raid",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "last-raid",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "last-raid",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "level-up",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "level-up",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "level-up",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "level-up",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "sell-dialog",
+  "size": "1440x900",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "sell-dialog",
+  "size": "1280x720",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "sell-dialog",
+  "size": "844x390",
+  "page": false,
+  "n": 0,
+  "out": []
+ },
+ {
+  "scenario": "sell-dialog",
+  "size": "740x360",
+  "page": false,
+  "n": 0,
+  "out": []
+ }
+]
