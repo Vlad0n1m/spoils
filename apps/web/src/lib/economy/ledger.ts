@@ -11,7 +11,9 @@ export type CreditReason =
   | "listing_fee"
   | "market_buy"
   | "market_sale"
-  | "admin";
+  | "admin"
+  /** iDos edition SPOILS shop: the CR pack (lib/idos/shop.ts), ref `idos:<order id>`. */
+  | "idos_shop";
 
 export type CreditResult =
   | { ok: true; applied: boolean; balance: number }
