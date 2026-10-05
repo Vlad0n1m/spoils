@@ -501,6 +501,18 @@ SOL-рынок и казна (`lib/inventory`, `api/market`), девнет по 
 5. Сказать агенту домен и Title ID — дальше он даёт команды с подставленными значениями.
 6. Публичный GitHub-репозиторий (сейчас у репозитория нет remote) — для сабмита (§10).
 
+### 9.0.1 Состояние на 05.10.2026
+
+- VPS Hetzner `spoils-1` (Helsinki, 4 vCPU / 8 ГБ, Ubuntu 26.04), код в `/opt/spoils` (git bundle, не
+  GitHub), `.env.idos.local` сгенерирован на сервере (`openssl rand`, chmod 600, значения нигде не
+  выводились). Docker 29, Compose 2.40, nginx 1.28, certbot 4; ufw: 22, 80, 443.
+- Стек `spoils-idos` поднят, проверки 9.2.6 на 127.0.0.1:3100 зелёные (CSP с `8yechsd4(-dev).idos.games`).
+- nginx: catch-all и порт 80 (acme webroot `/var/www/certbot`); полный конфиг с 443 —
+  `/root/spoils-idos.conf.full`, ставится после сертификата.
+- Ждём: домен `spoils.gg` в реестре .gg (A-записи `idos`, `game-idos`, `game`, `@` → VPS заведены у
+  регистратора), затем `certbot certonly --webroot -w /var/www/certbot -d idos.spoils.gg -d game-idos.spoils.gg`.
+- Оболочка с `VITE_SPOILS_EDITION_URL=https://idos.spoils.gg/play` собрана локально, ещё не залита.
+
 ### 9.1 Тайтл и доступ агента (Влад)
 
 1. idosgames.com → дашборд издателя → создать тайтл: web3, сеть Solana. Записать **Title ID**
