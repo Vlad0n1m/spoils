@@ -9,6 +9,7 @@ import {
   SERVER_INSTANCE,
   announceBoot,
   enterRaid,
+  errorBodyForLog,
   offExitSettled,
   onExitSettled,
   openShard,
@@ -447,4 +448,25 @@ test("exit receipts are routed by entryId: two entries of one user in one match 
   // The daily task line (C14b) is kept, so the outcome's lines add up to its xp total.
   const quest = parseExitSettled({ credits: 0, sold: [], guest: false, xp: 160, xpLines: [{ key: "extract", qty: 9, xp: 60 }, { key: "quest", qty: 1, xp: 100 }], level: 2, levelUp: false });
   assert.deepEqual(quest?.xpLines?.map((l) => l.key), ["extract", "quest"]);
+});
+
+test("a web error page is logged as its title and size, not 500 chars of markup (replay ingest 500 report)", async () => {
+  const html = `<!DOCTYPE html><html><head><meta charSet="utf-8"/><title>500: Internal Server Error</title></head><body>${"x".repeat(4000)}</body></html>`;
+  assert.equal(errorBodyForLog(html), `[html error page "500: Internal Server Error", ${html.length} bytes]`);
+  assert.equal(errorBodyForLog('{"error":"internal"}'), '{"error":"internal"}');
+  const srv = await serve(() => 500, html);
+  const logs: string[] = [];
+  const quiet = console.error;
+  console.error = (m: string) => void logs.push(m);
+  try {
+    await withEnv({ WEB_API_BASE_URL: `http://127.0.0.1:${srv.port}`, GAME_SERVER_HMAC_SECRET: "s" }, async () => {
+      const r = await postSigned("/api/admin/replays/ingest", payload, { attempts: 1 });
+      assert.equal(r.status, "failed");
+    });
+  } finally {
+    console.error = quiet;
+    srv.close();
+  }
+  assert.equal(logs.length, 1);
+  assert.match(logs[0]!, /status=500 body=\[html error page "500: Internal Server Error", \d+ bytes\]$/);
 });

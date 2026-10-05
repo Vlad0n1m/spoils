@@ -64,6 +64,20 @@ export function webApiConfigured(): boolean {
 }
 
 /**
+ * An error reply body for the log: a JSON / text answer as is (≤ 300 chars); an HTML page (Next's
+ * error page when the web failed before the route handler, e.g. a dev server mid-compile) as its
+ * <title> and size instead of 500 chars of markup.
+ */
+export function errorBodyForLog(text: string): string {
+  const t = text.trimStart();
+  if (/^<(!doctype|html)/i.test(t)) {
+    const title = /<title[^>]*>([^<]*)<\/title>/i.exec(t)?.[1]?.trim();
+    return `[html error page${title ? ` "${title.slice(0, 80)}"` : ""}, ${text.length} bytes]`;
+  }
+  return text.slice(0, 300);
+}
+
+/**
  * POST `body` as JSON to `${WEB_API_BASE_URL}${path}`, signed with GAME_SERVER_HMAC_SECRET.
  * A fresh timestamp per attempt (the API rejects stale signatures). Never throws.
  */
@@ -97,7 +111,7 @@ export async function postSigned<T = unknown>(path: string, body: unknown, opts:
         }
         return { status: "ok", body: parsed as T };
       }
-      lastErr = `status=${res.status} body=${text.slice(0, 500)}`;
+      lastErr = `status=${res.status} body=${errorBodyForLog(text)}`;
       if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
         return { status: "rejected", code: res.status, body: text.slice(0, 500) };
       }

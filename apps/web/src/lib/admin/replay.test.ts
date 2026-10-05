@@ -202,6 +202,65 @@ describe("replay ingest", () => {
     assert.equal(clash.status, 409);
     assert.equal(await count("replay_chunks"), 3);
   });
+
+  // Regression (game server log "replays/ingest failed: status=500 body=<!DOCTYPE html>…"): the 500s
+  // were Next's HTML error page, i.e. something escaped the handler. A body stream that breaks
+  // mid-read (the uploader aborting on a slow web) used to throw out of it; it is a JSON 400 now,
+  // and any other failure a JSON 500 the game server can log.
+  test("a body stream that breaks mid-read answers JSON 400 body_aborted; a DB failure answers JSON 500; nothing throws", async () => {
+    const id = randomUUID();
+    const text = JSON.stringify(upload(id, 0));
+    const ts = String(Date.now());
+    const broken = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(text.slice(0, 40)));
+        c.error(new Error("aborted"));
+      },
+    });
+    const req = new Request(URL_, {
+      method: "POST",
+      headers: { "content-type": "application/json", [HEADERS.GAME_SERVER_TS]: ts, [HEADERS.GAME_SERVER_SIG]: signGameServerBody(SECRET, ts, text) },
+      body: broken,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const res = await handleReplayIngest(req, db, SECRET);
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { error: "body_aborted" });
+    // A store that fails (DB down): a JSON 500, never a thrown error.
+    const failing = { transaction: async () => { throw new Error("connection terminated"); } } as unknown as typeof db;
+    const quiet = console.error;
+    console.error = () => {};
+    try {
+      const r = await handleReplayIngest(signed(text), failing, SECRET);
+      assert.equal(r.status, 500);
+      assert.equal(r.headers.get("content-type"), "application/json");
+      assert.deepEqual(await r.json(), { error: "internal" });
+    } finally {
+      console.error = quiet;
+    }
+    assert.equal(await count("replay_chunks"), 0);
+  });
+
+  test("format v3: a chunk with world-event (WEV) and boss records from the current encoder is stored", async () => {
+    const id = randomUUID();
+    const raw = encodeReplayChunk({
+      v: REPLAY.VERSION,
+      seq: 0,
+      startMs: 0,
+      endMs: 60_000,
+      final: false,
+      roster: [],
+      frames: [],
+      events: [
+        { t: 1_000, type: "wev", ev: "drop_announce", n: 1, x: 1200, y: 900, r: 400, zone: "Grain Elevator" },
+        { t: 2_000, type: "wev", ev: "hot_start", n: 2, x: 800, y: 700, r: 300, zone: "Rail Depot" },
+      ],
+    });
+    assert.equal(REPLAY.VERSION, 3);
+    const res = await post(upload(id, 0, { raw, frames: 0, events: 2 }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { status: "stored", seq: 0 });
+  });
 });
 
 describe("replay map generator version", () => {
