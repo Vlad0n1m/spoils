@@ -80,6 +80,8 @@ export const worldEventsView = {
   /** Written by the objectives system (objectives.ts) every frame. */
   clues: [] as ClueMark[],
   locks: [] as LockMark[],
+  /** The local player's running objective channel (unlock / crack), for the HUD's F hint. */
+  channel: null as "unlock" | "crack" | null,
 };
 
 /** Fight markers live this long on the minimap. */

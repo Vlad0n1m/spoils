@@ -417,6 +417,13 @@ export interface HudInput {
   move?: HudMovement | null;
   /** Targets this client searched and saw empty (known-empty.ts). */
   known?: Pick<KnownEmpty, "container" | "corpse"> | null;
+  /** The local player's running objective channel (objectives.ts): replaces the F hint. */
+  channel?: "unlock" | "crack" | null;
+}
+
+/** The bottom hint while an unlock / crack channel runs (the server breaks it on damage or moving). */
+export function channelHint(kind: "unlock" | "crack"): string {
+  return kind === "crack" ? "Cracking… (move or get hit to stop)" : "Unlocking… (move or get hit to stop)";
 }
 
 /** interactHint's objectives input: on only while BattleState.lockState lists the map's locks. */
@@ -432,7 +439,7 @@ function objectivesOf(state: BattleState, map: MapData | null, priv: SelfState |
 }
 
 export function buildHud({
-  state, sessionId, selfKey, selfPos, clockMs, killFeed, killTally, pingMs, idx = null, map = null, move = null, known = null,
+  state, sessionId, selfKey, selfPos, clockMs, killFeed, killTally, pingMs, idx = null, map = null, move = null, known = null, channel = null,
 }: HudInput): HudSnapshot {
   const me = state.players.get(sessionId) ?? null;
   const priv = selfKey ? (state.self.get(selfKey) ?? null) : null;
@@ -478,7 +485,7 @@ export function buildHud({
     totalPlayers,
     nearestExtract: onMap ? nearestExtract : null,
     extracts: onMap ? extracts : [],
-    interactHint: canInteract ? interactHint({ state, map, x: selfPos!.x, y: selfPos!.y, idx, known, objectives: objectivesOf(state, map, priv) }) : null,
+    interactHint: canInteract && channel ? channelHint(channel) : canInteract ? interactHint({ state, map, x: selfPos!.x, y: selfPos!.y, idx, known, objectives: objectivesOf(state, map, priv) }) : null,
     killFeed,
     ...(killTally ? { killTally } : {}),
     pingMs,

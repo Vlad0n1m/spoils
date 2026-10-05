@@ -601,10 +601,11 @@ function InteractHint({ store, touch }: { store: HudStore; touch: boolean }) {
   const hint = useHud(store, hintSlice);
   if (!hint) return null;
   // Renderer formats hints as "F — <action>"; show the key as a keycap (the USE button on touch).
+  // A status line without an action ("Locked — needs …", "Cracking…") gets no key.
   const m = /^F\s*[—–-]\s*(.+)$/.exec(hint);
   return (
     <div className="toon-chip flex items-center gap-2 px-3 py-1.5 text-sm tracking-wide md:text-base">
-      {touch ? <span className="toon-key px-1.5">USE</span> : <span className="toon-key">F</span>}
+      {m && (touch ? <span className="toon-key px-1.5">USE</span> : <span className="toon-key">F</span>)}
       <span className="toon-text-thin">{m ? m[1] : hint}</span>
     </div>
   );

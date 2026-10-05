@@ -100,6 +100,7 @@ import { canStartHeal, decayFactor, inputCancelsHeal, moveFnFor, Predictor, read
 import { DelayQueue, shotCentre } from "./shots";
 import type { CameraView, GameContext, GameLayers, GameSystem, SystemCommand } from "./systems";
 import { SYSTEM_FACTORIES } from "./systems-registry";
+import { worldEventsView } from "./world-events-marks";
 import type { GameRendererApi, HudSnapshot, KillFeedEntry, RendererOptions, XpGain } from "./types";
 import { KnownEmpty } from "./known-empty";
 import { WorldView, type ViewRect } from "./world";
@@ -1938,6 +1939,7 @@ export class GameRenderer implements GameRendererApi {
       map: this.mapData,
       move: p ? { rollCooldownMs: p.rollCooldownMs, rolling: p.rolling, walking: p.walking } : null,
       known: this.known,
+      channel: worldEventsView.channel,
     });
     this.counts = stickyCounts(this.counts, snapshot);
     snapshot = {
