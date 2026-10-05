@@ -12,7 +12,19 @@ import {
   editionLabel,
   editionPublicEnv,
   editionSessionCookie,
+  EDITION_UI,
+  editionBlock,
+  editionUi,
   flagOn,
+  IDOS_DISABLED_API,
+  IDOS_SHELL_ORIGINS,
+  idosShellOrigins,
+  isIdosAccountEmail,
+  parseIdosTitleIds,
+  SOL_ECONOMY,
+  shellOriginsFromEnv,
+  solEconomyEnabled,
+  titleShellOrigin,
   frameAncestorsDirective,
   isFramed,
   isIdosBuildEnv,
@@ -174,5 +186,129 @@ describe("isFramed", () => {
     assert.equal(isIdosFramed(false, framed), false);
     assert.equal(isIdosFramed(true, framed), true);
     assert.equal(isIdosFramed(true, { self: top, top }), false);
+  });
+});
+
+describe("SOL economy gate (iDos edition)", () => {
+  it("is on in the main build and off in the edition", () => {
+    assert.equal(solEconomyEnabled(false), true);
+    assert.equal(solEconomyEnabled(true), false);
+    // This test bundle is the main build.
+    assert.equal(IDOS_BUILD, false);
+    assert.equal(SOL_ECONOMY, true);
+  });
+
+  it("hides every SOL piece of the UI in the edition and none in the main build", () => {
+    for (const v of Object.values(editionUi(false))) assert.equal(v, true);
+    for (const v of Object.values(editionUi(true))) assert.equal(v, false);
+    assert.deepEqual(EDITION_UI, editionUi(false));
+  });
+
+  it("the edition answers 404 on the SOL economy API", () => {
+    for (const p of [
+      "/api/market/buy",
+      "/api/market/list",
+      "/api/market/cancel",
+      "/api/market/listings",
+      "/api/market/history",
+      "/api/market",
+      "/api/wallet/dev-topup",
+      "/api/wallet/link",
+      "/api/wallet/link/nonce",
+      "/api/withdraw",
+      "/api/withdraw/",
+      "/api/stash/starter",
+      "/API/Market/Buy",
+      "/api/economy/stats",
+    ]) {
+      assert.equal(editionBlock(p, true), "api", p);
+      assert.equal(editionBlock(p, false), null, `main build serves ${p}`);
+    }
+  });
+
+  it("the edition keeps the game loop", () => {
+    for (const p of [
+      "/api/stash",
+      "/api/trader/buy",
+      "/api/trader/bound",
+      "/api/raids/enter",
+      "/api/raids/exit",
+      "/api/loadout/draft",
+      "/api/pass",
+      "/api/quests",
+      "/api/friends",
+      "/api/leaderboards",
+      "/api/me",
+      "/api/auth/login",
+      "/api/world/join",
+      "/api/marketing",
+      "/api/idos/session",
+      "/play",
+      "/",
+    ]) assert.equal(editionBlock(p, true), null, p);
+  });
+
+  it("the edition sends its SOL pages to /play", () => {
+    for (const p of ["/wallet", "/wallet/", "/economy", "/economy/x"]) assert.equal(editionBlock(p, true), "page", p);
+    for (const p of ["/wallet", "/economy"]) assert.equal(editionBlock(p, false), null, p);
+  });
+
+  it("the main build answers 404 on the edition-only bridge", () => {
+    assert.equal(editionBlock("/api/idos/session", false), "api");
+    assert.equal(editionBlock("/api/idos", false), "api");
+    assert.equal(editionBlock("/api/idosx", false), null);
+  });
+
+  it("lists only real route prefixes", () => {
+    for (const p of IDOS_DISABLED_API) assert.match(p, /^\/api\/[a-z/-]+$/);
+  });
+});
+
+describe("iDos Titles and shells", () => {
+  it("parses IDOS_TITLE_IDS", () => {
+    assert.deepEqual(parseIdosTitleIds("abcd1234, ABCD1234-dev  junk *.idos.games ABCD1234"), ["ABCD1234", "ABCD1234-DEV"]);
+    assert.deepEqual(parseIdosTitleIds(undefined), []);
+    assert.deepEqual(parseIdosTitleIds("ABC"), []);
+  });
+
+  it("maps a Title to its shell origin", () => {
+    assert.equal(titleShellOrigin("ABCD1234"), "https://abcd1234.idos.games");
+    assert.equal(titleShellOrigin("ABCD1234-DEV"), "https://abcd1234-dev.idos.games");
+    assert.deepEqual(idosShellOrigins({ IDOS_TITLE_IDS: "ABCD1234 ABCD1234-DEV" }), [
+      "https://abcd1234.idos.games",
+      "https://abcd1234-dev.idos.games",
+    ]);
+  });
+
+  it("frames: defaults plus our shells when IDOS_FRAME_ANCESTORS is unset; an explicit list wins", () => {
+    const h = editionHeaders({ IDOS_BUILD: "1", IDOS_TITLE_IDS: "ABCD1234-DEV" });
+    assert.equal(
+      h[0]!.headers[0]!.value,
+      "frame-ancestors 'self' https://idosgames.com https://www.idosgames.com https://abcd1234-dev.idos.games",
+    );
+    const explicit = editionHeaders({ IDOS_BUILD: "1", IDOS_TITLE_IDS: "ABCD1234", IDOS_FRAME_ANCESTORS: "https://idosgames.com" });
+    assert.equal(explicit[0]!.headers[0]!.value, "frame-ancestors 'self' https://idosgames.com");
+    assert.deepEqual(editionHeaders({ IDOS_TITLE_IDS: "ABCD1234" }), []);
+  });
+
+  it("inlines the shell origins only into the edition", () => {
+    assert.deepEqual(editionPublicEnv({ IDOS_BUILD: "1", IDOS_TITLE_IDS: "ABCD1234" }), {
+      NEXT_PUBLIC_IDOS_BUILD: "1",
+      NEXT_PUBLIC_IDOS_SHELL_ORIGINS: "https://abcd1234.idos.games",
+    });
+    assert.deepEqual(editionPublicEnv({ IDOS_TITLE_IDS: "ABCD1234" }), {});
+  });
+
+  it("the page accepts only exact iDos shell origins, and none in the main build", () => {
+    const raw = "https://abcd1234.idos.games https://evil.example https://*.idos.games https://abcd1234-dev.idos.games";
+    assert.deepEqual(shellOriginsFromEnv(raw, true), ["https://abcd1234.idos.games", "https://abcd1234-dev.idos.games"]);
+    assert.deepEqual(shellOriginsFromEnv(raw, false), []);
+    assert.deepEqual(IDOS_SHELL_ORIGINS, []);
+  });
+
+  it("recognises bridge accounts by their placeholder email", () => {
+    assert.equal(isIdosAccountEmail("0123abcd@idos.invalid"), true);
+    assert.equal(isIdosAccountEmail("player@example.com"), false);
+    assert.equal(isIdosAccountEmail(undefined), false);
   });
 });

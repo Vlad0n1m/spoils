@@ -11,8 +11,11 @@ export {
   editionPublicEnv,
   flagOn,
   frameAncestorsDirective,
+  idosShellOrigins,
   isIdosBuildEnv,
   parseFrameAncestors,
+  parseIdosTitleIds,
+  titleShellOrigin,
   wildcardSources,
 } from "./edition-frame.mjs";
 import { flagOn } from "./edition-frame.mjs";
@@ -83,4 +86,101 @@ export function isFramed(win: FrameWindow | undefined = typeof window === "undef
  */
 export function isIdosFramed(idosBuild: boolean = IDOS_BUILD, win?: FrameWindow): boolean {
   return idosBuild && isFramed(win);
+}
+
+/**
+ * The SOL economy (docs/IDOS_EDITION.md §3.5): the player-to-player market and treasury lots, the paid
+ * starter kit, the custodial balance with deposit / withdraw / dev top-up, wallet linking (SIWS) and
+ * the /economy money page. On in the main build; off in the iDos edition, whose economy is the iDos
+ * Title's (its currencies, store and game token) and which keeps only the game loop (raids, loot,
+ * CR traders, XP, levels, pass, friends, leaderboards).
+ */
+export function solEconomyEnabled(idosBuild: boolean = IDOS_BUILD): boolean {
+  return !idosBuild;
+}
+
+/** solEconomyEnabled() of this bundle (a build-time constant). */
+export const SOL_ECONOMY: boolean = solEconomyEnabled();
+
+/** Which pieces of the lobby UI a build shows. Every flag is true in the main build. */
+export interface EditionUi {
+  /** SOL balance pill in the top bar and the "Wallet" stat in the stash. */
+  walletBalance: boolean;
+  /** "Wallet" links (account menu, More sheet, stash) and Connect wallet (SIWS). */
+  walletLinks: boolean;
+  /** "Economy" links to the /economy money page. */
+  economyLinks: boolean;
+  /** The paid starter kit card and "Buy starter kit" buttons. */
+  starterKitSale: boolean;
+  /** Shop · Market tab, "Sell on market" in the stash, market lines in the rules. */
+  market: boolean;
+}
+
+export function editionUi(idosBuild: boolean = IDOS_BUILD): EditionUi {
+  const sol = solEconomyEnabled(idosBuild);
+  return { walletBalance: sol, walletLinks: sol, economyLinks: sol, starterKitSale: sol, market: sol };
+}
+
+/** editionUi() of this bundle. */
+export const EDITION_UI: EditionUi = editionUi();
+
+/**
+ * API routes of the SOL economy: 404 in the edition (middleware.ts), whatever the UI shows.
+ * Cron routes are not listed (the edition's cron keeps calling them; they hold no SOL path today).
+ */
+export const IDOS_DISABLED_API: readonly string[] = Object.freeze([
+  "/api/market",
+  "/api/wallet",
+  "/api/withdraw",
+  "/api/stash/starter",
+  "/api/economy",
+]);
+
+/** Pages of the SOL economy: the edition redirects them to /play. */
+export const IDOS_DISABLED_PAGES: readonly string[] = Object.freeze(["/wallet", "/economy"]);
+
+/** Edition-only API (the iDos sign-in bridge): 404 in the main build. */
+export const MAIN_DISABLED_API: readonly string[] = Object.freeze(["/api/idos"]);
+
+/** `/api/market` covers `/api/market` and `/api/market/buy`, never `/api/marketing`. */
+function underPrefix(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+/**
+ * What a build does with a request path: "api" → answer 404, "page" → redirect to /play, null → serve
+ * it. Trailing slashes and letter case are ignored (Next routes are case-sensitive, so a differently
+ * cased path never reaches a route anyway, but it must not slip past the gate either).
+ */
+export function editionBlock(pathname: string, idosBuild: boolean = IDOS_BUILD): "api" | "page" | null {
+  const p = (pathname.replace(/\/+$/, "") || "/").toLowerCase();
+  if (idosBuild) {
+    if (IDOS_DISABLED_API.some((x) => underPrefix(p, x))) return "api";
+    if (IDOS_DISABLED_PAGES.some((x) => underPrefix(p, x))) return "page";
+    return null;
+  }
+  return MAIN_DISABLED_API.some((x) => underPrefix(p, x)) ? "api" : null;
+}
+
+/**
+ * Origins of the iDos shells (https://{titleid}.idos.games) allowed to hand this page an iDos session.
+ * Built in from IDOS_TITLE_IDS at build time (next.config → NEXT_PUBLIC_IDOS_SHELL_ORIGINS); empty in
+ * the main build and in an edition built without Title ids.
+ */
+export function shellOriginsFromEnv(raw: string | undefined, idosBuild: boolean = IDOS_BUILD): string[] {
+  if (!idosBuild) return [];
+  return (raw ?? "").split(/\s+/).filter((o) => /^https:\/\/[a-z0-9]{8}(-dev)?\.idos\.games$/.test(o));
+}
+
+/** shellOriginsFromEnv() of this bundle (the literal env name is what Next inlines). */
+export const IDOS_SHELL_ORIGINS: readonly string[] = shellOriginsFromEnv(process.env.NEXT_PUBLIC_IDOS_SHELL_ORIGINS);
+
+/**
+ * Accounts made by the iDos sign-in bridge (app/api/idos/session) have no email of their own; they get
+ * a placeholder at the reserved `.invalid` domain (RFC 2606), which no one can register or receive.
+ */
+export const IDOS_ACCOUNT_EMAIL_DOMAIN = "idos.invalid";
+
+export function isIdosAccountEmail(email: string | null | undefined): boolean {
+  return typeof email === "string" && email.toLowerCase().endsWith(`@${IDOS_ACCOUNT_EMAIL_DOMAIN}`);
 }

@@ -5,10 +5,12 @@
  * Inventory·Loadout / Inventory·Stash / Shop·Market. Friends (friends, requests, party) has a panel;
  * Guilds is still locked: no panel.
  */
+import { IDOS_BUILD } from "../edition";
+
 export const LOBBY_PANELS = ["inventory", "shop", "info", "news", "leaderboards", "friends"] as const;
 export type LobbyPanel = (typeof LOBBY_PANELS)[number];
 
-export const PANEL_TABS = {
+const MAIN_PANEL_TABS = {
   inventory: ["loadout", "stash"],
   shop: ["market", "traders"],
   info: ["howto", "rules", "controls"],
@@ -16,7 +18,18 @@ export const PANEL_TABS = {
   leaderboards: ["level", "kills", "npc"],
   friends: ["friends", "requests", "party"],
 } as const satisfies Record<LobbyPanel, readonly string[]>;
-export type PanelTab<P extends LobbyPanel = LobbyPanel> = (typeof PANEL_TABS)[P][number];
+export type PanelTab<P extends LobbyPanel = LobbyPanel> = (typeof MAIN_PANEL_TABS)[P][number];
+export type PanelTabs = Readonly<Record<LobbyPanel, readonly string[]>>;
+
+/**
+ * Tabs of each panel in a build. The iDos edition has no SOL market (lib/edition.ts SOL_ECONOMY), so
+ * its Shop is Traders only, and old `tab=market` links land on Traders.
+ */
+export function panelTabsFor(idosBuild: boolean): PanelTabs {
+  return idosBuild ? { ...MAIN_PANEL_TABS, shop: ["traders"] } : MAIN_PANEL_TABS;
+}
+
+export const PANEL_TABS: PanelTabs = panelTabsFor(IDOS_BUILD);
 
 /** Leaderboard periods (the level board is all-time and ignores it). */
 export const LB_PERIODS = ["map", "week", "all"] as const;
@@ -83,9 +96,14 @@ export function isLobbyPanel(v: unknown): v is LobbyPanel {
 }
 
 /** The panel state `p` with a valid tab and period (defaults filled in). */
-export function normalizePanel(panel: LobbyPanel | null, tab?: string | null, period?: string | null): PanelState {
+export function normalizePanel(
+  panel: LobbyPanel | null,
+  tab?: string | null,
+  period?: string | null,
+  tabsOf: PanelTabs = PANEL_TABS,
+): PanelState {
   if (!panel) return NO_PANEL;
-  const tabs = PANEL_TABS[panel] as readonly string[];
+  const tabs = tabsOf[panel];
   const t = tab && tabs.includes(tab) ? tab : tabs[0];
   const per = panel === "leaderboards" ? ((LB_PERIODS as readonly string[]).includes(period ?? "") ? (period as LbPeriod) : DEFAULT_LB_PERIOD) : null;
   return { panel, tab: t, period: per };

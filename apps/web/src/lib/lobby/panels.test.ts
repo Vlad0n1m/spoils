@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { NO_PANEL, PANEL_HOTKEYS, PANEL_TABS, normalizePanel, panelHref, parseLobbyPanel, samePanel } from "./panels";
+import { NO_PANEL, PANEL_HOTKEYS, PANEL_TABS, normalizePanel, panelHref, panelTabsFor, parseLobbyPanel, samePanel } from "./panels";
 
 describe("parseLobbyPanel", () => {
   it("no params → no panel", () => {
@@ -78,5 +78,20 @@ describe("panelHref", () => {
 describe("hotkeys", () => {
   it("I, B, L, N, H, F open Inventory, Shop, Leaderboards, News, Info, Friends", () => {
     assert.deepEqual(PANEL_HOTKEYS, { KeyI: "inventory", KeyB: "shop", KeyL: "leaderboards", KeyN: "news", KeyH: "info", KeyF: "friends" });
+  });
+});
+
+describe("iDos edition tabs (no SOL market)", () => {
+  const edition = panelTabsFor(true);
+  it("the main build keeps Market first in Shop", () => {
+    assert.deepEqual(panelTabsFor(false).shop, ["market", "traders"]);
+    assert.deepEqual(PANEL_TABS.shop, ["market", "traders"]);
+  });
+
+  it("the edition's Shop is Traders only, and market links land on Traders", () => {
+    assert.deepEqual(edition.shop, ["traders"]);
+    assert.deepEqual(normalizePanel("shop", "market", null, edition), { panel: "shop", tab: "traders", period: null });
+    assert.deepEqual(normalizePanel("shop", null, null, edition), { panel: "shop", tab: "traders", period: null });
+    for (const p of ["inventory", "info", "news", "leaderboards", "friends"] as const) assert.deepEqual(edition[p], PANEL_TABS[p], p);
   });
 });
