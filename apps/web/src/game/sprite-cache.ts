@@ -110,6 +110,9 @@ export const SPRITE_NAMES = [
   "box_safe_open",
   "box_stash",
   "box_stash_open",
+  // In-raid objectives: a hidden cache (Corpse "hc<n>", entities.ts CorpseView).
+  "cache_stash",
+  "cache_stash_open",
 ] as const;
 
 export type SpriteName = (typeof SPRITE_NAMES)[number];

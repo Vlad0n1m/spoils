@@ -307,6 +307,36 @@
       "size": 256,
       "view": "Seen STRICTLY from directly above (bird's-eye, 90 degrees top-down).",
       "prompt": "A perfectly STRAIGHT horizontal wall of stacked tan sandbags seen from directly above, two rows, long and narrow (about 4:1), no curve."
+    },
+    {
+      "id": "key_t2",
+      "size": 128,
+      "prompt": "An old brass door key with a round bow and a small cardboard luggage tag tied on a string, no text."
+    },
+    {
+      "id": "key_t3",
+      "size": 128,
+      "prompt": "A steel door key with a square bow on a metal ring with a blue plastic tag, no text."
+    },
+    {
+      "id": "key_t4",
+      "size": 128,
+      "prompt": "A heavy military door key with a red rubber head and a red metal tag on a steel ring, no text."
+    },
+    {
+      "id": "note_cache",
+      "size": 128,
+      "prompt": "A folded torn piece of yellowed paper with a hand-drawn treasure map sketch and a red X mark, no letters or text."
+    },
+    {
+      "id": "cache_stash",
+      "size": 192,
+      "prompt": "A small hidden stash in the dirt: an olive canvas duffel bag half buried under a few rocks, dry grass and a camouflage net."
+    },
+    {
+      "id": "cache_stash_open",
+      "size": 192,
+      "prompt": "A small hidden stash in the dirt, dug open: an empty opened olive canvas duffel bag lying in a shallow hole, rocks and a camouflage net pushed aside."
     }
   ]
 }

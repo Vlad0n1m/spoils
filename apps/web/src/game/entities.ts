@@ -18,6 +18,7 @@ import {
   WEAPONS,
   WORLD,
   isSupplyDropId,
+  isCacheId,
   itemDef,
   type BossSpot,
   type ContainerKind,
@@ -795,6 +796,19 @@ export class ItemView {
 
 /* ---------------------------------------------------------------------------- corpses */
 
+/** CorpseView.syncCrate looks: the WORLD v6 supply crate and the in-raid objectives' hidden cache. */
+interface CrateLook {
+  id: string;
+  closed: string;
+  open: string;
+  width: number;
+  ring: number;
+  label: string;
+  text: number;
+}
+const CRATE_LOOK: CrateLook = { id: "crate", closed: "box_weapon_box", open: "box_weapon_box_open", width: 70, ring: 0xffb020, label: "SUPPLY DROP", text: 0xffc95a };
+const CACHE_LOOK: CrateLook = { id: "cache", closed: "cache_stash", open: "cache_stash_open", width: 76, ring: 0x7fe0c8, label: "HIDDEN CACHE", text: 0x9ff0dc };
+
 export class CorpseView {
   readonly root = new Container();
   private readonly ring = new Graphics();
@@ -835,6 +849,8 @@ export class CorpseView {
     this.root.position.set(c.x, c.y);
     // WORLD v6 supply crate (Corpse "sd<n>", world-events.ts): a military crate, not a body.
     if (isSupplyDropId((c as { id?: string }).id ?? "")) return this.syncCrate(c.opened, empty);
+    // In-raid objectives: a hidden cache ("hc<n>"), only ever sent to its finders.
+    if (isCacheId((c as { id?: string }).id ?? "")) return this.syncCrate(c.opened, empty, CACHE_LOOK);
     if (this.sprite.texture === Texture.EMPTY) {
       const t = this.icons.get("corpse");
       if (t && t !== Texture.EMPTY) {
@@ -876,24 +892,24 @@ export class CorpseView {
     }
   }
 
-  /** Supply crate look: closed / opened weapon box, amber ring and label, dimmed once empty. */
-  private syncCrate(opened: boolean, empty: boolean) {
-    const want = opened || empty ? "box_weapon_box_open" : "box_weapon_box";
+  /** Supply crate look (or a hidden cache's): closed / opened sprite, ring and label, dimmed once empty. */
+  private syncCrate(opened: boolean, empty: boolean, look: CrateLook = CRATE_LOOK) {
+    const want = opened || empty ? look.open : look.closed;
     const t = this.icons.get(want);
     if (t && t !== Texture.EMPTY && this.sprite.texture !== t) {
       this.sprite.texture = t;
-      fitWidth(this.sprite, 70);
+      fitWidth(this.sprite, look.width);
     }
     this.sprite.rotation = 0;
-    if (this.colorKey !== "crate") {
-      this.colorKey = "crate";
+    if (this.colorKey !== look.id) {
+      this.colorKey = look.id;
       this.ring.clear();
-      this.ring.ellipse(0, 0, 44, 34).fill({ color: 0xffb020, alpha: 0.2 }).stroke({ width: 3, color: 0xffb020, alpha: 0.85 });
-      this.name.text = "SUPPLY DROP";
-      this.name.style.fill = 0xffc95a;
-      this.labelKey = "crate";
+      this.ring.ellipse(0, 0, 44, 34).fill({ color: look.ring, alpha: 0.2 }).stroke({ width: 3, color: look.ring, alpha: 0.85 });
+      this.name.text = look.label;
+      this.name.style.fill = look.text;
+      this.labelKey = look.id;
     }
-    const key = `crate|${opened}|${empty}`;
+    const key = `${look.id}|${opened}|${empty}`;
     if (key !== this.stateKey) {
       this.stateKey = key;
       this.sprite.tint = empty ? 0x6a6a6a : 0xffffff;

@@ -27,6 +27,13 @@ import {
   DROP,
   isSupplyDropId,
   isSupplyDropKey,
+  isCacheId,
+  isCacheKey,
+  CACHE,
+  CRACK,
+  crackSafes,
+  gateClosed,
+  lockedRooms,
   SOLID,
   WEAPONS,
   XP,
@@ -165,6 +172,7 @@ export function searchTitle(key: string, map: Pick<MapData, "containers"> | null
     return spot ? containerTitle(spot.kind) : "Container";
   }
   if (isSupplyDropKey(key)) return "Supply drop";
+  if (isCacheKey(key)) return "Hidden cache";
   if (key.startsWith("k")) {
     // NPC bodies read by role ("Marauder's body"), never as a nickname.
     return bodyTitle(state?.corpses.get(key.slice(1))?.label);
@@ -178,6 +186,7 @@ export function searchOpenMs(key: string, map: Pick<MapData, "containers"> | nul
     const spot = map?.containers[Number(key.slice(1))];
     return spot ? containerOpenMs(spot) : SEARCH.OPEN_MS.tier[1]!;
   }
+  if (isCacheKey(key)) return CACHE.OPEN_MS;
   return isSupplyDropKey(key) ? DROP.OPEN_MS : SEARCH.OPEN_MS.corpse;
 }
 
@@ -294,6 +303,16 @@ export interface InteractInput {
   idx?: CollisionIndex | null;
   /** Targets this client searched and saw empty (known-empty.ts): no prompt for them. */
   known?: Pick<KnownEmpty, "container" | "corpse"> | null;
+  /**
+   * In-raid objectives (null = off: BattleState.lockState empty): the full map (lockedRooms /
+   * crackSafes) and what the player carries (a gate's key).
+   */
+  objectives?: { map: MapData; carries: (def: string) => boolean } | null;
+}
+
+/** Display name of an item def ("Radar office key"). */
+function defName(def: string): string {
+  return itemDef(def)?.name ?? def;
 }
 
 /**
@@ -302,7 +321,7 @@ export interface InteractInput {
  * item within PLAYER.INTERACT_RADIUS. Only targets in line of sight (MOVE mask, as the server)
  * count when the collision index is known. Ties go to the later entry, like the server's scan.
  */
-export function interactHint({ state, map, x, y, idx = null, known = null }: InteractInput): string | null {
+export function interactHint({ state, map, x, y, idx = null, known = null, objectives = null }: InteractInput): string | null {
   const visible = (tx: number, ty: number) => !idx || hasLineOfSight(idx, x, y, tx, ty, SOLID.MOVE);
   const R = SEARCH.OPEN_RANGE;
   let bestD = R * R;
@@ -315,14 +334,32 @@ export function interactHint({ state, map, x, y, idx = null, known = null }: Int
     if (d > bestD) continue;
     if ((state.containerState[i] ?? 0) === CONTAINER_STATE.EMPTIED || known?.container(i) || !visible(c.x, c.y)) continue;
     bestD = d;
-    hint = `F — search ${containerTitle(c.kind)}`;
+    const crack = objectives && (state.containerState[i] ?? 0) === CONTAINER_STATE.UNTOUCHED && crackSafes(objectives.map).has(i);
+    hint = crack ? `F — crack safe (${CRACK.MS / 1000} s, loud)` : `F — search ${containerTitle(c.kind)}`;
+  }
+  // In-raid objectives: a locked gate nearer than any container wins (Objectives.interact).
+  if (objectives && idx) {
+    const om = objectives.map;
+    let gateD = 110 * 110;
+    let gateHint: string | null = null;
+    for (const l of lockedRooms(om)) {
+      if (!gateClosed(idx, om, l.id)) continue;
+      for (const g of l.doors) {
+        const nx = Math.max(g.x, Math.min(x, g.x + g.w)), ny = Math.max(g.y, Math.min(y, g.y + g.h));
+        const d = (nx - x) ** 2 + (ny - y) ** 2;
+        if (d > gateD) continue;
+        gateD = d;
+        gateHint = objectives.carries(l.key) ? `F — unlock with ${defName(l.key)}` : `Locked — needs ${defName(l.key)}`;
+      }
+    }
+    if (gateHint && (hint === null || gateD < bestD)) return gateHint;
   }
   state.corpses.forEach((k, id) => {
     if (k.empty || known?.corpse(id)) return;
     const d = (k.x - x) ** 2 + (k.y - y) ** 2;
     if (d > bestD || !visible(k.x, k.y)) return;
     bestD = d;
-    hint = isSupplyDropId(id) ? "F — open supply drop" : `F — search ${k.label ? `${k.label}'s body` : "body"}`;
+    hint = isSupplyDropId(id) ? "F — open supply drop" : isCacheId(id) ? "F — open hidden cache" : `F — search ${k.label ? `${k.label}'s body` : "body"}`;
   });
   if (hint) return hint;
 
@@ -382,6 +419,18 @@ export interface HudInput {
   known?: Pick<KnownEmpty, "container" | "corpse"> | null;
 }
 
+/** interactHint's objectives input: on only while BattleState.lockState lists the map's locks. */
+function objectivesOf(state: BattleState, map: MapData | null, priv: SelfState | null): InteractInput["objectives"] {
+  if (!map || !priv || !(state.lockState?.length > 0)) return null;
+  return {
+    map,
+    carries: (def) => {
+      for (const it of priv.slots.values()) if (it.def === def) return true;
+      return false;
+    },
+  };
+}
+
 export function buildHud({
   state, sessionId, selfKey, selfPos, clockMs, killFeed, killTally, pingMs, idx = null, map = null, move = null, known = null,
 }: HudInput): HudSnapshot {
@@ -429,7 +478,7 @@ export function buildHud({
     totalPlayers,
     nearestExtract: onMap ? nearestExtract : null,
     extracts: onMap ? extracts : [],
-    interactHint: canInteract ? interactHint({ state, map, x: selfPos!.x, y: selfPos!.y, idx, known }) : null,
+    interactHint: canInteract ? interactHint({ state, map, x: selfPos!.x, y: selfPos!.y, idx, known, objectives: objectivesOf(state, map, priv) }) : null,
     killFeed,
     ...(killTally ? { killTally } : {}),
     pingMs,
