@@ -5,16 +5,15 @@ import { QUEST } from "@extract/shared";
 import { ControlsSection, PlayerInstructions, RulesSection } from "@/components/play-instructions";
 import { useLobby } from "@/lib/lobby/lobby-context";
 import { markRewardTable, rewardTable } from "@/lib/lobby/levels";
-import { Paged } from "@/components/paged";
 
 /**
  * Info (WORLD v6 spec §6.3): How to play, Rules (currencies, risk, XP table, levels and tasks),
- * Controls. No scrolling: each tab flows into page-tall columns (two or three on wide screens) and
- * pages with ‹ › / swipe.
+ * Controls. These reading tabs keep an ordinary vertical scroll (owner's call), unlike the paged panels.
  */
 export function InfoPanel({ tab }: { tab: string }) {
   return (
-    <Paged gap={14} colGap={18} minCol={300} maxCols={3} resetKey={tab} label="Info pages">
+    <div key={tab} className="read-scroll min-h-0 flex-1 pr-1" aria-label="Info">
+      <div className="mx-auto flex max-w-3xl flex-col gap-4 pb-4">
       {tab === "rules" ? (
         <>
           <AlphaRulesLink />
@@ -29,7 +28,8 @@ export function InfoPanel({ tab }: { tab: string }) {
           <PlayerInstructions />
         </>
       )}
-    </Paged>
+      </div>
+    </div>
   );
 }
 
