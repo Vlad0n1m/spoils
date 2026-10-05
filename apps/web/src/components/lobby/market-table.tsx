@@ -8,6 +8,7 @@ import { formatMinor } from "@/lib/market/config";
 import { MARKET_CATS, templateLabel, type MarketCat } from "@/lib/market/templates";
 import { ItemCard } from "./item-card";
 import { api, timeLeft, useResource } from "./use-lobby";
+import { Paged } from "@/components/paged";
 
 const CAT_LABEL: Record<MarketCat, string> = { all: "All", weapon: "Weapons", armor: "Armor", backpack: "Backpacks" };
 const SORTS = [
@@ -19,7 +20,8 @@ const SORTS = [
 
 /**
  * Market board (economy memo §7, v1): fixed-price lots, filters by category, sort, buy with a
- * confirm step. `canBuy` is false for guests / signed-out viewers (browse only).
+ * confirm step. `canBuy` is false for guests / signed-out viewers (browse only). The lots page
+ * (‹ ›, swipe) in the free height instead of scrolling.
  */
 export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean; onBought: () => void; refreshKey: number }) {
   const [cat, setCat] = useState<MarketCat>("all");
@@ -60,9 +62,9 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
   const balance = res.data?.balance ? BigInt(res.data.balance) : null;
 
   return (
-    <section className="toon-panel bg-[#161b28]/95 p-5">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="toon-text-thin text-2xl tracking-wide text-white">Market</h2>
+    <section className="toon-panel flex min-h-0 flex-1 flex-col bg-[#161b28]/95 p-5 short:p-3">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <h2 className="toon-text-thin text-2xl tracking-wide text-white short:sr-only">Market</h2>
         <div className="flex flex-wrap items-center gap-1.5">
           {MARKET_CATS.map((c) => (
             <Chip key={c} active={cat === c} onClick={() => setCat(c)}>
@@ -88,18 +90,18 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
       </header>
 
       {msg && (
-        <p role="status" className={clsx("font-body mt-3 rounded-xl border-2 border-black px-3 py-2 text-sm font-semibold text-black", msg.ok ? "bg-zooa-lime" : "bg-rose-300")}>
+        <p role="status" className={clsx("font-body mt-3 shrink-0 rounded-xl border-2 border-black px-3 py-2 text-sm font-semibold text-black", msg.ok ? "bg-zooa-lime" : "bg-rose-300")}>
           {msg.text}
         </p>
       )}
-      {res.error && <p className="font-body mt-4 text-sm text-rose-300">{res.error}</p>}
+      {res.error && <p className="font-body mt-4 shrink-0 text-sm text-rose-300">{res.error}</p>}
       {!res.error && rows.length === 0 && (
-        <p className="font-body mt-6 rounded-2xl border-2 border-dashed border-white/15 p-6 text-center text-sm text-white/70">
+        <p className="font-body mt-6 shrink-0 rounded-2xl border-2 border-dashed border-white/15 p-6 text-center text-sm text-white/70">
           {res.loading ? "Loading listings…" : "Nothing for sale in this category yet."}
         </p>
       )}
 
-      <ul className="mt-4 flex flex-col gap-2">
+      <Paged as="ul" className="mt-4 short:mt-2" gap={8} minCol={360} maxCols={2} resetKey={`${cat}:${sort}`} label="Market pages">
         {rows.map((l) => {
           const d = describeItem({ def: l.item.def, rarity: l.item.rarity });
           const pending = l.visibleAt > now;
@@ -108,7 +110,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
             <li
               key={l.id}
               className={clsx(
-                "grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-2xl border-2 border-black bg-black/25 p-2.5 pr-3 sm:grid-cols-[auto_1fr_auto_auto]",
+                "grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-2xl border-2 border-black bg-black/25 p-2.5 pr-3 sm:grid-cols-[auto_1fr_auto_auto] short:gap-2 short:p-1.5 short:pr-2",
                 l.mine && "bg-sky-300/10",
               )}
             >
@@ -121,7 +123,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
                   <span className="hidden sm:inline"> · {timeLeft(l.expiresAt, now)} left</span>
                 </p>
               </div>
-              <p className="toon-text-thin text-right text-lg tabular-nums tracking-wide text-zooa-lime max-sm:col-span-3 max-sm:row-start-2 max-sm:text-left sm:text-xl">
+              <p className="toon-text-thin text-right text-lg tabular-nums tracking-wide text-zooa-lime max-sm:col-span-3 max-sm:row-start-2 max-sm:text-left sm:text-xl short:!text-base">
                 {formatMinor(l.price)}
               </p>
               <div className="max-sm:col-start-3 max-sm:row-start-1">
@@ -153,7 +155,7 @@ export function MarketTable({ canBuy, onBought, refreshKey }: { canBuy: boolean;
             </li>
           );
         })}
-      </ul>
+      </Paged>
     </section>
   );
 }
@@ -174,8 +176,8 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
   );
 }
 
-/** Recent trades (all templates): what things actually sell for. */
-export function RecentTrades({ refreshKey }: { refreshKey: number }) {
+/** Recent trades (all templates): what things actually sell for. Paged, never scrolled. */
+export function RecentTrades({ refreshKey, className }: { refreshKey: number; className?: string }) {
   const res = useResource<{ trades: Array<{ id: string; template: string; def: string; rarity: number; dur: number; price: string; at: number }> }>(
     "/api/market/history",
   );
@@ -185,12 +187,12 @@ export function RecentTrades({ refreshKey }: { refreshKey: number }) {
   }, [refreshKey, reload]);
   const trades = res.data?.trades ?? [];
   return (
-    <section className="toon-panel bg-[#161b28]/95 p-5">
-      <h2 className="toon-text-thin text-xl tracking-wide text-white">Recent sales</h2>
+    <section className={clsx("toon-panel flex min-h-0 flex-col bg-[#161b28]/95 p-5 short:p-3", className)}>
+      <h2 className="toon-text-thin shrink-0 text-xl tracking-wide text-white short:text-lg">Recent sales</h2>
       {trades.length === 0 ? (
         <p className="font-body mt-3 text-sm text-white/70">{res.loading ? "Loading…" : "No sales yet — be the first."}</p>
       ) : (
-        <ul className="font-body mt-3 flex flex-col gap-1.5 text-sm">
+        <Paged as="ul" className="mt-3 short:mt-2" flowClassName="font-body text-sm" gap={6} label="Recent sale pages">
           {trades.slice(0, 10).map((t) => (
             <li key={t.id} className="flex items-center gap-2">
               <ItemCard def={t.def} rarity={t.rarity} size="sm" />
@@ -200,7 +202,7 @@ export function RecentTrades({ refreshKey }: { refreshKey: number }) {
               <span className="tabular-nums text-zooa-lime">{formatMinor(t.price)}</span>
             </li>
           ))}
-        </ul>
+        </Paged>
       )}
     </section>
   );
