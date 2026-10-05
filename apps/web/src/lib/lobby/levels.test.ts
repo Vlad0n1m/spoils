@@ -8,6 +8,7 @@ import { COSMETICS, LEVEL_REWARDS, MARKET } from "@extract/shared";
 import {
   REWARD_TABLE_TOP,
   cosmeticLabel,
+  defaultSellUnlockLevel,
   levelRewards,
   levelUnlocks,
   featureKindOf,
@@ -59,6 +60,21 @@ describe("level rewards", () => {
     assert.equal(featureKindOf("Level badge turns gold"), "band");
     assert.deepEqual(rewardsBetween(1, 4).map((x) => x.label), unlocksBetween(1, 4));
     assert.deepEqual(rewardsBetween(10, 11), []);
+  });
+
+  it("iDos edition (no market): no level promises market selling; the rest of the table is unchanged", () => {
+    assert.equal(defaultSellUnlockLevel(true), MARKET.SELL_UNLOCK_LEVEL);
+    assert.equal(defaultSellUnlockLevel(false), null);
+    assert.equal(defaultSellUnlockLevel(), MARKET.SELL_UNLOCK_LEVEL, "tests run as the main build");
+    const all = rewardTable(null).flatMap((r) => r.items);
+    assert.ok(all.every((i) => i.feature !== "market" && !/market|sell|SOL/i.test(i.label)), "no market line anywhere");
+    assert.deepEqual(levelRewards(5, null).map((x) => x.feature ?? x.kind), ["trader", "band", "title", "color"]);
+    assert.ok(!unlocksBetween(1, 30, null).includes("Market selling unlocked"));
+    assert.ok(rewardsBetween(1, 30, null).every((x) => x.feature !== "market"));
+    // Only the market line differs from the main table.
+    const main = rewardTable(MARKET.SELL_UNLOCK_LEVEL).flatMap((r) => r.items).filter((i) => i.feature !== "market");
+    assert.deepEqual(all, main);
+    assert.equal(nextReward(1, null)!.level, nextReward(1)!.level);
   });
 
   it("next reward after a level", () => {
