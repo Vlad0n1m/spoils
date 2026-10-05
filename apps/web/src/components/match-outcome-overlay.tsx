@@ -3,7 +3,7 @@
 /**
  * End-of-raid overlay v2: extracted gear (to the stash), the junk auto-sell receipt (CR lines,
  * coin tick per line), dog tags, broken items (lost to the pool) and items left in your body,
- * kills and time. Driven by S2C.OUTCOME (OutcomeMsg) and S2C.SETTLED (MatchSummaryMsg); the web
+ * kills and time; on a death the recap card (who killed you and with what, OutcomeMsg.recap). Driven by S2C.OUTCOME (OutcomeMsg) and S2C.SETTLED (MatchSummaryMsg); the web
  * API's final credits (after applyExit: autosell mult, dog-tag repeat rule) can be passed later
  * through `finalCredits`, and the receipt re-totals itself.
  */
@@ -17,6 +17,7 @@ import type { RoomExit } from "@/lib/room-exit";
 import { killedByLine, npcKillsLine, npcLabels, type KillTally } from "@/game/npc-labels";
 import { earlyExtract } from "@/game/hud";
 import { DogTagRow, ItemStrip, SellReceipt } from "./inventory/outcome-receipt";
+import { DeathRecapCard } from "./death-recap-card";
 
 /** Delay before the result card appears, so the player sees the moment of death / extraction. */
 const CONTENT_DELAY_MS = 900;
@@ -157,6 +158,7 @@ function ResultCard({
   onContinue: () => void;
 }) {
   const style = EXIT_STYLE[outcome.exit];
+  const recap = outcome.exit === "dead" ? outcome.recap : undefined;
   const L = npcLabels();
   // v5 participants are humans only; the filter keeps pre-v5 reports (with bots) honest too.
   const humans = settlement?.participants.filter((p) => !p.isBot) ?? [];
@@ -174,14 +176,30 @@ function ResultCard({
       <div className={clsx("h-3 shrink-0 border-b-[3px] border-black", style.band)} aria-hidden />
       <div className="flex min-h-0 flex-col p-6 sm:p-8 land:grid land:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] land:grid-rows-[minmax(0,1fr)] land:gap-8 short:!gap-4 short:!p-4">
         <div className="contents land:flex land:min-h-0 land:flex-col">
-        <p className="shrink-0 text-xs uppercase tracking-[0.25em] text-white/50">Raid result</p>
-        <h2 className={clsx("toon-text mt-2 shrink-0 text-5xl tracking-wide sm:text-6xl short:!text-4xl", style.color)}>{style.title}</h2>
-        <p className="font-body mt-3 shrink-0 text-lg font-semibold leading-snug text-white/85 short:mt-1.5 short:text-base">{subtitle(outcome)}</p>
+        <p className={clsx("shrink-0 text-xs uppercase tracking-[0.25em] text-white/50", recap && "short:hidden")}>Raid result</p>
+        <h2
+          className={clsx(
+            "toon-text mt-2 shrink-0 text-5xl tracking-wide sm:text-6xl short:!text-4xl",
+            // With the recap card the left column is tall: a smaller title on short screens.
+            recap && "short:mt-0 short:!text-3xl",
+            style.color,
+          )}
+        >
+          {style.title}
+        </h2>
+        {recap ? (
+          // Death recap: who killed you and with what (replaces the one-line "Killed by" subtitle).
+          <DeathRecapCard recap={recap} className="mt-3 shrink-0 short:mt-1.5" />
+        ) : (
+          <p className="font-body mt-3 shrink-0 text-lg font-semibold leading-snug text-white/85 short:mt-1.5 short:text-base">{subtitle(outcome)}</p>
+        )}
 
 
         <dl
           className={clsx(
             "mt-6 grid shrink-0 gap-2 border-t-[3px] border-black/50 pt-5 text-center short:mt-3 short:pt-3",
+            // Short screens with the recap card: the stats fold into one line below (no scroll, no overlap).
+            recap && "short:hidden",
             killTally ? "grid-cols-2 gap-y-4 sm:grid-cols-4" : "grid-cols-3",
           )}
         >
@@ -212,8 +230,19 @@ function ResultCard({
             title={settlement ? `${raidersOut} of ${humans.length} raiders got out` : "The map is still running"}
           />
         </dl>
+        {recap && (
+          <p className="font-body mt-1.5 hidden shrink-0 text-center text-xs font-semibold tabular-nums text-white/70 short:block">
+            {[
+              killTally ? `${L.playersKilled} ${killTally.players} · ${L.npcsKilled} ${npcKillsLine(killTally)}` : `Kills ${outcome.kills}`,
+              enteredAtMs > 0 ? `On the map ${fmtClock(Math.max(0, outcome.atMs - enteredAtMs))}` : `Survived ${fmtClock(outcome.atMs)}`,
+              settlement ? `Extracted ${raidersOut}/${humans.length}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        )}
         {npc && (
-          <p className="font-body mt-3 shrink-0 text-center text-xs leading-relaxed text-white/50">
+          <p className={clsx("font-body mt-3 shrink-0 text-center text-xs leading-relaxed text-white/50", recap && "short:hidden")}>
             {npcRaidLine(npc)}
           </p>
         )}

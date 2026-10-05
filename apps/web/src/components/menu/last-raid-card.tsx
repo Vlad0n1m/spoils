@@ -6,6 +6,7 @@ import { XP_LINE_LABEL, type ExitType, type LastRaidDto, type XpLine } from "@ex
 import { fmtCr } from "@/lib/items-ui";
 import { fmtInt } from "./xp-bar";
 import { mapLabel } from "@/lib/lobby/world-clock";
+import { killedByText } from "@/game/recap-text";
 
 const EXIT: Record<ExitType, { title: string; bar: string }> = {
   extract: { title: "Extracted!", bar: "bg-zooa-lime" },
@@ -72,6 +73,9 @@ export function LastRaidCard({ raid, onDismiss }: { raid: LastRaidDto; onDismiss
           <Stat label="Kills" value={String(raid.kills.players + raid.kills.npcs)} tone="text-white" />
         </div>
         <p className="font-body mt-3 text-sm text-white/80 short:mt-2">{killsText(raid.kills)}</p>
+        {raid.exit === "dead" && killedByText(raid.killedBy, raid.killedByRole) && (
+          <p className="font-body mt-1 text-sm font-semibold text-rose-300">{killedByText(raid.killedBy, raid.killedByRole)}</p>
+        )}
         {raid.trophies && raid.trophies.length > 0 && (
           <p className="font-body mt-2 text-sm font-bold text-amber-300">Boss trophy: {raid.trophies.join(", ")}</p>
         )}

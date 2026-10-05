@@ -7,9 +7,11 @@
  * what the client knows entities by).
  */
 
+import type { HitRing } from "./recap.js";
 import type {
   BoomMsg,
   BossEvMsg,
+  DeathRecap,
   XpMsg,
   BossKind,
   GrenadeMsg,
@@ -231,6 +233,10 @@ export interface PlayerRuntime {
   bossTrophies: Set<BossKind>;
   /** Bosses only: humans who damaged it this life (party trophy, boss-fight.ts). */
   bossDamagers: Set<PlayerRuntime> | null;
+  /** Death recap (recap.ts): ring buffer of the last hits taken (created on the first hit). */
+  hits: HitRing | null;
+  /** Death recap of this human's death (recap.ts buildRecap), put into the OutcomeMsg. */
+  recap: DeathRecap | null;
 }
 
 export interface Bullet {
@@ -243,6 +249,8 @@ export interface Bullet {
   speed: number;
   remaining: number;
   damage: number;
+  /** Rarity of the weapon that fired it (death recap). */
+  rarity: number;
 }
 
 /**

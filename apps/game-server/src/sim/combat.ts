@@ -33,6 +33,7 @@ import { cancelHeal, startReload } from "./actions.js";
 import { activeWeapon, ammoCount, syncPublic, weaponDefOf } from "./bag.js";
 import { closeSearch } from "./containers.js";
 import { killPlayer } from "./death.js";
+import { recordHit } from "./recap.js";
 import { toPlain } from "./items.js";
 import type { Match } from "./match.js";
 import { emitSound } from "./sound.js";
@@ -105,6 +106,7 @@ export function tryFire(m: Match, rt: PlayerRuntime): void {
       speed: def.bulletSpeed,
       remaining: def.range,
       damage,
+      rarity: Math.max(0, Math.min(3, w.rarity)),
     });
   }
   m.emit({
@@ -149,7 +151,7 @@ export function stepBullets(m: Match, dtMs: number): void {
     }
 
     if (hit && hitT <= tWall) {
-      damagePlayer(m, hit, b.damage, b.owner, b.weapon, b.x + sx * hitT, b.y + sy * hitT);
+      damagePlayer(m, hit, b.damage, b.owner, b.weapon, b.x + sx * hitT, b.y + sy * hitT, undefined, b.rarity);
       continue;
     }
     if (tWall !== Infinity) continue;
@@ -174,6 +176,7 @@ export function damagePlayer(
   hx: number,
   hy: number,
   from?: { x: number; y: number },
+  rarity = -1,
 ): void {
   const p = rt.pub;
   if (!p.alive) return;
@@ -183,6 +186,7 @@ export function damagePlayer(
   const armor = s.slots.get("armor");
   const level = armor ? (itemDef(armor.def)?.armorLevel ?? 0) : 0;
   const { hpLoss, armorUsed } = applyDamage(raw, level, armor ? armor.dur : 0);
+  const hpBefore = p.hp;
   p.hp = Math.max(0, round2(p.hp - hpLoss));
   if (armor && armorUsed > 0) {
     armor.dur = round2(armor.dur - armorUsed);
@@ -201,6 +205,8 @@ export function damagePlayer(
     // Boss trophies (boss-fight.ts): the killer's party mates who damaged the boss share it.
     if (p.role === NPC_ROLE.BOSS && !attacker.isNpc && hpLoss > 0) (rt.bossDamagers ??= new Set()).add(attacker);
   }
+  // Death recap (recap.ts): every hit that cost HP or armor, with the HP it actually took (no overkill).
+  if (hpLoss > 0 || armorUsed > 0) recordHit(m, rt, attacker, weapon, rarity, round2(hpBefore - p.hp));
   // Taking damage restarts the extraction channel.
   if (s.extractId) s.extractStartedAt = m.clock;
   // WORLD v6: damage interrupts the supply crate's open channel (contests happen at the crate).

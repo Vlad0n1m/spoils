@@ -82,6 +82,9 @@ export const playerExitReportSchema = z.object({
   touch: z.boolean().optional(),
   /** Boss fights: bosses this entry killed or helped kill (party) → bossTrophyId titles at settlement. */
   bossTrophies: z.array(bossKind).max(BOSS_KINDS.length).optional(),
+  /** Death recap: who killed this entry (nickname / NPC role display key) and their NPC_ROLE. */
+  killedBy: z.string().max(64).optional(),
+  killedByRole: z.number().int().min(0).max(3).optional(),
 }) as unknown as z.ZodType<PlayerExitReport>;
 
 export const matchEndReportSchema = z.object({
