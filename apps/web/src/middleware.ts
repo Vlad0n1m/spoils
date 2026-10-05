@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { editionBlock } from "./lib/edition";
-import { checkApiMutation } from "./lib/request-guard";
+import { checkApiMutation, editionCorsHeaders } from "./lib/request-guard";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -23,9 +23,12 @@ export function middleware(req: NextRequest) {
   if (gate === "api") return NextResponse.json({ error: "not_found" }, { status: 404, headers: NO_STORE });
   if (gate === "page") return NextResponse.redirect(new URL("/play", req.url), { status: 307, headers: NO_STORE });
   if (!pathname.startsWith("/api/")) return NextResponse.next();
+  // 3. iDos edition: CORS for our client on the iDos title subdomains (request-guard.ts); none elsewhere.
+  const cors = editionCorsHeaders(req.headers.get("origin"));
+  if (cors && req.method === "OPTIONS") return new NextResponse(null, { status: 204, headers: cors });
   const blocked = checkApiMutation(req, pathname);
-  if (blocked) return NextResponse.json({ error: blocked.error }, { status: blocked.status, headers: NO_STORE });
-  return NextResponse.next();
+  if (blocked) return NextResponse.json({ error: blocked.error }, { status: blocked.status, headers: { ...NO_STORE, ...cors } });
+  return NextResponse.next(cors ? { headers: cors } : undefined);
 }
 
 export const config = {

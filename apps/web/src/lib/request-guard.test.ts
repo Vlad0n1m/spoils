@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { checkApiMutation, checkSameOriginRequest, isServerToServerApi } from "./request-guard";
+import { checkApiMutation, checkSameOriginRequest, editionCorsHeaders, isEditionClientOrigin, isServerToServerApi } from "./request-guard";
 
 const req = (headers: Record<string, string>) =>
   new Request("https://game.example/api/auth/login", { method: "POST", headers: { host: "game.example", ...headers } });
@@ -144,5 +144,40 @@ describe("checkApiMutation (middleware.ts, every /api route)", () => {
     );
     assert.equal(bridge.status, 404);
     assert.deepEqual(await bridge.json(), { error: "not_found" });
+  });
+});
+
+describe("iDos edition client origin (the static client on the title subdomain)", () => {
+  const client = ["https://8yechsd4.idos.games", "https://8yechsd4-dev.idos.games"];
+  const fromClient = (origin: string, type = "application/json") =>
+    new Request("https://idos.example/api/idos/session", {
+      method: "POST",
+      headers: { host: "idos.example", origin, "sec-fetch-site": "cross-site", "content-type": type },
+    });
+
+  it("passes the CSRF checks only from the listed client origins", () => {
+    assert.equal(checkSameOriginRequest(fromClient(client[0]!), { json: true }, client), null);
+    assert.equal(checkApiMutation(fromClient(client[1]!), "/api/raids/enter-x", client), null);
+    assert.deepEqual(checkSameOriginRequest(fromClient("https://evil.idos.games"), { json: true }, client), { status: 403, error: "cross_site" });
+    assert.deepEqual(checkApiMutation(fromClient("https://8yechsd4.idos.games.evil.com"), "/api/x", client), { status: 403, error: "cross_site" });
+  });
+
+  it("still requires a JSON body from the client origin where a route asks for one", () => {
+    assert.deepEqual(checkSameOriginRequest(fromClient(client[0]!, "text/plain"), { json: true }, client), { status: 415, error: "unsupported_media_type" });
+  });
+
+  it("is off when no client origins are configured (the main build)", () => {
+    assert.equal(isEditionClientOrigin(client[0]!, []), false);
+    assert.deepEqual(checkSameOriginRequest(fromClient(client[0]!), { json: true }, []), { status: 403, error: "cross_site" });
+    assert.equal(editionCorsHeaders(client[0]!, []), null);
+  });
+
+  it("CORS headers echo only a listed origin, without credentials", () => {
+    const h = editionCorsHeaders(client[0]!, client)!;
+    assert.equal(h["Access-Control-Allow-Origin"], client[0]);
+    assert.match(h["Access-Control-Allow-Headers"]!, /Authorization/);
+    assert.equal("Access-Control-Allow-Credentials" in h, false);
+    assert.equal(editionCorsHeaders("https://other.example", client), null);
+    assert.equal(editionCorsHeaders(null, client), null);
   });
 });

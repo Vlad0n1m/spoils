@@ -8,7 +8,20 @@
  * matters in the iDos edition, whose session cookie is SameSite=None.
  */
 
+import { IDOS_SHELL_ORIGINS } from "./edition";
+
 export type GuardFailure = { status: 403 | 415; error: "cross_site" | "unsupported_media_type" };
+
+/**
+ * iDos edition: the game client served from our iDos title subdomains (https://{titleid}.idos.games
+ * and its -dev copy, IDOS_SHELL_ORIGINS; empty in the main build) calls this API cross-origin. It
+ * sends its session in an Authorization header and never a cookie (lib/session.ts), so a request from
+ * one of those exact origins is not a CSRF risk; any other foreign origin is still refused. Those
+ * subdomains serve only our own uploaded build.
+ */
+export function isEditionClientOrigin(origin: string | null, allowed: readonly string[] = IDOS_SHELL_ORIGINS): boolean {
+  return !!origin && allowed.includes(origin);
+}
 
 function hostOf(origin: string): string | null {
   if (origin === "null") return null;
@@ -20,8 +33,13 @@ function hostOf(origin: string): string | null {
 }
 
 /** Null when the request may proceed. `json: true` additionally requires an application/json body. */
-export function checkSameOriginRequest(req: Request, opts: { json: boolean }): GuardFailure | null {
+export function checkSameOriginRequest(
+  req: Request,
+  opts: { json: boolean },
+  clientOrigins: readonly string[] = IDOS_SHELL_ORIGINS,
+): GuardFailure | null {
   const h = req.headers;
+  if (isEditionClientOrigin(h.get("origin"), clientOrigins)) return opts.json ? jsonOnly(h) : null;
   // Fetch metadata (all current browsers): only the page itself ("same-origin") or a direct
   // user action ("none") may call these routes.
   const site = h.get("sec-fetch-site");
@@ -36,11 +54,28 @@ export function checkSameOriginRequest(req: Request, opts: { json: boolean }): G
     if (!from || !hosts.includes(from)) return { status: 403, error: "cross_site" };
   }
 
-  if (opts.json) {
-    const type = (h.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-    if (type !== "application/json") return { status: 415, error: "unsupported_media_type" };
-  }
-  return null;
+  return opts.json ? jsonOnly(h) : null;
+}
+
+function jsonOnly(h: Headers): GuardFailure | null {
+  const type = (h.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+  return type === "application/json" ? null : { status: 415, error: "unsupported_media_type" };
+}
+
+/**
+ * CORS answer for the edition's client (isEditionClientOrigin): the headers to add, or null for any
+ * other origin (no CORS headers: the browser then blocks the response). No credentials: the client
+ * sends its session in the Authorization header.
+ */
+export function editionCorsHeaders(origin: string | null, clientOrigins: readonly string[] = IDOS_SHELL_ORIGINS): Record<string, string> | null {
+  if (!isEditionClientOrigin(origin, clientOrigins)) return null;
+  return {
+    "Access-Control-Allow-Origin": origin!,
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Max-Age": "600",
+    Vary: "Origin",
+  };
 }
 
 /**
@@ -70,10 +105,14 @@ export function isServerToServerApi(pathname: string): boolean {
  * - a form body type (urlencoded, multipart, text/plain) is 415, which also covers old browsers that
  *   send neither fetch metadata nor Origin. Bodiless POSTs (no content-type) stay allowed.
  */
-export function checkApiMutation(req: Request, pathname = new URL(req.url).pathname): GuardFailure | null {
+export function checkApiMutation(
+  req: Request,
+  pathname = new URL(req.url).pathname,
+  clientOrigins: readonly string[] = IDOS_SHELL_ORIGINS,
+): GuardFailure | null {
   if (!STATE_CHANGING.has(req.method.toUpperCase())) return null;
   if (isServerToServerApi(pathname)) return null;
-  const cross = checkSameOriginRequest(req, { json: false });
+  const cross = checkSameOriginRequest(req, { json: false }, clientOrigins);
   if (cross) return cross;
   const type = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
   if (FORM_TYPES.has(type)) return { status: 415, error: "unsupported_media_type" };

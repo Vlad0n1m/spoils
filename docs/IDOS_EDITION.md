@@ -525,6 +525,11 @@ SOL-рынок и казна (`lib/inventory`, `api/market`), девнет по 
   выключен (нет `HOT_WALLET_SECRET_B58`). https://spoils.gg и `wss://game.spoils.gg`, сертификат `spoils.gg`.
   Ключ программы `AHgxhkN5Qu9T9nuV5yBaSU2oR6Xk7XA1QkrYRcUiPgNN` на devnet с балансом 0 — пополнить через
   https://faucet.solana.com, иначе события остаются в очереди.
+- 05.10 вечер: основная версия обновлена до 69aec18 (бэкап базы `/root/extract-20261005-1554.dump`, `.env` —
+  `/root/env-backup-20261005-1554`). Миграции 014 (маркет за CR), 015 (вещи на Solana), 016 (лут альфы) применены;
+  в `.env` добавлен `ONCHAIN_COLLECTION`. Программа событий и `spoils_market` задеплоены на devnet, ключ
+  `AHgx…PgNN` пополнен, события пишутся. `/onchain` живой. При перезапуске game-server аннулирован 1 рейд
+  (игрок был на карте). Издание iDos (`spoils-idos`) не пересобиралось.
 
 ### 9.1 Тайтл и доступ агента (Влад)
 

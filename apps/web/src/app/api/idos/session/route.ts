@@ -4,7 +4,7 @@ import { z } from "zod";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { users } from "@/db/schema";
-import { getSession } from "@/lib/session";
+import { getSession, sessionToken } from "@/lib/session";
 import { deriveDepositPubkey } from "@/lib/keypair";
 import { checkSameOriginRequest } from "@/lib/request-guard";
 import { clientIp, registerLimiter } from "@/lib/auth-rate-limit";
@@ -22,6 +22,12 @@ const bodySchema = z.object({
   ticket: z.string().max(4096),
   nickname: z.string().max(64).optional(),
 });
+
+/** The client on the iDos title subdomain keeps its session as a token (lib/session.ts): hand it the new seal. */
+function tokenOf(session: object): { token?: string } {
+  const token = sessionToken(session);
+  return token ? { token } : {};
+}
 
 function reply(status: number, body: Record<string, unknown>) {
   return NextResponse.json(body, { status, headers: NO_STORE });
@@ -75,7 +81,7 @@ export async function POST(req: Request) {
     session.userId = existing.id;
     session.nickname = existing.nickname;
     await session.save();
-    return reply(200, { status: "signed_in" });
+    return reply(200, { status: "signed_in", ...tokenOf(session) });
   }
 
   const id = randomUUID();
@@ -109,13 +115,13 @@ export async function POST(req: Request) {
       session.userId = raced.id;
       session.nickname = raced.nickname;
       await session.save();
-      return reply(200, { status: "signed_in" });
+      return reply(200, { status: "signed_in", ...tokenOf(session) });
     }
     session.guest = false;
     session.userId = id;
     session.nickname = nick;
     await session.save();
-    return reply(200, { status: "created" });
+    return reply(200, { status: "created", ...tokenOf(session) });
   }
   return reply(409, { error: "nickname_unavailable" });
 }
