@@ -632,6 +632,9 @@ Superteam Earn (трек Superteam KZ × iDos) и Colosseum, дедлайн 13.1
 | GitHub | — | нет remote, создать репозиторий |
 | Трейлер | https://www.youtube.com/watch?v=MunQ4wpESBk | есть |
 | Демо-видео с входом через iDos | — | снять после 9.6 |
+| Логотип токена | `docs/store/token-{1000,512,256}.png` (прозрачный круг) | есть (05.10) |
+| Обложка | `docs/store/cover-1920x1080.jpg`, `cover-1536x1024.jpg` | есть (05.10) |
+| Скриншоты | `docs/store/screens/` (лобби, карта); бой, лут, босс, выход — доснять | частично |
 
 **Superteam Earn:**
 
