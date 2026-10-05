@@ -8,17 +8,17 @@ export function Gate({ loading, guest, next }: { loading: boolean; guest: boolea
   if (loading) return <div className="py-6" aria-busy="true" />;
   const back = encodeURIComponent(next);
   return (
-    <div className="py-6">
-      <div className="toon-panel mx-auto max-w-xl bg-[#161b28]/95 p-8 text-center">
+    <div className="my-auto py-6 short:py-0">
+      <div className="toon-panel mx-auto max-w-xl bg-[#161b28]/95 p-8 text-center short:p-4">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/sprites/backpack_2.png" alt="" className="mx-auto h-20 w-20 animate-float-sm motion-reduce:animate-none" draggable={false} />
-        <h2 className="toon-text mt-4 text-3xl tracking-wide text-zooa-lime">{guest ? "Guests travel light" : "Sign in for your stash"}</h2>
+        <img src="/sprites/backpack_2.png" alt="" className="mx-auto h-20 w-20 short:h-12 short:w-12 animate-float-sm motion-reduce:animate-none" draggable={false} />
+        <h2 className="toon-text mt-4 text-3xl tracking-wide text-zooa-lime short:mt-2 short:text-2xl">{guest ? "Guests travel light" : "Sign in for your stash"}</h2>
         <p className="font-body mx-auto mt-3 max-w-[44ch] text-base text-white/75">
           {guest
             ? "Guest raids use the basic gear and loot isn't kept. Register to get a stash, a loadout and a rank."
             : "Your stash, loadout, traders and market listings live on your account."}
         </p>
-        <div className="mt-6 flex flex-wrap justify-center gap-3">
+        <div className="mt-6 flex flex-wrap justify-center gap-3 short:mt-3">
           <Link href={`/auth/register?next=${back}`} className="toon-btn min-h-12 px-6 text-lg">
             <span className="optical-center">Register</span>
           </Link>

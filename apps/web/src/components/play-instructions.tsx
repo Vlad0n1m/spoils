@@ -69,14 +69,17 @@ const STEPS: { title: string; body: string; icon: string }[] = [
   },
 ];
 
-/** Info · How to play (WORLD v6 spec §6.3). */
+/**
+ * Info · How to play (WORLD v6 spec §6.3). The sections are `paged-group`s: inside the Info panel
+ * every step, block and note is its own item of the paged columns (components/paged.tsx).
+ */
 export function PlayerInstructions() {
   return (
-    <section aria-label="How to play">
+    <section aria-label="How to play" className="paged-group">
       <p className="font-body text-base leading-relaxed text-white/75">Top-down extraction shooter: drop in, loot up, get out alive.</p>
-      <ol className="mt-5 list-none space-y-4">
+      <ol className="paged-group list-none">
         {STEPS.map((s, i) => (
-          <li key={s.title} className="flex gap-4">
+          <li key={s.title} className="flex gap-4 pt-2">
             <span className="relative grid h-14 w-14 shrink-0 place-items-center rounded-2xl border-[3px] border-black bg-white/[0.07] shadow-[0_3px_0_#000]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={s.icon} alt="" className="h-11 w-11 object-contain" draggable={false} />
@@ -84,12 +87,12 @@ export function PlayerInstructions() {
             </span>
             <div className="min-w-0">
               <h3 className="text-lg tracking-wide text-white">{s.title}</h3>
-              <p className="font-body mt-1.5 text-[0.95rem] leading-relaxed text-white/75">{s.body}</p>
+              <p className="font-body mt-1.5 text-[0.95rem] leading-relaxed text-white/75 short:text-sm short:leading-snug">{s.body}</p>
             </div>
           </li>
         ))}
       </ol>
-      <p className="font-body mt-6 rounded-xl border-2 border-black bg-amber-300 px-3 py-2 text-sm font-bold text-black">
+      <p className="font-body rounded-xl border-2 border-black bg-amber-300 px-3 py-2 text-sm font-bold text-black">
         Items left on the ground vanish after {GROUND_MIN} min, bodies after {CORPSE_MIN} min — valuables go to the treasury.
       </p>
     </section>
@@ -112,9 +115,9 @@ const XP_ROWS: Array<[string, string]> = [
 
 function Block({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="toon-panel bg-[#161b28]/95 p-4 md:p-5">
-      <h3 className="toon-text-thin text-xl tracking-wide text-white">{title}</h3>
-      <div className="font-body mt-3 text-[0.95rem] leading-relaxed text-white/75">{children}</div>
+    <section className="paged-split toon-panel bg-[#161b28]/95 p-4 md:p-5 short:!p-3">
+      <h3 className="toon-text-thin text-xl tracking-wide text-white short:text-lg">{title}</h3>
+      <div className="font-body mt-3 text-[0.95rem] leading-relaxed text-white/75 short:mt-2 short:text-sm short:leading-snug">{children}</div>
     </section>
   );
 }
@@ -122,7 +125,7 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 /** Info · Rules (WORLD v6 spec §6.3): currencies, risk, XP table, boards, ground expiry. */
 export function RulesSection() {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="paged-group">
       <Block title="Two currencies">
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
           <dt className="font-bold text-amber-300">CR</dt>
@@ -167,7 +170,7 @@ export function RulesSection() {
       <Block title="Leaderboards">
         <p>Level (all time), Raider kills and NPC kills, for this map, this week or all time. Guests aren&apos;t ranked. No prizes: the boards are for bragging.</p>
       </Block>
-      <Link href="/economy" className="font-body self-start rounded-lg px-1 text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline">
+      <Link href="/economy" className="font-body block w-fit rounded-lg px-1 text-sm font-semibold text-zooa-lime underline-offset-4 hover:underline">
         Live economy stats →
       </Link>
     </div>
@@ -230,7 +233,7 @@ function TouchControlsBlock() {
 export function ControlsSection() {
   const touch = useTouchMode();
   return (
-    <div className="flex flex-col gap-4">
+    <div className="paged-group">
       {touch && <TouchControlsBlock />}
       <Block title="In a raid">
         <ul className="divide-y divide-white/10">
