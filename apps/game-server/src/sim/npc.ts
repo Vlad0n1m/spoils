@@ -462,6 +462,8 @@ export class NpcSystem {
     giveSidearm(rt);
     // The bag: non-FREE, lootable from the corpse.
     for (const it of bag) placeItem(rt, makeItem(it.def, { qty: it.qty, rarity: it.rarity }));
+    // In-raid objectives: a locked-room key this marauder carries this cycle (first spawn only).
+    for (const k of m.objectives.takeNpcKeys(post.id, member)) placeItem(rt, k);
     // A pool unique (carrier): T3/T4 POI posts only, at most one; never minted, never breaks.
     // A respawned squad gets none at spawn (world placement may stow one later, pool-place.ts).
     const carried = carrier ? m.containers.takeCarrierPool(npcCarrierKey(post.id, member)) : [];

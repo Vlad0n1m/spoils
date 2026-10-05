@@ -245,6 +245,10 @@ export function buildBatches(
         // Personal: only the earner (dead / extracted included: a bullet in flight can still kill).
         if (recipients.includes(ev.to)) (batchOf(out, ev.to).xp ??= []).push(ev.msg);
         break;
+      case "obj":
+        // Personal objective notices (objectives.ts already chose the recipients).
+        if (recipients.includes(ev.to)) (batchOf(out, ev.to).obj ??= []).push(ev.msg);
+        break;
       default:
         break;
     }

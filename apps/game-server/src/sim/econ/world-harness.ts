@@ -85,6 +85,8 @@ export interface WorldShardOptions {
   cycleId?: number;
   /** The event boss of this cycle (bossEventOf on the real schedule; the harness may force one). */
   bossEvent: BossKind | null;
+  /** In-raid objectives (locked rooms, cracking, caches); default on like a real world map. */
+  objectives?: boolean;
   /** Distinct users making a first entry over the entry window (default 36). */
   users?: number;
   /** Share of first entries in minutes 0:20–5:00 (default 0.35). */
@@ -277,6 +279,7 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
     now: () => wall.t,
     envSeed: cycleEnvSeed(cycle),
     world: { cycleId: cycle, shard: 0, cycleStartsAt: startAt, entryCloseMs, bossEvent: o.bossEvent },
+    objectives: o.objectives ?? true,
   });
 
   // ---- the lost pool and the web's per-entry release (mirrored in-process)
@@ -506,7 +509,7 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
     const npcKills = rep.stats.npcKills ?? 0;
     const guards = rep.stats.guardKills ?? 0;
     const xp = xpForExit({
-      exit: rep.exit, onMapMs: rep.atMs - (rep.enteredAtMs ?? 0), haulCr: r.junkPaidCr, containers: rep.stats.containersSearched, hotContainers: rep.stats.hotContainers ?? 0,
+      exit: rep.exit, onMapMs: rep.atMs - (rep.enteredAtMs ?? 0), haulCr: r.junkPaidCr, containers: rep.stats.containersSearched, hotContainers: rep.stats.hotContainers ?? 0, objectives: rep.stats.objectives ?? 0,
       marauders: npcKills - guards, guards, bosses: rep.stats.bossKills, rankedPvp: rep.victims?.length ?? 0, grindToday: 0, firstExtractToday: false,
     });
     r.xp = xp.total;
@@ -636,6 +639,23 @@ export function runWorldShard(o: WorldShardOptions): { result: WorldShardResult;
       `hot ${we.hots.map((h) => `${h.plan.n}@${Math.round(h.plan.startAt / 60_000)}m ${h.zone?.name ?? "-"} refilled ${h.refilled.length}`).join(", ") || "-"} · ` +
       `late refills ${we.rolled.lateRefills} (junk ${we.rolled.lateJunkCr} CR) · ` +
       `rolled junk ${we.rolled.junkCr} CR in ${we.rolled.items} stacks (budget left ${we.budget.left})`,
+  );
+  // In-raid objectives (objectives.ts): what keys, strongroom rolls and caches added, what left the map.
+  const ob = m.objectives;
+  let keysOut = 0, keysCr = 0;
+  for (const r of m.exitReports) {
+    for (const it of r.extracted) {
+      const d = itemDef(it.def);
+      if (d?.opens) {
+        keysOut += it.qty;
+        keysCr += (d.value ?? 0) * it.qty;
+      }
+    }
+  }
+  console.log(
+    `[world] seed ${o.seed} objectives: keys ${ob.rolled.keys} (extracted ${keysOut} = ${keysCr} CR) · notes ${ob.rolled.notes} · ` +
+      `caches ${ob.rolled.caches} (opened ${ob.rolled.cachesOpened}) · strongroom rolls ${ob.rolled.strongroom} · unlocks ${ob.rolled.unlocks} · ` +
+      `cracks ${ob.rolled.cracks} · rolled junk ${ob.rolled.junkCr} CR (budget left ${ob.budget.left})`,
   );
   return { result: res, entries: records };
 }
@@ -812,6 +832,8 @@ export function worldCli(arg: (name: string) => string | undefined, out: string,
       return { key: key as Kit, w: Number(w ?? 1) };
     });
   const probeKit = (arg("probe-kit") ?? "starter") as Kit;
+  // --no-objectives: the same cycles without locked rooms / cracking / caches (A/B of their CR effect).
+  const objectives = !process.argv.includes("--no-objectives");
   const results: WorldShardResult[] = [];
   const entries: WorldEntryRecord[] = [];
   for (let i = 0; i < cycles; i++) {
@@ -819,7 +841,7 @@ export function worldCli(arg: (name: string) => string | undefined, out: string,
     const b = bossList[i % bossList.length]!;
     const bossEvent = b === "none" || b === "" ? null : (b as BossKind);
     const probes = enterAt.flatMap((atMin) => probeStrats.map((strategy) => ({ atMin, strategy, kit: probeKit })));
-    const r = runWorldShard({ seed, bossEvent, users, probes, kitMix, taggers: { n: taggers, fromMin: 25, toMin: 33 }, poolSize });
+    const r = runWorldShard({ seed, bossEvent, users, probes, kitMix, taggers: { n: taggers, fromMin: 25, toMin: 33 }, poolSize, objectives });
     results.push(r.result);
     entries.push(...r.entries);
     const x = r.result;
@@ -835,6 +857,7 @@ export function worldCli(arg: (name: string) => string | undefined, out: string,
     `(35 % arriving in minutes 0–5, re-entry 40 % after death / 20 % after extract), probes ${probeStrats.join("+")} ${probeKit} at ${enterAt.join("/")} min, kits ${kitMix ? kitMix.map((k) => `${k.key}:${k.w}`).join(",") : "starter:3,free:1,hunter:1"}, ` +
     `${taggers} free-kit taggers in minutes 25–33, boss events ${bossList.slice(0, cycles).join(", ")} (forced: one per cycle), pool ${poolSize ?? 700}. ` +
     `CR at autosell 1; free-kit junk × 0.5; tags under D22. XP per entry without daily state (no cap, no first-extract bonus).` +
+    (objectives ? "" : " In-raid objectives OFF (--no-objectives).") +
     (stale.length ? ` WARNING: shared sources newer than the dist: ${stale.slice(0, 3).join(", ")}.` : "");
   mkdirSync(out, { recursive: true });
   const base = join(out, `yield-world${tag ? "-" + tag : ""}`);

@@ -12,6 +12,7 @@ import type {
   BoomMsg,
   BossEvMsg,
   DeathRecap,
+  ObjMsg,
   XpMsg,
   BossKind,
   GrenadeMsg,
@@ -193,7 +194,7 @@ export interface PlayerRuntime {
   /** Death: uniques that survived the break roll and stay on the map for others. */
   dropped: ItemLike[];
   /** RaidStats: bossKills = bosses killed, npcKills = marauders + guards killed, guardKills = the guards among them (v5). */
-  stats: { shotsFired: number; dmgDealt: number; containersSearched: number; corpsesSearched: number; bossKills: number; npcKills: number; guardKills: number; hotContainers?: number };
+  stats: { shotsFired: number; dmgDealt: number; containersSearched: number; corpsesSearched: number; bossKills: number; npcKills: number; guardKills: number; hotContainers?: number; objectives?: number };
   killedBy: string;
   /** Set once the player left the map (extract / death / timeout). NPCs get one too (never posted). */
   exitReport: PlayerExitReport | null;
@@ -282,6 +283,8 @@ export type MatchEvent =
   | { type: "boom"; to: number; msg: BoomMsg }
   /** In-raid XP the recipient earned (xp.ts creditRaidXp): personal, to that player only. */
   | { type: "xp"; to: number; msg: XpMsg }
+  /** In-raid objective notice (objectives.ts): personal, to that player only. */
+  | { type: "obj"; to: number; msg: ObjMsg }
   /** Add / remove a `loot` entry to / from one client's StateView (WP-B search sessions). */
   | { type: "view"; to: number; op: "add" | "remove"; key: string }
   | { type: "outcome"; to: number; msg: OutcomeMsg }

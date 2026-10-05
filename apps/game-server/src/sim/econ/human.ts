@@ -323,6 +323,8 @@ export class HumanAgent {
   private hitSeenAt = -Infinity;
 
   private goal: Goal | null = null;
+  /** In-raid objectives: the safe being cracked (stand still until the channel ends). */
+  private cracking: Goal | null = null;
   private goalSince = 0;
   private readonly blacklist = new Map<string, number>();
   private readonly searchedKeys = new Set<string>();
@@ -926,6 +928,8 @@ export class HumanAgent {
         const id = `c${idx}`;
         if (this.searchedKeys.has(id) || this.blacklist.has(id)) continue;
         if (this.m.containers.stateOf(idx) === CONTAINER_STATE.EMPTIED) continue;
+        // In-raid objectives: a locked room's containers are out of reach (no key logic here).
+        if (this.m.objectives.containerLocked(idx)) continue;
         if (!this.allowedAt(c.x, c.y, c.zone)) continue;
         const sc = score(c.x, c.y, c.tier);
         if (sc < bestScore) {
@@ -936,6 +940,8 @@ export class HumanAgent {
       const bossIdx = this.bossRt()?.rosterIndex ?? -1;
       for (const t of this.m.containers.corpses()) {
         if (t.emptied || this.searchedKeys.has(t.key) || this.blacklist.has(t.key)) continue;
+        // A hidden cache only once this human has found it (objectives.ts): no map-hack.
+        if (t.kind === "cache" && !this.m.objectives.cacheKnown(t, this.rt)) continue;
         if (!this.allowedAt(t.x, t.y) || (tags && !this.tagBody(t.owner))) continue;
         // The hunted boss's body first (that is what the hunt was for).
         const sc = score(t.x, t.y, 2) * (t.owner === bossIdx ? 0.05 : 0.8);
@@ -967,6 +973,16 @@ export class HumanAgent {
 
   private lootStep(): void {
     const clock = this.m.clock;
+    // In-raid objectives: hold still while cracking a safe; afterwards F opens the cracked safe.
+    if (this.cracking) {
+      if (this.m.objectives.channelOf(this.rt)) {
+        this.stop();
+        return;
+      }
+      const g = this.cracking;
+      this.cracking = null;
+      if (g.kind !== "search" || !this.m.objectives.cracked.has(g.idx)) this.blacklist.set(g.id, clock + 30_000);
+    }
     if (this.strategy === "boss" && this.hunting) {
       this.huntStep();
       return;
@@ -1023,6 +1039,11 @@ export class HumanAgent {
     const d = Math.hypot(g.x - p.x, g.y - p.y);
     if (g.kind === "search" && d < SEARCH.OPEN_RANGE * 0.75) {
       this.stop();
+      if (g.idx >= 0 && this.m.objectives.crackPending(g.idx)) {
+        if (this.m.openSearch(this.rt.id, g.id) && this.m.objectives.channelOf(this.rt)) this.cracking = g;
+        else this.blacklist.set(g.id, clock + 30_000);
+        return;
+      }
       if (this.m.openSearch(this.rt.id, g.id)) {
         this.searchedKeys.add(g.id);
         this.searchSrc = g.src;

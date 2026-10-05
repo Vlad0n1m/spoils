@@ -211,6 +211,8 @@ export function damagePlayer(
   if (s.extractId) s.extractStartedAt = m.clock;
   // WORLD v6: damage interrupts the supply crate's open channel (contests happen at the crate).
   if (hpLoss > 0 && rt.search && m.clock < rt.search.readyAt && isSupplyDropKey(rt.search.key)) closeSearch(m, rt, "hit");
+  // In-raid objectives: damage breaks an unlock / crack channel.
+  if (hpLoss > 0) m.objectives.onHit(rt);
 
   m.emit({
     type: "hit",
