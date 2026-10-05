@@ -507,9 +507,10 @@ export async function grantBossTrophies(tx: Tx, userId: string, kinds: readonly 
  */
 /**
  * ALPHA LOOT: the item row of an extracted alpha find (alpha-loot.ts), straight into `userId`'s stash
- * with the server's uid: origin 'alpha', bound (never listable; on a later loss destroyed instead of
- * pooled), so a free mint never reaches the SOL market or the lost pool. One item_events row
- * (reason alpha_found, ref entryId). False when the uid already exists (never overwritten).
+ * with the server's uid: origin 'alpha', tradable like any find (Vlad 05.10: the alpha market runs on CR,
+ * and SOL trades only go through the devnet escrow, so a free alpha find never reaches real money). On a
+ * later loss it follows the normal rules. One item_events row (reason alpha_found, ref entryId). False when
+ * the uid already exists (never overwritten).
  */
 async function createAlphaItem(tx: Tx, s: SettledItem, userId: string, matchId: string, ref: string): Promise<boolean> {
   const durability = Math.max(0, Math.min(100, fromRaidDur(s.def, s.dur)));
@@ -524,7 +525,7 @@ async function createAlphaItem(tx: Tx, s: SettledItem, userId: string, matchId: 
       state: "in_stash",
       ownerId: userId,
       origin: "alpha",
-      bound: true,
+      bound: false,
       lockRaids: 0,
     })
     .onConflictDoNothing()

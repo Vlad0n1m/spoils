@@ -226,7 +226,7 @@ docker compose logs -f web game-server cron
   006 and 008 add `users` columns (`role`; `title`, `name_color`, `badge_frame`) that every query reading whole `users`
   rows selects (login, `/api/me`, stash): without them those routes answer 500. Without 007 every replay chunk from the
   game server is refused with a 500 (the game server keeps 10 minutes of chunks, then drops them); 009 adds
-  `replays.gen_version`. 014 (`014_alpha_loot.sql`) adds the `alpha` item origin: without it every extract of an
+  `replays.gen_version`. 014 (`016_alpha_loot.sql`) adds the `alpha` item origin: without it every extract of an
   alpha-loot find fails with a 500 until the server's retries give up.
 - Alpha loot (`packages/shared/src/alpha-loot.ts`): the game server mints extra weapons / gear in containers, supply
   drops and on the floor, on by default. `ALPHA_LOOT=0` on the game server turns it off (the v4 loot exactly).

@@ -13,8 +13,8 @@
  *
  * These uniques are minted from nothing (accepted for the alpha). The server registers them in the
  * ledger with origin "alpha" and lists the extracted ones in PlayerExitReport.alphaFound; the web
- * creates the item rows on extract (origin 'alpha', bound: never listable, destroyed instead of
- * pooled, so free mints never reach the SOL market or the lost pool). NPC gear still never drops.
+ * creates the item rows on extract (origin 'alpha', tradable: the alpha market runs on CR and SOL
+ * trades only go through the devnet escrow). NPC gear still never drops.
  *
  * Everything here is pure and deterministic in its seed (containers: (lootSeed, idx) alone, so the
  * open order never changes what is inside).

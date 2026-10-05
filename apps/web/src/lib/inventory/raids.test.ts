@@ -596,7 +596,7 @@ describe("raid exit", () => {
     assert.equal(await itemCount(), 0);
   });
 
-  test("alpha loot: uids listed in alphaFound become bound 'alpha' stash items once; unlisted stay skipped; guests keep nothing; the end sweep leaves them alone", async () => {
+  test("alpha loot: uids listed in alphaFound become tradable 'alpha' stash items once; unlisted stay skipped; guests keep nothing; the end sweep leaves them alone", async () => {
     const u = await makeUser(db);
     const { shard, e } = await enterNew(u);
     const gun = randomUUID();
@@ -614,7 +614,7 @@ describe("raid exit", () => {
     assert.equal(r.status, "applied");
     assert.deepEqual(r.skipped, [ghost], "only listed uids are created");
     const g = await item(gun);
-    assert.deepEqual([g.state, g.ownerId, g.matchId, g.defId, g.rarity, g.durability, g.origin, g.bound], ["in_stash", u, null, "smg", 1, 80, "alpha", true]);
+    assert.deepEqual([g.state, g.ownerId, g.matchId, g.defId, g.rarity, g.durability, g.origin, g.bound], ["in_stash", u, null, "smg", 1, 80, "alpha", false]);
     assert.equal((await item(vest)).durability, 50, "armor points → %");
     assert.deepEqual((await events(gun)).map((x) => x.reason), ["alpha_found"]);
     assert.equal((await applyExit(db, rep)).status, "duplicate");
