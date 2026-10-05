@@ -42,6 +42,10 @@
  * shard cannot take them all. Later members of that drop take a held seat (no capacity refusal),
  * and every other admission counts the held seats as taken. Spawning together is the Match's
  * (spawn.ts pickDropSpawn). The web puts a new drop on a shard with room for the whole party.
+ * A later member of a drop already admitted here may still enter after the cycle's entry close (the
+ * map is closing): while the drop's window runs (firstAt + PARTY.DROP_TTL_MS) and a seat it holds is
+ * free, so a party split by the overlap of two maps still lands together (lateDropSeat). Anyone else,
+ * and a member who already took a seat of that drop, gets entry_closed as before.
  */
 
 import { randomInt, randomUUID } from "node:crypto";
@@ -488,7 +492,10 @@ export class WorldDirectory {
     if (!t.entryId) throw joinErr(401, WORLD_JOIN_ERR.INVALID_TICKET);
     // That entry already left the map; its exit is not applied on the web yet.
     if (m.entryById(t.entryId)) throw joinErr(409, WORLD_JOIN_ERR.EXIT_SETTLING);
-    if (worldPhase(shard.wc, this.deps.now()) !== "open") throw joinErr(409, WORLD_JOIN_ERR.ENTRY_CLOSED);
+    const phase = worldPhase(shard.wc, this.deps.now());
+    if (phase !== "open" && !(phase === "closing" && this.lateDropSeat(shard, t, this.deps.now()))) {
+      throw joinErr(409, WORLD_JOIN_ERR.ENTRY_CLOSED);
+    }
     const running = shard.inflight.get(t.userId);
     if (running) {
       await running;
@@ -518,6 +525,16 @@ export class WorldDirectory {
     } finally {
       if (shard.inflight.get(t.userId) === p) shard.inflight.delete(t.userId);
     }
+  }
+
+  /**
+   * A closing shard (entry closed, not wiped) still takes `t` when it is a later member of a party
+   * drop admitted here whose window runs and which still holds a free seat for them (module comment).
+   */
+  private lateDropSeat(shard: Shard, t: JoinTicket, now: number): boolean {
+    if (!t.partyId || !t.dropId || now >= shard.wc.wipeAt) return false;
+    const d = shard.drops.get(t.dropId);
+    return Boolean(d && d.partyId === t.partyId && now - d.firstAt <= PARTY.DROP_TTL_MS && !d.users.has(t.userId) && d.users.size < d.size);
   }
 
   /** Seats held for party drops on a shard (expired drops are forgotten). */

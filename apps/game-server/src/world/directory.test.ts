@@ -571,6 +571,43 @@ test("party drop admission: a signed dropSize holds exactly that many seats (a p
     h.dir.stop();
   }));
 
+test("party drop admission after the entry close: later members of a drop admitted before it still land on the closing map while its window runs", () =>
+  quiet(async () => {
+    const h = harness(WC.entryClosesAt - 20_000);
+    await h.dir.start();
+    const s = h.dir.shardOfCycle(K)!;
+    const m = s.room.match as Match;
+    const partyId = randomUUID();
+    const dropId = randomUUID();
+    const mate = (userId: string = randomUUID()): JoinTicket => ({ ...ticket(s.matchId, userId), partyId, dropId, dropSize: 3 });
+    const first = mate();
+    await h.dir.admit(first);
+    const anchor = m.currentOf(first.userId)!;
+
+    await h.time.advanceTo(WC.entryClosesAt + 5_000);
+    assert.notEqual(h.dir.current(), s, "k + 1 takes entries now");
+    await assert.rejects(h.dir.admit(ticket(s.matchId)), /entry_closed/, "a solo raider cannot enter the closing map");
+    await assert.rejects(h.dir.admit({ ...ticket(s.matchId), partyId, dropId: randomUUID() }), /entry_closed/, "nor a drop that never landed here");
+    await assert.rejects(h.dir.admit({ ...ticket(s.matchId), partyId: randomUUID(), dropId }), /entry_closed/, "nor another party's ticket with this dropId");
+
+    const late = mate();
+    await h.dir.admit(late);
+    const rt = m.currentOf(late.userId)!;
+    assert.ok(rt.pub.alive, "the late member is on the closing map");
+    const d = Math.hypot(rt.pub.x - anchor.pub.x, rt.pub.y - anchor.pub.y);
+    assert.ok(d >= PARTY_SPAWN_MIN_PX && d <= PARTY_SPAWN_MAX_PX, `${d.toFixed(0)} px from the landing zone`);
+    assert.equal(rt.dropId, dropId);
+
+    // A member who already took a seat of the drop does not re-enter the closing map.
+    rt.pub.alive = false;
+    await assert.rejects(h.dir.admit({ ...mate(late.userId), entryId: randomUUID() }), /entry_closed/);
+
+    // The window ends: the third seat is no longer open after the entry close.
+    await h.time.advanceTo(WC.entryClosesAt - 20_000 + PARTY.DROP_TTL_MS + 1);
+    await assert.rejects(h.dir.admit(mate()), /entry_closed/);
+    h.dir.stop();
+  }));
+
 test("admission: bodies without a client hold a seat only WORLD.IDLE_SEAT_MS; a short disconnect keeps it, rejoin always works (security audit)", () =>
   quiet(async () => {
     const h = harness(WC.openAt + 60_000);
