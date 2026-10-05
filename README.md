@@ -137,6 +137,55 @@ global Solana CLI config may point at mainnet.
    (например, `openssl rand -hex 32`; не менять после запуска). На существующей базе применить `004_chain_events.sql`.
 3. Сохранить `programs/.keys/` в менеджере паролей и офлайн-бэкапе: без `deploy.json` программу не обновить.
 
+## On-chain items
+
+Epic and legendary gear can leave the game as a Solana asset in the player's own wallet, trade for SOL
+between players without trusting the game, and come back into the game. Page: `/onchain` (linked from the top
+bar and `/economy`). Code: `apps/web/src/lib/onchain`, program `programs/spoils-market`, table `onchain_ops`
+(migration `015_onchain_items.sql`).
+
+| | |
+|---|---|
+| Collection (Metaplex Core) | `GpKomKhahD93PDJB9jhz6v32Y8oMgVKcjrBWXu2kDBhX` — [Explorer (devnet)](https://explorer.solana.com/address/GpKomKhahD93PDJB9jhz6v32Y8oMgVKcjrBWXu2kDBhX?cluster=devnet) |
+| Market program `spoils_market` | `3eu7K4GkLw1CA74Z4JSadBjsxZHNpaauWTtky6u52eGB` — [Explorer (devnet)](https://explorer.solana.com/address/3eu7K4GkLw1CA74Z4JSadBjsxZHNpaauWTtky6u52eGB?cluster=devnet) |
+| Market config PDA (seed `market`) | fee 5 %, treasury = the server authority `AHgx…NPgU` |
+| Status (2026-10-05) | Deployed and initialized on devnet; `onchain-admin.ts smoke` and `e2e` pass on devnet |
+
+How it works:
+
+- **Send to wallet** (`export`): the server mints the item as a Core asset into the player's linked wallet (first
+  time) or moves its asset out of the game vault (later times). The server signs and pays; the item turns
+  `onchain` in the game.
+- **SOL market** (`spoils_market`): `list` moves the asset from the seller into escrow (a PDA per asset) at a
+  fixed price; `buy` pays the seller (minus the fee to the treasury) and hands the asset to the buyer in one
+  atomic transaction; `cancel` returns it. Only assets of the SPOILS collection can be listed. The game never
+  holds a seller's SOL or a listed item.
+- **Into the game** (`import`): the wallet sends the asset to the game vault (the server authority); after
+  confirmation the item lands in the importer's stash, whoever minted it. The asset is kept and reused on the
+  next send.
+- **Starter kit for SOL** (`kit`): a SOL transfer from the wallet to the treasury with a `spoils:kit:<op>` memo;
+  the kit is granted after confirmation (same daily cap as the balance purchase).
+
+Trust model: for every player-signed action the server builds the transaction (fee payer = the linked wallet)
+and stores its message; `/api/onchain/submit` accepts only that exact message with valid signatures, sends it,
+waits for confirmation and only then applies the game effect, once. Ops left unconfirmed are settled later
+(landed → done, blockhash expired → expired; a never-landed export puts the item back). Item metadata
+(`/api/onchain/meta/<item>`) shows live durability from the game. The player market inside the game is priced in
+CR (alpha); SOL trades go only through this escrow.
+
+```bash
+T=apps/game-server/node_modules/.bin/tsx
+cd programs && nice -n 10 env CARGO_BUILD_JOBS=4 anchor build -p spoils_market && cargo test -p spoils-market && cd ..
+$T programs/scripts/onchain-admin.ts status
+$T programs/scripts/onchain-admin.ts smoke GpKomKhahD93PDJB9jhz6v32Y8oMgVKcjrBWXu2kDBhX   # raw program flow, 2 throwaway wallets
+$T programs/scripts/onchain-admin.ts e2e GpKomKhahD93PDJB9jhz6v32Y8oMgVKcjrBWXu2kDBhX     # the web code against devnet + extract_test
+apps/game-server/node_modules/.bin/tsx --test apps/web/src/lib/onchain/onchain.test.ts
+```
+
+Server setup: `ONCHAIN_COLLECTION=GpKomKhahD93PDJB9jhz6v32Y8oMgVKcjrBWXu2kDBhX` in `.env` (the rest have devnet
+defaults, see `.env.example`), migrations `014_cr_market.sql` and `015_onchain_items.sql`. The authority key pays
+for mints (~0.003 SOL each) and receives fees and kit payments; keep it topped up on devnet.
+
 ## Deploy
 
 ### Single VPS with docker compose
