@@ -4,20 +4,26 @@
  * server only ever sees what a signed JoinTicket carries.
  *
  * Party drop (spawn together), WORLD v6:
- *   1. The party leader presses PLAY → POST /api/world/join. With ≥ PARTY.MIN_SIZE members the web
- *      creates a PartyDropInfo (or reuses the party's live one) for this cycle and the leader's shard,
- *      and signs `dropId` + `partyId` into the leader's JoinTicket.
- *   2. Members learn about the drop by polling GET /api/party (every PARTY.POLL_MS while in a party):
- *      the menu prompts "Leader is dropping in — PLAY", or joins at once when the member turned on
- *      "Follow leader". Their /api/world/join is pinned to the drop's shard and their ticket carries the
- *      same `dropId` and `partyId`. After `expiresAt` (createdAt + PARTY.DROP_TTL_MS) a member drops on
- *      their own (ticket with `partyId` only).
+ *   1. The first party member to press PLAY (leader or not) → POST /api/world/join. With ≥
+ *      PARTY.MIN_SIZE members and no live drop, the web claims a new PartyDropInfo (one live drop per
+ *      party, under the party row lock) for the open cycle and a shard with room for the whole party,
+ *      and signs `dropId` + `partyId` into that member's JoinTicket.
+ *   2. The others learn about the drop by polling GET /api/party (every PARTY.POLL_MS while in a
+ *      party): the menu prompts "Rook dropped into Map #N — PLAY to join them", or joins at once with
+ *      "Follow leader" on. Any member's PLAY while the drop is open is pinned to the drop's own cycle and
+ *      shard — also when that map has stopped taking entries meanwhile (maps overlap: the closing map
+ *      still admits a drop's later members, below) — and their ticket carries the same `dropId` and
+ *      `partyId`. After `expiresAt` (createdAt + PARTY.DROP_TTL_MS), or when the drop's map is gone,
+ *      the next member's PLAY starts a fresh drop. A member who joined the party after the drop
+ *      started drops on their own (ticket with `partyId` only).
  *   3. Game server (apps/game-server world/directory.ts, sim/spawn.ts): the first admitted ticket of a
  *      `dropId` picks a normal spawn (the landing zone, kept off the bodies of the party) and holds
  *      `dropSize` seats on the shard for 60 s; later tickets with the same `dropId` spawn
  *      PARTY.SPAWN_MIN_PX–PARTY.SPAWN_NEAR_PX from the landing zone on its side (same extracts),
  *      even when the first member has moved on or a stranger stands nearby. A member who already
- *      landed with the drop and re-enters takes a normal spawn.
+ *      landed with the drop and re-enters takes a normal spawn. After the shard's entry close (a
+ *      closing map) only later members of a drop admitted there get in, while its window runs and a
+ *      held seat is free; everyone else gets entry_closed.
  * Each member still locks their own loadout; the risk rule, pool limits and settlement stay per player.
  * Party members on the same shard: no damage between them (PARTY.FRIENDLY_FIRE = false, see
  * partyMates) and S2C.PARTY with their positions at ~PARTY.POS_HZ. Rejoin tickets (an active entry)
@@ -33,7 +39,7 @@ export const PARTY = {
   MAX_SIZE: 4,
   /** A party invite expires this long after it was sent. */
   INVITE_TTL_MS: 10 * 60_000,
-  /** Members can follow a leader's drop this long after the leader pressed PLAY. */
+  /** Members can follow a party drop this long after the first member pressed PLAY. */
   DROP_TTL_MS: 60_000,
   /** Menu poll of GET /api/party while in a party (drop prompt, members, ready state). */
   POLL_MS: 5_000,
@@ -70,9 +76,10 @@ export const FRIENDS = {
 export type Presence = "online" | "raid" | "offline";
 
 /**
- * One party drop (web table party_drops). `members` are userIds at drop time (leader first); only
- * they may join with this dropId. `matchId` = the shard the leader's join was issued for: members'
- * joins are pinned to it while it runs. Times are wall ms.
+ * One party drop (web table party_drops). `leaderId` = the member who started it (the first to press
+ * PLAY, party leader or not). `members` are userIds at drop time (starter first); only they may join
+ * with this dropId. `matchId` = the shard the starter's join was issued for: the others' joins are
+ * pinned to it (and to `cycle`) while it runs. Times are wall ms.
  */
 export interface PartyDropInfo {
   dropId: string;

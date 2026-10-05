@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { FRIENDS, PARTY } from "@extract/shared";
+import { FRIENDS, PARTY, worldCycleOf } from "@extract/shared";
 import { SocialLimiter } from "./rate-limit";
 import {
   SOCIAL_ERR,
@@ -164,11 +164,21 @@ describe("party drops", () => {
     assert.deepEqual(drop, { dropId: "d", partyId: "p", cycle: 7, matchId: "m", leaderId: B, members: [B, A, C], createdAt: now, expiresAt: now + 60_000 });
     assert.equal(PARTY.DROP_TTL_MS, 60_000);
   });
+  it("a member may follow a drop of the closing previous map until the window ends or that map wipes", () => {
+    const k = 900_000;
+    const wc = worldCycleOf(k);
+    const late = buildPartyDrop({ dropId: "d", partyId: "p", leaderId: B, members: [A, B], cycle: k, matchId: "m", now: wc.entryClosesAt - 20_000 });
+    assert.equal(canFollowDrop(late, A, k + 1, wc.entryClosesAt + 30_000), true, "the next map opened meanwhile");
+    assert.equal(canFollowDrop(late, A, k + 1, late.expiresAt), false, "window over");
+    assert.equal(canFollowDrop({ ...late, expiresAt: wc.wipeAt + 1 }, A, k + 1, wc.wipeAt), false, "the drop's map wiped");
+    assert.equal(canFollowDrop(late, A, k + 2, wc.entryClosesAt + 30_000), false, "two maps on");
+  });
   it("members listed at drop time may follow on the same map until it expires", () => {
     assert.equal(canFollowDrop(drop, A, 7, now + 1_000), true);
     assert.equal(canFollowDrop(drop, C, 7, now + 59_999), true);
     assert.equal(canFollowDrop(drop, A, 7, now + 60_000), false, "expired");
-    assert.equal(canFollowDrop(drop, A, 8, now + 1_000), false, "another map");
+    assert.equal(canFollowDrop(drop, A, 6, now + 1_000), false, "a drop of a later map than the open one");
+    assert.equal(canFollowDrop(drop, A, 9, now + 1_000), false, "two maps on");
     assert.equal(canFollowDrop(drop, "44444444-4444-4444-8444-444444444444", 7, now), false, "joined the party after the drop");
     assert.equal(canFollowDrop(null, A, 7, now), false);
   });

@@ -13,7 +13,8 @@ const BTN =
 
 /**
  * Floating party prompts above PLAY (over panels too, so a member reading the leaderboard still
- * sees them): "Leader is dropping in — PLAY" with the drop's countdown while PLAY could join, and the
+ * sees them): "Rook dropped into Map #N — PLAY to join them" (the party's drop, started by whichever
+ * member pressed PLAY first) with the drop's countdown while PLAY could join, and the
  * newest party invite with Join / Decline. × hides a prompt (the invite stays in Friends · Party).
  * Members with "Follow leader" on drop in by themselves (PlayController), so they see no drop prompt.
  */
@@ -52,10 +53,10 @@ export function PartyPrompts({ hidden }: { hidden: boolean }) {
           <p className="font-body min-w-0 flex-1 text-sm leading-snug text-white">
             {/* Only the static line is live: a countdown inside a live region is re-read every second. */}
             <span role="status">
-              <b className="font-display text-base tracking-wide text-zooa-lime">{drop.leader}</b> is dropping in
+              <b className="font-display text-base tracking-wide text-zooa-lime">{drop.leader}</b> dropped into {drop.map}
             </span>
             <span className="block text-xs lg:text-[0.8125rem] tabular-nums text-white/75">
-              Drop in next to them · <span role="timer">{fmtClockS(drop.secondsLeft)}</span>
+              PLAY to join them · <span role="timer">{fmtClockS(drop.secondsLeft)}</span>
             </span>
           </p>
           <button

@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { WORLD } from "@extract/shared";
 import {
   autoFollow,
   canInvite,
@@ -95,8 +96,11 @@ describe("drop prompt and Follow leader", () => {
   const now = 1_000_000;
   const drop: PartyDropDto = { dropId: "d1", cycle: 5, leader: "lead", expiresAt: now + 42_000, mine: false };
 
-  it("shows the leader's live drop while PLAY could join, with the seconds left", () => {
-    assert.deepEqual(dropPrompt({ drop, playKind: "ready", now, dismissed: null }), { dropId: "d1", leader: "lead", secondsLeft: 42 });
+  it("shows another member's live drop while PLAY could join, with its map and the seconds left", () => {
+    assert.deepEqual(dropPrompt({ drop, playKind: "ready", now, dismissed: null }), { dropId: "d1", leader: "lead", map: "Preview map", secondsLeft: 42 });
+    const n = 4_000;
+    const live = { ...drop, cycle: n - 1 + Math.floor(WORLD.NUMBER_EPOCH_MS / WORLD.CYCLE_MS) };
+    assert.equal(dropPrompt({ drop: live, playKind: "ready", now, dismissed: null })?.map, `Map #${n}`);
   });
   it("hidden for the leader, after expiry, when dismissed, or when PLAY cannot join", () => {
     assert.equal(dropPrompt({ drop: { ...drop, mine: true }, playKind: "ready", now, dismissed: null }), null);

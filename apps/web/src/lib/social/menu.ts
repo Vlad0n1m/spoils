@@ -2,6 +2,8 @@
  * Pure helpers of the menu's social UI (Friends panel, party strip, invite and drop prompts). No
  * React, no fetch: the tests cover them and the components only render what they return.
  */
+import { mapNumber } from "@extract/shared";
+import { mapLabel } from "../lobby/world-clock";
 import type { FriendDto, PartyDropDto, PartyDto, PartyInviteDto, PartyMemberDto, PartyStateDto, Presence } from "./types";
 
 export const PRESENCE_LABEL: Readonly<Record<Presence, string>> = {
@@ -49,7 +51,10 @@ export function secondsLeft(at: number, now: number): number {
   return Math.max(0, Math.ceil((at - now) / 1000));
 }
 
-/** "Leader is dropping in — PLAY": a member's prompt while the leader's drop is open and PLAY could join. */
+/**
+ * "Rook dropped into Map #N — PLAY to join them": a member's prompt while another member's drop (the
+ * first in the party to press PLAY, `leader`) is open and PLAY could join. `map` = the drop's map.
+ */
 export function dropPrompt(i: {
   drop: PartyDropDto | null;
   /** The PLAY state's kind (an error's base kind). */
@@ -57,12 +62,12 @@ export function dropPrompt(i: {
   now: number;
   /** A drop the player closed the prompt of. */
   dismissed: string | null;
-}): { dropId: string; leader: string; secondsLeft: number } | null {
+}): { dropId: string; leader: string; map: string; secondsLeft: number } | null {
   const d = i.drop;
   if (!d || d.mine || d.dropId === i.dismissed) return null;
   if (i.now >= d.expiresAt) return null;
   if (i.playKind !== "ready") return null;
-  return { dropId: d.dropId, leader: d.leader, secondsLeft: secondsLeft(d.expiresAt, i.now) };
+  return { dropId: d.dropId, leader: d.leader, map: mapLabel(mapNumber(d.cycle)), secondsLeft: secondsLeft(d.expiresAt, i.now) };
 }
 
 /**

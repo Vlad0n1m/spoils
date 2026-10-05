@@ -58,7 +58,7 @@ let autoRejoinDecided = false;
  * failures, the armed auto-enter for the next map (sessionStorage `spoils.armed`, rand(0..4 s)
  * jitter, visible tabs only — a hidden tab gets "▶ Map open" in its title and the coin sound),
  * and the clock offset from every join answer. Party (useParty): a member with "Follow leader" on
- * joins the leader's live drop by itself once per drop while PLAY could join (a hidden tab gets
+ * joins the party's live drop (started by whichever member pressed PLAY first) by itself once per drop while PLAY could join (a hidden tab gets
  * "▶ Party dropping" in its title instead); `joinDrop` is the drop prompt's PLAY. Renders only the
  * provider: `children` come from the menu, so the per-second state reaches the PLAY consumers alone.
  */

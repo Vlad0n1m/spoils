@@ -2,7 +2,7 @@
  * Friends and party rules as pure functions (the DB services in friends.ts / party.ts feed them
  * counts and rows; the tests cover every branch). Limits come from @extract/shared FRIENDS / PARTY.
  */
-import { FRIENDS, PARTY, type PartyDropInfo, type Presence } from "@extract/shared";
+import { FRIENDS, PARTY, worldCycleOf, type PartyDropInfo, type Presence } from "@extract/shared";
 import type { SocialErrCode } from "./types";
 
 /** Same rule as registration (api/auth/register): 2–16 letters, digits, underscores. */
@@ -143,7 +143,10 @@ export function partyCanDrop(members: number): boolean {
   return members >= PARTY.MIN_SIZE;
 }
 
-/** A new drop: leader first, members de-duplicated, open for PARTY.DROP_TTL_MS. */
+/**
+ * A new drop: its starter first (`leaderId` = the member whose PLAY started it, party leader or not),
+ * members de-duplicated, open for PARTY.DROP_TTL_MS.
+ */
 export function buildPartyDrop(p: {
   dropId: string;
   partyId: string;
@@ -166,10 +169,16 @@ export function buildPartyDrop(p: {
   };
 }
 
-/** `userId` may follow `drop` at `now` on cycle `cycle` (listed at drop time, still open, same map). */
-export function canFollowDrop(drop: PartyDropInfo | null, userId: string, cycle: number, now: number): boolean {
+/**
+ * `userId` may follow `drop` at `now`, while `openCycle` takes entries: listed at drop time, the drop
+ * window still open, and the drop's map still running — the open cycle's, or the previous cycle's
+ * until its wipe (maps overlap: a member whose PLAY lands after the drop's map stopped taking entries
+ * still joins the drop there; the game server admits a drop's later members on a closing map).
+ */
+export function canFollowDrop(drop: PartyDropInfo | null, userId: string, openCycle: number, now: number): boolean {
   if (!drop) return false;
-  return drop.cycle === cycle && now >= drop.createdAt - 5_000 && now < drop.expiresAt && drop.members.includes(userId);
+  if (!(now >= drop.createdAt - 5_000 && now < drop.expiresAt && drop.members.includes(userId))) return false;
+  return drop.cycle === openCycle || (drop.cycle === openCycle - 1 && now < worldCycleOf(drop.cycle).wipeAt);
 }
 
 // ---------------------------------------------------------------------------- error text and status

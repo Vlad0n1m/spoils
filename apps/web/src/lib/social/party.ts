@@ -5,8 +5,10 @@
  * - Members accept / decline / leave; the leader kicks, cancels invites, hands over or disbands.
  *   A leader who leaves hands over to the longest member. One party per user (party_members PK).
  * - A party below PARTY.MIN_SIZE with nobody invited dissolves (lazily, on the next read or change).
- * - Drops: the leader's /api/world/join creates (or reuses) the party's live drop for the map;
- *   members' joins follow it until it expires (partyJoinPlan / savePartyDrop, used by lib/lobby/join.ts).
+ * - Drops: the first member's /api/world/join (leader or not) creates the party's drop for the open
+ *   map; every other member's join follows it until it expires, on the drop's own map and shard even
+ *   when that map has stopped taking entries meanwhile (partyJoinPlan / claimPartyDrop, used by
+ *   lib/lobby/join.ts). One live drop per party, claimed under the party row lock.
  * Every change runs in one transaction holding the party row lock (and the actors' advisory locks).
  */
 import { randomUUID } from "node:crypto";
@@ -149,9 +151,16 @@ export async function getPartyState(db: Db, me: string, now: number): Promise<Pa
       invited: inv.rows.map((x) => ({ nickname: x.nickname, expiresAt: ms(x.expires_at) ?? 0 })),
       maxSize: PARTY.MAX_SIZE,
     };
-    const d = await latestDrop(db, m.partyId, worldCycleAt(now).cycle, now);
-    if (d && d.members.includes(self)) {
-      drop = { dropId: d.dropId, cycle: d.cycle, leader: d.leaderId === m.leaderId ? leader : (await nicknameOf(db, d.leaderId)) ?? leader, expiresAt: d.expiresAt, mine: d.leaderId === self };
+    // The party's live drop, started by whichever member pressed PLAY first (`leader` = that member).
+    const d = await latestDrop(db, m.partyId, now);
+    if (d && d.members.includes(self) && (d.leaderId === self || canFollowDrop(d, self, worldCycleAt(now).cycle, now))) {
+      drop = {
+        dropId: d.dropId,
+        cycle: d.cycle,
+        leader: (await nicknameOf(db, d.leaderId)) ?? leader,
+        expiresAt: d.expiresAt,
+        mine: d.leaderId === self,
+      };
     }
   }
 
@@ -207,12 +216,15 @@ function dropOf(x: DropRow): PartyDropInfo {
   };
 }
 
-/** The party's newest drop of `cycle` that is still open at `now`. */
-async function latestDrop(q: Q, partyId: string, cycle: number, now: number, dropId?: string): Promise<PartyDropInfo | null> {
+/**
+ * The party's newest drop that is still open at `now` (any cycle: a drop started just before its map
+ * stopped taking entries stays followable on that closing map; canFollowDrop decides).
+ */
+async function latestDrop(q: Q, partyId: string, now: number, dropId?: string): Promise<PartyDropInfo | null> {
   const r = await q.execute<DropRow>(sql`
     select drop_id, party_id, cycle, match_id, leader_id, members, created_at, expires_at
     from party_drops
-    where party_id = ${partyId}::uuid and cycle = ${cycle} and expires_at > ${new Date(now)}
+    where party_id = ${partyId}::uuid and expires_at > ${new Date(now)}
       ${dropId ? sql`and drop_id = ${dropId}::uuid` : sql``}
     order by created_at desc
     limit 1`);
@@ -419,25 +431,35 @@ async function leaderOnTarget(
 /** What /api/world/join signs for a party member (null = solo: no party of ≥ PARTY.MIN_SIZE). */
 export interface PartyJoinPlan {
   partyId: string;
+  /** The caller leads the party. */
   leader: boolean;
-  /** The drop this join starts (leader, `isNew`), reuses or follows; null = drop on your own. */
+  /** The drop this join starts (`isNew`) or follows; null = drop on your own. */
   drop: PartyDropInfo | null;
-  /** The leader's drop is new: save it (savePartyDrop) once the ticket is issued. */
+  /**
+   * The caller's PLAY starts the party's drop (no live one, or its map is gone): pick its shard, set
+   * `drop.matchId`, then claimPartyDrop before the ticket is signed. `drop.matchId` is "" until then.
+   */
   isNew: boolean;
+  /** The live drop a new one replaces (its map is gone). */
+  replaces?: string;
 }
 
 /**
- * The party side of a world join on `cycle`, whose shard would be `matchId`:
- * - leader of a party of ≥ PARTY.MIN_SIZE: the party's live drop of this map, else a new one for
- *   `matchId` listing the current members;
- * - member: the drop `dropId` (or, without one, the party's newest live drop) when they may follow it
- *   (canFollowDrop); the caller pins the join to `drop.matchId` while that shard runs;
- * - otherwise null.
+ * The party side of a world join while `cycle` takes entries. The first party member to press PLAY,
+ * leader or not, starts the party's drop; everyone else follows it:
+ * - no live drop: a new one of the caller's for `cycle`, listing the current members (`isNew`);
+ * - a live drop (`dropId`, else the party's newest) listing the caller, whose map still runs
+ *   (canFollowDrop, and `runs`: the caller's check of the drop's shard row): follow it, on its own
+ *   cycle and shard even when that map has stopped taking entries meanwhile — unless the caller
+ *   already entered that closing map (the game server lets only new members of a drop in there);
+ * - a live drop whose map is gone: a new drop replacing it;
+ * - a live drop not listing the caller (joined the party after it started): drop on your own.
+ * Not in a party of ≥ PARTY.MIN_SIZE: null.
  */
 export async function partyJoinPlan(
   db: Db,
   userId: string,
-  p: { cycle: number; matchId: string; now: number; dropId?: string },
+  p: { cycle: number; now: number; dropId?: string; runs: (d: PartyDropInfo) => Promise<boolean> },
 ): Promise<PartyJoinPlan | null> {
   const self = userId.toLowerCase();
   const m = await membershipOf(db, self);
@@ -447,32 +469,50 @@ export async function partyJoinPlan(
   const ids = members.rows.map((x) => String(x.user_id).toLowerCase());
   if (!partyCanDrop(ids.length)) return null;
 
-  if (m.leaderId === self) {
-    const live = await latestDrop(db, m.partyId, p.cycle, p.now);
-    if (live && live.leaderId === self) return { partyId: m.partyId, leader: true, drop: live, isNew: false };
-    const drop = buildPartyDrop({ dropId: randomUUID(), partyId: m.partyId, leaderId: self, members: ids, cycle: p.cycle, matchId: p.matchId, now: p.now });
-    return { partyId: m.partyId, leader: true, drop, isNew: true };
-  }
+  const base = { partyId: m.partyId, leader: m.leaderId === self };
+  const fresh = () =>
+    buildPartyDrop({ dropId: randomUUID(), partyId: m.partyId, leaderId: self, members: ids, cycle: p.cycle, matchId: "", now: p.now });
   const want = p.dropId && UUID_RE.test(p.dropId) ? p.dropId.toLowerCase() : undefined;
-  const d = await latestDrop(db, m.partyId, p.cycle, p.now, want);
-  return { partyId: m.partyId, leader: false, drop: canFollowDrop(d, self, p.cycle, p.now) ? d : null, isNew: false };
+  const d = (want ? await latestDrop(db, m.partyId, p.now, want) : null) ?? (await latestDrop(db, m.partyId, p.now));
+  if (!d) return { ...base, drop: fresh(), isNew: true };
+  if (!d.members.includes(self)) return { ...base, drop: null, isNew: false };
+  if (!canFollowDrop(d, self, p.cycle, p.now) || !(await p.runs(d))) return { ...base, drop: fresh(), isNew: true, replaces: d.dropId };
+  if (d.cycle !== p.cycle) {
+    const been = await db.execute(sql`select 1 from raid_entries where match_id = ${d.matchId}::uuid and user_id = ${self}::uuid limit 1`);
+    if (been.rows.length > 0) return { ...base, drop: null, isNew: false };
+  }
+  return { ...base, drop: d, isNew: false };
 }
 
-/** Stores a new leader drop (idempotent per dropId; a party disbanded meanwhile just has no drop). */
-export async function savePartyDrop(db: Db, d: PartyDropInfo): Promise<boolean> {
+/**
+ * Claims the party's one live drop for a new drop `d` (its shard picked), under the party row lock:
+ * when another member's PLAY started a live drop meanwhile, that one comes back (`isNew` false: the
+ * caller follows it); else `replaces` (a drop whose map is gone) is closed and `d` is stored.
+ * Idempotent per dropId. null: the party or the starter's membership is gone, or the store failed
+ * (drop on your own).
+ */
+export async function claimPartyDrop(db: Db, d: PartyDropInfo, replaces?: string): Promise<{ drop: PartyDropInfo; isNew: boolean } | null> {
   try {
-    const r = await db.execute(sql`
-      insert into party_drops (drop_id, party_id, cycle, match_id, leader_id, members, created_at, expires_at)
-      select ${d.dropId}::uuid, ${d.partyId}::uuid, ${d.cycle}, ${d.matchId}::uuid, ${d.leaderId}::uuid,
-             ${JSON.stringify(d.members)}::jsonb, ${new Date(d.createdAt)}, ${new Date(d.expiresAt)}
-      where exists (select 1 from parties where id = ${d.partyId}::uuid)
-      on conflict (drop_id) do nothing
-      returning drop_id`);
-    // Old drops of the party are never read again (latestDrop only sees open ones).
-    await db.execute(sql`delete from party_drops where party_id = ${d.partyId}::uuid and expires_at < ${new Date(d.createdAt - 60 * 60_000)}`);
-    return r.rows.length > 0;
+    return await db.transaction(async (tx) => {
+      if (!(await lockParty(tx, d.partyId))) return null;
+      const mem = await tx.execute(sql`
+        select 1 from party_members where party_id = ${d.partyId}::uuid and user_id = ${d.leaderId}::uuid`);
+      if (mem.rows.length === 0) return null;
+      const live = await latestDrop(tx, d.partyId, d.createdAt);
+      if (live && live.dropId === d.dropId) return { drop: live, isNew: true };
+      if (live && live.dropId !== replaces) return { drop: live, isNew: false };
+      if (live) await tx.execute(sql`update party_drops set expires_at = ${new Date(d.createdAt)} where drop_id = ${live.dropId}::uuid`);
+      await tx.execute(sql`
+        insert into party_drops (drop_id, party_id, cycle, match_id, leader_id, members, created_at, expires_at)
+        values (${d.dropId}::uuid, ${d.partyId}::uuid, ${d.cycle}, ${d.matchId}::uuid, ${d.leaderId}::uuid,
+                ${JSON.stringify(d.members)}::jsonb, ${new Date(d.createdAt)}, ${new Date(d.expiresAt)})
+        on conflict (drop_id) do nothing`);
+      // Old drops of the party are never read again (latestDrop only sees open ones).
+      await tx.execute(sql`delete from party_drops where party_id = ${d.partyId}::uuid and expires_at < ${new Date(d.createdAt - 60 * 60_000)}`);
+      return { drop: d, isNew: true };
+    });
   } catch (e) {
-    console.error("[party] drop not saved", e);
-    return false;
+    console.error("[party] drop not claimed", e);
+    return null;
   }
 }

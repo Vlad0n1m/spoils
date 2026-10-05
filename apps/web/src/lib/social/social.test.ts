@@ -399,7 +399,7 @@ describe("party drop", () => {
     if (lb.ok && la.ok) assert.equal(lb.body.ticket.dropId, la.body.ticket.dropId, "the party's live drop");
   });
 
-  test("after 60 s a member drops on their own (partyId only); solo players get no party fields", async () => {
+  test("after 60 s the next PLAY starts a fresh drop; solo players get no party fields", async () => {
     const [a, b, solo] = [await user(), await user(), await user()];
     const pid = await party(a, b);
     await openShard(db, shardReq());
@@ -408,13 +408,16 @@ describe("party drop", () => {
     assert.equal((await getPartyState(db, b.userId, NOW + PARTY.DROP_TTL_MS)).drop, null);
     const lb = await worldJoin(db, b, undefined, NOW + PARTY.DROP_TTL_MS);
     assert.ok(lb.ok);
-    if (!lb.ok) return;
-    assert.equal(lb.body.ticket.dropId, undefined);
+    if (!lb.ok || !la.ok) return;
+    assert.match(lb.body.ticket.dropId ?? "", UUID_RE);
+    assert.notEqual(lb.body.ticket.dropId, la.body.ticket.dropId, "a fresh drop, started by the member");
     assert.equal(lb.body.ticket.partyId, pid);
-    assert.deepEqual(lb.body.party, { partyId: pid, dropId: null, dropExpiresAt: null, leader: false });
+    assert.deepEqual(lb.body.party, { partyId: pid, dropId: lb.body.ticket.dropId, dropExpiresAt: NOW + 2 * PARTY.DROP_TTL_MS, leader: false });
     assert.ok(sigOk(lb.body.ticket));
+    const sa = await getPartyState(db, a.userId, NOW + PARTY.DROP_TTL_MS + 1_000);
+    assert.deepEqual([sa.drop?.dropId, sa.drop?.leader, sa.drop?.mine], [lb.body.ticket.dropId, b.nickname, false]);
 
-    const ls = await worldJoin(db, solo, undefined, NOW);
+    const ls = await worldJoin(db, solo, undefined, NOW, { dropId: lb.body.ticket.dropId });
     assert.ok(ls.ok);
     if (!ls.ok) return;
     assert.equal(ls.body.party, undefined);
@@ -422,7 +425,7 @@ describe("party drop", () => {
     assert.equal("partyId" in ls.body.ticket, false);
     // Old-format payload: exactly the six pre-party fields.
     const { sig: _sig, ...rest } = ls.body.ticket;
-    assert.equal(joinTicketPayload(rest).split(".").length, 6);
+    assert.equal(joinTicketPayload(rest).split("|")[0]!.split(".").length, 6, "no party fields (alpha extras sit after |)");
   });
 
   test("a member who joined after the drop cannot follow it", async () => {
@@ -438,5 +441,106 @@ describe("party drop", () => {
     const lc = await worldJoin(db, c, undefined, NOW + 2_000);
     assert.ok(lc.ok);
     if (lc.ok) assert.equal(lc.body.ticket.dropId, undefined);
+  });
+
+  test("a member's PLAY before the leader's starts the party's drop; the leader follows it to the same shard", async () => {
+    const [a, b, c] = [await user(), await user(), await user()];
+    const pid = await party(a, b, c);
+    const s0 = shardReq({ shard: 0 });
+    await openShard(db, s0);
+    const lb = await worldJoin(db, b, undefined, NOW);
+    assert.ok(lb.ok, JSON.stringify(lb));
+    if (!lb.ok) return;
+    const dropId = lb.body.ticket.dropId!;
+    assert.match(dropId, UUID_RE);
+    assert.deepEqual([lb.body.party?.leader, lb.body.ticket.partyId, lb.body.ticket.dropSize], [false, pid, 3]);
+    const row = (await db.select().from(partyDrops))[0]!;
+    assert.deepEqual([row.leaderId, row.members[0], row.matchId], [b.userId, b.userId, s0.matchId], "the member who pressed first starts it");
+
+    // The leader sees the prompt with the starter's name, then follows even with a second shard open.
+    const sa = await getPartyState(db, a.userId, NOW + 1_000);
+    assert.deepEqual([sa.drop?.dropId, sa.drop?.leader, sa.drop?.mine, sa.drop?.cycle], [dropId, b.nickname, false, C]);
+    assert.equal((await getPartyState(db, b.userId, NOW + 1_000)).drop?.mine, true);
+    await openShard(db, shardReq({ shard: 1 }));
+    const la = await worldJoin(db, a, undefined, NOW + 2_000);
+    assert.ok(la.ok && la.body.matchId === s0.matchId && la.body.ticket.dropId === dropId && la.body.party?.leader === true);
+    const lc = await worldJoin(db, c, undefined, NOW + 3_000, { dropId });
+    assert.ok(lc.ok && lc.body.matchId === s0.matchId && lc.body.ticket.dropId === dropId);
+    assert.equal((await db.select().from(partyDrops)).length, 1, "one drop for the party");
+  });
+
+  test("two members pressing PLAY at once get one drop: the second claim follows the first", async () => {
+    const [a, b, c] = [await user(), await user(), await user()];
+    await party(a, b, c);
+    await openShard(db, shardReq({ shard: 0 }));
+    await openShard(db, shardReq({ shard: 1 }));
+    const [lb, lc] = await Promise.all([worldJoin(db, b, undefined, NOW), worldJoin(db, c, undefined, NOW)]);
+    assert.ok(lb.ok && lc.ok, JSON.stringify([lb, lc]));
+    if (!lb.ok || !lc.ok) return;
+    assert.equal(lb.body.ticket.dropId, lc.body.ticket.dropId);
+    assert.equal(lb.body.matchId, lc.body.matchId);
+    const live = (await db.select().from(partyDrops)).filter((d) => d.expiresAt.getTime() > NOW);
+    assert.equal(live.length, 1);
+  });
+
+  test("a member whose PLAY lands after the drop's map closed entry follows the drop onto that closing map", async () => {
+    const [a, b, c, d] = [await user(), await user(), await user(), await user()];
+    await party(a, b, c);
+    const cur = shardReq({ shard: 0 });
+    await openShard(db, cur);
+    const NC = worldCycleOf(C + 1);
+    const next = shardReq({ cycleId: C + 1, shard: 0, roomId: `room-${C + 1}`, startsAt: NC.startAt, entryClosesAt: NC.entryClosesAt, endsAt: NC.wipeAt });
+    await openShard(db, next);
+
+    const t0 = WC.entryClosesAt - 20_000;
+    const la = await worldJoin(db, a, undefined, t0);
+    assert.ok(la.ok && la.body.matchId === cur.matchId && la.body.cycle === C, JSON.stringify(la));
+    if (!la.ok) return;
+    const dropId = la.body.ticket.dropId!;
+    // The leader is on the map: an active entry of the old cycle.
+    await db.insert(raidEntries).values({ entryId: la.body.ticket.entryId!, matchId: cur.matchId, cycleId: C, userId: a.userId, status: "active" });
+
+    const t1 = WC.entryClosesAt + 10_000;
+    assert.equal(worldCycleAt(t1).cycle, C + 1, "the next map takes entries now");
+    const sb = await getPartyState(db, b.userId, t1);
+    assert.deepEqual([sb.drop?.dropId, sb.drop?.cycle], [dropId, C], "the prompt still shows the drop on its map");
+    const lb = await worldJoin(db, b, undefined, t1);
+    assert.ok(lb.ok, JSON.stringify(lb));
+    if (!lb.ok) return;
+    assert.deepEqual([lb.body.matchId, lb.body.cycle, lb.body.wipeAt, lb.body.entryClosesAt], [cur.matchId, C, WC.wipeAt, WC.entryClosesAt]);
+    assert.equal(lb.body.ticket.dropId, dropId);
+    assert.equal(lb.body.ticket.matchId, cur.matchId);
+    assert.ok(sigOk(lb.body.ticket));
+
+    // c already entered the closing map once (exited): no re-entry there, a solo join on the open map.
+    await db.insert(raidEntries).values({ entryId: randomUUID(), matchId: cur.matchId, cycleId: C, userId: c.userId, status: "exited" });
+    const lc = await worldJoin(db, c, undefined, t1);
+    assert.ok(lc.ok && lc.body.matchId === next.matchId && lc.body.cycle === C + 1, JSON.stringify(lc));
+    if (lc.ok) assert.equal(lc.body.ticket.dropId, undefined);
+
+    // A stranger passing the dropId gets nothing of it.
+    const ld = await worldJoin(db, d, undefined, t1, { dropId });
+    assert.ok(ld.ok && ld.body.matchId === next.matchId && ld.body.party === undefined && ld.body.ticket.dropId === undefined);
+  });
+
+  test("a drop whose map is gone gives way: the next PLAY starts a fresh drop on the open map", async () => {
+    const [a, b] = [await user(), await user()];
+    await party(a, b);
+    const s0 = shardReq({ shard: 0 });
+    await openShard(db, s0);
+    const la = await worldJoin(db, a, undefined, NOW);
+    assert.ok(la.ok);
+    if (!la.ok) return;
+    await db.execute(sql`update raids set status = 'settled' where match_id = ${s0.matchId}`);
+    const s1 = shardReq({ shard: 1 });
+    await openShard(db, s1);
+    const lb = await worldJoin(db, b, undefined, NOW + 5_000);
+    assert.ok(lb.ok, JSON.stringify(lb));
+    if (!lb.ok) return;
+    assert.equal(lb.body.matchId, s1.matchId);
+    assert.notEqual(lb.body.ticket.dropId, la.body.ticket.dropId);
+    const rows = await db.select().from(partyDrops);
+    const live = rows.filter((r) => r.expiresAt.getTime() > NOW + 5_000);
+    assert.deepEqual(live.map((r) => r.dropId), [lb.body.ticket.dropId], "the old drop is closed, one live drop");
   });
 });

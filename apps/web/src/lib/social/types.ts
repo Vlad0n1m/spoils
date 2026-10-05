@@ -69,7 +69,11 @@ export interface PartyInviteDto {
   expiresAt: number;
 }
 
-/** The caller's party's live drop for this map (`mine` = the caller is the leader who started it). */
+/**
+ * The caller's party's live drop the caller can still join (`cycle` = its map: the open one, or the
+ * closing previous one). `leader` = nickname of the member who started it (the first to press PLAY,
+ * party leader or not); `mine` = that was the caller.
+ */
 export interface PartyDropDto {
   dropId: string;
   cycle: number;
