@@ -49,10 +49,10 @@ export const VISION = {
   AOI_CELL: 512,
   AOI_RING: 3,
   /**
-   * @deprecated NPC MODEL v5: NPC sight cap moved to NPC.VIEW_RANGE_CAP (npc.ts, same 800). Kept
+   * @deprecated NPC MODEL v5: NPC sight cap moved to NPC.VIEW_RANGE_CAP (npc.ts, same value). Kept
    * for one release while the server renames its bot viewers.
    */
-  BOT_RANGE_CAP: 800,
+  BOT_RANGE_CAP: 650,
 } as const;
 
 /** cos(105°) ≈ -0.2588: dot-product threshold of the server cone (no atan2 per pair). */

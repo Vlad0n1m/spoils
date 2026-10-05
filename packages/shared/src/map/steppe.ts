@@ -149,23 +149,24 @@ export const BOSS_BUILDING_PREFS: Readonly<Record<BossKind, readonly ("office" |
  * Marauder squads of the map v2 places (NPC MODEL v5 posts). NPC_CAMPS (npc.ts) keys squads by
  * zone id and only knows the ten places of the 24-block layout; a zone it does not list takes its
  * row here, else CAMP_BY_TIER. Sized by POI tier like the existing camps: T1 one small squad, T2
- * two, T3 one big one.
+ * two, T3 one big one. Alpha softening (2026-10): chances here and in CAMP_BY_TIER are the old
+ * ones × 0.75.
  */
 export const ZONE_CAMPS: Readonly<Record<string, { squads: number; size: readonly [number, number]; chance: number }>> = {
-  millbrook: { squads: 2, size: [1, 3], chance: 0.7 },
-  pumpworks: { squads: 2, size: [1, 3], chance: 0.7 },
-  ranger: { squads: 1, size: [1, 2], chance: 0.6 },
+  millbrook: { squads: 2, size: [1, 3], chance: 0.525 },
+  pumpworks: { squads: 2, size: [1, 3], chance: 0.525 },
+  ranger: { squads: 1, size: [1, 2], chance: 0.45 },
   // One squad: T3 marauders also carry pool uniques (NPC_CARRIER), and a second squad would grow
   // the carriers' share of the pool release past the containers' (+30 % carriers vs +36 % T3/T4 boxes).
-  relay: { squads: 1, size: [2, 3], chance: 0.85 },
-  truckstop: { squads: 1, size: [1, 2], chance: 0.6 },
+  relay: { squads: 1, size: [2, 3], chance: 0.6375 },
+  truckstop: { squads: 1, size: [1, 2], chance: 0.45 },
 };
 
 /** Default squads by tier for a zone in neither NPC_CAMPS nor ZONE_CAMPS. */
 export const CAMP_BY_TIER: Readonly<Record<LootTier, { squads: number; size: readonly [number, number]; chance: number }>> = {
-  0: { squads: 0, size: [1, 2], chance: 0.5 },
-  1: { squads: 1, size: [1, 2], chance: 0.6 },
-  2: { squads: 2, size: [1, 3], chance: 0.7 },
-  3: { squads: 2, size: [2, 3], chance: 0.85 },
-  4: { squads: 1, size: [2, 3], chance: 1.0 },
+  0: { squads: 0, size: [1, 2], chance: 0.375 },
+  1: { squads: 1, size: [1, 2], chance: 0.45 },
+  2: { squads: 2, size: [1, 3], chance: 0.525 },
+  3: { squads: 2, size: [2, 3], chance: 0.6375 },
+  4: { squads: 1, size: [2, 3], chance: 0.75 },
 };

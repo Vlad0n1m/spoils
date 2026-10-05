@@ -53,14 +53,18 @@ export const NPC = {
    */
   PEACE_MS: 30_000,
   PEACE_CLOSE_PX: 600,
-  /** NPC sight cap while calm (was VISION.BOT_RANGE_CAP): a careful human gets the first look. */
-  VIEW_RANGE_CAP: 800,
+  /**
+   * NPC sight cap while calm (was VISION.BOT_RANGE_CAP, 800): a careful human gets the first look.
+   * Alpha softening (2026-10): 800 → 650.
+   */
+  VIEW_RANGE_CAP: 650,
   /**
    * NPC sight cap while its squad is alerted or it was hit recently: the full human VISION.RANGE, so
    * nobody can shoot an NPC from 800–1000 px without being seen back (v5 review fix: rifle kiting
-   * at 870 px killed every marauder class and whole boss groups with 0 return fire).
+   * at 870 px killed every marauder class and whole boss groups with 0 return fire). Alpha softening
+   * (2026-10): 1000 → 850, so a careful human outranges an alerted NPC again (accepted for alpha).
    */
-  VIEW_RANGE_ALERT: 1000,
+  VIEW_RANGE_ALERT: 850,
   /**
    * Hit by someone it cannot see or cannot reach with its weapon (a sniper beyond sight, a kiter
    * outside its chase radius): break line of sight to the threat within this radius of where it
@@ -166,27 +170,31 @@ export interface MarauderDef {
  * (mid rifle 85 → 70 + SMG 15; high rifle 70 → 55, shotgun 30 → 25 + rare SMG 20), the top class
  * trades rifle 80 → 65 for a rare LMG 15 (at most one per squad). Low stays pistol / shotgun. No NPC
  * carries a crossbow or grenades. Kits stay FREE (never dropped, never valued).
+ * Alpha softening (2026-10, Vlad): sloppiness × 1.4 for every class (low 1.6 → 2.24, mid 1.1 → 1.54,
+ * high 1.0 → 1.4, top 0.9 → 1.26), reaction +200 ms at both ends, and the top class drops its
+ * sniper (its weight 20 goes to the rare rifle: 65 → 85). The hit-rate figures above are the
+ * pre-alpha-softening measurement; the npc-threat bench has not been re-run since.
  */
 export const MARAUDER: Readonly<Record<NpcClass, MarauderDef>> = {
   low: {
     name: "Marauder", hp: 80, armor: 0, armorChance: 0,
     weapons: [{ weapon: "pistol", rarity: 0, w: 85 }, { weapon: "shotgun", rarity: 0, w: 15 }],
-    sloppiness: 1.6, reactMs: [650, 1000], leashPx: 500, freeAmmo: 60,
+    sloppiness: 2.24, reactMs: [850, 1200], leashPx: 500, freeAmmo: 60,
   },
   mid: {
     name: "Marauder", hp: 100, armor: 1, armorChance: 0.4,
     weapons: [{ weapon: "shotgun", rarity: 0, w: 15 }, { weapon: "rifle", rarity: 0, w: 70 }, { weapon: "smg", rarity: 0, w: 15 }],
-    sloppiness: 1.1, reactMs: [550, 850], leashPx: 700, freeAmmo: 90,
+    sloppiness: 1.54, reactMs: [750, 1050], leashPx: 700, freeAmmo: 90,
   },
   high: {
     name: "Marauder", hp: 100, armor: 1, armorChance: 1,
     weapons: [{ weapon: "rifle", rarity: 0, w: 55 }, { weapon: "shotgun", rarity: 1, w: 25 }, { weapon: "smg", rarity: 1, w: 20 }],
-    sloppiness: 1.0, reactMs: [450, 750], leashPx: 800, freeAmmo: 120,
+    sloppiness: 1.4, reactMs: [650, 950], leashPx: 800, freeAmmo: 120,
   },
   top: {
     name: "Marauder", hp: 110, armor: 2, armorChance: 1,
-    weapons: [{ weapon: "rifle", rarity: 1, w: 65 }, { weapon: "sniper", rarity: 0, w: 20 }, { weapon: "lmg", rarity: 1, w: 15 }],
-    sniperMaxPerSquad: 1, lmgMaxPerSquad: 1, sloppiness: 0.9, reactMs: [400, 650], leashPx: 900, freeAmmo: 150,
+    weapons: [{ weapon: "rifle", rarity: 1, w: 85 }, { weapon: "lmg", rarity: 1, w: 15 }],
+    sniperMaxPerSquad: 1, lmgMaxPerSquad: 1, sloppiness: 1.26, reactMs: [600, 850], leashPx: 900, freeAmmo: 150,
   },
 };
 
@@ -197,19 +205,23 @@ export interface NpcCampDef {
   chance: number;
 }
 
-/** E ≈ 30.9 marauders + E ≈ 7.0 boss-group NPCs ≈ 38 per raid; max 71 → capped at NPC.MAX_PER_RAID. */
+/**
+ * Squads of the ten places of the 24-block layout (+ "road"); map v2 places use steppe.ts ZONE_CAMPS.
+ * Alpha softening (2026-10, Vlad): every spawn chance here, in ZONE_CAMPS and in CAMP_BY_TIER is the
+ * old one × 0.75 (radar 1.0 → 0.75): on the Steppe E marauders 40.4 → ≈ 30, E NPCs ≈ 47 → ≈ 37.
+ */
 export const NPC_CAMPS: Readonly<Record<string, NpcCampDef>> = {
-  dachas: { squads: 2, size: [1, 2], chance: 0.6 },
-  fuel: { squads: 1, size: [1, 2], chance: 0.6 },
-  zarya: { squads: 4, size: [1, 3], chance: 0.7 },
-  kolkhoz: { squads: 1, size: [1, 3], chance: 0.7 },
-  sawmill: { squads: 2, size: [1, 3], chance: 0.7 },
-  depot: { squads: 2, size: [1, 3], chance: 0.7 },
-  quarry: { squads: 2, size: [1, 3], chance: 0.7 },
-  checkpoint: { squads: 1, size: [2, 3], chance: 0.8 },
-  elevator: { squads: 2, size: [2, 3], chance: 0.9 },
-  radar: { squads: 1, size: [2, 3], chance: 1.0 }, // v5 iteration 2 (C4): 2 → 1, Commander kill band
-  road: { squads: 5, size: [1, 2], chance: 0.5 },
+  dachas: { squads: 2, size: [1, 2], chance: 0.45 },
+  fuel: { squads: 1, size: [1, 2], chance: 0.45 },
+  zarya: { squads: 4, size: [1, 3], chance: 0.525 },
+  kolkhoz: { squads: 1, size: [1, 3], chance: 0.525 },
+  sawmill: { squads: 2, size: [1, 3], chance: 0.525 },
+  depot: { squads: 2, size: [1, 3], chance: 0.525 },
+  quarry: { squads: 2, size: [1, 3], chance: 0.525 },
+  checkpoint: { squads: 1, size: [2, 3], chance: 0.6 },
+  elevator: { squads: 2, size: [2, 3], chance: 0.675 },
+  radar: { squads: 1, size: [2, 3], chance: 0.75 }, // v5 iteration 2 (C4): 2 → 1, Commander kill band
+  road: { squads: 5, size: [1, 2], chance: 0.375 },
 };
 
 /** One weighted entry of an NPC loot table (qty per draw). */

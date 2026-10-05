@@ -78,7 +78,8 @@ function drawEv(d: NpcLootDraw): number {
 test("roles, renamed constants and aliases", () => {
   assert.deepEqual(NPC_ROLE, { NONE: 0, BOSS: 1, GUARD: 2, MARAUDER: 3 });
   assert.equal(NPC.VIEW_RANGE_CAP, VISION.BOT_RANGE_CAP, "deprecated alias keeps the same cap");
-  assert.equal(NPC.VIEW_RANGE_ALERT, VISION.RANGE, "an alerted NPC sees as far as a human");
+  // Alpha softening: an alerted NPC sees 850 px, a human VISION.RANGE.
+  assert.ok(NPC.VIEW_RANGE_ALERT > NPC.VIEW_RANGE_CAP && NPC.VIEW_RANGE_ALERT <= VISION.RANGE, "alerted NPC sight between calm cap and human range");
   assert.equal(BOSS_AI.NO_BREAK, NPC.NO_BREAK);
   assert.equal(NPC_GEAR_FLAGS, ITEM_FLAG.FREE, "NPC gear is FREE: never in a corpse, never extracted, never valued");
   assert.equal(NPC.FRIENDLY_FIRE, false);
@@ -151,14 +152,14 @@ test("rollNpcLoot: deterministic per (seed, post, member), at most one cons + on
   assert.ok(differs > 50, "members of one squad get independent bags");
 });
 
-test("rollMarauderKit: deterministic, ≤ 1 sniper per top squad, armor by armorChance", () => {
+test("rollMarauderKit: deterministic, no sniper in any class (alpha softening), armor by armorChance", () => {
   assert.deepEqual(rollMarauderKit(9, 15, 3, "top"), rollMarauderKit(9, 15, 3, "top"));
   let armored = 0, mid = 0, snipers = 0;
   for (let s = 0; s < 3000; s++) {
     const top = rollMarauderKit(s * 31, 15, 3, "top");
     assert.equal(top.length, 3);
     const n = top.filter((k) => k.weapon === "sniper").length;
-    assert.ok(n <= 1, `seed ${s}: ${n} snipers`);
+    assert.equal(n, 0, `seed ${s}: ${n} snipers`);
     snipers += n;
     for (const k of top) assert.equal(k.armor, 2);
     for (const k of rollMarauderKit(s, 4, 2, "low")) assert.ok(k.armor === 0 && (k.weapon === "pistol" || k.weapon === "shotgun"));
@@ -168,10 +169,10 @@ test("rollMarauderKit: deterministic, ≤ 1 sniper per top squad, armor by armor
     }
   }
   assert.ok(Math.abs(armored / mid - 0.4) < 0.03, `mid armor ${(armored / mid).toFixed(3)}`);
-  assert.ok(snipers > 1000, "the top class does field snipers");
+  assert.equal(snipers, 0, "alpha softening: the top class fields no snipers");
 });
 
-test("rollNpcSpawns: deterministic, exactly 2 draws per post, frequency ≈ chance, E ≈ 47 NPCs with bosses", () => {
+test("rollNpcSpawns: deterministic, exactly 2 draws per post, frequency ≈ chance, E ≈ 37 NPCs with bosses", () => {
   assert.deepEqual(rollNpcSpawns(1234, posts, 7), rollNpcSpawns(1234, posts, 7));
   // Reference implementation of the draw contract.
   for (const seed of [1, 99, 123456]) {
@@ -213,9 +214,10 @@ test("rollNpcSpawns: deterministic, exactly 2 draws per post, frequency ≈ chan
   // v5 iteration 2 (C4): NPC_CAMPS.radar.squads 2 → 1 (E marauders 33.4 → 30.9, E NPCs 40 → ≈ 38).
   // Map v2 (MAP_GEN_VERSION 4): 36 % more area and five new places with squads by tier
   // (steppe.ts ZONE_CAMPS): E marauders 30.9 → 40.4 (+31 % for +36 % area), E NPCs ≈ 47.3; the
-  // MAX_PER_RAID cap (60) trims a squad in ≈ 1.6 % of raids.
-  assert.ok(Math.abs(total / N - 47.3) < 1.5, `E NPCs per raid ${(total / N).toFixed(2)}`);
-  assert.ok(near(expectedMarauders(posts), 40.4, 0.03), `E marauders ${expectedMarauders(posts).toFixed(2)}`);
+  // MAX_PER_RAID cap (60) trims a squad in ≈ 1.6 % of raids. Alpha softening: every chance × 0.75,
+  // E marauders 40.4 → 30.3, E NPCs ≈ 37.3.
+  assert.ok(Math.abs(total / N - 37.3) < 1.5, `E NPCs per raid ${(total / N).toFixed(2)}`);
+  assert.ok(near(expectedMarauders(posts), 30.3, 0.03), `E marauders ${expectedMarauders(posts).toFixed(2)}`);
   assert.ok(capped / N < 0.03, `capped raids ${(capped / N).toFixed(3)}`);
 });
 
@@ -359,7 +361,7 @@ test("Steppe npc posts: counts per zone, sizes / chances from NPC_CAMPS (map v2 
 });
 
 /** Golden digest of MapData.npcPosts (MAP_GEN_VERSION 4). Update only for an intended placement change. */
-const GOLDEN_POSTS = "8fcf3adf"; // map v2: 28 blocks, 15 places (v5 iteration 2 on MAP_GEN_VERSION 2–3: "8b0d6862")
+const GOLDEN_POSTS = "cd390299"; // alpha softening: chances × 0.75 (map v2 before it: "8fcf3adf"; v5 iteration 2 on MAP_GEN_VERSION 2–3: "8b0d6862")
 
 test("Steppe npc posts: clearances, terrain, reachability, patrol radius", () => {
   const g = getWalkGrid(m);

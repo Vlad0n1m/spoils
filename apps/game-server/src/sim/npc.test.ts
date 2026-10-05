@@ -162,21 +162,21 @@ test("chase inside leash + CHASE_EXTRA, search the last-known spot, then return 
   assert.equal(npc.stats.containersSearched + npc.stats.corpsesSearched, 0);
 });
 
-test("alerted sight: an NPC shot at sees to VISION.RANGE (calm cap NPC.VIEW_RANGE_CAP); a muzzle flash beats the calm cap", () => {
+test("alerted sight: an NPC shot at sees to NPC.VIEW_RANGE_ALERT (calm cap NPC.VIEW_RANGE_CAP); a muzzle flash beats the calm cap", () => {
   const { m, human, npcs } = arena([testPost(0, 1500, 1500, { tier: 2 })]);
   const npc = npcs[0]!;
   skipPeace(m);
-  human.pub.x = 1500 + 900;
+  human.pub.x = 1500 + 800;
   human.pub.y = 1500;
   human.pub.hp = 1e6;
   brain(m, npc).tune({ aim: 0, rollChance: 0 });
   run(m, 1000);
-  assert.ok(!m.vision.sees(npc.rosterIndex, human.rosterIndex), "calm: 900 px is beyond the 800 px cap");
+  assert.ok(!m.vision.sees(npc.rosterIndex, human.rosterIndex), "calm: 800 px is beyond the 650 px cap");
   assert.equal(npc.viewCap, NPC.VIEW_RANGE_CAP);
   damagePlayer(m, npc, 5, human, "rifle", npc.pub.x, npc.pub.y);
   run(m, NPC.THINK_MS + 2 * SERVER_TICK_MS);
   assert.equal(npc.viewCap, NPC.VIEW_RANGE_ALERT);
-  assert.ok(m.vision.sees(npc.rosterIndex, human.rosterIndex), "alerted: seen at 900 px");
+  assert.ok(m.vision.sees(npc.rosterIndex, human.rosterIndex), "alerted: seen at 800 px (alert cap 850)");
 });
 
 test("cover: hit by a human beyond its sight, an NPC leaves the line of fire inside its chase radius, never fires blind, then returns to its post", () => {

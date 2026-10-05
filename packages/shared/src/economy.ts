@@ -819,10 +819,13 @@ export const BOSSES: Readonly<Record<BossKind, BossDef>> = {
 
 /** Boss / guard AI tuning (server sim/boss.ts). */
 export const BOSS_AI = {
-  /** Aim sloppiness (marauders 0.9–1.6, npc.ts MARAUDER). */
-  BOSS_SLOPPINESS: 0.7,
-  GUARD_SLOPPINESS: 0.85,
-  REACT_MS: [300, 550] as readonly [number, number],
+  /**
+   * Aim sloppiness (marauders 1.26–2.24, npc.ts MARAUDER). Alpha softening (2026-10, Vlad): boss
+   * 0.7 → 0.84 (× 1.2), guards 0.85 → 1.19 (× 1.4), reaction [300, 550] → [500, 750] ms.
+   */
+  BOSS_SLOPPINESS: 0.84,
+  GUARD_SLOPPINESS: 1.19,
+  REACT_MS: [500, 750] as readonly [number, number],
   /** Leash around the BossSpot (boss) / the guard's post (guards). */
   LEASH_BOSS_PX: 600,
   LEASH_GUARD_PX: 900,
