@@ -33,6 +33,10 @@ services:
         # Add the exact shell origin of our title (https://<titleid>.idos.games) once it exists; never
         # https://*.idos.games unless on purpose (every title hosted there could frame the edition).
         IDOS_FRAME_ANCESTORS: ${IDOS_FRAME_ANCESTORS:-}
+        # iDos Title ids of the shell (ABCD1234, ABCD1234-DEV): page side of the sign-in bridge and the
+        # shell origins in frame-ancestors when IDOS_FRAME_ANCESTORS is unset. The server also reads it
+        # at runtime from .env.idos.local (POST /api/idos/session).
+        IDOS_TITLE_IDS: ${IDOS_TITLE_IDS:-}
     env_file: !override
       - .env.idos.local
     ports: !override

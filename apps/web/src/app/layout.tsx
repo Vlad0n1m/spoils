@@ -2,7 +2,9 @@ import type { Metadata, Viewport } from "next";
 import { Luckiest_Guy, Nunito, Press_Start_2P } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
+import { IdosBridge } from "@/components/idos/idos-bridge";
 import { BRAND } from "@/lib/brand";
+import { IDOS_BUILD } from "@/lib/edition";
 import { SITE_URL } from "@/lib/site-url";
 
 const luckiestGuy = Luckiest_Guy({
@@ -53,6 +55,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${luckiestGuy.variable} ${nunito.variable} ${pixel.variable}`}>
       <body className={`${luckiestGuy.className} min-h-screen bg-ink-900 text-white`}>
         <Providers>{children}</Providers>
+        {/* iDos Games edition only: sign-in from the iDos shell around the iframe. */}
+        {IDOS_BUILD && <IdosBridge />}
       </body>
     </html>
   );
