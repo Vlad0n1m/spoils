@@ -41,19 +41,31 @@ const clientEnv: Record<string, string> = {
 
 /**
  * The app addresses its public files absolutely ("/sprites/x.png"); the iDos test copy is served
- * under /v/<build>/, so they become document-relative ("./sprites/x.png"), which also works at the
- * live root. Only string literals that start a known public folder are touched.
+ * under /v/<build>/, so they become relative, which also works at the live root:
+ * - JS string literals and inline-style url(/…) → "./sprites/x.png" (resolved against the page);
+ * - Tailwind classes like bg-[url('/lobby/bg.webp')] stay as written in the source (Tailwind builds
+ *   their CSS from the files on disk, so the class name must not change); in the emitted CSS, which
+ *   sits in assets/, their url(/lobby/…) becomes url(../lobby/…).
  */
 function relativePublicPaths(): Plugin {
-  const re = /(["'`])\/(sprites|lobby|sfx|landing)\//g;
+  const dirs = "sprites|lobby|sfx|landing";
+  const literal = new RegExp(`(?<!\\[url\\()(["'\`])\\/(${dirs})\\/`, "g");
+  const inlineUrl = new RegExp(`(?<!\\[)url\\(\\/(${dirs})\\/`, "g");
+  const cssUrl = new RegExp(`url\\((["']?)\\/(${dirs})\\/`, "g");
   return {
     name: "spoils-relative-public-paths",
     enforce: "pre",
     transform(code, id) {
       if (!id.startsWith(webSrc) || !/\.(tsx?|jsx?|mjs)$/.test(id.split("?")[0]!)) return null;
-      if (!re.test(code)) return null;
-      re.lastIndex = 0;
-      return { code: code.replace(re, "$1./$2/"), map: null };
+      const out = code.replace(literal, "$1./$2/").replace(inlineUrl, "url(./$1/");
+      return out === code ? null : { code: out, map: null };
+    },
+    generateBundle(_options, bundle) {
+      for (const file of Object.values(bundle)) {
+        if (file.type === "asset" && file.fileName.endsWith(".css") && typeof file.source === "string") {
+          file.source = file.source.replace(cssUrl, "url($1../$2/");
+        }
+      }
     },
   };
 }
