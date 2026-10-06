@@ -28,7 +28,7 @@ import {
   type NpcPost,
   type Zone,
 } from "./types.js";
-import { chance, dist2, grow, inRect, pickW, ri, shuffle } from "./util.js";
+import { chance, dist2, grow, inRect, overlaps, pickW, ri, shuffle } from "./util.js";
 
 // ───────────────────────── extracts and spawns
 
@@ -445,12 +445,88 @@ function npcClearances(k: number) {
 
 /** Nobody spawns or extracts into a camp, and marauders hold the approaches, not the boss room. */
 function npcPostClear(
-  map: Pick<MapData, "spawns" | "extracts" | "bosses">, c: ReturnType<typeof npcClearances>, x: number, y: number,
+  map: Pick<MapData, "spawns" | "extracts" | "bosses">, c: ReturnType<typeof npcClearances>, x: number, y: number, boss = true,
 ): boolean {
   if (map.spawns.some((s) => dist2(s.x, s.y, x, y) < c.spawn * c.spawn)) return false;
   if (map.extracts.some((e) => dist2(e.x, e.y, x, y) < c.extract * c.extract)) return false;
-  if (map.bosses.some((b) => dist2(b.x, b.y, x, y) < c.boss * c.boss)) return false;
+  if (boss && map.bosses.some((b) => dist2(b.x, b.y, x, y) < c.boss * c.boss)) return false;
   return true;
+}
+
+/**
+ * Building posts (POI garrison, npc.ts POI_GARRISON): one "bld" post per building of every POI zone,
+ * placed after every other post from its own "npc-bld" rng stream, so the older posts keep their
+ * ids and spots. The post stands in the yard of an exterior door (BLD_DOOR_OFFSETS px out, outdoors,
+ * free ground, not forest / water, ≥ POI_GARRISON.POST_SEP_PX from every post); a building with no
+ * such yard gets an indoor post on a free spot of one of its rooms (clear of furniture and containers,
+ * ≥ POST_SEP_PX / 2 from every post). Clearances: ≥ POI_GARRISON.SPAWN_CLEAR_PX from spawns (beyond
+ * the T4 chase radius, 900 + 300 px; the 30 s peace window covers the rest) and EXTRACT_CLEAR_PX
+ * from extracts; the boss clearance does not apply (on a non-event map the boss building is held by
+ * marauders; on the event map they hold its doors, the guards the room). Size =
+ * POI_GARRISON.BUILDING_GROUP[tier], chance 0 (rollNpcSpawns spawns them as the garrison), no patrol.
+ */
+const BLD_DOOR_OFFSETS = [160, 224, 288] as const;
+
+export function placeBuildingPosts(ctx: GenCtx): void {
+  const rng = ctx.rng("npc-bld");
+  const k = ctx.block / 1024;
+  const posts = ctx.npcPosts;
+  const sep = Math.round(POI_GARRISON.POST_SEP_PX * k);
+  const spawnClear = Math.round(POI_GARRISON.SPAWN_CLEAR_PX * k), extractClear = Math.round(NPC.EXTRACT_CLEAR_PX * k);
+  const clear = (x: number, y: number) =>
+    !ctx.spawns.some((s) => dist2(s.x, s.y, x, y) < spawnClear * spawnClear) &&
+    !ctx.extracts.some((e) => dist2(e.x, e.y, x, y) < extractClear * extractClear);
+  const apart = (x: number, y: number, d: number) => posts.every((p) => dist2(p.x, p.y, x, y) >= d * d);
+  const terrainOk = (x: number, y: number, indoor: boolean): boolean => {
+    const byte = ctx.terrain.byteAt(x, y);
+    if (((byte & TERRAIN_INDOOR) !== 0) !== indoor) return false;
+    const kind = byte & TERRAIN_KIND_MASK;
+    return kind !== TERRAIN.WATER && kind !== TERRAIN.SHALLOW && kind !== TERRAIN.BRIDGE && kind !== TERRAIN.FOREST;
+  };
+  const yardOk = (x: number, y: number): boolean => {
+    const r: Rect = { x: x - 40, y: y - 40, w: 80, h: 80 };
+    if (!ctx.inBounds(r, 200) || !terrainOk(x, y, false) || !ctx.blocks.free(r, 8)) return false;
+    return !ctx.buildings.some((b) => inRect(grow(b.floor, 64), x, y));
+  };
+  ctx.buildings.forEach((b, bi) => {
+    if (!b.zone) return;
+    const z = ctx.zone(b.zone);
+    const size = POI_GARRISON.BUILDING_GROUP[z.tier];
+    if (size[1] <= 0) return;
+    const add = (x: number, y: number) => {
+      posts.push({ id: posts.length, zone: z.id, tier: z.tier, kind: "bld", x, y, patrol: [], size: [size[0], size[1]], chance: 0, building: bi });
+    };
+    const ok = (x: number, y: number) => inRect(z.rect, x, y) && clear(x, y) && apart(x, y, sep);
+    for (const d of shuffle(rng, [...b.doors])) {
+      const nx = d.x === b.floor.x ? -1 : d.x + d.w === b.floor.x + b.floor.w ? 1 : 0;
+      const ny = d.y === b.floor.y ? -1 : d.y + d.h === b.floor.y + b.floor.h ? 1 : 0;
+      if (nx === 0 && ny === 0) continue;
+      for (const off of BLD_DOOR_OFFSETS) {
+        const x = Math.round(d.x + d.w / 2 + nx * off * k), y = Math.round(d.y + d.h / 2 + ny * off * k);
+        if (!yardOk(x, y) || !ok(x, y)) continue;
+        add(x, y);
+        return;
+      }
+    }
+    // No free yard: hold the inside, a free 80 px square in one of its rooms (largest first).
+    const furniture = ctx.furniture[bi] ?? [];
+    const indoorOk = (room: Rect, x: number, y: number): boolean => {
+      const r: Rect = { x: x - 40, y: y - 40, w: 80, h: 80 };
+      if (!inRect(grow(room, -48), x, y) || !terrainOk(x, y, true)) return false;
+      if (furniture.some((f) => overlaps(f, r, 16))) return false;
+      if (ctx.containers.some((q) => dist2(q.x, q.y, x, y) < 96 * 96)) return false;
+      return inRect(z.rect, x, y) && clear(x, y) && apart(x, y, sep / 2);
+    };
+    for (const room of [...b.rooms].sort((p, q) => q.w * q.h - p.w * p.h)) {
+      for (let t = 0; t < 24; t++) {
+        const fx = t === 0 ? 0.5 : 0.2 + rng() * 0.6, fy = t === 0 ? 0.5 : 0.2 + rng() * 0.6;
+        const x = Math.round(room.x + room.w * fx), y = Math.round(room.y + room.h * fy);
+        if (!indoorOk(room, x, y)) continue;
+        add(x, y);
+        return;
+      }
+    }
+  });
 }
 
 /**
@@ -497,11 +573,7 @@ export function placeNpcPosts(ctx: GenCtx): void {
   let poiIdx = 0;
   for (const z of ctx.zones) {
     const camp = zoneCamp(z);
-    // POI garrison (npc.ts POI_GARRISON): at least MIN_POSTS[tier] posts; the ones beyond the camp's
-    // squads are garrison-only (chance 0: they spawn only when rollNpcSpawns tops the zone up).
-    const want = Math.max(camp.squads, POI_GARRISON.MIN_POSTS[z.tier]);
-    if (want <= 0) continue;
-    const campAt = (n: number) => (n < camp.squads ? camp : { size: camp.size, chance: 0 });
+    if (camp.squads <= 0) continue;
     const inZone = (x: number, y: number) => inRect(grow(z.rect, -96), x, y);
     // Gates: where a road crosses the zone border, 256 px inside, beside the road (or on it).
     const gates: Array<[number, number]> = [];
@@ -527,6 +599,7 @@ export function placeNpcPosts(ctx: GenCtx): void {
         yards.push([Math.round(d.x + d.w / 2 + ox), Math.round(d.y + d.h / 2 + oy)]);
       }
     }
+    const want = camp.squads;
     const maxGates = Math.ceil(want / 2);
     let n = 0, nGates = 0;
     // Gate triples stay together (beside / other side / on the road) so one gate yields one post.
@@ -536,7 +609,7 @@ export function placeNpcPosts(ctx: GenCtx): void {
       for (let j = 0; j < 3; j++) {
         const [x, y] = gates[gi * 3 + j]!;
         if (!inZone(x, y) || !ok(x, y)) continue;
-        post(z, "gate", x, y, campAt(n));
+        post(z, "gate", x, y, camp);
         n++;
         nGates++;
         break;
@@ -545,14 +618,14 @@ export function placeNpcPosts(ctx: GenCtx): void {
     for (const [x, y] of shuffle(rng, yards)) {
       if (n >= want) break;
       if (!inZone(x, y) || !ok(x, y)) continue;
-      post(z, "poi", x, y, campAt(n));
+      post(z, "poi", x, y, camp);
       n++;
     }
     for (let t = 0; t < 600 && n < want; t++) {
       const x = Math.round(z.rect.x + 96 + rng() * (z.rect.w - 192));
       const y = Math.round(z.rect.y + 96 + rng() * (z.rect.h - 192));
       if (!ok(x, y)) continue;
-      post(z, "poi", x, y, campAt(n));
+      post(z, "poi", x, y, camp);
       n++;
     }
   }
@@ -724,7 +797,9 @@ export function validateMap(map: MapData): ValidationReport {
   if (map.npcPosts) {
     const c = npcClearances(map.width / WORLD.WIDTH);
     const fine = (p: { x: number; y: number }) => nudge(p) && npcPostClear(map, c, p.x, p.y);
-    const posts = map.npcPosts.filter(fine);
+    // Building posts: no boss clearance, POI_GARRISON.SPAWN_CLEAR_PX from spawns (placeBuildingPosts).
+    const bc = { ...c, spawn: Math.round((POI_GARRISON.SPAWN_CLEAR_PX * map.width) / WORLD.WIDTH) };
+    const posts = map.npcPosts.filter((p) => (p.kind === "bld" ? nudge(p) && npcPostClear(map, bc, p.x, p.y, false) : fine(p)));
     report.droppedNpcPosts = map.npcPosts.length - posts.length;
     posts.forEach((p, i) => {
       p.id = i;
@@ -733,9 +808,9 @@ export function validateMap(map: MapData): ValidationReport {
     map.npcPosts.splice(0, map.npcPosts.length, ...posts);
     const camps = posts.filter((p) => p.kind === "road").length;
     if (camps < NPC.ROAD_CAMPS_MIN) report.errors.push(`only ${camps} road camps (min ${NPC.ROAD_CAMPS_MIN})`);
-    // POI garrison: a zone with a garrison but no post would stand unguarded.
+    // POI garrison: a zone with a garrison but no post at all would stand unguarded.
     for (const z of map.zones) {
-      if (POI_GARRISON.BY_TIER[z.tier][0] > 0 && !posts.some((p) => p.zone === z.id)) report.errors.push(`zone ${z.id} has no npc post (POI garrison)`);
+      if (POI_GARRISON.POI_MIN[z.tier][0] > 0 && !posts.some((p) => p.zone === z.id)) report.errors.push(`zone ${z.id} has no npc post (POI garrison)`);
     }
   }
   return report;

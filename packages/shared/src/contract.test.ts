@@ -158,7 +158,7 @@ test("containers: rolls are deterministic per (seed, idx), valid, and some come 
   });
   // Tarkov-like: a real share searches empty, most hold something.
   assert.ok(empty > m.containers.length * 0.1 && empty < m.containers.length * 0.6, `empty ${empty}`);
-  assert.ok(items > m.containers.length * 0.5, `items ${items}`);
+  assert.ok(items > m.containers.length * 0.45, `items ${items}`); // LOOT_TRIM: was 0.5 before the × 0.9 drop cut
   // A different match seed reshuffles contents.
   const diff = m.containers.filter((s, i) =>
     JSON.stringify(rollContainerFungibles(42, i, s)) !== JSON.stringify(rollContainerFungibles(43, i, s))).length;

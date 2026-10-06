@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ALPHA_LOOT,
+  LOOT_TRIM,
   CONTAINER,
   generateMap,
   itemDef,
@@ -49,11 +50,12 @@ function fungibleDigest(roll: (seed: number, i: number, c: ContainerSpot) => Ret
   return { digest: (h >>> 0).toString(16).padStart(8, "0"), empty: empty / n };
 }
 
-test("ALPHA_LOOT off keeps the v4 container rolls exactly (golden digest from before the alpha layer); on, ≈ 30 % of containers stay empty", () => {
+test("ALPHA_LOOT off keeps the v4 container rolls (golden digest; LOOT_TRIM × 0.9 fill since 2026-10); on, ≈ 35 % of containers stay empty", () => {
   const v4 = fungibleDigest((s, i, c) => rollContainerFungibles(s, i, c));
-  assert.equal(v4.digest, "813938d9", "v4 fungibles unchanged");
-  assert.ok(Math.abs(v4.empty - 0.538) < 0.002, `v4 empty share ${v4.empty.toFixed(3)}`);
-  assert.equal(fungibleDigest((s, i, c) => rollContainerFungibles(s, i, c, { alpha: false })).digest, "813938d9");
+  // "813938d9" / empty 0.538 before LOOT_TRIM (the pure v4 rolls); the same draws with fill × 0.9.
+  assert.equal(v4.digest, "f2c1749f", "v4 fungibles unchanged");
+  assert.ok(Math.abs(v4.empty - (1 - LOOT_TRIM.DROP_MULT * (1 - 0.538))) < 0.01, `v4 empty share ${v4.empty.toFixed(3)}`);
+  assert.equal(fungibleDigest((s, i, c) => rollContainerFungibles(s, i, c, { alpha: false })).digest, v4.digest);
   // Alpha: a container is empty when it rolls no fungible and no alpha unique.
   let empty = 0;
   let n = 0;
@@ -63,7 +65,8 @@ test("ALPHA_LOOT off keeps the v4 container rolls exactly (golden digest from be
       if (rollContainerFungibles(seed * 7919, i, c, { alpha: true }).length === 0 && rollAlphaContainerUniques(seed * 7919, i, c).length === 0) empty++;
     });
   }
-  assert.ok(empty / n > 0.25 && empty / n < 0.34, `alpha empty share ${(empty / n).toFixed(3)} (target ≈ 30 %)`);
+  // LOOT_TRIM: ≈ 30 % → ≈ 35 % (fill, weapon and gear chances × 0.9).
+  assert.ok(empty / n > 0.29 && empty / n < 0.39, `alpha empty share ${(empty / n).toFixed(3)} (target ≈ 35 %)`);
   assert.equal(ALPHA_LOOT.EMPTY_CHANCE, 0.08);
   for (let t = 3; t <= 4; t++) assert.ok(ALPHA_LOOT.FILL_CHANCE[t]! >= CONTAINER.FILL_CHANCE[t]!, "T3/T4 fill never drops");
 });
@@ -88,8 +91,9 @@ test("alpha container uniques: weapon chance and rarity mix per tier, weapon box
         }
       }
     }
-    assert.ok(Math.abs(weapons / N - ALPHA_LOOT.WEAPON_CHANCE[tier]!) < 0.01, `T${tier} weapons ${(weapons / N).toFixed(3)}`);
-    assert.ok(Math.abs(gear / N - ALPHA_LOOT.GEAR_CHANCE[tier]!) < 0.01, `T${tier} gear ${(gear / N).toFixed(3)}`);
+    // LOOT_TRIM: weapon and gear chances × DROP_MULT.
+    assert.ok(Math.abs(weapons / N - ALPHA_LOOT.WEAPON_CHANCE[tier]! * LOOT_TRIM.DROP_MULT) < 0.01, `T${tier} weapons ${(weapons / N).toFixed(3)}`);
+    assert.ok(Math.abs(gear / N - ALPHA_LOOT.GEAR_CHANCE[tier]! * LOOT_TRIM.DROP_MULT) < 0.01, `T${tier} gear ${(gear / N).toFixed(3)}`);
     const mix = ALPHA_LOOT.WEAPON_RARITY[tier]!;
     const tw = mix.reduce((s, r) => s + r.weight, 0);
     if (weapons > 0) for (const r of mix) assert.ok(Math.abs(rar[r.rarity]! / weapons - r.weight / tw) < 0.03, `T${tier} rarity ${r.rarity}`);
@@ -102,10 +106,15 @@ test("alpha container uniques: weapon chance and rarity mix per tier, weapon box
       assert.equal(u.rarity, 0);
     }
   }
+  // Weapon boxes at T2+: one weapon in DROP_MULT of them (LOOT_TRIM; was always), never two.
   for (const tier of [2, 3, 4] as LootTier[]) {
-    for (let i = 0; i < 500; i++) {
-      assert.equal(rollAlphaContainerUniques(5, i, { kind: "weapon_box", tier }).filter((u) => isWeapon(u.def)).length, 1, `T${tier} weapon box`);
+    let armed = 0;
+    for (let i = 0; i < 4000; i++) {
+      const w = rollAlphaContainerUniques(5, i, { kind: "weapon_box", tier }).filter((u) => isWeapon(u.def)).length;
+      assert.ok(w <= 1, `T${tier} weapon box`);
+      armed += w;
     }
+    assert.ok(Math.abs(armed / 4000 - LOOT_TRIM.DROP_MULT) < 0.02, `T${tier} weapon boxes armed ${(armed / 4000).toFixed(3)}`);
   }
   assert.deepEqual(rollAlphaContainerUniques(123, 45, { kind: "safe", tier: 4 }), rollAlphaContainerUniques(123, 45, { kind: "safe", tier: 4 }));
 });

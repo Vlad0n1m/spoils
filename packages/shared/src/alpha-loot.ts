@@ -35,6 +35,23 @@ interface WeaponW {
 const R = (rarity: Rarity, weight: number): RarityW => ({ rarity, weight });
 const W = (weapon: WeaponId, weight: number): WeaponW => ({ weapon, weight });
 
+/**
+ * Loot trim (owner, 2026-10, after looting the T4 Radar to an epic backpack and an epic rifle from
+ * almost every case):
+ * - DROP_MULT: every static container gives 10 % less: the fungible fill chance (v4 and alpha,
+ *   economy.ts rollContainerFungibles), the alpha weapon and gear chances, and the weapon-box
+ *   guarantee (now DROP_MULT instead of always) are all × DROP_MULT. Expected items per container
+ *   (fungible stacks and uniques) are exactly × 0.9 at every tier; the draw order is unchanged.
+ * - T4 on top: WEAPON_RARITY[4] epic 70 / legendary 30 → rare 70 / epic 25 / legendary 5 and
+ *   GEAR_CHANCE[4] 0.2 → 0.1 (gear stays level 3: an epic backpack / armor is still a T4 find, just
+ *   rarer). Epic+ per full Radar visit (55 containers, 30 weapon boxes; loot model, alpha-loot.test.ts):
+ *   ≈ 56 → ≈ 17 (weapons 12.2 + gear 5.0). Fewer epic items per container, not fewer containers, so the map and its hash stay.
+ * Prices and fees do not change.
+ */
+export const LOOT_TRIM = {
+  DROP_MULT: 0.9,
+} as const;
+
 export const ALPHA_LOOT = {
   /** Default of the game server's ALPHA_LOOT env flag. */
   ENABLED: true,
@@ -48,7 +65,7 @@ export const ALPHA_LOOT = {
     [R(0, 100)],
     [R(0, 70), R(1, 30)],
     [R(1, 60), R(2, 40)],
-    [R(2, 70), R(3, 30)],
+    [R(1, 70), R(2, 25), R(3, 5)], // LOOT_TRIM (2026-10): was epic 70 / legendary 30
   ] as ReadonlyArray<readonly RarityW[]>,
   /** A weapon_box of at least this tier always holds one weapon of its tier's mix. */
   WEAPON_BOX_MIN_TIER: 2,
@@ -61,7 +78,7 @@ export const ALPHA_LOOT = {
     W("rifle", 24), W("smg", 18), W("shotgun", 18), W("pistol", 8), W("revolver", 10), W("sniper", 10), W("crossbow", 6), W("lmg", 6),
   ] as readonly WeaponW[],
   /** Armor or backpack per opened container, by tier; level by tier (0 = none); armor share of the draw. */
-  GEAR_CHANCE: [0, 0, 0.08, 0.15, 0.2] as readonly number[],
+  GEAR_CHANCE: [0, 0, 0.08, 0.15, 0.1] as readonly number[], // LOOT_TRIM (2026-10): T4 0.2 → 0.1
   GEAR_LEVEL: [0, 0, 1, 2, 3] as readonly (0 | 1 | 2 | 3)[],
   GEAR_ARMOR_SHARE: 0.6,
   /** Supply crate: one weapon of this rarity mix (rare+) and one armor of this level mix. */
@@ -116,10 +133,12 @@ export function rollAlphaContainerUniques(lootSeed: number, idx: number, spot: {
   const rng = alphaRng(lootSeed, idx);
   const out: AlphaUnique[] = [];
   const box = spot.kind === "weapon_box" && tier >= ALPHA_LOOT.WEAPON_BOX_MIN_TIER;
-  const weaponHit = rng() < ALPHA_LOOT.WEAPON_CHANCE[tier]! || box;
+  // LOOT_TRIM: weapon / gear chances and the weapon-box guarantee × DROP_MULT (same draws).
+  const rWeapon = rng();
+  const weaponHit = rWeapon < (box ? 1 : ALPHA_LOOT.WEAPON_CHANCE[tier]!) * LOOT_TRIM.DROP_MULT;
   const weapon = rollAlphaWeapon(rng, tier, ALPHA_LOOT.WEAPON_RARITY[tier]!);
   if (weaponHit && ALPHA_LOOT.WEAPON_RARITY[tier]!.length > 0) out.push(weapon);
-  const gearHit = rng() < ALPHA_LOOT.GEAR_CHANCE[tier]!;
+  const gearHit = rng() < ALPHA_LOOT.GEAR_CHANCE[tier]! * LOOT_TRIM.DROP_MULT;
   const level = ALPHA_LOOT.GEAR_LEVEL[tier]!;
   const gear = rollGear(rng, (level || 1) as 1 | 2 | 3);
   if (gearHit && level > 0) out.push(gear);
@@ -153,7 +172,7 @@ export function expectedAlphaWeapons(tiers: readonly number[], weaponBoxShare: r
     const t = clampTier(t0);
     const p = ALPHA_LOOT.WEAPON_CHANCE[t]!;
     const box = t >= ALPHA_LOOT.WEAPON_BOX_MIN_TIER ? (weaponBoxShare[t] ?? 0) : 0;
-    e += box + (1 - box) * p;
+    e += (box + (1 - box) * p) * LOOT_TRIM.DROP_MULT;
   }
   return e;
 }

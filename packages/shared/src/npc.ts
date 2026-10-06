@@ -24,13 +24,15 @@ import { mulberry32, pickWeighted, type Rng } from "./rng.js";
 export const NPC = {
   /**
    * All NPCs of a raid, boss groups included. Over the cap, rollNpcSpawns drops whole squads.
-   * POI garrison (2026-10): 60 → 64. E NPCs ≈ 37 → ≈ 51 (world map, event boss) / ≈ 54 (legacy, all
-   * bosses at their chance); the highest Steppe garrison (49) + all three boss groups (10) fits, so the
-   * cap only trims road camps and extra squads (≈ 1.4 % of legacy raids), and keeps headroom for the
-   * Commander's call and squad respawns. SCALING.md bench budget: 24 humans + 60 NPC, step 0.38 ms;
-   * dormant NPCs cost nothing, so +4 at the cap is ≈ +7 % NPC brain time in the worst case.
+   * POI garrison v1 (2026-10): 60 → 64. Garrison v2 (a group at every POI building + a POI minimum,
+   * T4 ≥ 20): 64 → 200. E NPCs ≈ 175 on a world map (event boss), ≈ 178 legacy (all bosses at their
+   * chance), max seen 201; the highest Steppe garrison (174) + all three boss groups (10) fits, so the
+   * cap never cuts a garrison, only road camps / extra squads in the rare worst roll, and leaves room
+   * for the Commander's call and respawns. Measured (perf.bench 24 humans, 3 min, docs/SCALING.md):
+   * step avg 0.29 → 0.66 ms (scripted) and 0.64 → 1.40 ms (tour, every NPC awake), p99 ≤ 2.8 ms, max
+   * 5.8 ms of the 50 ms tick.
    */
-  MAX_PER_RAID: 64,
+  MAX_PER_RAID: 200,
   /** Which marauder squads go first when over the cap: road camps, then POI posts by tier. */
   CAP_DROP_ORDER: ["road", 1, 2, 3, 4] as const,
   /** rollNpcSpawns: mulberry32(matchSeed ^ SALT), exactly 2 draws per post. */
@@ -318,25 +320,42 @@ export const NPC_CAMPS: Readonly<Record<string, NpcCampDef>> = {
  * POI garrison (2026-10, Vlad's playtest: a pistol-only run looted the T4 Radar to a full epic
  * backpack and extracted without meeting anyone). The per-post chance roll alone left a zone
  * unguarded in 5–56 % of maps (Radar T4 24 %, Relay T3 35 %, T1 places ≈ 55 %), and in world mode
- * the boss groups of the non-event bosses do not spawn at all. Every POI zone now holds at least
- * BY_TIER[tier] marauders (uniform in [min, max], one draw per zone per match) on every map, boss
- * map or not; the chance roll still adds squads on top. rollNpcSpawns tops a short zone up: first
- * its posts that did not roll (1 member each), then +1 member round-robin up to SQUAD_MAX per post.
- * MIN_POSTS: placeNpcPosts places at least this many posts per zone (the extra ones are
- * garrison-only, chance 0), so a T3/T4 garrison stands at two points of the POI, not in one clump.
- * Individual NPC strength is unchanged: the class (MARAUDER low/mid/high/top) already follows the tier.
+ * the boss groups of the non-event bosses do not spawn at all.
+ * Garrison v2 (owner, same day: "every building of the Radar must be held, ≥ 20 marauders there"):
+ * - BUILDING_GROUP: every building of a POI has its own "bld" post (placeBuildingPosts: at an
+ *   exterior door, or inside when no yard is free) holding a group of this size (uniform, one draw
+ *   per post per match);
+ * - POI_MIN: then each POI zone holds at least this many marauders (uniform, one draw per zone per
+ *   match), counting the chance-rolled squads too; a short zone is topped up +1 round-robin over its
+ *   building posts, then its other posts, up to SQUAD_MAX per post (a post that did not roll starts at 0).
+ * The chance roll of the old posts still adds squads on top. The cap (NPC.MAX_PER_RAID) never cuts a
+ * garrison on the Steppe (npc.test.ts). Individual NPC strength is unchanged: the class (MARAUDER
+ * low/mid/high/top) already follows the tier.
  */
 export const POI_GARRISON = {
-  BY_TIER: { 0: [0, 1], 1: [1, 2], 2: [2, 3], 3: [3, 4], 4: [4, 6] } as Readonly<Record<LootTier, readonly [number, number]>>,
-  MIN_POSTS: { 0: 1, 1: 1, 2: 1, 3: 2, 4: 2 } as Readonly<Record<LootTier, number>>,
+  BUILDING_GROUP: { 0: [0, 1], 1: [1, 1], 2: [1, 1], 3: [1, 2], 4: [2, 3] } as Readonly<Record<LootTier, readonly [number, number]>>,
+  POI_MIN: { 0: [0, 2], 1: [2, 4], 2: [5, 8], 3: [10, 14], 4: [20, 24] } as Readonly<Record<LootTier, readonly [number, number]>>,
   SQUAD_MAX: 4,
-  /** Garrison size stream: mulberry32(matchSeed ^ SALT), one draw per zone (independent of NPC.SALT). */
+  /** Building posts keep this far from every other post (block 1024 scale). */
+  POST_SEP_PX: 320,
+  /** Building posts keep this far from player spawns (other posts: NPC.SPAWN_CLEAR_PX 2500), beyond the T4 chase radius 1200. */
+  SPAWN_CLEAR_PX: 1500,
+  /** Garrison stream: mulberry32(matchSeed ^ SALT): one draw per building post, then one per zone (independent of NPC.SALT). */
   SALT: 0x6a77_15e0,
 } as const;
 
-/** Garrison size range of a POI zone of `tier`. */
+function clampTier(tier: number): LootTier {
+  return Math.max(0, Math.min(4, Math.floor(tier))) as LootTier;
+}
+
+/** POI-level minimum range of a zone of `tier` (POI_GARRISON.POI_MIN). */
 export function garrisonRange(tier: number): readonly [number, number] {
-  return POI_GARRISON.BY_TIER[Math.max(0, Math.min(4, Math.floor(tier))) as LootTier];
+  return POI_GARRISON.POI_MIN[clampTier(tier)];
+}
+
+/** Group size range of one building post of `tier` (POI_GARRISON.BUILDING_GROUP). */
+export function buildingGroupRange(tier: number): readonly [number, number] {
+  return POI_GARRISON.BUILDING_GROUP[clampTier(tier)];
 }
 
 /** One weighted entry of an NPC loot table (qty per draw). */
@@ -405,14 +424,17 @@ export const NPC_LOOT: Readonly<Record<NpcClass, { cons: NpcLootDraw; junk: NpcL
 };
 
 /**
- * Pool uniques on T3/T4 marauders (allocation carriers): weight WEIGHT_MULT × (tier+1)² → T3 80, T4 125.
+ * Pool uniques on T3/T4 marauders (allocation carriers): weight WEIGHT_MULT × (tier+1)² → T3 10, T4 15.6 (were 80 / 125 at WEIGHT_MULT 5).
  * v5 tuning: 2 → 3; v5 review: 3 → 5 after the radar squads went 2 → 1 (≈ 2.5 fewer T4 carriers per
  * raid): measured at R 24 over 200 Steppe seeds, carriers 0.38 → 0.61 items per raid (target 0.6–0.7),
  * containers 3.19 → 2.96.
  */
 export const NPC_CARRIER = {
   MIN_TIER: 3,
-  WEIGHT_MULT: 5,
+  // POI garrison v2 (2026-10): ≈ 8.2× the carrier weight Σ(tier+1)² per raid (126 → 1034, all the new
+  // T3/T4 building guards), so 5 → 0.625 (= 5 × 126 / 1034) keeps the carriers' weight share of the
+  // non-boss release at ≈ 15 % (was 14.7 %; the loot-yield harness measured that as ≈ 17 % live).
+  WEIGHT_MULT: 0.625,
   MAX_PER_NPC: 1,
 } as const;
 
@@ -483,36 +505,50 @@ export function rollPostChances(matchSeed: number, posts: readonly NpcPost[]): N
   return out;
 }
 
-/** Garrison target per POI zone this match: zone id → marauders (POI_GARRISON, one draw per zone in order of its first post). */
-export function rollGarrisons(matchSeed: number, posts: readonly NpcPost[]): Map<string, number> {
+/** This match's garrison: group size per building post, POI minimum per zone (POI_GARRISON). */
+export interface GarrisonRoll {
+  /** Building post id → its group size (0 possible at T0). */
+  buildings: Map<number, number>;
+  /** Zone id → POI minimum of marauders. */
+  zones: Map<string, number>;
+}
+
+/**
+ * Garrison draws, mulberry32(matchSeed ^ POI_GARRISON.SALT): one per building post in post order
+ * (BUILDING_GROUP of its tier), then one per POI zone in order of its first post (POI_MIN of the
+ * highest tier among its posts).
+ */
+export function rollGarrisons(matchSeed: number, posts: readonly NpcPost[]): GarrisonRoll {
+  const rng = mulberry32((matchSeed ^ POI_GARRISON.SALT) >>> 0);
+  const uniform = ([lo, hi]: readonly [number, number]) => Math.min(hi, lo + Math.floor(rng() * (hi - lo + 1)));
+  const buildings = new Map<number, number>();
+  for (const p of posts) if (p.kind === "bld") buildings.set(p.id, uniform(buildingGroupRange(p.tier)));
   const tierOf = new Map<string, number>();
   for (const p of posts) if (p.kind !== "road" && p.zone !== null) tierOf.set(p.zone, Math.max(tierOf.get(p.zone) ?? 0, p.tier));
-  const rng = mulberry32((matchSeed ^ POI_GARRISON.SALT) >>> 0);
-  const out = new Map<string, number>();
-  for (const [zone, tier] of tierOf) {
-    const [lo, hi] = garrisonRange(tier);
-    out.set(zone, Math.min(hi, lo + Math.floor(rng() * (hi - lo + 1))));
-  }
-  return out;
+  const zones = new Map<string, number>();
+  for (const [zone, tier] of tierOf) zones.set(zone, uniform(garrisonRange(tier)));
+  return { buildings, zones };
 }
 
 /**
  * Which marauder squads spawn this match:
- * 1. the chance roll (rollPostChances);
- * 2. the POI garrison (POI_GARRISON, rollGarrisons): a zone with fewer marauders than its target
- *    gets its posts that did not roll (1 member each, post order), then +1 member round-robin over
- *    its squads up to POI_GARRISON.SQUAD_MAX;
- * 3. NPC.MAX_PER_RAID together with `bossNpcs` (bossGroupNpcCount(rollBossSpawns(...))): whole
+ * 1. the chance roll of the old posts (rollPostChances; building posts have chance 0);
+ * 2. the building groups (rollGarrisons().buildings);
+ * 3. the POI minimum: a zone with fewer marauders than rollGarrisons().zones gets +1 member
+ *    round-robin over its building posts, then over its other posts, up to POI_GARRISON.SQUAD_MAX;
+ * 4. NPC.MAX_PER_RAID together with `bossNpcs` (bossGroupNpcCount(rollBossSpawns(...))): whole
  *    squads are dropped in NPC.CAP_DROP_ORDER (road camps, then T1, T2, …), the last post of a group
- *    first, but never one that takes its zone below the garrison; only if that is not enough
- *    (never on the Steppe, see npc.test.ts) the old order drops garrison squads too.
+ *    first, never a building squad and never one that takes its zone below its minimum; only if that
+ *    is not enough (never on the Steppe, see npc.test.ts) the old order drops garrison squads too.
  * Squads in post order. Deterministic in (matchSeed, posts, bossNpcs).
  */
 export function rollNpcSpawns(matchSeed: number, posts: readonly NpcPost[], bossNpcs = 0): NpcSquadSpawn[] {
   const byId = new Map(posts.map((p) => [p.id, p]));
   const spawned = new Map<number, number>();
   for (const s of rollPostChances(matchSeed, posts)) spawned.set(s.postId, s.members);
-  const garrison = rollGarrisons(matchSeed, posts);
+  const g0 = rollGarrisons(matchSeed, posts);
+  for (const [id, n] of g0.buildings) if (n > 0) spawned.set(id, n);
+  const garrison = g0.zones;
   const zoneTotal = new Map<string, number>();
   const addZone = (p: NpcPost, n: number) => { if (p.zone !== null && p.kind !== "road") zoneTotal.set(p.zone, (zoneTotal.get(p.zone) ?? 0) + n); };
   for (const [id, n] of spawned) addZone(byId.get(id)!, n);
@@ -520,17 +556,12 @@ export function rollNpcSpawns(matchSeed: number, posts: readonly NpcPost[], boss
     let need = want - (zoneTotal.get(zone) ?? 0);
     if (need <= 0) continue;
     const zp = posts.filter((p) => p.zone === zone && p.kind !== "road");
-    for (const p of zp) {
-      if (need <= 0) break;
-      if (spawned.has(p.id)) continue;
-      spawned.set(p.id, 1);
-      need--;
-    }
+    const order = [...zp.filter((p) => p.kind === "bld"), ...zp.filter((p) => p.kind !== "bld")];
     for (let grew = true; need > 0 && grew; ) {
       grew = false;
-      for (const p of zp) {
+      for (const p of order) {
         if (need <= 0) break;
-        const n = spawned.get(p.id)!;
+        const n = spawned.get(p.id) ?? 0;
         if (n >= POI_GARRISON.SQUAD_MAX) continue;
         spawned.set(p.id, n + 1);
         need--;
@@ -550,6 +581,7 @@ export function rollNpcSpawns(matchSeed: number, posts: readonly NpcPost[], boss
         if (s.group !== g) continue;
         const p = byId.get(s.postId)!;
         const zone = p.kind !== "road" ? p.zone : null;
+        if (keepGarrison && p.kind === "bld") continue;
         if (keepGarrison && zone !== null && (zoneTotal.get(zone) ?? 0) - s.members < (garrison.get(zone) ?? 0)) continue;
         if (zone !== null) zoneTotal.set(zone, (zoneTotal.get(zone) ?? 0) - s.members);
         total -= s.members;
@@ -652,7 +684,7 @@ export function npcCarrierEligible(tier: number): boolean {
   return tier >= NPC_CARRIER.MIN_TIER;
 }
 
-/** planAllocation weight of one carrier: WEIGHT_MULT × (tier+1)² (T3 80, T4 125; containers T3 16/64, T4 25/100). */
+/** planAllocation weight of one carrier: WEIGHT_MULT × (tier+1)² (T3 10, T4 15.6; containers T3 16/64, T4 25/100). */
 export function npcCarrierWeight(tier: number): number {
   return NPC_CARRIER.WEIGHT_MULT * (tier + 1) * (tier + 1);
 }

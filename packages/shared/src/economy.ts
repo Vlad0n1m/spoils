@@ -15,7 +15,7 @@
  * the top pool items and the high-value junk.
  */
 
-import { ALPHA_LOOT } from "./alpha-loot.js";
+import { ALPHA_LOOT, LOOT_TRIM } from "./alpha-loot.js";
 import { DOG_TAG, ammoDefOf, dogTagCr, itemDef } from "./item-defs.js";
 import { ARMOR, WEAPONS, type Rarity, type WeaponId } from "./items.js";
 import { BOSS_CHANCE } from "./map/steppe.js";
@@ -267,7 +267,8 @@ export function rollContainerFungibles(
   const tier = Math.max(0, Math.min(4, spot.tier));
   const fill = opts.alpha ? ALPHA_LOOT.FILL_CHANCE : CONTAINER.FILL_CHANCE;
   const emptyChance = opts.alpha ? ALPHA_LOOT.EMPTY_CHANCE : CONTAINER.EMPTY_CHANCE;
-  if (rng() >= fill[tier]!) return [];
+  // LOOT_TRIM (2026-10): every container × DROP_MULT (fill chance), v4 and alpha alike.
+  if (rng() >= fill[tier]! * LOOT_TRIM.DROP_MULT) return [];
   const table = containerLootFor({ kind: spot.kind, tier });
   if (table.length === 0) return [];
   const out: RolledFungible[] = [];

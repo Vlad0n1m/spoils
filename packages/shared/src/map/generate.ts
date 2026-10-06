@@ -30,6 +30,7 @@ import {
   placeBuildingSpots,
   placeExtracts,
   placeNpcPosts,
+  placeBuildingPosts,
   placeSpawns,
   placeWildSpots,
   validateMap,
@@ -126,6 +127,7 @@ export function generateMapWithReport(
   placeAmbient(ctx);
   // Last, from its own rng stream and reserving nothing: posts never move geometry (not hashed).
   placeNpcPosts(ctx);
+  placeBuildingPosts(ctx);
 
   const t = ctx.terrain;
   const map: MapData = {

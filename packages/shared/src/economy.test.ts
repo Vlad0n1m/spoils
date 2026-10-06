@@ -30,6 +30,7 @@ import {
   xpForExit,
   xpToNext,
 } from "./economy.js";
+import { LOOT_TRIM } from "./alpha-loot.js";
 import { DOG_TAG, JUNK_IDS, dogTagCr, itemDef, junkCredits } from "./item-defs.js";
 import { ARMOR } from "./items.js";
 
@@ -250,7 +251,8 @@ test("container fungibles: wilds mostly empty, T3/T4 mostly full and hold more l
     }
   }
   // Empty ≈ 1 − FILL × (1 − EMPTY^ROLLS): T0 85 % (v5 tuning: FILL 0.25 → 0.18), T1 62 %, T2 58 %, T3 17 %, T4 12 %.
-  const want = [0.85, 0.62, 0.58, 0.17, 0.12];
+  // LOOT_TRIM (2026-10): fill × 0.9, so empty = 1 − 0.9 × (1 − pre-cut empty).
+  const want = [0.85, 0.62, 0.58, 0.17, 0.12].map((e) => 1 - LOOT_TRIM.DROP_MULT * (1 - e));
   want.forEach((w, t) => assert.ok(Math.abs(empty[t]! / n - w) < 0.03, `T${t} empty ${(empty[t]! / n).toFixed(3)} vs ${w}`));
   assert.ok(lines[3]! / n > lines[0]! / n + 0.8, "T3 has clearly more lines than T0");
 });
