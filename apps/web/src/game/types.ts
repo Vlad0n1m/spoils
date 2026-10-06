@@ -238,4 +238,6 @@ export interface GameRendererApi {
   startReplay?(): boolean;
   /** Skip the death replay. */
   stopReplay?(): void;
+  /** Touch HUD: switch weapons (the same action as the swap button). */
+  swapWeapon?(): void;
 }
