@@ -38,7 +38,9 @@ import {
   NPC_GEAR_FLAGS,
   NPC_KILL,
   NPC_LOOT,
+  POI_GARRISON,
   bossGroupNpcCount,
+  garrisonRange,
   expectedMarauders,
   npcCarrierEligible,
   npcCarrierKey,
@@ -51,7 +53,9 @@ import {
   raidNpcCarriers,
   rollMarauderKit,
   rollNpcLoot,
+  rollGarrisons,
   rollNpcSpawns,
+  rollPostChances,
   type NpcClass,
   type NpcLootDraw,
 } from "./npc.js";
@@ -172,9 +176,9 @@ test("rollMarauderKit: deterministic, no sniper in any class (alpha softening), 
   assert.equal(snipers, 0, "alpha softening: the top class fields no snipers");
 });
 
-test("rollNpcSpawns: deterministic, exactly 2 draws per post, frequency ≈ chance, E ≈ 37 NPCs with bosses", () => {
+test("rollNpcSpawns: deterministic, chance roll = exactly 2 draws per post, frequency ≈ chance, garrison on top, E ≈ 54 NPCs with bosses", () => {
   assert.deepEqual(rollNpcSpawns(1234, posts, 7), rollNpcSpawns(1234, posts, 7));
-  // Reference implementation of the draw contract.
+  // Reference implementation of the chance-roll draw contract.
   for (const seed of [1, 99, 123456]) {
     const rng = mulberry32((seed ^ NPC.SALT) >>> 0);
     const ref: Array<{ postId: number; members: number }> = [];
@@ -182,61 +186,135 @@ test("rollNpcSpawns: deterministic, exactly 2 draws per post, frequency ≈ chan
       const a = rng(), b = rng();
       if (a < p.chance) ref.push({ postId: p.id, members: p.size[0] + Math.floor(b * (p.size[1] - p.size[0] + 1)) });
     }
-    assert.deepEqual(rollNpcSpawns(seed, posts, 0), ref);
+    assert.deepEqual(rollPostChances(seed, posts), ref);
+    // The garrison only adds: every rolled squad is still there with at least its rolled size.
+    const full = new Map(rollNpcSpawns(seed, posts, 0).map((x) => [x.postId, x.members]));
+    for (const r of ref) assert.ok((full.get(r.postId) ?? 0) >= r.members, `seed ${seed} post ${r.postId}`);
   }
   // A post that never spawns still consumes its draws: zeroing post 0 does not shift the others.
   const zeroed = posts.map((p, i) => (i === 0 ? { ...p, chance: 0 } : p));
   for (let s = 0; s < 50; s++) {
-    assert.deepEqual(rollNpcSpawns(s, zeroed).filter((x) => x.postId !== 0), rollNpcSpawns(s, posts).filter((x) => x.postId !== 0));
+    assert.deepEqual(rollPostChances(s, zeroed).filter((x) => x.postId !== 0), rollPostChances(s, posts).filter((x) => x.postId !== 0));
   }
   const N = 20_000;
   const hits = new Map<number, number>();
-  let total = 0, maxSeen = 0, capped = 0;
+  let total = 0, capped = 0;
   for (let s = 0; s < N; s++) {
     const seed = (s * 2654435761) >>> 0;
     const bosses = rollBossSpawns(seed, m.bosses);
     const bossNpcs = bossGroupNpcCount(bosses);
     const sp = rollNpcSpawns(seed, posts, bossNpcs);
-    // Frequencies from the uncapped roll: on the map v2 the boss groups + marauders pass
-    // NPC.MAX_PER_RAID in ≈ 1.6 % of raids, and the cap then drops road camps first (next test).
-    for (const x of rollNpcSpawns(seed, posts, 0)) hits.set(x.postId, (hits.get(x.postId) ?? 0) + 1);
+    for (const x of rollPostChances(seed, posts)) hits.set(x.postId, (hits.get(x.postId) ?? 0) + 1);
     for (const x of sp) {
       const p = posts[x.postId]!;
-      assert.ok(x.members >= p.size[0] && x.members <= p.size[1]);
+      // A garrison top-up starts a post at 1 and grows squads up to SQUAD_MAX.
+      assert.ok(x.members >= 1 && x.members <= Math.max(p.size[1], POI_GARRISON.SQUAD_MAX));
     }
     const n = bossNpcs + sp.reduce((a, x) => a + x.members, 0);
     assert.ok(n <= NPC.MAX_PER_RAID);
     if (rollNpcSpawns(seed, posts, 0).length !== sp.length) capped++;
     total += n;
-    maxSeen = Math.max(maxSeen, n);
   }
   for (const p of posts) assert.ok(Math.abs((hits.get(p.id) ?? 0) / N - p.chance) < 0.015, `post ${p.id}`);
   // v5 iteration 2 (C4): NPC_CAMPS.radar.squads 2 → 1 (E marauders 33.4 → 30.9, E NPCs 40 → ≈ 38).
-  // Map v2 (MAP_GEN_VERSION 4): 36 % more area and five new places with squads by tier
-  // (steppe.ts ZONE_CAMPS): E marauders 30.9 → 40.4 (+31 % for +36 % area), E NPCs ≈ 47.3; the
-  // MAX_PER_RAID cap (60) trims a squad in ≈ 1.6 % of raids. Alpha softening: every chance × 0.75,
-  // E marauders 40.4 → 30.3, E NPCs ≈ 37.3.
-  assert.ok(Math.abs(total / N - 37.3) < 1.5, `E NPCs per raid ${(total / N).toFixed(2)}`);
+  // Map v2 (MAP_GEN_VERSION 4): E marauders 30.9 → 40.4, E NPCs ≈ 47.3. Alpha softening: every
+  // chance × 0.75, E marauders 40.4 → 30.3 (chance roll alone, expectedMarauders), E NPCs ≈ 37.3.
+  // POI garrison (2026-10): every POI zone at least POI_GARRISON.BY_TIER marauders, E NPCs (legacy
+  // roll, all three bosses at their chance) ≈ 54.0; MAX_PER_RAID 60 → 64 trims a squad in ≈ 1.4 %.
+  assert.ok(Math.abs(total / N - 54.0) < 1.5, `E NPCs per raid ${(total / N).toFixed(2)}`);
   assert.ok(near(expectedMarauders(posts), 30.3, 0.03), `E marauders ${expectedMarauders(posts).toFixed(2)}`);
   assert.ok(capped / N < 0.03, `capped raids ${(capped / N).toFixed(3)}`);
 });
 
-test("rollNpcSpawns cap: drops whole squads — road camps first, then T1, then T2 …", () => {
+test("POI garrison: every POI zone of the Steppe holds BY_TIER[tier] marauders on every map, boss map or not, even at the cap", () => {
+  assert.deepEqual(POI_GARRISON.BY_TIER, { 0: [0, 1], 1: [1, 2], 2: [2, 3], 3: [3, 4], 4: [4, 6] });
+  const zones = m.zones;
+  const tierOf = new Map(zones.map((z) => [z.id, z.tier]));
+  const N = 5000;
+  const seen = new Map<number, Set<number>>();
+  for (let s = 0; s < N; s++) {
+    const seed = (s * 2654435761 + 17) >>> 0;
+    const garrison = rollGarrisons(seed, posts);
+    assert.equal(garrison.size, zones.length, "one garrison per POI zone");
+    // Legacy (every boss at its chance), world map without an event boss, world map with the
+    // Commander event (largest boss group), and a worst case of all three boss groups.
+    for (const bossNpcs of [bossGroupNpcCount(rollBossSpawns(seed, m.bosses)), 0, 4, bossGroupNpcCount(m.bosses)]) {
+      const per = new Map<string, number>();
+      for (const x of rollNpcSpawns(seed, posts, bossNpcs)) {
+        const p = posts[x.postId]!;
+        if (p.zone) per.set(p.zone, (per.get(p.zone) ?? 0) + x.members);
+      }
+      for (const z of zones) {
+        const n = per.get(z.id) ?? 0;
+        assert.ok(n >= garrison.get(z.id)!, `seed ${seed} boss NPCs ${bossNpcs}: ${z.id} ${n} < garrison ${garrison.get(z.id)}`);
+        assert.ok(n >= garrisonRange(z.tier)[0], `${z.id} T${z.tier}: ${n} marauders`);
+        if (z.tier >= 1) assert.ok(n >= 1, `${z.id} T${z.tier} unguarded`);
+      }
+    }
+    for (const [zone, g] of garrison) {
+      const t = tierOf.get(zone)!;
+      const [lo, hi] = garrisonRange(t);
+      assert.ok(g >= lo && g <= hi);
+      if (!seen.has(t)) seen.set(t, new Set());
+      seen.get(t)!.add(g);
+    }
+  }
+  // Every value of each tier's range turns up (T1 1–2, T2 2–3, T3 3–4, T4 4–6).
+  for (const [t, vals] of seen) {
+    const [lo, hi] = garrisonRange(t);
+    assert.equal(vals.size, hi - lo + 1, `T${t} garrison sizes ${[...vals].sort().join(",")}`);
+  }
+  // T3 / T4 garrisons stand at two posts (POI_GARRISON.MIN_POSTS), never in one clump.
+  for (const z of zones) {
+    const n = posts.filter((p) => p.zone === z.id).length;
+    assert.ok(n >= POI_GARRISON.MIN_POSTS[z.tier], `${z.id} T${z.tier}: ${n} posts`);
+  }
+  // Highest garrison + all three boss groups fits under the cap, so the cap never cuts a garrison.
+  const maxGarrison = zones.reduce((n, z) => n + garrisonRange(z.tier)[1], 0);
+  assert.ok(maxGarrison + bossGroupNpcCount(m.bosses) <= NPC.MAX_PER_RAID, `max garrison ${maxGarrison}`);
+});
+
+test("POI garrison top-up: unrolled posts first (1 each), then +1 round-robin up to SQUAD_MAX; road camps never", () => {
+  const P = (id: number, zone: string | null, tier: NpcPost["tier"], chance: number): NpcPost => ({
+    id, zone, tier, kind: zone ? "poi" : "road", x: 0, y: 0, patrol: [], size: [2, 3], chance,
+  });
+  const list = [P(0, "radar", 4, 0), P(1, "radar", 4, 0), P(2, null, 0, 0), P(3, "fuel", 1, 0)];
+  for (let s = 0; s < 200; s++) {
+    const g = rollGarrisons(s, list);
+    assert.deepEqual([...g.keys()], ["radar", "fuel"]);
+    const sp = rollNpcSpawns(s, list, 0);
+    const a = sp.find((x) => x.postId === 0)!.members, b = sp.find((x) => x.postId === 1)!.members;
+    assert.equal(a + b, g.get("radar"));
+    assert.ok(a - b === 0 || a - b === 1, "round-robin, first post first");
+    assert.equal(sp.find((x) => x.postId === 3)!.members, g.get("fuel"));
+    assert.ok(!sp.some((x) => x.postId === 2), "no road camp garrison");
+  }
+  // One post only: a squad grows to SQUAD_MAX at most.
+  for (let s = 0; s < 200; s++) assert.ok(rollNpcSpawns(s, [P(0, "radar", 4, 0)])[0]!.members <= POI_GARRISON.SQUAD_MAX);
+  // A T0 garrison may be empty.
+  let empty = 0;
+  for (let s = 0; s < 400; s++) if (rollNpcSpawns(s, [P(0, "yard", 0, 0)]).length === 0) empty++;
+  assert.ok(empty > 100 && empty < 300, `T0 empty ${empty}/400`);
+});
+
+test("rollNpcSpawns cap: drops whole squads — road camps first, then T1, then T2 …; garrisons last", () => {
   const P = (id: number, kind: NpcPost["kind"], tier: NpcPost["tier"], size: number): NpcPost => ({
     id, zone: kind === "road" ? null : "z", tier, kind, x: 0, y: 0, patrol: [], size: [size, size], chance: 1,
   });
   const list = [P(0, "poi", 4, 3), P(1, "road", 0, 2), P(2, "poi", 1, 2), P(3, "poi", 2, 3), P(4, "road", 0, 2), P(5, "gate", 3, 3)];
-  // 15 marauders: room for all with 45 boss-group NPCs.
-  assert.equal(rollNpcSpawns(5, list, 45).length, 6);
+  // 15 marauders (zone "z" is above its garrison): room for all with cap − 15 boss-group NPCs.
+  const C = NPC.MAX_PER_RAID - 15;
+  assert.equal(rollNpcSpawns(5, list, C).length, 6);
   // Over by 2: the LAST road camp goes first.
-  assert.deepEqual(rollNpcSpawns(5, list, 47).map((s) => s.postId), [0, 1, 2, 3, 5]);
+  assert.deepEqual(rollNpcSpawns(5, list, C + 2).map((s) => s.postId), [0, 1, 2, 3, 5]);
   // Over by 4: both road camps.
-  assert.deepEqual(rollNpcSpawns(5, list, 49).map((s) => s.postId), [0, 2, 3, 5]);
+  assert.deepEqual(rollNpcSpawns(5, list, C + 4).map((s) => s.postId), [0, 2, 3, 5]);
   // Over by 5: road camps, then the T1 squad.
-  assert.deepEqual(rollNpcSpawns(5, list, 50).map((s) => s.postId), [0, 3, 5]);
+  assert.deepEqual(rollNpcSpawns(5, list, C + 5).map((s) => s.postId), [0, 3, 5]);
   // Over by 7: then T2.
-  assert.deepEqual(rollNpcSpawns(5, list, 52).map((s) => s.postId), [0, 5]);
-  assert.deepEqual(rollNpcSpawns(5, list, 60), []);
+  assert.deepEqual(rollNpcSpawns(5, list, C + 7).map((s) => s.postId), [0, 5]);
+  // Nothing fits: garrison squads go last, but they go (the cap is hard).
+  assert.deepEqual(rollNpcSpawns(5, list, NPC.MAX_PER_RAID), []);
   assert.deepEqual(rollNpcSpawns(5, [], 0), []);
 });
 
@@ -328,15 +406,17 @@ test("Steppe npc posts: counts per zone, sizes / chances from NPC_CAMPS (map v2 
     // The ten places of the 24-block layout keep their NPC_CAMPS rows; new places use ZONE_CAMPS.
     assert.equal(camp, NPC_CAMPS[z.id] ?? ZONE_CAMPS[z.id], `${z.id} camp row`);
     const zp = posts.filter((p) => p.zone === z.id);
-    assert.equal(zp.length, camp.squads, `${z.id} posts`);
-    for (const p of zp) {
+    // POI garrison: at least MIN_POSTS[tier] posts; the extra ones are garrison-only (chance 0).
+    const want = Math.max(camp.squads, POI_GARRISON.MIN_POSTS[z.tier]);
+    assert.equal(zp.length, want, `${z.id} posts`);
+    zp.forEach((p, i) => {
       assert.equal(p.tier, z.tier);
       assert.notEqual(p.kind, "road");
       assert.deepEqual(p.size, [...camp.size]);
-      assert.equal(p.chance, camp.chance);
-    }
+      assert.equal(p.chance, i < camp.squads ? camp.chance : 0);
+    });
     // At most half the posts of a zone sit on its gates.
-    assert.ok(zp.filter((p) => p.kind === "gate").length <= Math.ceil(camp.squads / 2));
+    assert.ok(zp.filter((p) => p.kind === "gate").length <= Math.ceil(want / 2));
   }
   const roads = posts.filter((p) => p.kind === "road");
   assert.equal(roads.length, NPC_CAMPS.road!.squads, "5 road camps on the Steppe");
@@ -361,7 +441,7 @@ test("Steppe npc posts: counts per zone, sizes / chances from NPC_CAMPS (map v2 
 });
 
 /** Golden digest of MapData.npcPosts (MAP_GEN_VERSION 4). Update only for an intended placement change. */
-const GOLDEN_POSTS = "cd390299"; // alpha softening: chances × 0.75 (map v2 before it: "8fcf3adf"; v5 iteration 2 on MAP_GEN_VERSION 2–3: "8b0d6862")
+const GOLDEN_POSTS = "60547530"; // POI garrison: +1 garrison-only post at Radar (T4) and Relay (T3), POI_GARRISON.MIN_POSTS (before: alpha softening, chances × 0.75 "cd390299"; map v2 "8fcf3adf"; v5 iteration 2 on MAP_GEN_VERSION 2–3: "8b0d6862")
 
 test("Steppe npc posts: clearances, terrain, reachability, patrol radius", () => {
   const g = getWalkGrid(m);

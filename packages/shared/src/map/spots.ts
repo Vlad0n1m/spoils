@@ -6,7 +6,7 @@
 
 import { WORLD } from "../constants.js";
 import type { Rect } from "../geometry.js";
-import { MARAUDER, NPC, NPC_CAMPS, npcClassOfTier } from "../npc.js";
+import { MARAUDER, NPC, NPC_CAMPS, POI_GARRISON, npcClassOfTier } from "../npc.js";
 import type { Rng } from "../rng.js";
 import type { GenCtx } from "./context.js";
 import { floodWalk, getCollisionIndex, getWalkGrid, nearestWalkCell, reachedNear, walkCellOf } from "./query.js";
@@ -497,7 +497,11 @@ export function placeNpcPosts(ctx: GenCtx): void {
   let poiIdx = 0;
   for (const z of ctx.zones) {
     const camp = zoneCamp(z);
-    if (camp.squads <= 0) continue;
+    // POI garrison (npc.ts POI_GARRISON): at least MIN_POSTS[tier] posts; the ones beyond the camp's
+    // squads are garrison-only (chance 0: they spawn only when rollNpcSpawns tops the zone up).
+    const want = Math.max(camp.squads, POI_GARRISON.MIN_POSTS[z.tier]);
+    if (want <= 0) continue;
+    const campAt = (n: number) => (n < camp.squads ? camp : { size: camp.size, chance: 0 });
     const inZone = (x: number, y: number) => inRect(grow(z.rect, -96), x, y);
     // Gates: where a road crosses the zone border, 256 px inside, beside the road (or on it).
     const gates: Array<[number, number]> = [];
@@ -523,7 +527,6 @@ export function placeNpcPosts(ctx: GenCtx): void {
         yards.push([Math.round(d.x + d.w / 2 + ox), Math.round(d.y + d.h / 2 + oy)]);
       }
     }
-    const want = camp.squads;
     const maxGates = Math.ceil(want / 2);
     let n = 0, nGates = 0;
     // Gate triples stay together (beside / other side / on the road) so one gate yields one post.
@@ -533,7 +536,7 @@ export function placeNpcPosts(ctx: GenCtx): void {
       for (let j = 0; j < 3; j++) {
         const [x, y] = gates[gi * 3 + j]!;
         if (!inZone(x, y) || !ok(x, y)) continue;
-        post(z, "gate", x, y, camp);
+        post(z, "gate", x, y, campAt(n));
         n++;
         nGates++;
         break;
@@ -542,14 +545,14 @@ export function placeNpcPosts(ctx: GenCtx): void {
     for (const [x, y] of shuffle(rng, yards)) {
       if (n >= want) break;
       if (!inZone(x, y) || !ok(x, y)) continue;
-      post(z, "poi", x, y, camp);
+      post(z, "poi", x, y, campAt(n));
       n++;
     }
     for (let t = 0; t < 600 && n < want; t++) {
       const x = Math.round(z.rect.x + 96 + rng() * (z.rect.w - 192));
       const y = Math.round(z.rect.y + 96 + rng() * (z.rect.h - 192));
       if (!ok(x, y)) continue;
-      post(z, "poi", x, y, camp);
+      post(z, "poi", x, y, campAt(n));
       n++;
     }
   }
@@ -730,6 +733,10 @@ export function validateMap(map: MapData): ValidationReport {
     map.npcPosts.splice(0, map.npcPosts.length, ...posts);
     const camps = posts.filter((p) => p.kind === "road").length;
     if (camps < NPC.ROAD_CAMPS_MIN) report.errors.push(`only ${camps} road camps (min ${NPC.ROAD_CAMPS_MIN})`);
+    // POI garrison: a zone with a garrison but no post would stand unguarded.
+    for (const z of map.zones) {
+      if (POI_GARRISON.BY_TIER[z.tier][0] > 0 && !posts.some((p) => p.zone === z.id)) report.errors.push(`zone ${z.id} has no npc post (POI garrison)`);
+    }
   }
   return report;
 }

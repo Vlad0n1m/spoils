@@ -3,8 +3,9 @@
  * player. A match holds real humans and NPCs only, and every NPC holds a place on the map:
  *
  * - boss + guards (loot economy v4, boss.ts): a squad of type "boss" at a BossSpot;
- * - marauders (NPC_ROLE.MARAUDER): squads of 1–3 at a MapData.npcPosts post (POI yard, zone gate,
- *   road camp in the wilds), rolled per match by the shared rollNpcSpawns.
+ * - marauders (NPC_ROLE.MARAUDER): squads of 1–4 at a MapData.npcPosts post (POI yard, zone gate,
+ *   road camp in the wilds), rolled per match by the shared rollNpcSpawns; every POI zone holds at
+ *   least its POI_GARRISON (by tier) on every map, boss map or not.
  *
  * NPCs never loot (containers, corpses, ground), never extract (extractMask 0), never roam outside
  * leash + chase, never heal (except the boss, v4), never fight another NPC (one

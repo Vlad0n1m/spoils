@@ -22,8 +22,15 @@ import type { BossKind, LootTier, MapData, NpcPost } from "./map/types.js";
 import { mulberry32, pickWeighted, type Rng } from "./rng.js";
 
 export const NPC = {
-  /** All NPCs of a raid, boss groups included. Over the cap, rollNpcSpawns drops whole squads. */
-  MAX_PER_RAID: 60,
+  /**
+   * All NPCs of a raid, boss groups included. Over the cap, rollNpcSpawns drops whole squads.
+   * POI garrison (2026-10): 60 → 64. E NPCs ≈ 37 → ≈ 51 (world map, event boss) / ≈ 54 (legacy, all
+   * bosses at their chance); the highest Steppe garrison (49) + all three boss groups (10) fits, so the
+   * cap only trims road camps and extra squads (≈ 1.4 % of legacy raids), and keeps headroom for the
+   * Commander's call and squad respawns. SCALING.md bench budget: 24 humans + 60 NPC, step 0.38 ms;
+   * dormant NPCs cost nothing, so +4 at the cap is ≈ +7 % NPC brain time in the worst case.
+   */
+  MAX_PER_RAID: 64,
   /** Which marauder squads go first when over the cap: road camps, then POI posts by tier. */
   CAP_DROP_ORDER: ["road", 1, 2, 3, 4] as const,
   /** rollNpcSpawns: mulberry32(matchSeed ^ SALT), exactly 2 draws per post. */
@@ -307,6 +314,31 @@ export const NPC_CAMPS: Readonly<Record<string, NpcCampDef>> = {
   road: { squads: 5, size: [1, 2], chance: 0.375 },
 };
 
+/**
+ * POI garrison (2026-10, Vlad's playtest: a pistol-only run looted the T4 Radar to a full epic
+ * backpack and extracted without meeting anyone). The per-post chance roll alone left a zone
+ * unguarded in 5–56 % of maps (Radar T4 24 %, Relay T3 35 %, T1 places ≈ 55 %), and in world mode
+ * the boss groups of the non-event bosses do not spawn at all. Every POI zone now holds at least
+ * BY_TIER[tier] marauders (uniform in [min, max], one draw per zone per match) on every map, boss
+ * map or not; the chance roll still adds squads on top. rollNpcSpawns tops a short zone up: first
+ * its posts that did not roll (1 member each), then +1 member round-robin up to SQUAD_MAX per post.
+ * MIN_POSTS: placeNpcPosts places at least this many posts per zone (the extra ones are
+ * garrison-only, chance 0), so a T3/T4 garrison stands at two points of the POI, not in one clump.
+ * Individual NPC strength is unchanged: the class (MARAUDER low/mid/high/top) already follows the tier.
+ */
+export const POI_GARRISON = {
+  BY_TIER: { 0: [0, 1], 1: [1, 2], 2: [2, 3], 3: [3, 4], 4: [4, 6] } as Readonly<Record<LootTier, readonly [number, number]>>,
+  MIN_POSTS: { 0: 1, 1: 1, 2: 1, 3: 2, 4: 2 } as Readonly<Record<LootTier, number>>,
+  SQUAD_MAX: 4,
+  /** Garrison size stream: mulberry32(matchSeed ^ SALT), one draw per zone (independent of NPC.SALT). */
+  SALT: 0x6a77_15e0,
+} as const;
+
+/** Garrison size range of a POI zone of `tier`. */
+export function garrisonRange(tier: number): readonly [number, number] {
+  return POI_GARRISON.BY_TIER[Math.max(0, Math.min(4, Math.floor(tier))) as LootTier];
+}
+
 /** One weighted entry of an NPC loot table (qty per draw). */
 export interface NpcLootEntry {
   def: string;
@@ -432,15 +464,13 @@ function capGroup(p: NpcPost): number {
 }
 
 /**
- * Which marauder squads spawn this match. mulberry32((matchSeed ^ NPC.SALT) >>> 0), exactly two
- * draws per post in array order (spawn, size), also for posts that do not spawn, so one post's
- * chance never shifts another. Then NPC.MAX_PER_RAID applies together with `bossNpcs`
- * (bossGroupNpcCount(rollBossSpawns(...))): whole squads are dropped in NPC.CAP_DROP_ORDER (road
- * camps, then T1, T2, …), the last post of a group first. Deterministic in (matchSeed, posts, bossNpcs).
+ * The chance roll alone (no garrison, no cap): mulberry32((matchSeed ^ NPC.SALT) >>> 0), exactly
+ * two draws per post in array order (spawn, size), also for posts that do not spawn, so one post's
+ * chance never shifts another. Squads in post order.
  */
-export function rollNpcSpawns(matchSeed: number, posts: readonly NpcPost[], bossNpcs = 0): NpcSquadSpawn[] {
+export function rollPostChances(matchSeed: number, posts: readonly NpcPost[]): NpcSquadSpawn[] {
   const rng = mulberry32((matchSeed ^ NPC.SALT) >>> 0);
-  const out: Array<NpcSquadSpawn & { group: number }> = [];
+  const out: NpcSquadSpawn[] = [];
   for (const p of posts) {
     const rSpawn = rng();
     const rSize = rng();
@@ -448,14 +478,83 @@ export function rollNpcSpawns(matchSeed: number, posts: readonly NpcPost[], boss
     const lo = Math.max(1, Math.floor(p.size[0]));
     const hi = Math.max(lo, Math.floor(p.size[1]));
     const members = Math.min(hi, lo + Math.floor(rSize * (hi - lo + 1)));
-    out.push({ postId: p.id, members, group: capGroup(p) });
+    out.push({ postId: p.id, members });
   }
+  return out;
+}
+
+/** Garrison target per POI zone this match: zone id → marauders (POI_GARRISON, one draw per zone in order of its first post). */
+export function rollGarrisons(matchSeed: number, posts: readonly NpcPost[]): Map<string, number> {
+  const tierOf = new Map<string, number>();
+  for (const p of posts) if (p.kind !== "road" && p.zone !== null) tierOf.set(p.zone, Math.max(tierOf.get(p.zone) ?? 0, p.tier));
+  const rng = mulberry32((matchSeed ^ POI_GARRISON.SALT) >>> 0);
+  const out = new Map<string, number>();
+  for (const [zone, tier] of tierOf) {
+    const [lo, hi] = garrisonRange(tier);
+    out.set(zone, Math.min(hi, lo + Math.floor(rng() * (hi - lo + 1))));
+  }
+  return out;
+}
+
+/**
+ * Which marauder squads spawn this match:
+ * 1. the chance roll (rollPostChances);
+ * 2. the POI garrison (POI_GARRISON, rollGarrisons): a zone with fewer marauders than its target
+ *    gets its posts that did not roll (1 member each, post order), then +1 member round-robin over
+ *    its squads up to POI_GARRISON.SQUAD_MAX;
+ * 3. NPC.MAX_PER_RAID together with `bossNpcs` (bossGroupNpcCount(rollBossSpawns(...))): whole
+ *    squads are dropped in NPC.CAP_DROP_ORDER (road camps, then T1, T2, …), the last post of a group
+ *    first, but never one that takes its zone below the garrison; only if that is not enough
+ *    (never on the Steppe, see npc.test.ts) the old order drops garrison squads too.
+ * Squads in post order. Deterministic in (matchSeed, posts, bossNpcs).
+ */
+export function rollNpcSpawns(matchSeed: number, posts: readonly NpcPost[], bossNpcs = 0): NpcSquadSpawn[] {
+  const byId = new Map(posts.map((p) => [p.id, p]));
+  const spawned = new Map<number, number>();
+  for (const s of rollPostChances(matchSeed, posts)) spawned.set(s.postId, s.members);
+  const garrison = rollGarrisons(matchSeed, posts);
+  const zoneTotal = new Map<string, number>();
+  const addZone = (p: NpcPost, n: number) => { if (p.zone !== null && p.kind !== "road") zoneTotal.set(p.zone, (zoneTotal.get(p.zone) ?? 0) + n); };
+  for (const [id, n] of spawned) addZone(byId.get(id)!, n);
+  for (const [zone, want] of garrison) {
+    let need = want - (zoneTotal.get(zone) ?? 0);
+    if (need <= 0) continue;
+    const zp = posts.filter((p) => p.zone === zone && p.kind !== "road");
+    for (const p of zp) {
+      if (need <= 0) break;
+      if (spawned.has(p.id)) continue;
+      spawned.set(p.id, 1);
+      need--;
+    }
+    for (let grew = true; need > 0 && grew; ) {
+      grew = false;
+      for (const p of zp) {
+        if (need <= 0) break;
+        const n = spawned.get(p.id)!;
+        if (n >= POI_GARRISON.SQUAD_MAX) continue;
+        spawned.set(p.id, n + 1);
+        need--;
+        grew = true;
+      }
+    }
+    zoneTotal.set(zone, want - need);
+  }
+  const out: Array<NpcSquadSpawn & { group: number }> = posts
+    .filter((p) => spawned.has(p.id))
+    .map((p) => ({ postId: p.id, members: spawned.get(p.id)!, group: capGroup(p) }));
   let total = Math.max(0, Math.floor(bossNpcs)) + out.reduce((n, s) => n + s.members, 0);
-  for (let g = 0; g < NPC.CAP_DROP_ORDER.length && total > NPC.MAX_PER_RAID; g++) {
-    for (let i = out.length - 1; i >= 0 && total > NPC.MAX_PER_RAID; i--) {
-      if (out[i]!.group !== g) continue;
-      total -= out[i]!.members;
-      out.splice(i, 1);
+  for (const keepGarrison of [true, false]) {
+    for (let g = 0; g < NPC.CAP_DROP_ORDER.length && total > NPC.MAX_PER_RAID; g++) {
+      for (let i = out.length - 1; i >= 0 && total > NPC.MAX_PER_RAID; i--) {
+        const s = out[i]!;
+        if (s.group !== g) continue;
+        const p = byId.get(s.postId)!;
+        const zone = p.kind !== "road" ? p.zone : null;
+        if (keepGarrison && zone !== null && (zoneTotal.get(zone) ?? 0) - s.members < (garrison.get(zone) ?? 0)) continue;
+        if (zone !== null) zoneTotal.set(zone, (zoneTotal.get(zone) ?? 0) - s.members);
+        total -= s.members;
+        out.splice(i, 1);
+      }
     }
   }
   return out.map(({ postId, members }) => ({ postId, members }));
