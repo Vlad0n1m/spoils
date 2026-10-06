@@ -43,6 +43,8 @@ export interface PartyMemberDto {
   follow: boolean;
   presence: Presence;
   you: boolean;
+  /** Seeker badge (lib/seeker): the member's linked wallet holds a Seeker Genesis Token. */
+  seeker?: boolean;
 }
 
 export interface PartyDto {

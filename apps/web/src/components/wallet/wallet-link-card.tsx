@@ -6,6 +6,7 @@ import { BRAND } from "@/lib/brand";
 import { SOLANA_CLUSTER, explorerAddressUrl } from "@/lib/wallet/cluster";
 import { shortAddress } from "@/lib/wallet/siws";
 import { useIdosFramed } from "@/components/menu/use-idos-frame";
+import { SeekerWalletPanel } from "@/components/seeker/seeker-wallet-panel";
 import { CopyAddressButton } from "./copy-address-button";
 import { WalletChooser, WalletLinkStatus } from "./wallet-chooser";
 import {
@@ -169,6 +170,7 @@ export function WalletLinkCard({ userId }: { userId: string }) {
           </div>
         )}
         {link.status === "ready" && <WalletLinkStatus className="mt-3" />}
+        {link.status === "ready" && <SeekerWalletPanel userId={userId} linkedAddress={link.linked?.address ?? null} />}
       </div>
     </section>
   );

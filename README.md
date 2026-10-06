@@ -227,7 +227,9 @@ docker compose logs -f web game-server cron
   rows selects (login, `/api/me`, stash): without them those routes answer 500. Without 007 every replay chunk from the
   game server is refused with a 500 (the game server keeps 10 minutes of chunks, then drops them); 009 adds
   `replays.gen_version`. 014 (`016_alpha_loot.sql`) adds the `alpha` item origin: without it every extract of an
-  alpha-loot find fails with a 500 until the server's retries give up.
+  alpha-loot find fails with a 500 until the server's retries give up. `018_seeker.sql` adds the Seeker perk tables
+  (`seeker_checks`, `seeker_claims`) and the `seeker` source of `pass_unlocks`: the party poll and the leaderboard
+  badges read `seeker_checks`, so without it `/api/party` and `/api/quests/badges` answer 500.
 - Alpha loot (`packages/shared/src/alpha-loot.ts`): the game server mints extra weapons / gear in containers, supply
   drops and on the floor, on by default. `ALPHA_LOOT=0` on the game server turns it off (the v4 loot exactly).
 - Ship the web and the game server together. The map generator is at `MAP_GEN_VERSION` 4 (map v2, mapHash `dda13fd8`):

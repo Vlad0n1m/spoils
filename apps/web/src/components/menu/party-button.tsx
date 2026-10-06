@@ -10,6 +10,7 @@ import { playUi } from "@/game/audio/ui-sounds";
 import { useLobby, useNow } from "@/lib/lobby/lobby-context";
 import { CHIP_TONE, PresenceDot } from "./panels/friends-panel";
 import { useParty } from "./party-context";
+import { SeekerBadge } from "@/components/seeker/seeker-badge";
 
 const BTN =
   "font-body inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border-[3px] border-black px-3 text-sm font-bold shadow-[0_3px_0_#000] transition-[transform,box-shadow] active:translate-y-[2px] active:shadow-[0_1px_0_#000] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-zooa-lime/70 disabled:cursor-not-allowed disabled:opacity-60";
@@ -232,6 +233,7 @@ function PartySheet({ party, onClose, onInvite }: { party: PartyDto; onClose: ()
                         </span>
                       )}
                       {m.nickname}
+                      {m.seeker && <SeekerBadge className="ml-1.5 align-[-0.2em]" />}
                       {m.you && <span className="font-body ml-1 text-xs font-bold text-white/60">(you)</span>}
                     </span>
                     <span className="font-body block text-xs font-semibold text-white/60">

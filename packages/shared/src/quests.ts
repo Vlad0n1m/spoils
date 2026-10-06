@@ -308,6 +308,9 @@ export interface QuestsDto {
 
 /** GET /api/quests/badges?n=<nickname>…: equipped cosmetics of those players (leaderboards). */
 export interface CosmeticBadgesDto {
-  /** `badge`: an owned leaderboard badge (Alpha Pass tier 10 "Founder"); never equipped, always shown. */
-  badges: Record<string, Partial<EquippedCosmetics> & { badge?: string }>;
+  /**
+   * `badge`: an owned leaderboard badge (Alpha Pass tier 10 "Founder"); never equipped, always shown.
+   * `seeker`: the linked wallet holds a Seeker Genesis Token (apps/web lib/seeker); shown, never worn.
+   */
+  badges: Record<string, Partial<EquippedCosmetics> & { badge?: string; seeker?: boolean }>;
 }

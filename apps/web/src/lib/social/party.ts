@@ -16,6 +16,7 @@ import { sql } from "drizzle-orm";
 import { PARTY, worldCycleAt, type PartyDropInfo } from "@extract/shared";
 import type { Db, Tx } from "../inventory/db";
 import { fail, findUserByNickname, inRaidSql, lockUsers, ms, touchPresence, type Q, type SocialResult } from "./common";
+import { SEEKER_BADGE_SQL } from "../seeker/seeker";
 import { areFriends, incomingRequestCount } from "./friends";
 import {
   acceptDecision,
@@ -108,7 +109,16 @@ async function currentMembership(db: Db, userId: string, now: number): Promise<M
 
 // ---------------------------------------------------------------------------- GET /api/party
 
-type MemberRow = { user_id: string; nickname: string; level: number; follow: boolean; joined_at: Date | string; seen_at: Date | string | null; in_raid: boolean };
+type MemberRow = {
+  user_id: string;
+  nickname: string;
+  level: number;
+  follow: boolean;
+  joined_at: Date | string;
+  seen_at: Date | string | null;
+  in_raid: boolean;
+  seeker: boolean;
+};
 
 /** Everything the menu polls: party, invites to me, the live drop, incoming friend requests. Heartbeat too. */
 export async function getPartyState(db: Db, me: string, now: number): Promise<PartyStateDto> {
@@ -120,7 +130,8 @@ export async function getPartyState(db: Db, me: string, now: number): Promise<Pa
   let drop: PartyDropDto | null = null;
   if (m) {
     const rows = await db.execute<MemberRow>(sql`
-      select u.id as user_id, u.nickname, u.level, pm.follow, pm.joined_at, p.seen_at, ${inRaidSql(sql`u.id`, now)} as in_raid
+      select u.id as user_id, u.nickname, u.level, pm.follow, pm.joined_at, p.seen_at, ${inRaidSql(sql`u.id`, now)} as in_raid,
+        ${SEEKER_BADGE_SQL} as seeker
       from party_members pm join users u on u.id = pm.user_id
       left join user_presence p on p.user_id = u.id
       where pm.party_id = ${m.partyId}::uuid
@@ -134,6 +145,7 @@ export async function getPartyState(db: Db, me: string, now: number): Promise<Pa
         follow: id === m.leaderId ? true : Boolean(x.follow),
         presence: presenceOf(ms(x.seen_at), Boolean(x.in_raid), now),
         you: id === self,
+        seeker: Boolean(x.seeker),
       };
     });
     members.sort((a, b) => Number(b.leader) - Number(a.leader));

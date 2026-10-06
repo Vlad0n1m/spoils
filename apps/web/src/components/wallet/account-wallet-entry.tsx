@@ -3,17 +3,21 @@
 import { useEffect, useState } from "react";
 import clsx from "clsx";
 import { shortAddress } from "@/lib/wallet/siws";
+import { SeekerBadge } from "@/components/seeker/seeker-badge";
+import { useSeekerVerified } from "@/components/seeker/seeker-store";
 import { CopyAddressButton } from "./copy-address-button";
 import { WalletChooser, WalletLinkStatus } from "./wallet-chooser";
 import { clearWalletLinkError, linkWallet, loadWalletLink, prefetchChallenge, useWalletLink } from "./wallet-link-store";
 
 /**
  * Account-menu entry of the wallet link (registered users): the linked short address with a copy
- * button, or "Connect wallet", which opens the wallet list inline in the menu. Unlink lives on /wallet.
+ * button (and the Seeker badge when it holds a Seeker Genesis Token), or "Connect wallet", which opens
+ * the wallet list inline in the menu. Unlink lives on /wallet.
  */
 export function AccountWalletEntry({ userId, itemClassName }: { userId: string; itemClassName: string }) {
   const link = useWalletLink();
   const [choosing, setChoosing] = useState(false);
+  const seeker = useSeekerVerified();
 
   useEffect(() => {
     void loadWalletLink(userId);
@@ -36,7 +40,10 @@ export function AccountWalletEntry({ userId, itemClassName }: { userId: string; 
           <path d="M13 10.5h2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
         </svg>
         <span className="min-w-0 flex-1">
-          <span className="font-body block text-[11px] font-semibold uppercase tracking-wider text-white/50">Wallet</span>
+          <span className="font-body flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/50">
+            Wallet
+            {seeker && <SeekerBadge className="!h-4 !px-1 [&_span]:!text-[0.55rem]" />}
+          </span>
           <span className="block truncate font-mono text-sm text-white" title={link.linked.address}>
             {shortAddress(link.linked.address)}
           </span>
