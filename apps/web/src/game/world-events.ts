@@ -15,7 +15,8 @@
 import { Assets, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import { WEV_KIND, WEV_STATE, decodeFight, type EventsMsg, type MapData, type WorldEvent } from "@extract/shared";
 import { AudioEngine } from "./audio/engine";
-import { MINIMAP_MARGIN, minimapSize } from "./minimap";
+import { EXTRACT_PILL_BOTTOM_TOUCH, MINIMAP_MARGIN, minimapSize } from "./hud-layout";
+import { shouldUseTouch } from "./touch-mode";
 import type { GameContext, GameSystem } from "./systems";
 import {
   DROP_COLOR,
@@ -153,6 +154,8 @@ class WorldEventsSystem implements GameSystem {
   private readonly bursts = new Map<string, number>();
   private eng: AudioEngine | null = null;
   private size = { w: 0, h: 0 };
+  /** Touch mode, read once (drawStatus runs every frame). */
+  private readonly touch = shouldUseTouch();
   private disposed = false;
 
   init(ctx: GameContext) {
@@ -325,11 +328,13 @@ class WorldEventsSystem implements GameSystem {
   private drawStatus(lines: readonly string[]) {
     const { w, h } = this.size;
     if (w === 0) return;
-    // Short landscape phones: left of the minimap (under it sit the touch action buttons).
+    // Touch and short screens: left of the minimap (under it sit the touch action buttons), below
+    // the HUD v3 extract pill that holds the top edge there.
     const short = h < 480;
+    const side = short || this.touch;
     const mini = minimapSize(w, h);
-    const top = short ? MINIMAP_MARGIN : MINIMAP_MARGIN + mini + 8;
-    const right = short ? w - MINIMAP_MARGIN - mini - 8 : w - MINIMAP_MARGIN;
+    const top = side ? EXTRACT_PILL_BOTTOM_TOUCH + 6 : MINIMAP_MARGIN + mini + 8;
+    const right = side ? w - MINIMAP_MARGIN - mini - 8 : w - MINIMAP_MARGIN;
     while (this.statusLines.length < lines.length) {
       const t = new Text({ text: "", style: { fontFamily: FONT, fontSize: 13, fontWeight: "800", fill: 0xffffff, stroke: { color: 0x0b0b0b, width: 4 } } });
       t.anchor.set(1, 0);

@@ -2046,6 +2046,9 @@ export class GameRenderer implements GameRendererApi {
         bandages: s?.bandages ?? 0,
         medkits: s?.medkits ?? 0,
         grenades: s?.grenades ?? 0,
+        // Cooldowns as the client already enforces them (Predictor roll; nextThrowAt on performance.now()).
+        rollCdMs: p ? p.rollCooldownMs : 0,
+        grenadeCdMs: Math.max(0, this.nextThrowAt - performance.now()),
       });
     }
     try {

@@ -7,7 +7,7 @@
 import type { TouchIconId } from "./touch-controls";
 
 /** Path data per icon (drawn twice: the black casing, then the white line). */
-const PATHS: Record<TouchIconId | "close", string> = {
+const PATHS: Record<TouchIconId | "close" | "expand", string> = {
   // Dodge roll: a double chevron dash with speed lines.
   roll: "M9 6l6 6-6 6M15 6l6 6-6 6M3 9h3M2 15h4",
   // Use / pick up: an open hand reaching down.
@@ -21,10 +21,12 @@ const PATHS: Record<TouchIconId | "close", string> = {
   bag: "M8 7h8a3 3 0 0 1 3 3v10.5H5V10a3 3 0 0 1 3-3zM10 7V4.5h4V7M8.5 14h7v4h-7zM8.5 11h7",
   map: "M3.5 6.5l5.5-2 6 2 5.5-2v13l-5.5 2-6-2-5.5 2zM9 4.5v13M15 6.5v13",
   close: "M6 6l12 12M18 6L6 18",
+  // Expand (the mark on the minimap: tap for the full map): four corners pointing out.
+  expand: "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5",
 };
 
 /** The icon as an SVG string sized to `pct` of its box. */
-export function touchIconSvg(id: TouchIconId | "close", pct = 62): string {
+export function touchIconSvg(id: TouchIconId | "close" | "expand", pct = 62): string {
   const d = PATHS[id];
   return (
     `<svg viewBox="0 0 24 24" width="${pct}%" height="${pct}%" aria-hidden="true" style="overflow:visible;pointer-events:none">` +

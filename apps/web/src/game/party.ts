@@ -268,15 +268,15 @@ const FONT = "ui-rounded, 'Trebuchet MS', system-ui, sans-serif";
 /** Off-screen arrows keep this far from the screen edges (CSS px). */
 const ARROW_INSETS: EdgeInsets = { left: 26, right: 26, top: 26, bottom: 30 };
 /**
- * Touch: the top edge runs below the corner chips and the ping badge (40 px buttons from top-2) and
- * the MAP button, so an arrow and its label never sit on them.
+ * Touch: the top edge runs below the HUD v3 top row (menu chips, ping, wipe pill, XP chip, extract
+ * pill: 40 px from top-2), so an arrow and its label never sit on them.
  */
 const ARROW_INSETS_TOUCH: EdgeInsets = { ...ARROW_INSETS, top: 64 };
 /** Touch HUD areas an arrow slides out of are widened by this much (CSS px) for its centred label. */
 const ARROW_LABEL_HALF = 56;
 
 /**
- * The screen rects the arrows keep out of: the minimap; on touch also the top stack (timer, compass)
+ * The screen rects the arrows keep out of: the minimap; on touch also the top stack (wipe / boss toasts)
  * and the bottom bar (touch-controls.ts hudReservedRects), widened for the label.
  */
 export function arrowObstacles(w: number, h: number, touch: boolean): ScreenRect[] {

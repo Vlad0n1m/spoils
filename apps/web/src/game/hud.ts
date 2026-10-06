@@ -58,7 +58,7 @@ import {
   type SelfState,
   type SlotStore,
 } from "@extract/shared";
-import { containerTitle } from "../lib/items-ui";
+import { containerTitle, fmtClock } from "../lib/items-ui";
 import type { ExtractStatus } from "./entities";
 import type { HudBoss, HudExtract, HudSelf, HudSlot, HudSnapshot, KillFeedEntry, WipeWarn } from "./types";
 import { bodyTitle, type KillTally } from "./npc-labels";
@@ -612,11 +612,35 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 /**
  * Whole seconds until an extract earns XP (shared XP.MIN_ONMAP_MS on the map), 0 once it does or
  * when the entry time is unknown (RETENTION.md: the 8-minute rule must show in the raid itself; the
- * HUD's extract compass counts it down for registered players).
+ * HUD v3 XP chip counts it down for registered players).
  */
 export function extractXpLeftS(enteredAtMs: number, clockMs: number): number {
   if (!(enteredAtMs > 0)) return 0;
   return Math.max(0, Math.ceil((enteredAtMs + XP.MIN_ONMAP_MS - clockMs) / 1000));
+}
+
+/** Rough px → metres for the HUD's distances; only has to feel consistent. */
+export const PX_PER_METER = 40;
+
+/**
+ * What the HUD v3 extract pill shows, quantized to what is visible (whole seconds, 1° of arrow,
+ * 1 m of distance): "closed" until THIS player's extracts arm (extractOpenAtMs, WORLD v6), then
+ * "open" with the route to the nearest allowed extract, "extracting" while standing in one.
+ */
+export function extractPillSlice(s: HudSnapshot) {
+  const ex = s.self?.extracting ?? null;
+  const t = s.nearestExtract;
+  return {
+    kind: ex ? "extracting" : s.phase === "ended" ? "none" : s.phase === "drop" ? "closed" : "open",
+    countdown: s.phase === "drop" && !ex ? fmtClock(s.extractOpenAtMs - s.clockMs) : "",
+    startedAtMs: ex?.startedAtMs ?? 0,
+    channelMs: ex?.channelMs ?? 0,
+    hasTarget: !!t,
+    targetOpen: t?.open ?? false,
+    deg: t ? Math.round((Math.atan2(t.dy, t.dx) * 180) / Math.PI) : 0,
+    meters: t ? Math.max(0, Math.round(t.dist / PX_PER_METER)) : 0,
+    name: s.extracts[0]?.name ?? "",
+  } as const;
 }
 
 /** An extract before XP.MIN_ONMAP_MS on the map: no extract / haul XP (shared xpForExit). */

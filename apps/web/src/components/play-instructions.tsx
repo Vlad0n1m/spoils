@@ -226,7 +226,7 @@ const TOUCH_KEYS: Array<[string, string]> = [
   ["Hand", "Search / pick up"],
   ["Reload · swap", "Reload · switch weapon"],
   ["Grenade", "Tap: throw ahead · drag: aim and range"],
-  ["Under the minimap", "Bandage · medkit · bag · full map (or tap the minimap)"],
+  ["Under the minimap", "Bandage · medkit · bag (tap the minimap for the full map)"],
   ["Hold the phone", "Sideways: the game plays in landscape only"],
 ];
 
