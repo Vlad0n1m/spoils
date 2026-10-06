@@ -58,7 +58,11 @@ export const TOUCH_CROSSHAIR = {
  * the point is outside that rect.
  */
 export function rayToScreenEdge(sx: number, sy: number, angle: number, w: number, h: number, inset: number): number {
-  const x0 = inset, y0 = inset, x1 = w - inset, y1 = h - inset;
+  return rayToRect(sx, sy, angle, inset, inset, w - inset, h - inset);
+}
+
+/** Screen distance (px) from (sx, sy) along `angle` to the edge of the rect, or 0 when outside it. */
+export function rayToRect(sx: number, sy: number, angle: number, x0: number, y0: number, x1: number, y1: number): number {
   if (!(x1 > x0) || !(y1 > y0) || sx < x0 || sx > x1 || sy < y0 || sy > y1) return 0;
   const c = Math.cos(angle);
   const s = Math.sin(angle);
@@ -68,6 +72,40 @@ export function rayToScreenEdge(sx: number, sy: number, angle: number, w: number
   if (s > 1e-9) t = Math.min(t, (y1 - sy) / s);
   else if (s < -1e-9) t = Math.min(t, (y0 - sy) / s);
   return Number.isFinite(t) ? Math.max(0, t) : 0;
+}
+
+/**
+ * Phones, aim stick held: the camera offset (SCREEN px, toward the aim) that shows as much as the
+ * weapon reaches, without pushing the player out of the open play area between the HUD's top row
+ * (`top` px) and its bottom bar (`bottom` px). Released → the camera centres on the player again.
+ */
+export const TOUCH_AIM_LEAN = {
+  /** Lean = this share of the weapon's screen range… */
+  RANGE_FRACTION: 0.55,
+  /** …capped here (px). */
+  MAX_PX: 300,
+  /** The player keeps this much room (px) from the open area's edges. */
+  MARGIN_PX: 44,
+} as const;
+
+export function touchAimLean(
+  rangeWorld: number,
+  zoom: number,
+  angle: number,
+  w: number,
+  h: number,
+  top: number,
+  bottom: number,
+  out: { x: number; y: number },
+): { x: number; y: number } {
+  const want = Math.min(rangeWorld > 0 && zoom > 0 ? rangeWorld * zoom * TOUCH_AIM_LEAN.RANGE_FRACTION : TOUCH_AIM_LEAN.MAX_PX, TOUCH_AIM_LEAN.MAX_PX);
+  const m = TOUCH_AIM_LEAN.MARGIN_PX;
+  // The player moves AGAINST the aim; it may go as far as the open area allows.
+  const room = rayToRect(w / 2, h / 2, angle + Math.PI, m, top + m, w - m, h - bottom - m);
+  const d = Math.max(0, Math.min(want, room));
+  out.x = Math.cos(angle) * d;
+  out.y = Math.sin(angle) * d;
+  return out;
 }
 
 /**
@@ -83,8 +121,11 @@ export function touchCrosshairDistance(
   angle: number,
   w: number,
   h: number,
+  /** Phones: keep the reticle above the HUD's bottom bar (px from the bottom edge). */
+  bottom = 0,
 ): number {
-  const edge = rayToScreenEdge(sx, sy, angle, w, h, TOUCH_CROSSHAIR.EDGE_INSET);
+  const i = TOUCH_CROSSHAIR.EDGE_INSET;
+  const edge = rayToRect(sx, sy, angle, i, i, w - i, h - Math.max(i, bottom + 8));
   const range = rangeWorld > 0 && zoom > 0 ? rangeWorld * zoom : Infinity;
   return Math.max(TOUCH_CROSSHAIR.MIN_PX, Math.min(range, edge));
 }

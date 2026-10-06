@@ -92,8 +92,8 @@ import { buildHud, extractAllowed, personalExtractStatus, stickyCounts, type Pla
 import { EXPIRE_FADE_TAU_MS, expiryBlink, expiryFading } from "./expiry";
 import { InputController, sampleAim, type GrenadeAim } from "./input";
 import { GRENADE_TAP_FRAC, grenadeFracFor } from "./grenades";
-import { PerfOverlay, TouchControls, shouldUseTouch } from "./touch-controls";
-import { TouchCrosshair, releaseCanvasCursor, setCanvasCrosshair, touchCrosshairDistance } from "./crosshair";
+import { PerfOverlay, TouchControls, hudReservedRects, shouldUseTouch } from "./touch-controls";
+import { TouchCrosshair, releaseCanvasCursor, setCanvasCrosshair, touchAimLean, touchCrosshairDistance } from "./crosshair";
 import { Minimap, type MinimapExtract } from "./minimap";
 import { PartyTracker, type PartyMateView } from "./party";
 import { autoFireTarget, isPartyMate, type AutoFireCandidate } from "./auto-fire";
@@ -108,7 +108,7 @@ import { WorldView, type ViewRect } from "./world";
 import { EMPTY_TALLY, bossKindOfLabel, corpseNpcRole, npcDisplayName, npcRoleName, tallyKill, type KillTally, type NpcRoleName } from "./npc-labels";
 import { getGameAudio } from "./audio/game-audio";
 import { OwnShotPredictor, predictedAngles } from "./own-shot";
-import { feedAimPointer, getCameraRig, reducedMotion, setTouchSticksActive } from "./camera";
+import { clearTouchLook, feedAimPointer, getCameraRig, reducedMotion, setTouchLook, setTouchSticksActive } from "./camera";
 import { SPRITE_RECOIL_PX } from "./combat-fx";
 import { FX, KillcamPlayer, KillcamRecorder, entOf, lerpAngle, type FrameSnap, type FxSnap, type ReplaySample } from "./killcam";
 
@@ -535,7 +535,10 @@ export class GameRenderer implements GameRendererApi {
       }
     }
     this.stopPing();
-    if (this.touch) setTouchSticksActive(false);
+    if (this.touch) {
+      setTouchSticksActive(false);
+      clearTouchLook();
+    }
     this.touch?.detach();
     this.touch = null;
     this.perf?.detach();
@@ -1926,8 +1929,9 @@ export class GameRenderer implements GameRendererApi {
   }
 
   /**
-   * Phones: the reticle on the aim-stick line at the effective aim distance, and the aim point the
-   * look-ahead and the hitmarker follow (also along the move direction while only moving).
+   * Phones: the reticle on the aim-stick line at the effective aim distance (kept above the HUD's
+   * bottom bar), the aim point the hitmarker follows, and the camera: centred on the player while
+   * walking, leaning toward the aim while the aim stick is held (crosshair.ts touchAimLean).
    */
   private updateTouchCrosshair(dt: number, w: number, h: number, live: boolean, rangeWorld: number) {
     const ch = this.touchCrosshair;
@@ -1936,12 +1940,31 @@ export class GameRenderer implements GameRendererApi {
     const self = this.selfRender;
     const aiming = live && !!self && input.touchAimAngle !== null;
     const facing = live && !!self && (aiming || input.touchMoveAngle !== null);
+    const hud = this.touchHudBands(w, h);
     const sx = self ? w / 2 + (self.x - this.camX) * this.zoom : w / 2;
     const sy = self ? h / 2 + (self.y - this.camY) * this.zoom : h / 2;
-    const dist = touchCrosshairDistance(rangeWorld, this.zoom, sx, sy, this.aim, w, h);
+    const dist = touchCrosshairDistance(rangeWorld, this.zoom, sx, sy, this.aim, w, h, hud.bottom);
     // Red while the aim line is on an enemy (what auto-fire shoots at).
     ch.update(dt, aiming, sx, sy, this.aim, dist, aiming && this.autoFireLock(this.aim) !== null);
-    if (facing) feedAimPointer(sx + Math.cos(this.aim) * dist, sy + Math.sin(this.aim) * dist, aiming);
+    if (facing) feedAimPointer(sx + Math.cos(this.aim) * dist, sy + Math.sin(this.aim) * dist);
+    if (aiming && this.zoom > 0) {
+      touchAimLean(rangeWorld, this.zoom, this.aim, w, h, hud.top, hud.bottom, this.leanOut);
+      setTouchLook(this.leanOut.x / this.zoom, this.leanOut.y / this.zoom);
+    } else setTouchLook(0, 0);
+  }
+
+  private readonly leanOut = { x: 0, y: 0 };
+  private hudBands = { w: 0, h: 0, top: 0, bottom: 0 };
+  /** Heights (px) of the touch HUD's top row and bottom bar, from the layout touch-controls mirrors. */
+  private touchHudBands(w: number, h: number): { top: number; bottom: number } {
+    const b = this.hudBands;
+    if (b.w !== w || b.h !== h) {
+      const rects = hudReservedRects(w, h);
+      const chips = rects.find((r) => r.id === "chips");
+      const bar = rects.find((r) => r.id === "bar");
+      this.hudBands = { w, h, top: chips ? chips.y + chips.h : 0, bottom: bar ? h - bar.y : 0 };
+    }
+    return this.hudBands;
   }
 
   /**

@@ -33,13 +33,6 @@ export const LOOK = {
   TAU_MS: 120,
   /** Look-ahead multiplier under reduced motion. */
   REDUCED: 0.5,
-  /**
-   * Phones while the aim stick is held: the camera leans much further toward the reticle so the
-   * player sees where they shoot (the landscape screen is short, aiming down or up showed little).
-   * The reticle stays on screen, so the player (≤ this fraction of the way back) stays on screen too.
-   */
-  TOUCH_AIM_FRACTION: 0.6,
-  TOUCH_AIM_MAX_PX: 320,
 } as const;
 
 /** Recoil kick in screen px, opposite the aim, per own shot (memo: 4–10 px, back in ~120 ms). */
@@ -358,8 +351,24 @@ export function setTouchSticksActive(on: boolean): void {
  * Phones: the touch aim point (the drawn crosshair, canvas px) stands in for the mouse, so the
  * look-ahead and the hitmarker follow the aim stick instead of the finger on it.
  */
-export function feedAimPointer(x: number, y: number, aiming = false): void {
-  for (const t of trackers) t.feed(x, y, aiming);
+export function feedAimPointer(x: number, y: number): void {
+  for (const t of trackers) t.feed(x, y);
+}
+
+/**
+ * Phones: the look-ahead in WORLD units set by the renderer (crosshair.ts touchAimLean while the
+ * aim stick is held, 0/0 otherwise so walking keeps the player centred). Null = follow the pointer.
+ */
+let touchLook: { x: number; y: number } | null = null;
+export function setTouchLook(x: number, y: number): void {
+  if (!touchLook) touchLook = { x, y };
+  else {
+    touchLook.x = x;
+    touchLook.y = y;
+  }
+}
+export function clearTouchLook(): void {
+  touchLook = null;
 }
 
 /**
@@ -373,8 +382,7 @@ export class PointerTracker {
   has = false;
   /** The last move happened over the game canvas (not over an inventory / map overlay). */
   overCanvas = false;
-  /** The point comes from the touch aim stick being held (stronger look-ahead). */
-  touchAiming = false;
+
   private canvas: HTMLCanvasElement | null = null;
 
   attach(canvas: HTMLCanvasElement): void {
@@ -394,12 +402,11 @@ export class PointerTracker {
   }
 
   /** A synthetic aim point over the canvas (feedAimPointer). */
-  feed(x: number, y: number, aiming = false): void {
+  feed(x: number, y: number): void {
     this.x = x;
     this.y = y;
     this.has = true;
     this.overCanvas = true;
-    this.touchAiming = aiming;
   }
 
   private onMove = (e: PointerEvent) => {
@@ -410,7 +417,6 @@ export class PointerTracker {
     this.y = e.clientY - r.top;
     this.has = true;
     this.overCanvas = e.target === c;
-    this.touchAiming = false;
   };
 }
 
@@ -455,14 +461,12 @@ class CameraSystem implements GameSystem {
     const self = ctx.self();
     const controllable = !!state && state.phase !== "ended" && !!me && me.alive && !!self && self.extractedAt === 0;
     if (!controllable) rig.setLook(0, 0);
-    else if (this.pointer.has && this.pointer.overCanvas && !ctx.inputBlocked()) {
+    else if (touchLook) {
+      if (!ctx.inputBlocked()) rig.setLook(touchLook.x, touchLook.y);
+    } else if (this.pointer.has && this.pointer.overCanvas && !ctx.inputBlocked()) {
       const cam = ctx.camera();
       // Base zoom: the target must not shrink while the intro / extraction zoom runs.
-      const aim = this.pointer.touchAiming;
-      lookAheadTarget(
-        this.pointer.x, this.pointer.y, cam.width, cam.height, cam.zoom / (rig.zoomMul || 1), this.look,
-        aim ? LOOK.TOUCH_AIM_FRACTION : LOOK.FRACTION, aim ? LOOK.TOUCH_AIM_MAX_PX : LOOK.MAX_PX,
-      );
+      lookAheadTarget(this.pointer.x, this.pointer.y, cam.width, cam.height, cam.zoom / (rig.zoomMul || 1), this.look);
       rig.setLook(this.look.x, this.look.y);
     }
     // Over an overlay (inventory, full map — the map is drawn on the canvas itself, hence

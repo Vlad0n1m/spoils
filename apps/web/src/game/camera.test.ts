@@ -3,6 +3,7 @@
  */
 
 import assert from "node:assert/strict";
+import { TOUCH_AIM_LEAN, touchAimLean, touchCrosshairDistance } from "./crosshair";
 import { describe, it } from "node:test";
 import {
   CameraRig,
@@ -214,16 +215,26 @@ describe("camera system", () => {
   });
 });
 
-describe("touch aim look-ahead", () => {
-  it("leans further toward the reticle while the aim stick is held, still bounded", () => {
-    const out = { x: 0, y: 0 };
-    // 844x390 phone, zoom 1, reticle 180 px below the centre (aiming down to the screen edge).
-    lookAheadTarget(422, 375, 844, 390, 1, out);
-    const walk = out.y;
-    lookAheadTarget(422, 375, 844, 390, 1, out, LOOK.TOUCH_AIM_FRACTION, LOOK.TOUCH_AIM_MAX_PX);
-    assert.ok(out.y > walk * 2, `aim ${out.y} vs walk ${walk}`);
-    assert.ok(out.y < 180, "the player stays on screen");
-    lookAheadTarget(422 + 5000, 195, 844, 390, 1, out, LOOK.TOUCH_AIM_FRACTION, LOOK.TOUCH_AIM_MAX_PX);
-    assert.equal(Math.round(out.x), LOOK.TOUCH_AIM_MAX_PX);
+describe("touch aim lean (crosshair.ts)", () => {
+  // 844x390 phone: top HUD row 54 px, bottom bar 80 px.
+  const W = 844, H = 390, TOP = 54, BOT = 80;
+  it("leans toward a downward aim but keeps the player in the open area", () => {
+    const o = { x: 0, y: 0 };
+    touchAimLean(2000, 1, Math.PI / 2, W, H, TOP, BOT, o);
+    assert.ok(o.y > 80, `lean ${o.y}`);
+    // The player (screen centre - lean) stays below the top row + margin.
+    assert.ok(H / 2 - o.y >= TOP + TOUCH_AIM_LEAN.MARGIN_PX - 1e-6);
+    assert.ok(Math.abs(o.x) < 1e-6);
+  });
+  it("is limited by the weapon's reach and by MAX_PX", () => {
+    const o = { x: 0, y: 0 };
+    touchAimLean(100, 1, 0, W, H, TOP, BOT, o);
+    assert.equal(Math.round(o.x), Math.round(100 * TOUCH_AIM_LEAN.RANGE_FRACTION));
+    touchAimLean(5000, 1, 0, W, H, TOP, BOT, o);
+    assert.ok(o.x <= TOUCH_AIM_LEAN.MAX_PX);
+  });
+  it("keeps the reticle above the bottom bar", () => {
+    const d = touchCrosshairDistance(5000, 1, W / 2, 120, Math.PI / 2, W, H, BOT);
+    assert.ok(120 + d <= H - BOT - 8 + 1e-6);
   });
 });
