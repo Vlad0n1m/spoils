@@ -25,6 +25,7 @@ import { PX_PER_METER } from "./cinematics";
 import { MINIMAP_MARGIN, minimapSize } from "./minimap";
 import type { GameContext, GameSystem } from "./systems";
 import { hudReservedRects } from "./touch-controls";
+import { NO_INSETS, safeInsets, type SafeInsets } from "./safe-area";
 import { shouldUseTouch } from "./touch-mode";
 
 /** One mate as the client draws it (world px, smoothed). */
@@ -279,15 +280,23 @@ const ARROW_LABEL_HALF = 56;
  * The screen rects the arrows keep out of: the minimap; on touch also the top stack (wipe / boss toasts)
  * and the bottom bar (touch-controls.ts hudReservedRects), widened for the label.
  */
-export function arrowObstacles(w: number, h: number, touch: boolean): ScreenRect[] {
-  const mm = minimapSize(w, h);
-  const out: ScreenRect[] = [{ x0: w - mm - MINIMAP_MARGIN - 14, y0: 0, x1: w, y1: mm + MINIMAP_MARGIN + 14 }];
+export function arrowObstacles(w: number, h: number, touch: boolean, ins: SafeInsets = NO_INSETS): ScreenRect[] {
+  // The canvas is full-bleed; the HUD lives in the safe area (safe-area.ts), ins.left px in.
+  const l = ins.left;
+  const sw = Math.max(0, w - ins.left - ins.right);
+  const mm = minimapSize(sw, h);
+  const out: ScreenRect[] = [{ x0: l + sw - mm - MINIMAP_MARGIN - 14, y0: 0, x1: w, y1: mm + MINIMAP_MARGIN + 14 }];
   if (!touch) return out;
-  for (const r of hudReservedRects(w, h)) {
+  for (const r of hudReservedRects(sw, h)) {
     if (r.soft || (r.id !== "top" && r.id !== "bar")) continue;
-    out.push({ x0: r.x - ARROW_LABEL_HALF, y0: r.y, x1: r.x + r.w + ARROW_LABEL_HALF, y1: r.y + r.h });
+    out.push({ x0: l + r.x - ARROW_LABEL_HALF, y0: r.y, x1: l + r.x + r.w + ARROW_LABEL_HALF, y1: r.y + r.h });
   }
   return out;
+}
+
+/** The arrows' edge margins pushed in by the safe-area insets (the canvas is full-bleed). */
+export function arrowInsets(base: EdgeInsets, ins: SafeInsets): EdgeInsets {
+  return { left: base.left + ins.left, right: base.right + ins.right, top: base.top + ins.top, bottom: base.bottom + ins.bottom };
 }
 /** The arrow's label sits this far inward of its tip. */
 const ARROW_LABEL_PX = 30;
@@ -357,7 +366,13 @@ export function createPartySystem(): GameSystem {
   const live = new Set<string>();
   let disposed = false;
   const touch = shouldUseTouch();
-  let avoidFor: { w: number; h: number; rects: ScreenRect[] } = { w: -1, h: -1, rects: [] };
+  let avoidFor: { w: number; h: number; safe: SafeInsets | null; rects: ScreenRect[]; ins: EdgeInsets } = {
+    w: -1,
+    h: -1,
+    safe: null,
+    rects: [],
+    ins: ARROW_INSETS,
+  };
 
   return {
     id: "party",
@@ -379,7 +394,10 @@ export function createPartySystem(): GameSystem {
         const h = cam.height;
         const now = performance.now();
         const me = ctx.selfPos();
-        if (avoidFor.w !== w || avoidFor.h !== h) avoidFor = { w, h, rects: arrowObstacles(w, h, touch) };
+        const safe = safeInsets();
+        if (avoidFor.w !== w || avoidFor.h !== h || avoidFor.safe !== safe) {
+          avoidFor = { w, h, safe, rects: arrowObstacles(w, h, touch, safe), ins: arrowInsets(touch ? ARROW_INSETS_TOUCH : ARROW_INSETS, safe) };
+        }
         const avoid = avoidFor.rects;
         for (const m of mates) {
           live.add(m.key);
@@ -399,7 +417,7 @@ export function createPartySystem(): GameSystem {
           const wx = inView ? seen!.x : m.x;
           const wy = inView ? seen!.y : m.y;
           const s = ctx.toScreen(wx, wy);
-          const a = edgeAnchor(w, h, s.x, s.y, touch ? ARROW_INSETS_TOUCH : ARROW_INSETS, avoid);
+          const a = edgeAnchor(w, h, s.x, s.y, avoidFor.ins, avoid);
           mk.root.visible = true;
           if (a.onScreen) {
             const mode: MarkMode = !m.alive ? "down" : inView ? "chevron" : "ghost";
@@ -426,7 +444,7 @@ export function createPartySystem(): GameSystem {
             const lx = -Math.cos(a.angle) * ARROW_LABEL_PX;
             const ly = -Math.sin(a.angle) * ARROW_LABEL_PX + 8;
             const half = mk.label.width / 2 + 4;
-            const gx = Math.max(half, Math.min(w - half, a.x + lx)) - a.x;
+            const gx = Math.max(safe.left + half, Math.min(w - safe.right - half, a.x + lx)) - a.x;
             mk.label.position.set(gx, ly);
           }
           mk.root.alpha = m.alive ? 1 : 0.75;

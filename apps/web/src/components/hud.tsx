@@ -99,9 +99,10 @@ export const Hud = memo(function Hud({
   const box = useBoxSize(rootRef);
 
   return (
-    // Same safe-area box as the game mount (battle-screen.tsx), so hudReservedRects() in
-    // touch-controls.ts, which measures from the mount, still mirrors this layout.
-    <div ref={rootRef} className="pointer-events-none absolute inset-y-0 left-[env(safe-area-inset-left,0px)] right-[env(safe-area-inset-right,0px)] select-none text-white">
+    // The safe-area box (the canvas under it is full-bleed): the same box as the touch-controls
+    // layer (touch-controls.ts), so hudReservedRects(), which measures from that layer, still
+    // mirrors this layout.
+    <div ref={rootRef} className="pointer-events-none absolute inset-y-0 left-[var(--safe-l)] right-[var(--safe-r)] select-none text-white">
       {inPlay && <LowHpVignette store={store} />}
 
       <KillFeed store={store} selfNickname={selfNickname} touch={touch} />

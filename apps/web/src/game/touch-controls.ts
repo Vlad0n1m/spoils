@@ -232,7 +232,7 @@ export function minimapRect(w: number, h: number): Rect {
 
 /**
  * Screen areas the touch HUD (components/hud.tsx with `touch`) and the canvas HUD (minimap.ts,
- * boss-hud.ts, the zone toast of fullmap.ts) draw into, plus the move thumb's corner, in CSS px of the game mount. Sizes mirror the HUD's Tailwind classes at their
+ * boss-hud.ts, the zone toast of fullmap.ts) draw into, plus the move thumb's corner, in CSS px of the touch-controls layer (the safe-area box, = the HUD root). Sizes mirror the HUD's Tailwind classes at their
  * largest content, times the touch scales above; keep them in sync when the touch HUD layout changes.
  */
 export function hudReservedRects(w: number, h: number): HudArea[] {
@@ -471,10 +471,15 @@ export class TouchControls {
   attach(): void {
     if (this.root) return;
     if (getComputedStyle(this.mount).position === "static") this.mount.style.position = "relative";
-    // No z-index: painted right above the canvas, under the HUD and the panels.
+    // No z-index: painted right above the canvas, under the HUD and the panels. The canvas is
+    // full-bleed; the controls keep to the safe area (the HUD's box, hud.tsx), so every layout
+    // below is in this layer's px.
     const root = el("div", {
       position: "absolute",
-      inset: "0",
+      top: "0",
+      bottom: "0",
+      left: "var(--safe-l, 0px)",
+      right: "var(--safe-r, 0px)",
       pointerEvents: "none",
       userSelect: "none",
       webkitUserSelect: "none",
@@ -536,9 +541,19 @@ export class TouchControls {
     });
     root.appendChild(hit);
     this.minimapHit = hit;
-    // Open full map: a shield over the whole mount (above the sticks) closes it on any tap, so no
-    // finger moves, aims or presses a button through the map; the × marks how to leave.
-    const shield = el("div", { position: "absolute", inset: "0", display: "none", pointerEvents: "auto", touchAction: "none" });
+    // Open full map: a shield over the whole screen (above the sticks, out into the safe-area
+    // strips) closes it on any tap, so no finger moves, aims or presses a button through the map;
+    // the × marks how to leave.
+    const shield = el("div", {
+      position: "absolute",
+      top: "0",
+      bottom: "0",
+      left: "calc(-1 * var(--safe-l, 0px))",
+      right: "calc(-1 * var(--safe-r, 0px))",
+      display: "none",
+      pointerEvents: "auto",
+      touchAction: "none",
+    });
     shield.setAttribute("data-map-shield", "");
     const closeMap = (e: PointerEvent) => {
       e.preventDefault();
@@ -575,7 +590,7 @@ export class TouchControls {
     this.layout();
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObs = new ResizeObserver(() => this.layout());
-      this.resizeObs.observe(this.mount);
+      this.resizeObs.observe(root);
     } else {
       window.addEventListener("resize", this.layout);
     }
@@ -694,7 +709,7 @@ export class TouchControls {
 
   private layout = () => {
     if (!this.root) return;
-    const r = this.mount.getBoundingClientRect();
+    const r = this.root.getBoundingClientRect();
     const w = Math.round(r.width);
     const h = Math.round(r.height);
     const key = `${w}x${h}`;

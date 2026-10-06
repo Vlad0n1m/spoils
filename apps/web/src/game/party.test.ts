@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { minimapMatePoint } from "./minimap";
-import { MATE_COLORS, MAX_MATES, PARTY_LERP_MS, PARTY_STALE_MS, PartyTracker, arrowObstacles, edgeAnchor, mateLabel, parsePartyMsg } from "./party";
+import { MATE_COLORS, MAX_MATES, PARTY_LERP_MS, PARTY_STALE_MS, PartyTracker, arrowInsets, arrowObstacles, edgeAnchor, mateLabel, parsePartyMsg } from "./party";
 
 const near = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
 const mate = (key: string, x: number, y: number, o: Record<string, unknown> = {}) => ({ key, id: `s-${key}`, name: key.toUpperCase(), x, y, alive: true, ...o });
@@ -118,6 +118,22 @@ describe("party (client)", () => {
     // The side edges are free below the top row.
     const left = edgeAnchor(w, h, -3000, h / 2 + 26, ins, avoid);
     assert.ok(near(left.x, 26), `left (${left.x}, ${left.y})`);
+  });
+
+  it("full-bleed canvas: the obstacles and the arrows keep to the safe area of a notched phone", () => {
+    const w = 844, h = 390;
+    const safe = { left: 47, right: 47, top: 0, bottom: 21 };
+    // The safe-area obstacles are the 750 px layout shifted 47 px in.
+    const inner = arrowObstacles(w - 94, h, true);
+    const shifted = arrowObstacles(w, h, true, safe);
+    assert.equal(shifted.length, inner.length);
+    for (let i = 1; i < inner.length; i++) assert.ok(near(shifted[i]!.x0, inner[i]!.x0 + 47) && near(shifted[i]!.x1, inner[i]!.x1 + 47));
+    assert.ok(near(shifted[0]!.x0, inner[0]!.x0 + 47), "minimap obstacle in the safe area's corner");
+    const ins = arrowInsets({ left: 26, right: 26, top: 64, bottom: 30 }, safe);
+    const left = edgeAnchor(w, h, -3000, h / 2 + 26, ins, shifted);
+    assert.ok(near(left.x, 73), `left arrow clears the cutout (${left.x})`);
+    const right = edgeAnchor(w, h, 4000, h / 2 + 26, ins, shifted);
+    assert.ok(near(right.x, w - 73), `right arrow clears the cutout (${right.x})`);
   });
 
   it("mateLabel and minimapMatePoint", () => {

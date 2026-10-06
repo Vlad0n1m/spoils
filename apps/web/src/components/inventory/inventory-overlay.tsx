@@ -369,7 +369,7 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
       {/* The side margins keep the panels out of a landscape phone's camera cutout (viewport-fit=cover). */}
       <div
         className={clsx(
-          "relative ml-[env(safe-area-inset-left,0px)] mr-[env(safe-area-inset-right,0px)] flex justify-center",
+          "relative ml-[var(--safe-l)] mr-[var(--safe-r)] flex justify-center",
           short ? clsx("h-full min-h-0 w-full gap-2", snap.search ? "items-stretch" : "items-center") : "max-h-[84vh] flex-wrap items-start gap-4",
         )}
       >

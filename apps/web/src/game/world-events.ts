@@ -16,6 +16,7 @@ import { Assets, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import { WEV_KIND, WEV_STATE, decodeFight, type EventsMsg, type MapData, type WorldEvent } from "@extract/shared";
 import { AudioEngine } from "./audio/engine";
 import { EXTRACT_PILL_BOTTOM_TOUCH, MINIMAP_MARGIN, minimapSize } from "./hud-layout";
+import { safeInsets } from "./safe-area";
 import { shouldUseTouch } from "./touch-mode";
 import type { GameContext, GameSystem } from "./systems";
 import {
@@ -332,9 +333,12 @@ class WorldEventsSystem implements GameSystem {
     // the HUD v3 extract pill that holds the top edge there.
     const short = h < 480;
     const side = short || this.touch;
-    const mini = minimapSize(w, h);
+    // The canvas is full-bleed: the minimap and this text keep to the safe area (safe-area.ts).
+    const ins = safeInsets();
+    const sw = Math.max(0, w - ins.left - ins.right);
+    const mini = minimapSize(sw, h);
     const top = side ? EXTRACT_PILL_BOTTOM_TOUCH + 6 : MINIMAP_MARGIN + mini + 8;
-    const right = side ? w - MINIMAP_MARGIN - mini - 8 : w - MINIMAP_MARGIN;
+    const right = ins.left + (side ? sw - MINIMAP_MARGIN - mini - 8 : sw - MINIMAP_MARGIN);
     while (this.statusLines.length < lines.length) {
       const t = new Text({ text: "", style: { fontFamily: FONT, fontSize: 13, fontWeight: "800", fill: 0xffffff, stroke: { color: 0x0b0b0b, width: 4 } } });
       t.anchor.set(1, 0);
