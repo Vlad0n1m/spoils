@@ -4,6 +4,12 @@
 
 :root {
   color-scheme: dark;
+  /* Safe-area insets (viewport-fit=cover). The raid's HUD, touch controls and canvas HUD
+     (game/safe-area.ts) read these, so overriding them here simulates a notched phone. */
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
 }
 
 html,

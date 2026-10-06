@@ -23,6 +23,7 @@ import { MinimapWorldMarks } from "./world-events-marks";
 import { MAP_ART_PX, acquireMapArt, releaseMapArt } from "./map-art";
 import { uiFonts, whenUiFontsReady } from "./ui-fonts";
 import { MINIMAP_BASE, MINIMAP_MARGIN, minimapSize } from "./hud-layout";
+import { safeInsets, type SafeInsets } from "./safe-area";
 
 /** Overview canvas size (px). 24,576 / 1024 = 24 world px per texel. */
 export const OVERVIEW_PX = 1024;
@@ -262,10 +263,12 @@ export class Minimap {
     this.root.interactiveChildren = false;
   }
 
-  layout(screenW: number, screenH: number) {
-    const size = minimapSize(screenW, screenH);
+  /** The canvas is full-bleed: the minimap sits in the safe area's top-right corner (safe-area.ts). */
+  layout(screenW: number, screenH: number, ins: SafeInsets = safeInsets()) {
+    const w = Math.max(0, screenW - ins.left - ins.right);
+    const size = minimapSize(w, screenH);
     this.root.scale.set(size / BASE);
-    this.root.position.set(screenW - size - MINIMAP_MARGIN, MINIMAP_MARGIN);
+    this.root.position.set(ins.left + w - size - MINIMAP_MARGIN, MINIMAP_MARGIN);
   }
 
   /**

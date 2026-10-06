@@ -95,6 +95,7 @@ import { GRENADE_TAP_FRAC, grenadeFracFor } from "./grenades";
 import { PerfOverlay, TouchControls, hudReservedRects, shouldUseTouch } from "./touch-controls";
 import { TouchCrosshair, releaseCanvasCursor, setCanvasCrosshair, touchAimLean, touchCrosshairDistance } from "./crosshair";
 import { Minimap, type MinimapExtract } from "./minimap";
+import { safeInsets } from "./safe-area";
 import { PartyTracker, type PartyMateView } from "./party";
 import { autoFireTarget, isPartyMate, type AutoFireCandidate } from "./auto-fire";
 import { canStartHeal, decayFactor, inputCancelsHeal, moveFnFor, Predictor, readServerMove } from "./prediction";
@@ -1313,7 +1314,10 @@ export class GameRenderer implements GameRendererApi {
     this.portrait = portrait;
     this.screenW = w;
     this.screenH = h;
-    const baseZoom = Math.sqrt((w * h) / (VIEW_W * VIEW_H)) || 1;
+    // The canvas is full-bleed (under a phone's cutout too): the scale follows the safe-area width,
+    // so the strips past the safe area show more world instead of zooming in (safe-area.ts).
+    const safe = safeInsets();
+    const baseZoom = Math.sqrt((Math.max(1, w - safe.left - safe.right) * h) / (VIEW_W * VIEW_H)) || 1;
     this.zoom = baseZoom;
     // Immersion camera (camera.ts): intro / cinematic zoom, look-ahead + focus offset, kick + shake.
     const rig = getCameraRig();

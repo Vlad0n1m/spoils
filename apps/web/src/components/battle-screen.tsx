@@ -466,10 +466,11 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
       className="fixed inset-0 z-[60] overflow-hidden bg-[#0b0f0a]"
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* viewport-fit=cover draws under a landscape phone's camera cutout (left or right edge): the
-          canvas and the touch controls stay inside the safe area, like the HUD (hud.tsx). The strips
-          outside show this background. */}
-      <div ref={mountRef} className="absolute inset-y-0 left-[env(safe-area-inset-left,0px)] right-[env(safe-area-inset-right,0px)] touch-none select-none" />
+      {/* viewport-fit=cover: the canvas fills the whole screen, under a landscape phone's camera
+          cutout and home indicator too. What the player reads or taps stays inside the safe area:
+          the HUD (hud.tsx) and the touch controls (touch-controls.ts) by the --safe-* insets
+          (globals.css), the canvas HUD (minimap, full map, party arrows) by game/safe-area.ts. */}
+      <div ref={mountRef} className="absolute inset-0 touch-none select-none" />
 
       {err ? (
         <div className="absolute inset-0 grid place-items-center bg-black/70 p-4">

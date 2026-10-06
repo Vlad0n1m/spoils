@@ -44,6 +44,7 @@ import {
   type LegendState,
 } from "./fullmap-layout";
 import { shouldUseTouch } from "./touch-mode";
+import { safeInsets, type SafeInsets } from "./safe-area";
 import { uiFonts, whenUiFontsReady } from "./ui-fonts";
 import { BOSS_COLOR, bossSpotShown, liveBossTurf, turfLine, type EventBossState } from "./boss";
 import { skullContext } from "./boss-icons";
@@ -277,8 +278,9 @@ export class ZoneToast {
     this.holdMs = boss ? TOAST.HOLD_MS + 1200 : TOAST.HOLD_MS;
   }
 
-  layout(screenW: number, screenH: number) {
-    this.root.position.set(screenW / 2, zoneToastY(screenH));
+  layout(screenW: number, screenH: number, ins: SafeInsets = safeInsets()) {
+    // Centred in the safe area (the canvas is full-bleed: safe-area.ts).
+    this.root.position.set(ins.left + (screenW - ins.left - ins.right) / 2, zoneToastY(screenH));
     // Short landscape phones: 80 %, like the rest of the compact touch HUD.
     this.root.scale.set(screenH < 480 ? 0.8 : 1);
   }
@@ -468,6 +470,8 @@ export class FullMapOverlay {
   private size = 1;
   private fontScale = 1;
   private screen = { w: 0, h: 0 };
+  /** Safe-area insets the layout was made for (safe-area.ts). */
+  private inset = { left: 0, right: 0 };
   private side: MapSide | -1 = -1;
   /** Allowed-extract key of the last label placement ("" = never placed). */
   private placedKey = "";
@@ -596,15 +600,22 @@ export class FullMapOverlay {
   }
 
   /** Re-fit to the screen. Cheap; call on resize (and it is called on open). */
-  layout(screenW: number, screenH: number) {
-    if (screenW === this.screen.w && screenH === this.screen.h) return;
+  layout(screenW: number, screenH: number, ins: SafeInsets = safeInsets()) {
+    if (screenW === this.screen.w && screenH === this.screen.h && ins.left === this.inset.left && ins.right === this.inset.right) return;
     this.screen = { w: screenW, h: screenH };
+    this.inset = { left: ins.left, right: ins.right };
     this.relayout();
   }
 
   private relayout() {
-    const { w: screenW, h: screenH } = this.screen;
+    // The canvas is full-bleed: the map is laid out in the safe area (safe-area.ts), the root shifted
+    // by its left inset; only the backdrop reaches out to the screen edges.
+    const { left, right } = this.inset;
+    const fullW = this.screen.w;
+    const screenW = fullW - left - right;
+    const screenH = this.screen.h;
     if (screenW <= 0 || screenH <= 0) return;
+    this.root.x = left;
     const lay = fullMapLayout(screenW, screenH, shouldUseTouch());
     this.lay = lay;
     const size = lay.panel.size;
@@ -612,7 +623,7 @@ export class FullMapOverlay {
     const fs = lay.fontScale;
     this.fontScale = fs;
     const k = mapScale(size, this.map);
-    this.backdrop.clear().rect(0, 0, screenW, screenH).fill({ color: 0x05080a, alpha: 0.8 });
+    this.backdrop.clear().rect(-left, 0, fullW, screenH).fill({ color: 0x05080a, alpha: 0.8 });
     this.panel.position.set(lay.panel.x, lay.panel.y);
     this.mapSprite.width = this.map.width * k;
     this.mapSprite.height = this.map.height * k;
