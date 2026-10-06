@@ -222,12 +222,12 @@ const MENU_KEYS: Array<[string, string]> = [
 const TOUCH_KEYS: Array<[string, string]> = [
   ["Left stick", "Move · push it part way to walk quietly"],
   ["Right stick", "Aim · firing is automatic: your gun shoots while the aim line is on an enemy (the reticle turns red), never at party mates"],
-  ["ROLL", `Dodge roll (${ROLL_CD_S} s cooldown)`],
-  ["USE", "Search / pick up"],
+  ["Roll", `Dodge roll (${ROLL_CD_S} s cooldown)`],
+  ["Hand", "Search / pick up"],
   ["Reload · swap", "Reload · switch weapon"],
-  ["Bandage · medkit", "Heal"],
   ["Grenade", "Tap: throw ahead · drag: aim and range"],
-  ["Bag · MAP", "Inventory · full map"],
+  ["Under the minimap", "Bandage · medkit · bag · full map (or tap the minimap)"],
+  ["Hold the phone", "Sideways: the game plays in landscape only"],
 ];
 
 function TouchControlsBlock() {

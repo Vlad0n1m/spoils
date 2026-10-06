@@ -14,12 +14,16 @@ import {
   GRENADE_DRAG_SPAN,
   dragRoom,
   grenadeDragAim,
+  CLUSTER_REACH,
+  STICK_KEEP,
   STICK_RADIUS,
   TOUCH_BUTTONS,
   TOUCH_MIN_SIZE,
   aimFromStick,
   hudReservedRects,
+  distToRect,
   layoutTouchButtons,
+  minimapRect,
   rectsOverlap,
   stickRest,
   stickVector,
@@ -36,6 +40,8 @@ const SCREENS: Array<[number, number]> = [
   [800, 360],
   [780, 360],
   [740, 360],
+  [932, 430],
+  [844, 390],
   [1024, 600],
   [1280, 800],
 ];
@@ -60,7 +66,7 @@ describe("touch sticks", () => {
         assert.ok(ring.x >= 0 && ring.y >= 0 && ring.x + ring.w <= w && ring.y + ring.h <= h, `${w}×${h} ${side}: ring on screen`);
         assert.ok(r.y >= h - tz.h, `${w}×${h} ${side}: in the thumb zone's rows`);
         assert.ok(side === "left" ? r.x <= tz.w : r.x >= w - tz.w, `${w}×${h} ${side}: in its corner`);
-        for (const b of buttons) assert.ok(!rectsOverlap(ring, b), `${w}×${h} ${side}: a button covers the resting stick`);
+        for (const b of buttons) assert.ok(distToRect(r.x, r.y, b) >= STICK_RADIUS, `${w}×${h} ${side}: a button covers the resting stick`);
         const bar = hudReservedRects(w, h).find((a) => a.id === "bar")!;
         assert.ok(!rectsOverlap(ring, bar), `${w}×${h} ${side}: the resting stick under the bottom bar`);
       }
@@ -97,11 +103,9 @@ describe("touch grenade button (Weapons v2)", () => {
     assert.ok(Math.abs(dragRoom(100, 100, Math.PI / 4, 844, 390) - 290 * Math.SQRT2) < 1e-6);
   });
 
-  it("sits on the left side next to the meds", () => {
+  it("sits in the combat cluster around the aim stick", () => {
     const g = TOUCH_BUTTONS.find((b) => b.id === "grenade");
-    assert.ok(g && g.side === "left");
-    const ids = TOUCH_BUTTONS.map((b) => b.id);
-    assert.equal(ids.indexOf("grenade"), ids.indexOf("medkit") + 1);
+    assert.ok(g && g.group === "cluster");
   });
 });
 
@@ -118,8 +122,16 @@ describe("touch button layout", () => {
         assert.ok(r.w >= TOUCH_MIN_SIZE && TOUCH_MIN_SIZE >= 40 && r.w === r.h, `${id} size ${r.w}`);
         assert.ok(r.w * BUTTON_DISC < r.w && r.w * BUTTON_DISC >= 32, `${id} disc ${r.w * BUTTON_DISC}`);
         assert.ok(r.x >= 0 && r.y >= 0 && r.x + r.w <= w && r.y + r.h <= h, `${id} on screen`);
-        if (spec.side === "right") assert.ok(r.x >= w / 2, `${id} right half`);
-        else assert.ok(r.x + r.w <= w / 2, `${id} left half`);
+        assert.ok(r.w >= 44, `${id} hit area ${r.w} ≥ 44 px`);
+        if (spec.group === "cluster") {
+          assert.ok(r.x >= w / 2, `${id} right half`);
+          const c = stickRest("right", w, h);
+          assert.ok(Math.hypot(r.x + r.w / 2 - c.x, r.y + r.h / 2 - c.y) <= CLUSTER_REACH, `${id} near the aim stick`);
+        } else {
+          const mm = minimapRect(w, h);
+          assert.ok(r.y > mm.y + mm.h && r.y < mm.y + mm.h + 16, `${id} in the row under the minimap`);
+          assert.ok(r.x >= w / 2 && r.x + r.w <= mm.x + mm.w, `${id} right-aligned under the minimap`);
+        }
         for (const a of hud) {
           if (a.soft) continue;
           assert.ok(!rectsOverlap(r, a), `${id} covers HUD ${a.id}`);
@@ -157,17 +169,32 @@ describe("touch button layout", () => {
     }
   });
 
-  it("no button sits where a thumb lands to start a stick (bottom corners)", () => {
+  it("no button sits where a thumb lands to start a stick (move corner, aim stick ring)", () => {
     for (const [w, h] of SCREENS) {
       const tz = thumbZone(w, h);
-      const corners = [
-        { x: 0, y: h - tz.h, w: tz.w, h: tz.h },
-        { x: w - tz.w, y: h - tz.h, w: tz.w, h: tz.h },
-      ];
+      const corner = { x: 0, y: h - tz.h, w: tz.w, h: tz.h };
+      const aim = stickRest("right", w, h);
       assert.ok(tz.w >= 136 && tz.h >= 140, `${w}×${h}: thumb zone ${tz.w}×${tz.h}`);
       for (const [id, r] of layoutTouchButtons(w, h)) {
-        for (const c of corners) assert.ok(!rectsOverlap(r, c), `${w}×${h}: ${id} in a thumb zone`);
+        assert.ok(!rectsOverlap(r, corner), `${w}×${h}: ${id} in the move thumb's corner`);
+        assert.ok(distToRect(aim.x, aim.y, r) >= STICK_KEEP, `${w}×${h}: ${id} too close to the aim stick`);
       }
+    }
+  });
+
+  it("the same arc on every phone: use left of the stick, reload above it, roll between", () => {
+    for (const [w, h] of [[740, 360], [800, 360], [844, 390], [915, 412], [932, 430]] as const) {
+      const rects = layoutTouchButtons(w, h);
+      const c = stickRest("right", w, h);
+      const ang = (id: "roll" | "interact" | "reload") => {
+        const r = rects.get(id)!;
+        return ((Math.atan2(r.y + r.h / 2 - c.y, r.x + r.w / 2 - c.x) * 180) / Math.PI + 360) % 360;
+      };
+      assert.ok(ang("interact") < ang("roll") && ang("roll") < ang("reload"), `${w}×${h}: arc order`);
+      assert.ok(ang("interact") >= 160 && ang("interact") <= 215, `${w}×${h}: use ${ang("interact")}`);
+      assert.ok(ang("reload") >= 240 && ang("reload") <= 300, `${w}×${h}: reload ${ang("reload")}`);
+      const top = (["bandage", "medkit", "inventory", "map"] as const).map((id) => rects.get(id)!);
+      for (let i = 1; i < top.length; i++) assert.ok(top[i]!.x > top[i - 1]!.x && top[i]!.y === top[0]!.y, `${w}×${h}: top row order`);
     }
   });
 

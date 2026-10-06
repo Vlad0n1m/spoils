@@ -532,9 +532,9 @@ export class FullMapOverlay {
     this.title = text(display, 24, 0xffffff, "400", { letterSpacing: 1, stroke: { color: INK, width: 4 } });
     this.meta = text(body, 14, 0xffd76a, "900", { letterSpacing: 0.5, stroke: { color: INK, width: 3 } });
     this.sub = text(body, 12, 0xc9ced6, "700", { stroke: { color: INK, width: 3 }, wordWrap: true, wordWrapWidth: SIDE_COLUMN_W });
-    // Touch has no M key: the MAP button toggles it.
+    // Touch has no M key: a tap anywhere (or the × button, touch-controls.ts) closes it.
     this.hint = text(body, 12, 0x9aa3ad, "800", { stroke: { color: INK, width: 3 } });
-    this.hint.text = shouldUseTouch() ? "Tap MAP to close" : "M — close map";
+    this.hint.text = shouldUseTouch() ? "Tap anywhere to close" : "M — close map";
 
     this.meRing.circle(0, 0, 14).stroke({ width: 2, color: 0xffffff, alpha: 0.9 });
     this.panel.addChild(

@@ -101,9 +101,9 @@ export function TutorialOverlay({ store, touch, force }: { store: HudStore; touc
     <div
       className={clsx(
         "pointer-events-none absolute z-20",
-        // Touch: under the compass, just right of the raider (centre) and left of the right-hand
-        // buttons — the left column holds the meds / bag / map buttons and the corners the sticks.
-        touch ? "left-[calc(50%+2.5rem)] top-[5.25rem] w-[min(13rem,calc(50%-12.75rem))]" : "left-3 top-[32%] w-[20rem]",
+        // Touch: the left side, under the kill feed and above the move stick — every button now
+        // sits on the right (the cluster around the aim stick, the row under the minimap).
+        touch ? "left-2 top-[7.25rem] w-[min(13rem,calc(50%-7rem))]" : "left-3 top-[32%] w-[20rem]",
       )}
       role="status"
       aria-live="polite"
