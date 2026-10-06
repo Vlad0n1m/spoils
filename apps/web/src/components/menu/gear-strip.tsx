@@ -1,12 +1,10 @@
 "use client";
 
 import { EQUIP_KEYS, FREE_KIT, itemDef, type LoadoutEntry } from "@extract/shared";
-import { formatMinor } from "@/lib/market/config";
 import clsx from "clsx";
 import { draftFromLocked, pruneDraft } from "@/lib/lobby/loadout-model";
 import type { StashResponse } from "@/lib/lobby/api-types";
 import { describeItem } from "@/lib/items-ui";
-import { EDITION_UI } from "@/lib/edition";
 
 const SLOT_LABEL: Record<string, string> = { w1: "Weapon 1", w2: "Weapon 2", armor: "Armor", bp: "Backpack" };
 
@@ -82,8 +80,7 @@ function EditButton({ onClick, label = "Edit" }: { onClick: () => void; label?: 
  * Gear plate under the hero (Brawl Stars layout): what PLAY would lock as a row of chunky squares —
  * the four equipment slots, then meds / ammo / grenades as counted squares — and a lime EDIT that
  * opens Inventory · Loadout. Guests and empty loadouts show the basic gear (the FREE fallback) with a
- * BASIC GEAR tab. Registered users with no weapon in the stash get a "Buy starter kit · <price>" button
- * that opens the stash, where the paid starter kit is sold (design §19).
+ * BASIC GEAR tab. The paid starter kit is sold in Inventory · Stash (design §19), not from the lobby.
  */
 export function GearStrip({
   stash,
@@ -91,7 +88,6 @@ export function GearStrip({
   guest,
   signedIn,
   onEdit,
-  onStarter,
   onRetry,
 }: {
   stash: StashResponse | null;
@@ -99,7 +95,6 @@ export function GearStrip({
   guest: boolean;
   signedIn: boolean;
   onEdit: () => void;
-  onStarter: () => void;
   onRetry: () => void;
 }) {
   if (signedIn && !guest && !stash) {
@@ -125,42 +120,21 @@ export function GearStrip({
   const entries = guest || !signedIn ? [] : loadoutOf(stash);
   if (entries.length === 0) {
     const hasGear = Boolean(stash?.uniques.some((u) => u.state === "in_stash"));
-    // The kit offer is absent from /api/stash in the iDos edition (no paid kit there).
-    const kitPrice =
-      EDITION_UI.starterKitSale && signedIn && !guest && stash?.kit && !stash.uniques.some((u) => u.state === "in_stash" && itemDef(u.def)?.cat === "weapon")
-        ? formatMinor(stash.kit.priceMinor)
-        : null;
     return (
-      <div className="flex items-end gap-3 short:gap-2">
-        <div className="relative">
-          <span className="menu-label absolute -top-3 left-3 z-10 rounded-lg border-[3px] border-black bg-sky-400 px-2 py-0.5 text-xs leading-none tracking-wider text-white [text-shadow:none] short:-top-2.5">
-            <span className="optical-center">BASIC GEAR</span>
-          </span>
-          <ul className={PLATE} aria-label={`You drop with the basic gear: pistol (never lost), ${FREE_KIT.AMMO_LIGHT} light ammo, ${FREE_KIT.BANDAGES} bandage`}>
-            <li><Slot def="pistol" label="Pistol — basic gear, never lost" /></li>
-            <li><Slot def="ammo_light" qty={FREE_KIT.AMMO_LIGHT} label={`${FREE_KIT.AMMO_LIGHT} light ammo`} /></li>
-            <li><Slot def="bandage" qty={FREE_KIT.BANDAGES} label={`${FREE_KIT.BANDAGES} bandage · +25 HP`} /></li>
-            {signedIn && !guest && hasGear && (
-              <li>
-                <EditButton onClick={onEdit} label="Set up" />
-              </li>
-            )}
-          </ul>
-        </div>
-        {kitPrice !== null && (
-          <button
-            type="button"
-            onClick={onStarter}
-            aria-label={`Buy starter kit · ${kitPrice}`}
-            className="menu-chip h-[4.6rem] max-w-[8.5rem] flex-col justify-center bg-[linear-gradient(180deg,#fff27a,#ffd91f_45%,#ffb800)] px-3 text-center text-black focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white/70 short:h-[4rem] short:max-w-[7.5rem]"
-          >
-            <span className="text-base leading-none tracking-wide short:text-sm">
-              <span className="optical-center">Buy starter kit</span>
-            </span>
-            <span className="font-body mt-1 text-xs font-bold leading-tight text-black/80">{kitPrice}</span>
-            <span className="absolute -right-2 -top-2 h-5 w-5 rounded-full border-[3px] border-black bg-rose-500" aria-hidden />
-          </button>
-        )}
+      <div className="relative">
+        <span className="menu-label absolute -top-3 left-3 z-10 rounded-lg border-[3px] border-black bg-sky-400 px-2 py-0.5 text-xs leading-none tracking-wider text-white [text-shadow:none] short:-top-2.5">
+          <span className="optical-center">BASIC GEAR</span>
+        </span>
+        <ul className={PLATE} aria-label={`You drop with the basic gear: pistol (never lost), ${FREE_KIT.AMMO_LIGHT} light ammo, ${FREE_KIT.BANDAGES} bandage`}>
+          <li><Slot def="pistol" label="Pistol — basic gear, never lost" /></li>
+          <li><Slot def="ammo_light" qty={FREE_KIT.AMMO_LIGHT} label={`${FREE_KIT.AMMO_LIGHT} light ammo`} /></li>
+          <li><Slot def="bandage" qty={FREE_KIT.BANDAGES} label={`${FREE_KIT.BANDAGES} bandage · +25 HP`} /></li>
+          {signedIn && !guest && hasGear && (
+            <li>
+              <EditButton onClick={onEdit} label="Set up" />
+            </li>
+          )}
+        </ul>
       </div>
     );
   }

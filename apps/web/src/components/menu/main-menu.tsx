@@ -47,7 +47,7 @@ import { MoreSheet } from "./more-sheet";
 import { Panel, type PanelVariant } from "./panel";
 import { PartyProvider, useParty } from "./party-context";
 import { PartyPrompts } from "./party-prompts";
-import { PartyStrip } from "./party-strip";
+import { PartyButton } from "./party-button";
 import { PlayButton, PlayMiniChip } from "./play-button";
 import { PlayController, type BattleStart, type RetryRequest } from "./play-controller";
 import { PassProvider, usePass } from "./pass-context";
@@ -505,7 +505,6 @@ function MenuScreen({
                   guest={sessionKind === "guest"}
                   signedIn={sessionKind !== "anon"}
                   onEdit={() => openPanel("inventory", "loadout")}
-                  onStarter={() => openPanel("inventory", "stash")}
                   onRetry={() => void stash.reload()}
                 />
               </div>
@@ -529,7 +528,7 @@ function MenuScreen({
             <div className="flex min-h-0 min-w-0 flex-col gap-3 short:gap-2 land:justify-between">
               <WorldCard className="hidden land:flex" />
               <div className="flex min-w-0 flex-col gap-2">
-                <PartyStrip onInvite={() => openPanel("friends", "friends")} />
+                <PartyButton onInvite={() => openPanel("friends", "friends")} />
                 <div data-coach="play">
                   <PlayButton onFixInventory={() => openPanel("inventory", "loadout")} />
                 </div>

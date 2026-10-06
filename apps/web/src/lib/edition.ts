@@ -110,7 +110,7 @@ export interface EditionUi {
   walletLinks: boolean;
   /** "Economy" links to the /economy money page. */
   economyLinks: boolean;
-  /** The paid starter kit card and "Buy starter kit" buttons. */
+  /** The paid starter kit card (Inventory · Stash) and its "Buy starter kit" buttons. */
   starterKitSale: boolean;
   /**
    * Shop · Market tab, "Sell on market" in the stash, market lines in the rules. On in both builds:

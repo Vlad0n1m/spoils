@@ -75,22 +75,22 @@ describe("derivePlayState", () => {
     assert.deepEqual(derivePlayState(input({ session: { loading: false, kind: "anon" }, me: null, stash: null })), { kind: "signed_out" });
   });
 
-  it("ready (lime) with the risk line and the wipe countdown", () => {
-    assert.deepEqual(derivePlayState(input()), { kind: "ready", sub: "4 items at risk · wipe in 50:00", tone: "lime" });
+  it("ready (lime) with the risk line only (the wipe countdown is on the world card)", () => {
+    assert.deepEqual(derivePlayState(input()), { kind: "ready", sub: "4 items at risk", tone: "lime" });
     const one = derivePlayState(input({ stash: { loaded: true, inRaid: false, atRisk: 1, starterClaimed: true } }));
-    assert.deepEqual(one, { kind: "ready", sub: "1 item at risk · wipe in 50:00", tone: "lime" });
+    assert.deepEqual(one, { kind: "ready", sub: "1 item at risk", tone: "lime" });
     const empty = derivePlayState(input({ stash: { loaded: true, inRaid: false, atRisk: 0, starterClaimed: false } }));
-    assert.deepEqual(empty, { kind: "ready", sub: "Basic gear · nothing at risk · wipe in 50:00", tone: "lime" });
+    assert.deepEqual(empty, { kind: "ready", sub: "Basic gear · nothing at risk", tone: "lime" });
   });
 
   it("ready for a guest: basic gear, loot isn't kept (no stash needed)", () => {
     const s = derivePlayState(input({ session: { loading: false, kind: "guest" }, stash: null }));
-    assert.deepEqual(s, { kind: "ready", sub: "Basic gear · loot isn't kept · wipe in 50:00", tone: "lime" });
+    assert.deepEqual(s, { kind: "ready", sub: "Basic gear · loot isn't kept", tone: "lime" });
   });
 
   it("ready turns amber when the wipe is under 15 minutes away", () => {
     const s = derivePlayState(input({ now: at(42, 20) }));
-    assert.deepEqual(s, { kind: "ready", sub: "Short raid · wipe in 12:40", tone: "amber" });
+    assert.deepEqual(s, { kind: "ready", sub: "Short raid · 4 items at risk", tone: "amber" });
     assert.equal((derivePlayState(input({ now: at(39, 59) })) as { tone: string }).tone, "lime");
   });
 
@@ -101,10 +101,10 @@ describe("derivePlayState", () => {
   it("never closed: in a map's last 10 minutes the next map is already open (overlapping maps)", () => {
     // 47:42 into map K: entry to K closed at 45:00, map K + 1 opened then and wipes 45 min after K.
     const s = derivePlayState(input({ now: at(47, 42) }));
-    assert.deepEqual(s, { kind: "ready", sub: "4 items at risk · wipe in 52:18", tone: "lime" });
+    assert.deepEqual(s, { kind: "ready", sub: "4 items at risk", tone: "lime" });
     assert.equal(worldCycleOf(K + 1).wipeAt - at(47, 42), (52 * 60 + 18) * 1000);
     // No reset gap either: a map takes entries from its first second.
-    assert.deepEqual(derivePlayState(input({ now: at(0, 6) })), { kind: "ready", sub: "4 items at risk · wipe in 54:54", tone: "lime" });
+    assert.deepEqual(derivePlayState(input({ now: at(0, 6) })), { kind: "ready", sub: "4 items at risk", tone: "lime" });
   });
 
   it("the clock decides the phase even with a stale status (from the previous map)", () => {

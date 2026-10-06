@@ -5,13 +5,13 @@
  */
 import type { LoadoutErrCode, MeWorldDto, WorldStatusDto } from "@extract/shared";
 import type { WorldJoinErrorBody } from "./api-types";
-import { fmtClockS, fmtLocalHm, secsUntil, worldView } from "./world-clock";
+import { fmtLocalHm, secsUntil, worldView } from "./world-clock";
 
 export type PlayState =
   | { kind: "loading" }
   | { kind: "signed_out" }
   | { kind: "offline" }
-  /** amber: wipe < 15 min ("Short raid · wipe in 12:40"). */
+  /** amber: wipe < 15 min ("Short raid · 4 items at risk"); the countdown itself is on the world card. */
   | { kind: "ready"; sub: string; tone: "lime" | "amber" }
   | { kind: "joining" }
   /** Entry is closed (closing) or the new map is starting (resetting), not armed. */
@@ -105,10 +105,10 @@ function baseState(i: PlayInput): Exclude<PlayState, { kind: "error" }> {
   // Armed for this cycle and the map just opened: the menu fires the auto-enter after its jitter.
   // A hidden tab never auto-enters (the menu turns it into a plain "ready" and pings the player).
   if (i.local.armedCycle === v.cycle && !i.local.hidden) return { kind: "armed", nextInS: 0 };
-  const wipeIn = v.wipeAt - i.now;
-  const clock = fmtClockS(secsUntil(v.wipeAt, i.now));
-  if (wipeIn < SHORT_RAID_MS) return { kind: "ready", sub: `Short raid · wipe in ${clock}`, tone: "amber" };
-  return { kind: "ready", sub: `${riskLine(i.session.kind, i.stash?.atRisk ?? 0)} · wipe in ${clock}`, tone: "lime" };
+  // The wipe countdown lives on the world card right above: the sub-line only says what is at stake.
+  const risk = riskLine(i.session.kind, i.stash?.atRisk ?? 0);
+  if (v.wipeAt - i.now < SHORT_RAID_MS) return { kind: "ready", sub: `Short raid · ${risk}`, tone: "amber" };
+  return { kind: "ready", sub: risk, tone: "lime" };
 }
 
 /** PLAY state at `i.now`. A join error wraps whatever the button would show otherwise. */
