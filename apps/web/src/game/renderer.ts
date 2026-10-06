@@ -781,11 +781,6 @@ export class GameRenderer implements GameRendererApi {
     this.endReplay();
   }
 
-  /** Touch HUD: a tap on the second weapon chip switches weapons, like the swap button. */
-  swapWeapon(): void {
-    this.input?.press("swap");
-  }
-
   private endReplay() {
     if (!this.replay) return;
     this.replay = null;

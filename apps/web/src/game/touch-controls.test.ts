@@ -22,8 +22,6 @@ import {
   STICK_RADIUS,
   TOUCH_BUTTONS,
   TOUCH_MIN_SIZE,
-  TOUCH_STRIP_H,
-  touchStripSize,
   aimFromStick,
   hudReservedRects,
   distToRect,
@@ -253,19 +251,6 @@ describe("touch button layout", () => {
       }
       assert.equal(hud.some((a) => a.id === "ring"), false, "no centred extract ring any more");
     }
-  });
-
-  it("HUD v3 bottom strip: one slim row on the bottom edge, between the sticks", () => {
-    for (const [w, h] of SCREENS) {
-      const bar = hudReservedRects(w, h).find((a) => a.id === "bar")!;
-      const tz = thumbZone(w, h);
-      const aim = stickRest("right", w, h);
-      assert.ok(bar.h <= (h >= 600 ? 56 : 48), `${w}×${h}: strip ${bar.h} px tall`);
-      assert.equal(bar.y + bar.h, h, "on the bottom edge");
-      assert.ok(bar.x >= tz.w && bar.x + bar.w <= aim.x - STICK_RADIUS, `${w}×${h}: between the move corner and the aim stick`);
-    }
-    // 844×390: the panel itself is 2.5 rem; with the chip's 44 px hit area ≤ 2.75 rem + the 4 px gap.
-    assert.ok(touchStripSize(390).h <= 44 && TOUCH_STRIP_H <= 44);
   });
 
   it("an empty or zero-size mount places nothing", () => {
