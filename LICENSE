@@ -1,0 +1,34 @@
+SPOILS Proprietary License
+
+Copyright (c) 2026 Vladislav Karachkov. All rights reserved.
+
+This repository is published so that the source code can be read. Publishing
+it does not make it open source, and no license to use it is granted except
+as stated below.
+
+1. Viewing. Anyone may view this source code on GitHub.
+
+2. Hackathon review. While the Colosseum hackathon is being judged, the
+   judges and staff of Colosseum may also clone, build and run this code
+   locally, solely to evaluate the project. This permission ends when judging
+   ends.
+
+3. Everything else is prohibited without prior written permission from the
+   copyright holder, including to:
+   - copy, modify, merge or create derivative works from the code or its
+     assets (art, sound, text and data);
+   - publish, distribute, sublicense or sell the code or its assets;
+   - run the game, its servers or any part of it for anyone other than
+     yourself, publicly or commercially;
+   - use the code or its assets to build a competing game or service.
+
+4. Security research. Testing the live game at spoils.gg without permission
+   is not allowed under this license. Vulnerabilities must be reported
+   privately as described in the README, and must not be exploited, published
+   or used to gain an advantage in the game.
+
+5. No warranty. The code is provided "as is", without warranty of any kind.
+   The copyright holder is not liable for any claim or damage arising from it.
+
+For permission or licensing requests, contact the copyright holder through
+GitHub: https://github.com/Vlad0n1m

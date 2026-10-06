@@ -32,6 +32,8 @@
 - [Repository map](#repository-map)
 - [Status and roadmap](#status-and-roadmap)
 - [Team](#team)
+- [Security](#found-a-vulnerability)
+- [License](#license)
 
 ## The problem
 
@@ -292,3 +294,15 @@ Built during the hackathon: first commit 2 October 2026. Live today at spoils.gg
 
 **Vlad** ([@Vlad0n1m](https://github.com/Vlad0n1m)) — solo builder: game design, code, art direction, working with AI
 coding agents. No VC or angel funding.
+
+## Found a vulnerability?
+
+We would rather pay you than fight you. Report it privately via
+**[Security → Report a vulnerability](https://github.com/Vlad0n1m/spoils/security/advisories/new)** and get a reward
+for valid findings, decided case by case by severity. Do not exploit the issue on the live game, do not publish it
+and do not use it to gain an advantage over other players; give us reasonable time to fix it.
+
+## License
+
+Proprietary, all rights reserved. The source is public to read; Colosseum judges and staff may clone, build and run it
+to evaluate the project. See [LICENSE](LICENSE).
