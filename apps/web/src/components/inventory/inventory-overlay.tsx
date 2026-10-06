@@ -382,7 +382,9 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
         >
           <header className={clsx("flex shrink-0 items-center gap-2", short ? "h-11" : "h-11")}>
             {short && itemBar ? (
-              <div className="min-w-0 flex-1">{itemBar}</div>
+              // inline-size containment: a long toast or item name truncates instead of widening the
+              // content-sized panel (it used to resize when "Bag full" replaced the title).
+              <div className="min-w-0 flex-1 [contain:inline-size]">{itemBar}</div>
             ) : (
               <>
                 <h2 className={clsx("toon-text shrink-0 tracking-wide text-white", short ? "text-lg" : "text-2xl")}>Inventory</h2>
