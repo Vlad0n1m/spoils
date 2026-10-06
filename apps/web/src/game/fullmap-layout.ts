@@ -67,8 +67,9 @@ export function fullMapLayout(w: number, h: number, touch: boolean): FullMapLayo
       panel: { x, y: top, size },
       ruler: 0,
       title: { x, y: top - 22, w: size, align: "center" },
-      // The gutter between the left touch buttons (MAP, items, stick: x < ~160) and the map.
-      legend: x - 8 - 160 >= 80 ? { mode: "gutter", x: x - 8, y: top, w: x - 8 - 160 } : { mode: "inside", x: x + 6, y: top + size - 6, w: 0 },
+      // The gutter left of the map: the touch sticks and buttons step aside while the map is open
+      // (and the MAP button is gone), so only a 16 px edge stays clear; the legend never covers the map.
+      legend: x - 8 - 16 >= 80 ? { mode: "gutter", x: x - 8, y: top, w: Math.min(190, x - 8 - 16) } : { mode: "inside", x: x + 6, y: top + size - 6, w: 0 },
       hint: { x: x + size / 2, y: top + size + 2, visible: false },
       compact: true,
       fontScale: Math.max(0.72, Math.min(0.85, size / 420)),

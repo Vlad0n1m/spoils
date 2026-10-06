@@ -46,13 +46,22 @@ describe("fullMapLayout", () => {
     const l = fullMapLayout(844, 390, true);
     assert.equal(l.compact, true);
     assert.equal(l.legend.mode, "gutter");
-    assert.ok(l.legend.x <= l.panel.x - 8 && l.legend.x - l.legend.w >= 160, "clear of the left touch buttons");
-    // Too narrow for a gutter: the legend goes into a corner of the map.
-    assert.equal(fullMapLayout(640, 360, true).legend.mode, "inside");
+    // The touch controls step aside while the map is open: only the screen edge stays clear.
+    assert.ok(l.legend.x <= l.panel.x - 8 && l.legend.x - l.legend.w >= 16, "left of the map, off the edge");
     assert.ok(l.panel.x >= 176 && l.panel.x + l.panel.size <= 844 - 176);
     assert.ok(l.panel.y + l.panel.size <= 390);
     assert.ok(l.title.y >= 40, "under the HUD's extraction pill");
     assert.equal(l.ruler, 0);
+  });
+
+  it("iPhone 13 safe area (750×390) and 640×360: the legend sits left of the map, not on it", () => {
+    for (const [w, h] of [[750, 390], [640, 360]] as const) {
+      const l = fullMapLayout(w, h, true);
+      assert.equal(l.legend.mode, "gutter", `${w}x${h}`);
+      assert.ok(l.legend.x <= l.panel.x - 8 && l.legend.w >= 80 && l.legend.x - l.legend.w >= 16);
+    }
+    // Far too narrow for a gutter: the legend goes into a corner of the map.
+    assert.equal(fullMapLayout(340, 300, true).legend.mode, "inside");
   });
 
   it("phone portrait 390×844: under the minimap, legend below the map, all on screen", () => {
