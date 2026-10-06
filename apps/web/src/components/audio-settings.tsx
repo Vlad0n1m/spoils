@@ -3,7 +3,8 @@
 /**
  * Audio settings popover (WP-A1): master / sfx / ambience / ui volumes, mute, "visualize sounds"
  * (the sound ring, WP-S) and "reduce flashes" (lightning). Mute lives here only — M is the full
- * map (critique "Key bindings").
+ * map (critique "Key bindings"). On a touch device that can vibrate it also holds "Vibration"
+ * (game/haptics.ts, its own localStorage key `extract.haptics.v1`, default on).
  *
  * Everything persists through game/audio/settings.ts (localStorage `extract.audio.v1`, wrapped in
  * try/catch there); the AudioEngine and WeatherFx subscribe to the same store, so a slider drag is
@@ -13,6 +14,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboard
 import clsx from "clsx";
 import { useAudioSettings, type AudioSettings } from "../game/audio/settings";
 import { useUiSound } from "../game/audio/ui-sounds";
+import { useHaptics } from "../game/haptics";
 
 export type VolumeKey = "master" | "sfx" | "ambience" | "ui";
 export type ToggleKey = "muted" | "visualize" | "reduceFlashes" | "reduceShake";
@@ -30,6 +32,9 @@ export const TOGGLE_ROWS: ReadonlyArray<{ key: ToggleKey; label: string; hint: s
   { key: "reduceFlashes", label: "Reduce flashes", hint: "Softer lightning for light-sensitive players" },
   { key: "reduceShake", label: "Reduce screen shake", hint: "No camera shake or kill zoom, softer recoil" },
 ];
+
+/** Shown only on touch devices that can vibrate (game/haptics.ts hapticsSupported). */
+export const HAPTICS_ROW = { label: "Vibration", hint: "Short buzzes for hits, damage, kills, loot and extraction" } as const;
 
 /** Slider value 0..1 → whole percent for the label and the range input. */
 export function toPercent(v: number): number {
@@ -75,6 +80,7 @@ export function AudioSettingsButton({ className, align = "right", direction = "d
   const button = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const ui = useUiSound();
+  const [canVibrate, vibrate, setVibrate] = useHaptics();
 
   // Close on outside pointer and on Escape (focus goes back to the button for keyboard users).
   useEffect(() => {
@@ -186,6 +192,24 @@ export function AudioSettingsButton({ className, align = "right", direction = "d
                 </label>
               );
             })}
+            {canVibrate && (
+              <label htmlFor={`${panelId}-haptics`} className="flex cursor-pointer items-start gap-3 text-sm" title={HAPTICS_ROW.hint}>
+                <input
+                  id={`${panelId}-haptics`}
+                  type="checkbox"
+                  checked={vibrate}
+                  onChange={(e) => {
+                    ui.click();
+                    setVibrate(e.currentTarget.checked);
+                  }}
+                  className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-zooa-lime"
+                />
+                <span className="flex flex-col">
+                  <span className="font-body">{HAPTICS_ROW.label}</span>
+                  <span className="font-body text-xs lg:text-[0.8125rem] text-white/70">{HAPTICS_ROW.hint}</span>
+                </span>
+              </label>
+            )}
           </div>
         </div>
       )}

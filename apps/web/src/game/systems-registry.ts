@@ -13,6 +13,7 @@ import { createAmbientSystem, createWorldFxSystem } from "./effects";
 import { createWeatherSystem } from "./env/weather-fx";
 import { DamageArcSystem } from "./entities";
 import { createGrenadeSystem } from "./grenades";
+import { createHapticsSystem } from "./haptics-system";
 import { createMapOverlaySystem } from "./fullmap";
 import { createIntroSystem } from "./intro";
 import { createPartySystem } from "./party";
@@ -60,4 +61,6 @@ export const SYSTEM_FACTORIES: readonly SystemFactory[] = [
   () => createMapOverlaySystem(),
   // Positional audio, ambience, own-action cues. Draws nothing.
   () => createGameAudioSystem(),
+  // Vibration on phones (damage, hits, kills, loot, extraction, low HP, wipe warning). Draws nothing.
+  () => createHapticsSystem(),
 ];
