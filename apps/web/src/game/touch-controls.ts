@@ -1,14 +1,17 @@
 /**
  * Phone touch controls (TWA build): a floating move stick on the left half (part deflection =
  * quiet walk), a floating aim stick on the right half that only aims (firing is automatic while
- * the aim is on an enemy: auto-fire.ts), and round buttons for roll, use (search / pick up),
- * reload, weapon swap, bandage, medkit, grenade (Weapons v2: tap throws ahead, a drag off the
- * button aims the throw and sets its range), inventory and full map.
+ * the aim is on an enemy: auto-fire.ts), and round icon buttons in two groups: the combat cluster
+ * around the aim stick (roll, use = search / pick up, reload, grenade — Weapons v2: tap throws
+ * ahead, a drag off the button aims the throw and sets its range — and weapon swap) and the
+ * utility row under the minimap (bandage, medkit, inventory, full map). Tapping the minimap also
+ * opens the full map; while it is open the sticks and the cluster are gone and a tap anywhere (or
+ * the × button) closes it, so no finger moves or aims through the map.
  *
  * Both sticks are always marked: at rest a faint ring + knob labelled MOVE / AIM sits in each
  * thumb corner (stickRest); a finger anywhere in the stick's half moves the stick there, and on
- * release it returns to its rest mark. Buttons have a ≥ 44 px hit area (40 px on tight screens)
- * with a smaller, half-transparent disc drawn inside it (BUTTON_DISC), so they hide less of the map.
+ * release it returns to its rest mark. Buttons have a ≥ 44 px hit area with a smaller,
+ * half-transparent disc drawn inside it (BUTTON_DISC), so they hide less of the map.
  *
  * Plain DOM inside the game mount, right above the canvas and BELOW the React HUD in paint order
  * (no z-index), so the HUD's own buttons (controls / leave raid, audio) stay tappable and the
@@ -23,6 +26,7 @@ import type { InputController, TouchAction } from "./input";
 import { MINIMAP_MARGIN, minimapSize } from "./minimap";
 import { zoneToastY } from "./fullmap";
 import { bossBarY } from "./boss-hud";
+import { touchIconSvg } from "./touch-icons";
 
 /** Stick travel in CSS px for full deflection. */
 export const STICK_RADIUS = 48;
@@ -32,6 +36,8 @@ export const STICK_KNOB = 40;
 export const AIM_FROM = 0.2;
 /** Visible disc of a button, as a fraction of its hit area. */
 export const BUTTON_DISC = 0.8;
+/** The stick zones start this far down the mount (the top strip belongs to the HUD and the minimap). */
+const STICK_ZONE_TOP = 0.2;
 
 /** Phones and tablets (coarse primary pointer); ?touch=1 forces it on a desktop, ?touch=0 off. */
 export { shouldUseTouch } from "./touch-mode";
@@ -107,45 +113,63 @@ export interface HudArea extends Rect {
 
 export type TouchButtonId = TouchAction;
 
+/** Inline SVG glyph of a button (touch-icons.ts). */
+export type TouchIconId = "roll" | "use" | "reload" | "swap" | "grenade" | "bandage" | "medkit" | "bag" | "map";
+
 export interface TouchButtonSpec {
   id: TouchButtonId;
-  side: "left" | "right";
+  /**
+   * "cluster": combat actions packed around the aim stick's rest mark (right thumb); "top": the
+   * utility row right under the minimap (heals, inventory, full map).
+   */
+  group: "cluster" | "top";
+  /**
+   * Cluster: preferred direction from the aim stick, degrees on screen (180 = left, 270 = up), so the
+   * cluster keeps the same arc on every screen.
+   */
+  angle?: number;
   /** Preferred diameter (px); shrinks down to TOUCH_MIN_SIZE when the screen is tight. */
   size: number;
-  label: string;
-  /** Icon instead of the label (public/ path). */
-  icon?: string;
+  icon: TouchIconId;
   aria: string;
 }
 
 /**
- * Every battle action that is not a stick (move / aim / fire / quiet walk are). Placement priority
- * per side is this order: the first ones get the spots nearest the thumb. Take all and close are
- * buttons of the search / inventory panels themselves; extraction is standing in the circle.
+ * Every battle action that is not a stick (move / aim / fire / quiet walk are). Cluster buttons are
+ * placed in this order, each on the free spot nearest the aim stick, so the first ones sit closest
+ * to the thumb; the top row runs left → right in this order and ends under the minimap's right
+ * edge. Take all and close are buttons of the search / inventory panels themselves; extraction is
+ * standing in the circle.
  */
 export const TOUCH_BUTTONS: readonly TouchButtonSpec[] = [
-  { id: "roll", side: "right", size: 56, label: "ROLL", aria: "Dodge roll" },
-  { id: "interact", side: "right", size: 50, label: "USE", aria: "Search / pick up" },
-  { id: "reload", side: "right", size: 46, label: "RELOAD", icon: "svg:reload", aria: "Reload" },
-  { id: "swap", side: "right", size: 46, label: "SWAP", icon: "svg:swap", aria: "Switch weapon" },
-  { id: "bandage", side: "left", size: 46, label: "+", icon: "/sprites/bandage.png", aria: "Bandage" },
-  { id: "medkit", side: "left", size: 46, label: "+", icon: "/sprites/medkit.png", aria: "Medkit" },
-  { id: "grenade", side: "left", size: 46, label: "G", icon: "/sprites/grenade.png", aria: "Throw grenade (drag to aim)" },
-  { id: "inventory", side: "left", size: 44, label: "BAG", icon: "/sprites/backpack.png", aria: "Inventory" },
-  { id: "map", side: "left", size: 44, label: "MAP", aria: "Full map" },
+  { id: "roll", group: "cluster", angle: 225, size: 56, icon: "roll", aria: "Dodge roll" },
+  { id: "interact", group: "cluster", angle: 180, size: 52, icon: "use", aria: "Search / pick up" },
+  { id: "reload", group: "cluster", angle: 270, size: 48, icon: "reload", aria: "Reload" },
+  { id: "grenade", group: "cluster", angle: 200, size: 48, icon: "grenade", aria: "Throw grenade (drag to aim)" },
+  { id: "swap", group: "cluster", angle: 250, size: 48, icon: "swap", aria: "Switch weapon" },
+  { id: "bandage", group: "top", size: 44, icon: "bandage", aria: "Bandage" },
+  { id: "medkit", group: "top", size: 44, icon: "medkit", aria: "Medkit" },
+  { id: "inventory", group: "top", size: 44, icon: "bag", aria: "Inventory" },
+  { id: "map", group: "top", size: 44, icon: "map", aria: "Full map" },
 ];
 
-/** Smallest hit area (px) a button shrinks to on a tight screen. */
-export const TOUCH_MIN_SIZE = 40;
+/** Smallest hit area (px) a button shrinks to on a tight screen (the Apple / Material minimum). */
+export const TOUCH_MIN_SIZE = 44;
 /** Distance kept from the screen edges and between buttons (px; the discs add their own margin). */
 const EDGE = 4;
 const GAP = 6;
 /** Candidate grid step (px). */
-const STEP = 4;
+const STEP = 2;
+/** Room kept around the resting aim stick's centre: a thumb going down to aim never lands on a button. */
+export const STICK_KEEP = STICK_RADIUS + 10;
+/** Cluster buttons stay within this distance of the aim stick's centre (px, to the button centre). */
+export const CLUSTER_REACH = STICK_KEEP + 118;
+/** The top row sits this far under the minimap. */
+const TOP_ROW_GAP = 8;
 
 /**
- * Where the thumbs land to start the floating sticks: the bottom-left and bottom-right corners.
- * No button may sit there, or a thumb that goes down to move or aim taps a medkit instead.
+ * Where the left thumb lands to start the floating move stick: the bottom-left corner. No button
+ * may sit there, or a thumb that goes down to move taps a medkit instead.
  */
 export function thumbZone(w: number, h: number): { w: number; h: number } {
   return { w: Math.round(Math.max(136, Math.min(200, 0.19 * w))), h: Math.round(Math.max(140, Math.min(210, 0.4 * h))) };
@@ -162,17 +186,25 @@ export const TOUCH_BAR_SCALE = 0.78;
  */
 export function stickRest(side: "left" | "right", w: number, h: number): { x: number; y: number } {
   const tz = thumbZone(w, h);
-  const m = STICK_RADIUS + 10;
-  const x = Math.max(m, tz.w / 2);
-  const y = Math.min(h - m, h - tz.h / 2);
+  const m = STICK_RADIUS + 14;
+  const x = Math.max(m, (side === "left" ? tz.w : AIM_CORNER * tz.w) / 2);
+  const y = Math.min(h - m, h - (side === "left" ? tz.h : AIM_CORNER * tz.h) / 2);
   return { x: side === "left" ? x : w - x, y };
+}
+
+/** The aim stick rests deeper in its corner than the move stick, so the action cluster fits around it. */
+const AIM_CORNER = 0.8;
+
+/** The minimap's screen rect (minimap.ts: MINIMAP_MARGIN from the top-right corner). */
+export function minimapRect(w: number, h: number): Rect {
+  const mm = minimapSize(w, h);
+  return { x: Math.round(w - MINIMAP_MARGIN - mm), y: MINIMAP_MARGIN, w: Math.round(mm), h: Math.round(mm) };
 }
 
 /**
  * Screen areas the touch HUD (components/hud.tsx with `touch`) and the canvas HUD (minimap.ts,
- * boss-hud.ts, the zone toast of fullmap.ts) draw into, plus the two thumb zones, in CSS px of the
- * game mount. Sizes mirror the HUD's Tailwind classes at their largest content, times the touch
- * scales above; keep them in sync when the touch HUD layout changes.
+ * boss-hud.ts, the zone toast of fullmap.ts) draw into, plus the move thumb's corner, in CSS px of the game mount. Sizes mirror the HUD's Tailwind classes at their
+ * largest content, times the touch scales above; keep them in sync when the touch HUD layout changes.
  */
 export function hudReservedRects(w: number, h: number): HudArea[] {
   const r: HudArea[] = [];
@@ -192,10 +224,10 @@ export function hudReservedRects(w: number, h: number): HudArea[] {
   const barW = Math.round((Math.min(w - 24, 480) + 12) * TOUCH_BAR_SCALE);
   const barH = Math.round(4 + (84 + 6 + 4) * TOUCH_BAR_SCALE);
   r.push({ id: "bar", x: (w - barW) / 2, y: h - barH, w: barW, h: barH });
-  // The thumbs' corners.
+  // The left thumb's corner (move stick). The resting aim stick is kept clear by the layout itself
+  // (a STICK_KEEP circle, so buttons may tuck in around it).
   const tz = thumbZone(w, h);
   r.push({ id: "thumb-left", x: 0, y: h - tz.h, w: tz.w, h: tz.h });
-  r.push({ id: "thumb-right", x: w - tz.w, y: h - tz.h, w: tz.w, h: tz.h });
   // Soft: shown now and then. Top left, under the chips: kill feed, up to 5 rows, max-w min(22rem, 40vw)
   // at 85 %. Only the first rows are kept clear: the feed is short-lived and paints over the buttons anyway.
   r.push({ id: "killfeed", soft: true, x: 0, y: 52, w: 8 + 0.85 * Math.min(352, 0.4 * w) + 6, h: 2 * 29 + 6 });
@@ -218,19 +250,24 @@ export function rectsOverlap(a: Rect, b: Rect, gap = 0): boolean {
   return a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
 }
 
-/** Where each side's buttons gather: right above that side's thumb zone. */
-function anchorOf(side: "left" | "right", w: number, h: number): { x: number; y: number } {
-  const tz = thumbZone(w, h);
-  return { x: side === "right" ? w - tz.w / 2 : tz.w / 2, y: h - tz.h };
+/** Distance from a point to the nearest point of a rect (0 inside). */
+export function distToRect(px: number, py: number, r: Rect): number {
+  const dx = Math.max(r.x - px, 0, px - (r.x + r.w));
+  const dy = Math.max(r.y - py, 0, py - (r.y + r.h));
+  return Math.hypot(dx, dy);
 }
 
 /**
- * Button rects for a w × h game mount. Each button, in TOUCH_BUTTONS order, takes the free spot
- * (inside its half of the screen, clear of the HUD areas and the buttons already placed) nearest
- * its side's thumb anchor, at its preferred size or smaller down to TOUCH_MIN_SIZE. Buttons that
- * fit nowhere get a second pass that may cover the soft areas (kill feed, interact hint, extract
- * ring: short-lived); the hard ones (timer / wipe / boss stack, minimap, bottom bar, ping, corner
- * chips) are never covered. A button that still fits nowhere is left out (absent from the map).
+ * Button rects for a w × h game mount.
+ *  - Top row: the "top" buttons side by side right under the minimap, right-aligned with it.
+ *  - Cluster: each "cluster" button, in TOUCH_BUTTONS order, takes the free spot nearest the aim
+ *    stick's rest mark — in the right half, outside the stick's keep-out circle (STICK_KEEP), clear
+ *    of the HUD areas and of the buttons already placed — so they pack into an arc around the
+ *    right thumb, never farther than CLUSTER_REACH from it.
+ * Cramped screens shrink every button together (never below TOUCH_MIN_SIZE); only when that is not
+ * enough may cluster buttons cover the soft areas (kill feed, interact hint, extract ring:
+ * short-lived) — the hard ones are never covered. A button that still fits nowhere is left out
+ * (absent from the map).
  */
 export function layoutTouchButtons(
   w: number,
@@ -240,26 +277,52 @@ export function layoutTouchButtons(
 ): Map<TouchButtonId, Rect> {
   let best = new Map<TouchButtonId, Rect>();
   if (!(w > 0) || !(h > 0)) return best;
-  // Cramped screens: shrink every button together rather than drop one.
-  for (const scale of LAYOUT_SCALES) {
-    const sized = specs.map((s) => ({ ...s, size: Math.max(TOUCH_MIN_SIZE, Math.round((s.size * scale) / 2) * 2) }));
-    const got = layoutPass(w, h, reserved, sized);
-    if (got.size > best.size) best = got;
-    if (got.size === specs.length) break;
+  // Shrinking the buttons beats covering a soft area; covering one beats dropping a button.
+  for (const coverSoft of [false, true]) {
+    for (const scale of LAYOUT_SCALES) {
+      const sized = specs.map((s) => ({ ...s, size: Math.max(TOUCH_MIN_SIZE, Math.round((s.size * scale) / 2) * 2) }));
+      const got = layoutPass(w, h, reserved, sized, coverSoft);
+      if (got.size > best.size) best = got;
+      if (got.size === specs.length) return got;
+    }
   }
   return best;
 }
 
-const LAYOUT_SCALES = [1, 0.85, 0.72, 0.6] as const;
+const LAYOUT_SCALES = [1, 0.92, 0.85] as const;
 
-function layoutPass(w: number, h: number, reserved: readonly HudArea[], specs: readonly TouchButtonSpec[]): Map<TouchButtonId, Rect> {
+function layoutPass(
+  w: number,
+  h: number,
+  reserved: readonly HudArea[],
+  specs: readonly TouchButtonSpec[],
+  coverSoft: boolean,
+): Map<TouchButtonId, Rect> {
   const out = new Map<TouchButtonId, Rect>();
   const placed: Rect[] = [];
   const hard = reserved.filter((r) => !r.soft);
-  for (const areas of [reserved, hard]) {
-    for (const spec of specs) {
+  // Top row, right → left from the minimap's right edge.
+  const mm = minimapRect(w, h);
+  let x = mm.x + mm.w;
+  const y = mm.y + mm.h + TOP_ROW_GAP;
+  const top = specs.filter((s) => s.group === "top");
+  for (let i = top.length - 1; i >= 0; i--) {
+    const s = top[i]!;
+    x -= s.size;
+    const rc = { x, y, w: s.size, h: s.size };
+    x -= GAP;
+    if (rc.x < EDGE || rc.y + rc.h > h - EDGE) continue;
+    if (hard.some((a) => rectsOverlap(rc, a))) continue;
+    out.set(s.id, rc);
+    placed.push(rc);
+  }
+  // Cluster around the aim stick.
+  const c = stickRest("right", w, h);
+  const cluster = specs.filter((s) => s.group === "cluster");
+  for (const areas of coverSoft ? [reserved, hard] : [reserved]) {
+    for (const spec of cluster) {
       if (out.has(spec.id)) continue;
-      const rc = placeOne(spec, w, h, areas, placed);
+      const rc = placeNearStick(spec.size, spec.angle ?? 225, w, h, c, areas, placed);
       if (!rc) continue;
       placed.push(rc);
       out.set(spec.id, rc);
@@ -268,27 +331,38 @@ function layoutPass(w: number, h: number, reserved: readonly HudArea[], specs: r
   return out;
 }
 
-function placeOne(spec: TouchButtonSpec, w: number, h: number, areas: readonly Rect[], placed: readonly Rect[]): Rect | null {
-  const a = anchorOf(spec.side, w, h);
-  for (let size = spec.size; size >= TOUCH_MIN_SIZE; size -= 4) {
-    const x0 = spec.side === "right" ? Math.ceil(w / 2) : EDGE;
-    const x1 = spec.side === "right" ? w - EDGE - size : Math.floor(w / 2) - size;
-    let best: Rect | null = null;
-    let bestD = Infinity;
-    for (let y = EDGE; y <= h - EDGE - size; y += STEP) {
-      for (let x = x0; x <= x1; x += STEP) {
-        const d = (x + size / 2 - a.x) ** 2 + (y + size / 2 - a.y) ** 2;
-        if (d >= bestD) continue;
-        const c = { x, y, w: size, h: size };
-        if (areas.some((r) => rectsOverlap(c, r))) continue;
-        if (placed.some((r) => rectsOverlap(c, r, GAP))) continue;
-        best = c;
-        bestD = d;
-      }
+/** Cluster placement: px of extra distance one degree off a button's preferred direction costs. */
+const ANGLE_COST = 0.8;
+
+function placeNearStick(
+  size: number,
+  angle: number,
+  w: number,
+  h: number,
+  c: { x: number; y: number },
+  areas: readonly Rect[],
+  placed: readonly Rect[],
+): Rect | null {
+  let best: Rect | null = null;
+  let bestD = Infinity;
+  for (let y = EDGE; y <= h - EDGE - size; y += STEP) {
+    for (let x = Math.ceil(w / 2); x <= w - EDGE - size; x += STEP) {
+      const dx = x + size / 2 - c.x;
+      const dy = y + size / 2 - c.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > CLUSTER_REACH) continue;
+      const off = Math.abs(((((Math.atan2(dy, dx) * 180) / Math.PI - angle) % 360) + 540) % 360 - 180);
+      const d = dist + ANGLE_COST * off;
+      if (d >= bestD) continue;
+      const rc = { x, y, w: size, h: size };
+      if (distToRect(c.x, c.y, rc) < STICK_KEEP) continue;
+      if (areas.some((r) => rectsOverlap(rc, r))) continue;
+      if (placed.some((r) => rectsOverlap(rc, r, GAP))) continue;
+      best = rc;
+      bestD = d;
     }
-    if (best) return best;
   }
-  return null;
+  return best;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -305,6 +379,8 @@ export interface TouchHudState {
   medkits: number;
   /** Weapons v2: hand grenades carried (the grenade button's badge; dimmed at 0). */
   grenades: number;
+  /** The full map is open: the controls step aside for it (tap anywhere closes it). */
+  mapOpen?: boolean;
 }
 
 interface Stick {
@@ -327,13 +403,6 @@ const BTN_BORDER = "2px solid rgba(0,0,0,0.6)";
 const STICK_REST = { base: "0.5", knob: "rgba(255,255,255,0.32)", text: "rgba(0,0,0,0.75)" };
 const STICK_HELD = { base: "1", knob: "rgba(255,255,255,0.85)", text: "rgba(0,0,0,0.85)" };
 
-/** Reload / swap glyphs (white strokes, viewBox 24). */
-const ICON_SVG: Record<string, string> = {
-  "svg:reload":
-    '<svg viewBox="0 0 24 24" width="62%" height="62%" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="#000" stroke-width="5" stroke-linecap="round"/><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M19.5 3.5v5h-5z" fill="#fff" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/></svg>',
-  "svg:swap":
-    '<svg viewBox="0 0 24 24" width="62%" height="62%" aria-hidden="true"><path d="M4 8h13M13 4l4 4-4 4M20 16H7M11 12l-4 4 4 4" fill="none" stroke="#000" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 8h13M13 4l4 4-4 4M20 16H7M11 12l-4 4 4 4" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-};
 
 export class TouchControls {
   private root: HTMLDivElement | null = null;
@@ -342,7 +411,12 @@ export class TouchControls {
   private readonly buttons = new Map<TouchButtonId, { el: HTMLDivElement; disc: HTMLDivElement; badge: HTMLSpanElement | null }>();
   private resizeObs: ResizeObserver | null = null;
   private laidOut = "";
-  private shown: TouchHudState = { active: true, canUse: false, bandages: -1, medkits: -1, grenades: -1 };
+  private shown: TouchHudState = { active: true, canUse: false, bandages: -1, medkits: -1, grenades: -1, mapOpen: false };
+  /** Tap target over the canvas minimap: opens the full map. */
+  private minimapHit: HTMLDivElement | null = null;
+  /** While the full map is open: catches every finger (a tap closes the map), plus a visible ×. */
+  private mapShield: HTMLDivElement | null = null;
+  private mapClose: HTMLDivElement | null = null;
   /** Called with the event timestamp of every stick or button press (perf overlay). */
   onPress: ((t: number) => void) | null = null;
 
@@ -363,8 +437,8 @@ export class TouchControls {
       webkitUserSelect: "none",
     });
     root.setAttribute("data-touch-controls", "");
-    this.move = this.makeStick(root, "left", { left: "0", top: "20%", bottom: "0", width: "50%" }, "rgba(255,255,255,0.10)", "MOVE");
-    this.aim = this.makeStick(root, "right", { right: "0", top: "20%", bottom: "0", width: "50%" }, "rgba(255,90,90,0.12)", "AIM");
+    this.move = this.makeStick(root, "left", { left: "0", top: `${STICK_ZONE_TOP * 100}%`, bottom: "0", width: "50%" }, "rgba(255,255,255,0.10)", "MOVE");
+    this.aim = this.makeStick(root, "right", { right: "0", top: `${STICK_ZONE_TOP * 100}%`, bottom: "0", width: "50%" }, "rgba(255,90,90,0.12)", "AIM");
     this.bindStick(
       this.move,
       (x, y) => this.input.setTouchMove({ x, y }),
@@ -380,6 +454,53 @@ export class TouchControls {
       root.appendChild(b.el);
       this.buttons.set(spec.id, b);
     }
+    // The minimap is drawn on the canvas: a transparent tap target over it opens the full map.
+    const hit = el("div", { position: "absolute", pointerEvents: "auto", touchAction: "none", borderRadius: "10px" });
+    hit.setAttribute("role", "button");
+    hit.setAttribute("aria-label", "Open full map");
+    hit.setAttribute("data-minimap-hit", "");
+    hit.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onPress?.(e.timeStamp);
+      this.input.press("map");
+    });
+    root.appendChild(hit);
+    this.minimapHit = hit;
+    // Open full map: a shield over the whole mount (above the sticks) closes it on any tap, so no
+    // finger moves, aims or presses a button through the map; the × marks how to leave.
+    const shield = el("div", { position: "absolute", inset: "0", display: "none", pointerEvents: "auto", touchAction: "none" });
+    shield.setAttribute("data-map-shield", "");
+    const closeMap = (e: PointerEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!this.shown.mapOpen) return;
+      this.onPress?.(e.timeStamp);
+      this.input.press("map");
+    };
+    shield.addEventListener("pointerdown", closeMap);
+    const close = el("div", {
+      position: "absolute",
+      display: "none",
+      placeItems: "center",
+      width: "48px",
+      height: "48px",
+      borderRadius: "50%",
+      border: BTN_BORDER,
+      boxSizing: "border-box",
+      background: "rgba(22,27,40,0.85)",
+      color: "#fff",
+      pointerEvents: "auto",
+      touchAction: "none",
+    });
+    close.innerHTML = touchIconSvg("close", 50);
+    close.setAttribute("role", "button");
+    close.setAttribute("aria-label", "Close map");
+    close.setAttribute("data-map-close", "");
+    close.addEventListener("pointerdown", closeMap);
+    root.append(shield, close);
+    this.mapShield = shield;
+    this.mapClose = close;
     this.mount.appendChild(root);
     this.root = root;
     this.layout();
@@ -404,6 +525,9 @@ export class TouchControls {
     this.move = null;
     this.aim = null;
     this.buttons.clear();
+    this.minimapHit = null;
+    this.mapShield = null;
+    this.mapClose = null;
     this.laidOut = "";
     this.input.setTouchMove(null);
     this.input.setTouchAim(null);
@@ -426,6 +550,7 @@ export class TouchControls {
         use.style.background = s.canUse ? "rgba(22,27,40,0.8)" : BTN_BG;
       }
     }
+    if (!!s.mapOpen !== !!prev.mapOpen) this.setMapMode(!!s.mapOpen);
     if (s.bandages !== prev.bandages) this.setCount("bandage", s.bandages);
     if (s.medkits !== prev.medkits) this.setCount("medkit", s.medkits);
     if (s.grenades !== prev.grenades) this.setCount("grenade", s.grenades);
@@ -442,6 +567,30 @@ export class TouchControls {
     this.releaseStick(this.aim, () => this.input.setTouchAim(null));
     this.input.setGrenadeAim(null);
   };
+
+  /**
+   * The screen turned (portrait ↔ landscape) or the mount changed size under a held finger: free
+   * both sticks and the grenade drag, then lay the buttons and rest marks out again for the new size.
+   */
+  reset(): void {
+    this.releaseSticks();
+    this.laidOut = "";
+    this.layout();
+  }
+
+  /** Full map open: sticks, cluster and the minimap target step aside; the shield and × close it. */
+  private setMapMode(open: boolean) {
+    if (open) this.releaseSticks();
+    for (const s of [this.move, this.aim]) if (s) s.zone.style.display = open ? "none" : "";
+    if (this.minimapHit) this.minimapHit.style.visibility = open ? "hidden" : "";
+    if (this.mapShield) this.mapShield.style.display = open ? "block" : "none";
+    if (this.mapClose) this.mapClose.style.display = open ? "grid" : "none";
+    for (const [id, b] of this.buttons) {
+      // Hidden buttons keep their laid-out display; visibility only.
+      b.el.style.visibility = open ? "hidden" : "";
+      if (id === "map") b.disc.style.background = BTN_BG;
+    }
+  }
 
   private setCount(id: TouchButtonId, n: number) {
     const b = this.buttons.get(id);
@@ -472,17 +621,23 @@ export class TouchControls {
         top: `${rc.y}px`,
         width: `${rc.w}px`,
         height: `${rc.h}px`,
-        fontSize: `${d >= 44 ? 13 : d >= 38 ? 11 : 10}px`,
       });
       Object.assign(b.disc.style, { width: `${d}px`, height: `${d}px` });
     }
+    const mm = minimapRect(w, h);
+    if (this.minimapHit) {
+      // A little larger than the minimap: easier to hit, still clear of the row under it.
+      Object.assign(this.minimapHit.style, { left: `${mm.x - 4}px`, top: `${mm.y - 4}px`, width: `${mm.w + 8}px`, height: `${mm.h + 4 + 2}px` });
+    }
+    if (this.mapClose) Object.assign(this.mapClose.style, { left: `${mm.x + mm.w - 48}px`, top: `${mm.y}px` });
     // Sticks back to (or onto) their rest marks for this size.
     for (const s of [this.move, this.aim]) {
       if (!s) continue;
       const rest = stickRest(s.side, w, h);
-      const zr = s.zone.getBoundingClientRect();
-      s.rx = rest.x - (zr.left - r.left);
-      s.ry = rest.y - (zr.top - r.top);
+      // From the zone's CSS box (STICK_ZONE_TOP, half width), not its measured rect: the zone is
+      // display:none while the controls hide (portrait, full map) and would measure 0 × 0.
+      s.rx = rest.x - (s.side === "right" ? w - w / 2 : 0);
+      s.ry = rest.y - STICK_ZONE_TOP * h;
       if (s.pointerId === null) this.showRest(s);
     }
   };
@@ -624,40 +779,28 @@ export class TouchControls {
     });
     b.appendChild(disc);
     let badge: HTMLSpanElement | null = null;
-    const svg = spec.icon ? ICON_SVG[spec.icon] : undefined;
-    if (svg) {
-      disc.innerHTML = svg;
-    } else if (spec.icon) {
-      const img = document.createElement("img");
-      img.src = spec.icon;
-      img.alt = "";
-      img.draggable = false;
-      Object.assign(img.style, { width: "66%", height: "66%", objectFit: "contain", pointerEvents: "none" });
-      disc.appendChild(img);
-      if (spec.id === "bandage" || spec.id === "medkit" || spec.id === "grenade") {
-        badge = document.createElement("span");
-        Object.assign(badge.style, {
-          position: "absolute",
-          right: "-5px",
-          bottom: "-5px",
-          minWidth: "15px",
-          height: "15px",
-          padding: "0 2px",
-          borderRadius: "8px",
-          border: "1.5px solid #000",
-          background: "rgba(255,255,255,0.92)",
-          color: "#000",
-          fontSize: "9px",
-          lineHeight: "12px",
-          textAlign: "center",
-          textShadow: "none",
-          boxSizing: "border-box",
-          pointerEvents: "none",
-        });
-        disc.appendChild(badge);
-      }
-    } else {
-      disc.textContent = spec.label;
+    disc.innerHTML = touchIconSvg(spec.icon, 68);
+    if (spec.id === "bandage" || spec.id === "medkit" || spec.id === "grenade") {
+      badge = document.createElement("span");
+      Object.assign(badge.style, {
+        position: "absolute",
+        right: "-5px",
+        bottom: "-5px",
+        minWidth: "15px",
+        height: "15px",
+        padding: "0 2px",
+        borderRadius: "8px",
+        border: "1.5px solid #000",
+        background: "rgba(255,255,255,0.92)",
+        color: "#000",
+        fontSize: "9px",
+        lineHeight: "12px",
+        textAlign: "center",
+        textShadow: "none",
+        boxSizing: "border-box",
+        pointerEvents: "none",
+      });
+      disc.appendChild(badge);
     }
     if (spec.id === "grenade") {
       this.bindGrenadeButton(b, disc);

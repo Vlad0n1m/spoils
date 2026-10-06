@@ -258,6 +258,8 @@ export class GameRenderer implements GameRendererApi {
   /** Weapons v2: earliest performance.now() of the next grenade throw (GRENADE.COOLDOWN_MS, client side). */
   private nextThrowAt = 0;
   private screenW = 0;
+  /** Touch device held upright: the game waits under the rotate overlay (battle-screen.tsx). */
+  private portrait = false;
   private screenH = 0;
 
   private disposers: Array<() => void> = [];
@@ -490,6 +492,16 @@ export class GameRenderer implements GameRendererApi {
       // Screen layer, above the fog; added before the systems so the full map covers it.
       this.touchCrosshair = new TouchCrosshair();
       this.layers.screen.addChild(this.touchCrosshair.root);
+      // A turn of the phone: re-measure the canvas once the browser has the new viewport (some
+      // Android builds fire the window resize before the layout settles), then the tick sees the
+      // new size and resets the sticks (touch.reset).
+      const onTurn = () => requestAnimationFrame(() => requestAnimationFrame(() => !this.stopped && this.app?.resize()));
+      window.addEventListener("orientationchange", onTurn);
+      screen.orientation?.addEventListener?.("change", onTurn);
+      this.disposers.push(() => {
+        window.removeEventListener("orientationchange", onTurn);
+        screen.orientation?.removeEventListener?.("change", onTurn);
+      });
     }
     if (new URLSearchParams(window.location.search).get("perf") === "1") {
       this.perf = new PerfOverlay(this.opts.mountEl);
@@ -1291,6 +1303,11 @@ export class GameRenderer implements GameRendererApi {
     const w = app.screen.width;
     const h = app.screen.height;
     const resized = w !== this.screenW || h !== this.screenH;
+    // Touch: a turn between portrait and landscape frees the sticks and re-lays the controls, so a
+    // finger held through the rotation cannot leave the aim stuck on the old geometry.
+    const portrait = !!this.touch && h > w;
+    if (resized && this.touch && (portrait !== this.portrait || this.screenW === 0)) this.touch.reset();
+    this.portrait = portrait;
     this.screenW = w;
     this.screenH = h;
     const baseZoom = Math.sqrt((w * h) / (VIEW_W * VIEW_H)) || 1;
@@ -1319,7 +1336,7 @@ export class GameRenderer implements GameRendererApi {
     // Overlays (inventory / search panel, full map) own the mouse: no fire, aim frozen.
     const blocked = inputBlockedBy(this.opts.isInputBlocked, this.systemsReady ? this.systems : NO_SYSTEMS);
     this.inputBlockedNow = blocked;
-    this.input?.setFireBlocked(blocked);
+    this.input?.setFireBlocked(blocked || this.portrait);
     // Desktop: crosshair cursor over the canvas, the normal one while the full map owns the mouse.
     if (!this.touch && this.cursorCrosshair !== !blocked) this.cursorCrosshair = setCanvasCrosshair(app.canvas, !blocked);
     // A held fire stick re-presses at the fire interval of a semi-auto weapon.
@@ -2022,7 +2039,9 @@ export class GameRenderer implements GameRendererApi {
     if (this.touch) {
       const s = snapshot.self;
       this.touch.sync({
-        active: !!s && s.alive && s.extractedAt === 0 && snapshot.phase !== "ended",
+        // Portrait (the rotate overlay of battle-screen covers the game): no controls, no input.
+        active: !!s && s.alive && s.extractedAt === 0 && snapshot.phase !== "ended" && !this.portrait,
+        mapOpen: snapshot.mapOpen,
         canUse: !!snapshot.interactHint,
         bandages: s?.bandages ?? 0,
         medkits: s?.medkits ?? 0,

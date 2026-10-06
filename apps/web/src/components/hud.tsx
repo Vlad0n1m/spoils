@@ -2,6 +2,7 @@
 
 import { AudioSettingsButton } from "./audio-settings";
 import { useTouchMode } from "./use-touch-mode";
+import { touchIconSvg } from "@/game/touch-icons";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 import { BREAK_CHANCE_ON_DEATH, GRENADE, HEAL, WEAPONS, XP, itemDef, type WeaponId } from "@extract/shared";
@@ -93,7 +94,7 @@ export const Hud = memo(function Hud({
   // (80 % / 78 % / 85 %) so a landscape phone shows more of the world. hudReservedRects() in
   // touch-controls.ts mirrors this layout.
   const touch = useTouchMode();
-  // Touch: the full map (MAP button) fills a short screen; the bar and compass would cover it.
+  // Touch: the full map (map button / minimap tap) fills a short screen; the bar and compass would cover it.
   const mapOpen = useHud(store, mapOpenSlice) && touch;
 
   return (
@@ -600,12 +601,21 @@ const hintSlice = (s: HudSnapshot) => s.interactHint;
 function InteractHint({ store, touch }: { store: HudStore; touch: boolean }) {
   const hint = useHud(store, hintSlice);
   if (!hint) return null;
-  // Renderer formats hints as "F — <action>"; show the key as a keycap (the USE button on touch).
+  // Renderer formats hints as "F — <action>"; show the key as a keycap (the hand button's icon on touch).
   // A status line without an action ("Locked — needs …", "Cracking…") gets no key.
   const m = /^F\s*[—–-]\s*(.+)$/.exec(hint);
   return (
     <div className="toon-chip flex items-center gap-2 px-3 py-1.5 text-sm tracking-wide md:text-base">
-      {m && (touch ? <span className="toon-key px-1.5">USE</span> : <span className="toon-key">F</span>)}
+      {m &&
+        (touch ? (
+          <span
+            className="toon-key grid h-6 w-7 place-items-center px-0.5 text-white"
+            aria-label="Use button"
+            dangerouslySetInnerHTML={{ __html: touchIconSvg("use", 90) }}
+          />
+        ) : (
+          <span className="toon-key">F</span>
+        ))}
       <span className="toon-text-thin">{m ? m[1] : hint}</span>
     </div>
   );
@@ -1109,12 +1119,11 @@ function ControlsHelp({ onLeave }: { onLeave: () => void }) {
 const TOUCH_CONTROLS: Array<[string, string]> = [
   ["Left stick", "Move · push less to walk quietly"],
   ["Right stick", "Aim · fires by itself while the aim is on an enemy (red reticle)"],
-  ["ROLL", "Dodge roll"],
-  ["USE", "Search / pick up"],
-  ["RELOAD · SWAP", "Reload · switch weapon"],
-  ["Bandage · medkit", "Heal"],
+  ["Roll · hand", "Dodge roll · search / pick up"],
+  ["Reload · swap", "Reload · switch weapon"],
   ["Grenade", "Tap: throw ahead · drag: aim and range"],
-  ["Bag · MAP", "Inventory · full map"],
+  ["Row under the minimap", "Bandage · medkit · bag · map"],
+  ["Minimap", "Tap: full map · tap again to close"],
   ["Extract", "Stand in an open extraction circle"],
 ];
 

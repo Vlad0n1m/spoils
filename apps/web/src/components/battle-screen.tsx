@@ -33,6 +33,8 @@ import { writeLastRaidSeen } from "@/lib/lobby/news-seen";
 import { RECONNECT, fetchRejoinTicket, reconnectDelayMs, shouldAutoReconnect } from "@/lib/lobby/reconnect";
 import { TutorialOverlay } from "./tutorial-overlay";
 import { useTouchMode } from "./use-touch-mode";
+import { RotateOverlay, usePortrait } from "./rotate-overlay";
+import { keepLandscape } from "@/game/orientation";
 
 interface Props {
   ticket: JoinTicket;
@@ -417,6 +419,9 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
   // The renderer keeps the same tally object until a kill lands, so identity is enough here.
   const killTally = useHud(hudStore, killTallySlice);
   const touch = useTouchMode();
+  const portrait = usePortrait();
+  // Phones: ask for landscape for the whole raid (manifest + TWA ask too; refusals are ignored).
+  useEffect(() => (touch ? keepLandscape() : undefined), [touch]);
   // The extraction / death cinematic plays on the canvas first; the overlay's dim and card would
   // hide it. Once the hold ran out it stays (one battle per mount).
   const cineExit = selfExit ?? cineExitOf(null, outcome?.exit);
@@ -533,6 +538,8 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
           onLeave={onLeave}
         />
       )}
+
+      {touch && portrait && <RotateOverlay />}
 
       <MatchOutcomeOverlay
         visible={!err && overlayVisible}
