@@ -948,7 +948,7 @@ function WeaponSlotCard({
   if (!weapon) {
     return (
       <div className={clsx("relative grid place-items-center rounded-2xl border-[3px] border-dashed border-black/80 bg-[#1d2333]/60", box)}>
-        <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>
+        {!compact && <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>}
         <span className="text-xs tracking-wide text-white/50">Empty</span>
       </div>
     );
@@ -969,7 +969,7 @@ function WeaponSlotCard({
       }}
       title={`${def.name} — ${rarityName(slot.rarity)}${slot.free ? " (basic gear)" : ""}`}
     >
-      <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>
+      {!compact && <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>}
       <span
         className="toon-text-thin absolute right-1.5 top-1.5 text-[0.6rem] uppercase tracking-wider"
         style={{ color: slot.broken ? "#f87171" : slot.free ? "#d4d4d8" : color }}
