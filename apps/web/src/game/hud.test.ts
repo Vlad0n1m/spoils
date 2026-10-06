@@ -226,6 +226,16 @@ describe("interactHint (v2 containers / corpses / items)", () => {
     );
   });
 
+  it("says 'Bag full' for a ground item that would not fit; weapons always fit (swap)", () => {
+    const full = new Map<string, { uid: string; def: string; qty: number; rarity: number; dur: number; mag: number; flags: number; label: string }>();
+    for (const k of ["p0", "p1", "p2", "p3"]) full.set(k, { uid: "", def: "junk_goldchain", qty: 1, rarity: 0, dur: 0, mag: 0, flags: 0, label: "" });
+    const junk = setup({ items: [{ def: "junk_gpu", x: 1030, y: 500 }] });
+    assert.match(interactHint({ state: junk, map: null, x: 1000, y: 500, bag: full }) ?? "", /^Bag full — no room for /);
+    assert.match(interactHint({ state: junk, map: null, x: 1000, y: 500, bag: new Map() }) ?? "", /^F — pick up/);
+    const gun = setup({ items: [{ def: "rifle", x: 1030, y: 500 }] });
+    assert.match(interactHint({ state: gun, map: null, x: 1000, y: 500, bag: full }) ?? "", /^F — pick up/);
+  });
+
   it("breaks distance ties like the server (the later entry wins) and respects the reach", () => {
     const state = setup({ items: [{ def: "rifle", x: 1040, y: 500 }, { def: "sniper", x: 960, y: 500 }, { def: "pistol", x: 1200, y: 500 }] });
     assert.match(interactHint({ state, map: null, x: 1000, y: 500 }) ?? "", /Sniper/);

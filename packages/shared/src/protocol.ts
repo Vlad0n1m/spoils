@@ -85,7 +85,12 @@ export const C2S = {
   INV_MOVE: "inv_move",
   /** {} — take every revealed takeable item of the current search (T). */
   INV_TAKE_ALL: "inv_take_all",
-  /** InvDropMsg — own item → ground (FREE items just vanish). */
+  /**
+   * InvDropMsg — own item (bag, pockets or equipped: weapon, armor, an empty backpack) → the ground
+   * at the dropper's feet, where anyone (the dropper too) picks it up with F; FREE items just vanish.
+   * Server-checked: alive, the uid/def stale-click guard, qty, the op token bucket ("rate") and
+   * GROUND_DROPS_PER_USER ("ground_full"); refusals come back as INV_ERR.
+   */
   INV_DROP: "inv_drop",
   /** { t: number } — latency probe, answered with PONG. */
   PING: "ping",
@@ -105,7 +110,10 @@ export const S2C = {
   JOINED: "joined",
   /** EventsMsg, at most one per client per tick, only when non-empty. */
   EV: "ev",
-  /** InvErrMsg (types.ts), to one client. */
+  /**
+   * InvErrMsg (types.ts), to one client. Also the answer to INTERACT on a ground item that does not
+   * fit: {code: "full", item: <def>} (the client toasts "Bag full — no room for <name>").
+   */
   INV_ERR: "inv_err",
   /** OutcomeMsg (types.ts), to one client: their personal result. */
   OUTCOME: "outcome",

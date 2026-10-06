@@ -150,6 +150,11 @@ export class FakeInventoryRoom implements InvRoomLike {
     this.patch();
   }
 
+  /** F on a ground item that does not fit: the server's INV_ERR full with the item's def. */
+  pickupFull(def: string): void {
+    this.err("full", { item: def });
+  }
+
   // ------------------------------------------------------------------ server rules
   private err(code: InvErrCode, extra: Partial<InvErrMsg> = {}) {
     const msg: InvErrMsg = { code, ...extra };

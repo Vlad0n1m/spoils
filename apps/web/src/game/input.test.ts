@@ -165,6 +165,15 @@ describe("InputController", () => {
     assert.equal(calls.length, 10, "repeats and browser shortcuts are ignored");
   });
 
+  it("I toggles the inventory like Tab (not while typing)", () => {
+    const { calls, down } = setup();
+    const i = down("KeyI");
+    assert.equal(i.defaultPrevented, true);
+    down("KeyI", { repeat: true });
+    down("KeyI", { target: { tagName: "INPUT", blur() {} } });
+    assert.deepEqual(calls, ["inventory"]);
+  });
+
   it("Weapons v2: G and 5 throw a grenade (once per press), the touch drag passes its aim", () => {
     const { ctl, calls, down } = setup();
     const g = down("KeyG");

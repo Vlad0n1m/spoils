@@ -14,6 +14,7 @@ import {
   countOf,
   isBagKey,
   isSlotKey,
+  pickupFits,
   planPlace,
   revealMs,
   storageKeys,
@@ -240,4 +241,23 @@ test("validateLoadout: authoritative lock checks", () => {
   assert.equal(err([{ key: "p0", def: "bandage", qty: 6 }], { bandage: 9 }), "bad_qty", "over the stack size");
   assert.equal(err([{ key: "p0", def: "bandage", qty: 1.5 }], { bandage: 9 }), "bad_qty");
   assert.equal(err([]), "ok", "an empty loadout is a free-kit raid");
+});
+
+test("pickupFits mirrors pickupGround: weapons always, better armor / bigger pack, else room from planPlace", () => {
+  const s = new Map<string, ItemLike>();
+  for (const k of ["p0", "p1", "p2", "p3"]) s.set(k, it("junk_goldchain"));
+  assert.equal(pickupFits(s, { def: "junk_gpu", qty: 1 }), false, "no backpack, pockets full");
+  assert.equal(pickupFits(s, { def: "rifle", qty: 1 }), true, "a weapon swaps into the hand");
+  assert.equal(pickupFits(s, { def: "armor_1", qty: 1 }), true, "no armor worn: equipped");
+  s.set("armor", it("armor_2", 1, 0, { dur: 130 }));
+  assert.equal(pickupFits(s, { def: "armor_1", qty: 1, dur: 10 }), false, "worse armor would need storage");
+  assert.equal(pickupFits(s, { def: "armor_3", qty: 1 }), true, "unknown dur counts as new: an upgrade");
+  assert.equal(pickupFits(s, { def: "backpack_1", qty: 1 }), true, "no pack: equipped");
+  s.set("bp", it("backpack_2"));
+  assert.equal(pickupFits(s, { def: "backpack_1", qty: 1 }), true, "the bag has room");
+  for (let i = 0; i < BACKPACK_SLOTS[2]; i++) s.set(`b${i}`, it("junk_goldchain"));
+  assert.equal(pickupFits(s, { def: "backpack_1", qty: 1 }), false, "smaller pack, bag full");
+  assert.equal(pickupFits(s, { def: "backpack_3", qty: 1 }), true, "a bigger pack is equipped");
+  s.set("b0", it("junk_bolts", 2));
+  assert.equal(pickupFits(s, { def: "junk_bolts", qty: 1 }), true, "merges into a stack");
 });

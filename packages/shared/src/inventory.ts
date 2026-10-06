@@ -11,6 +11,7 @@
 
 import { SEARCH } from "./constants.js";
 import { BACKPACK_SLOTS, POCKET_SLOTS, itemDef, type ItemDef } from "./item-defs.js";
+import { armorIsUpgrade } from "./items.js";
 import type { ContainerKind } from "./map/types.js";
 
 /** InvItem.flags bits. FREE: free kit (never drops/extracts, vanishes). BROKEN: shown in a corpse, not takeable. */
@@ -164,6 +165,31 @@ export function planPlace(s: SlotStore, item: ItemLike, qty = item.qty, prefer?:
   }
   const placed = qty - left;
   return placed > 0 ? { ok: true, steps, placed } : { ok: false, code: "full" };
+}
+
+/**
+ * Would F on this ground item take at least part of it? Mirrors the server's pickupGround: a weapon
+ * always goes in (empty slot, the FREE pistol, or a swap into the active hand), better armor and a
+ * bigger backpack are equipped (the old one spills to the ground if needed), everything else needs
+ * room from planPlace. `dur` unknown (the public GroundItem has none) = the ground armor counts as new.
+ * The HUD uses it for the "Bag full" prompt; the server answers a refused pickup with INV_ERR full.
+ */
+export function pickupFits(s: SlotStore, item: Pick<ItemLike, "def" | "qty"> & Partial<ItemLike>): boolean {
+  const d = itemDef(item.def);
+  if (!d) return false;
+  if (d.cat === "weapon") return true;
+  if (d.cat === "armor" && d.armorLevel) {
+    const worn = s.get("armor");
+    if (!worn) return true;
+    const wornLevel = itemDef(worn.def)?.armorLevel ?? 0;
+    if (armorIsUpgrade({ armor: wornLevel, armorDur: worn.dur }, d.armorLevel, item.dur ?? Number.POSITIVE_INFINITY)) return true;
+  }
+  if (d.cat === "backpack" && (!s.get("bp") || (d.bpLevel ?? 0) > bpLevelOf(s))) return true;
+  const full: ItemLike = {
+    uid: item.uid ?? "", def: item.def, qty: item.qty, rarity: item.rarity ?? 0, dur: item.dur ?? 0,
+    mag: item.mag ?? 0, flags: item.flags ?? 0, label: item.label ?? "",
+  };
+  return planPlace(s, full, Math.max(1, item.qty)).ok;
 }
 
 /** Backpack contents belong to the player: a non-empty backpack cannot be unequipped. */

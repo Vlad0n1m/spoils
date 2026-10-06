@@ -47,6 +47,8 @@ export interface InvSlotProps {
   dragging?: boolean;
   /** The active weapon slot. */
   active?: boolean;
+  /** The item the inventory's action bar shows (tap to select on touch, hover / focus on desktop). */
+  selected?: boolean;
   /** Small keycap in the corner (e.g. "1", "2"). */
   hotkey?: string;
   /**
@@ -65,6 +67,8 @@ export interface InvSlotProps {
   onDoubleClick?: () => void;
   /** Right-click (mouse or pen); never a touch long press, which starts a drag instead. */
   onContextMenu?: () => void;
+  /** Mouse / pen pointer entered the tile, or it got keyboard focus (desktop selection). */
+  onHover?: () => void;
   onPointerDown?: (e: React.PointerEvent<HTMLElement>) => void;
   onClickCapture?: (e: React.MouseEvent<HTMLElement>) => void;
 }
@@ -72,12 +76,12 @@ export interface InvSlotProps {
 const SIZE = {
   sm: { box: "h-12 w-12 rounded-lg", img: "h-9 w-9", text: "text-[0.6rem]" },
   // Landscape phones (short / tiny): smaller tiles, so the raid inventory and the loot fit the height.
-  md: { box: "h-[4.25rem] w-[4.25rem] rounded-xl short:h-12 short:w-12 tiny:h-11 tiny:w-11", img: "h-12 w-12 short:h-9 short:w-9 tiny:h-8 tiny:w-8", text: "text-[0.7rem]" },
-  lg: { box: "h-20 w-20 rounded-2xl short:h-14 short:w-14 tiny:h-[3.25rem] tiny:w-[3.25rem]", img: "h-16 w-16 short:h-11 short:w-11 tiny:h-10 tiny:w-10", text: "text-xs" },
+  md: { box: "h-[4.25rem] w-[4.25rem] rounded-xl short:h-[3.25rem] short:w-[3.25rem] tiny:h-12 tiny:w-12", img: "h-12 w-12 short:h-10 short:w-10 tiny:h-9 tiny:w-9", text: "text-[0.7rem]" },
+  lg: { box: "h-20 w-20 rounded-2xl short:h-[3.75rem] short:w-[3.75rem] tiny:h-14 tiny:w-14", img: "h-16 w-16 short:h-12 short:w-12 tiny:h-11 tiny:w-11", text: "text-xs" },
 } as const;
 
 export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
-  const { item, size = "md", pending, dropOk, dropBad, dragging, active, hotkey, dropId, footer, showName } = props;
+  const { item, size = "md", pending, dropOk, dropBad, dragging, active, selected, hotkey, dropId, footer, showName } = props;
   const state: InvSlotState = props.state ?? (item ? "item" : "empty");
   const sz = SIZE[size];
   const interactive = !!(props.onClick || props.onPointerDown);
@@ -145,6 +149,8 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
             : props.onPointerDown
         }
         onClickCapture={props.onClickCapture}
+        onPointerEnter={props.onHover ? (e: React.PointerEvent) => e.pointerType !== "touch" && props.onHover!() : undefined}
+        onFocus={props.onHover}
         className={clsx(
           "relative grid shrink-0 touch-none select-none place-items-center border-[3px] border-black shadow-[0_3px_0_#000] outline-none transition-[transform,filter,box-shadow] duration-100",
           sz.box,
@@ -154,6 +160,8 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
           interactive && state === "item" && "cursor-grab hover:-translate-y-0.5 hover:brightness-110 focus-visible:ring-4 focus-visible:ring-zooa-lime active:cursor-grabbing",
           interactive && state !== "item" && "focus-visible:ring-4 focus-visible:ring-zooa-lime",
           active && "ring-4 ring-zooa-lime",
+          selected && !active && "ring-4 ring-white/90",
+          selected && active && "outline outline-[3px] outline-offset-4 outline-white/90",
           dropOk && "scale-105 !border-solid !border-zooa-lime ring-4 ring-zooa-lime/70",
           dropBad && "!border-rose-500 opacity-70",
           dragging && "opacity-35",
@@ -182,7 +190,7 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
               </span>
             )}
             {magSize > 0 && !broken && item!.mag !== undefined && (
-              <span className="font-body absolute left-1 top-0.5 rounded bg-black/60 px-1 text-[0.6rem] font-bold tabular-nums text-white/90">
+              <span className="font-body absolute right-0.5 top-0.5 rounded bg-black/65 px-1 text-[0.6rem] font-bold leading-[1.1rem] tabular-nums text-white/90 short:text-[0.55rem] short:leading-[0.95rem]">
                 {item!.mag}/{magSize}
               </span>
             )}
@@ -198,7 +206,7 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
               </span>
             )}
             {free && (
-              <span className="absolute -left-1 -top-1 rotate-[-12deg] rounded-md border-2 border-black bg-sky-300 px-1 text-[0.55rem] text-black shadow-[0_2px_0_#000]">
+              <span className={clsx("font-body absolute left-0.5 rounded bg-sky-300 px-1 text-[0.5rem] font-extrabold leading-[0.85rem] text-black", dur && !broken ? "bottom-3" : "bottom-0.5")}>
                 FREE
               </span>
             )}
@@ -212,7 +220,7 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
           </>
         )}
         {state === "empty" && !showName && (
-          <span className={clsx("font-body px-0.5 text-center font-semibold uppercase leading-tight text-white/35", size === "sm" ? "text-[0.5rem]" : "text-[0.58rem]")}>
+          <span className={clsx("font-body px-0.5 text-center font-semibold uppercase leading-none text-white/35", size === "sm" ? "text-[0.5rem]" : "text-[0.58rem] short:text-[0.5rem]")}>
             {props.caption ?? (props.slotKey ? slotLabel(props.slotKey) : "")}
           </span>
         )}
@@ -222,7 +230,7 @@ export const InvSlot = memo(function InvSlot(props: InvSlotProps) {
           </span>
         )}
         {hotkey && (
-          <span className="toon-key absolute -right-1.5 -top-1.5 h-5 min-w-5 text-[0.6rem]">{hotkey}</span>
+          <span className="toon-key absolute -left-1.5 -top-1.5 h-5 min-w-5 text-[0.6rem]">{hotkey}</span>
         )}
       </Tag>
       {showName && (

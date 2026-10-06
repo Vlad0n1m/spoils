@@ -1,34 +1,48 @@
 "use client";
 
 /**
- * Tab inventory overlay for the raid (WP-B2): equipment (W1/W2/armor/backpack), 4 pockets, the
- * backpack grid sized by its level, carry value, plus the search panel docked to the right while
- * a container or corpse is open.
+ * In-raid inventory overlay (Tab / I, the touch Bag button): equipment (W1/W2/armor/backpack),
+ * 4 pockets, the backpack grid sized by its level, an item bar with the selected item's actions,
+ * plus the search panel next to it while a container or corpse is open.
+ *
+ * Layout (inventory v2):
+ * - the panels sit on an opaque backdrop, so the HUD, sticks and buttons never show through;
+ * - inventory panel = left column "Equipped" (2×2), right column "Pockets" + "Backpack"; the body
+ *   scrolls when it does not fit; the header has a real Close button on every device;
+ * - landscape phones (≤ 500 px tall): both panels fill the screen height side by side, and the item
+ *   bar replaces the header's title while an item is selected (no footer, the height is precious);
+ *   taller screens: the item bar is the panel's footer.
  *
  * Interactions (all keyboard reachable: tiles are buttons, Enter/Space = click):
- * - click: quick action — equip/unequip weapons, armor, backpacks; use a med; move a stack
- *   pocket ↔ backpack; take a loot item (auto-place)
- * - drag onto a slot: targeted move / swap / targeted take; drag onto the dimmed backdrop: drop
- * - right-click (mouse / pen, not a touch long press) or Delete/G on a focused own item: drop on the ground
- * - arrow keys: move focus between tiles; T take all; Esc close (bindInventoryHotkeys)
+ * - touch: tap = select (the item bar shows its name, Equip / Use / Move and Drop); tap the selected
+ *   item again = its quick action; drag onto a slot = move; drag onto the dark area = drop
+ * - mouse: click = quick action (equip/unequip, use a med, pocket ↔ backpack, take loot); hover /
+ *   focus = select (item bar); right-click, G or Delete = drop; drag onto a slot / the dark area
+ * - arrow keys: move focus between tiles; T take all; Tab / I / Esc close (the game input or
+ *   bindInventoryHotkeys)
+ * Dropping sends C2S.INV_DROP: the server puts the item on the ground at your feet, where anyone
+ * (you too) can pick it up with F; FREE kit items vanish instead ("Discard").
  *
  * `InventoryOverlay` binds to an InventoryClient; `InventoryView` is the pure, props-only part
- * (used by the dev page and tests).
+ * (used by the dev page and tests). A toast raised while the panel is closed (F on an item that
+ * does not fit: "Bag full — no room for …") still shows, above the HUD's interact prompt.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
 import clsx from "clsx";
 import {
+  EQUIP_KEYS,
   POCKET_SLOTS,
   accepts,
   bagKeys,
+  canRemoveBackpack,
   isSlotKey,
   itemDef,
   type SlotKey,
 } from "@extract/shared";
-import type { InvSnapshot, InventoryClient } from "@/game/inventory-client";
+import type { InvItemView, InvSnapshot, InvToast, InventoryClient } from "@/game/inventory-client";
 import { useItemDrag, type DragSource, type DropTarget } from "@/hooks/use-item-drag";
-import { describeItem, fmtCr, quickTarget, recordStore } from "@/lib/items-ui";
+import { describeItem, durInfo, fmtCr, isBroken, isFree, quickTarget, recordStore } from "@/lib/items-ui";
 import { SOL_ECONOMY } from "@/lib/edition";
 import { useTouchMode } from "@/components/use-touch-mode";
 import { InvSlot } from "./inv-slot";
@@ -71,11 +85,70 @@ export function dropAllowed(snap: InvSnapshot, source: DragSource, target: DropT
   return true;
 }
 
+/** What the item bar offers for an own item (pure: unit-tested). */
+export interface ItemBarActions {
+  /** Quick action label ("Equip", "Unequip", "Use", "To backpack", "To pockets"), null = none. */
+  primary: string | null;
+  /** "Drop" (lands on the ground), "Discard" (FREE kit: vanishes), null = cannot (full backpack). */
+  drop: "Drop" | "Discard" | null;
+  /** Why the drop is refused (shown as the disabled button's title). */
+  dropBlocked?: string;
+}
+
+export function itemBarActions(snap: Pick<InvSnapshot, "slots" | "active">, key: SlotKey): ItemBarActions {
+  const it = snap.slots[key];
+  if (!it) return { primary: null, drop: null };
+  const d = itemDef(it.def);
+  const store = recordStore(snap.slots);
+  let primary: string | null = null;
+  if (d?.cat === "med" && d.med) primary = "Use";
+  else {
+    const to = quickTarget(store, key, snap.active);
+    if (to !== null) {
+      const equipped = (EQUIP_KEYS as readonly string[]).includes(key);
+      if (equipped) primary = "Unequip";
+      else if (to === "w1" || to === "w2" || to === "armor" || to === "bp") primary = "Equip";
+      else primary = key.startsWith("p") ? "To backpack" : "To pockets";
+    }
+  }
+  if (key === "bp" && !canRemoveBackpack(store)) {
+    return { primary, drop: null, dropBlocked: "Empty the backpack first" };
+  }
+  return { primary, drop: isFree(it) ? "Discard" : "Drop" };
+}
+
+/** Landscape phones (the `short` Tailwind screen): ≤ 500 px tall. */
+const SHORT_QUERY = "(max-height: 500px)";
+function subscribeShort(cb: () => void) {
+  if (typeof window === "undefined" || !window.matchMedia) return () => {};
+  const mq = window.matchMedia(SHORT_QUERY);
+  mq.addEventListener("change", cb);
+  return () => mq.removeEventListener("change", cb);
+}
+function useShortScreen(): boolean {
+  return useSyncExternalStore(
+    subscribeShort,
+    () => (typeof window !== "undefined" && window.matchMedia ? window.matchMedia(SHORT_QUERY).matches : false),
+    () => false,
+  );
+}
+
+/** Empty equipment tiles: short captions that fit a 44 px tile. */
+const EQUIP_CAPTION: Record<string, string> = { w1: "Gun 1", w2: "Gun 2", armor: "Armor", bp: "Pack" };
+
 export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
   const store = useMemo(() => recordStore(snap.slots), [snap.slots]);
-  // Touch (phones, the TWA): a real Close button instead of the Tab hint, tap / drag wording.
   const touch = useTouchMode();
+  const short = useShortScreen();
   const rootRef = useRef<HTMLDivElement | null>(null);
+  /** Own slot shown in the item bar (tap on touch, hover / focus with a mouse). */
+  const [selected, setSelected] = useState<SlotKey | null>(null);
+  const selItem = selected ? (snap.slots[selected] ?? null) : null;
+
+  // Forget the selection when the panel closes; keep it while the item stays in its slot.
+  useEffect(() => {
+    if (!snap.visible) setSelected(null);
+  }, [snap.visible]);
 
   const onDrop = useCallback(
     (source: DragSource, target: DropTarget | null) => {
@@ -92,7 +165,7 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
   );
   const drag = useItemDrag(onDrop);
 
-  const clickOwn = useCallback(
+  const quickAction = useCallback(
     (key: SlotKey) => {
       const it = snap.slots[key];
       if (!it) return;
@@ -108,12 +181,34 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
     [actions, snap.slots, snap.active, store],
   );
 
-  // Focus the panel when it opens so arrow keys / Enter work without a mouse.
+  const clickOwn = useCallback(
+    (key: SlotKey) => {
+      if (!snap.slots[key]) return;
+      if (touch && selected !== key) {
+        // Touch: the first tap selects (the item bar shows the actions); the second one acts.
+        setSelected(key);
+        return;
+      }
+      setSelected(key);
+      quickAction(key);
+    },
+    [quickAction, selected, snap.slots, touch],
+  );
+
+  const dropKey = useCallback(
+    (key: SlotKey) => {
+      if (snap.slots[key]) actions.drop(key);
+    },
+    [actions, snap.slots],
+  );
+
+  // Focus the panel when it opens so arrow keys / Enter work without a mouse (not on touch: a focus
+  // ring on a phone is noise).
   useEffect(() => {
-    if (!snap.visible) return;
-    const first = rootRef.current?.querySelector<HTMLElement>("button[data-drop^='self:'], section[data-drop='loot'] button");
+    if (!snap.visible || touch) return;
+    const first = rootRef.current?.querySelector<HTMLElement>("button[data-drop^='self:'], section[data-drop='loot'] button[title]");
     if (first && !rootRef.current?.contains(document.activeElement)) first.focus({ preventScroll: true });
-  }, [snap.visible, snap.search?.key]);
+  }, [snap.visible, snap.search?.key, touch]);
 
   const onKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
@@ -123,8 +218,11 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
         e.preventDefault();
         return;
       }
-      if ((e.code === "Delete" || e.code === "Backspace" || e.code === "KeyG") && el?.dataset.drop?.startsWith("self:")) {
-        const key = el.dataset.drop.slice(5);
+      if (e.code === "Delete" || e.code === "Backspace" || e.code === "KeyG") {
+        // The item the bar shows (hovered / focused / tapped), else the focused tile.
+        const focused = el?.dataset.drop?.startsWith("self:") ? el.dataset.drop.slice(5) : null;
+        const key = selected && snap.slots[selected] ? selected : focused;
+        if (!key) return;
         if (isSlotKey(key) && snap.slots[key]) {
           e.preventDefault();
           actions.drop(key);
@@ -132,7 +230,7 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
         return;
       }
       if (e.code.startsWith("Arrow")) {
-        const tiles = [...(rootRef.current?.querySelectorAll<HTMLElement>("button[title]") ?? [])].filter(
+        const tiles = [...(rootRef.current?.querySelectorAll<HTMLElement>("button[data-drop^='self:'], section[data-drop='loot'] button[title]") ?? [])].filter(
           (b) => !b.hasAttribute("disabled"),
         );
         const i = el ? tiles.indexOf(el) : -1;
@@ -144,10 +242,18 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
         }
       }
     },
-    [actions, snap.slots],
+    [actions, selected, snap.slots],
   );
 
-  if (!snap.visible) return null;
+  if (!snap.visible) {
+    // Closed: only a toast (a refused pickup) shows, above the HUD's interact prompt.
+    return snap.toast ? <FloatingToast toast={snap.toast} touch={touch} onDismiss={actions.dismissToast} /> : null;
+  }
+
+  const closeAll = () => {
+    // Closes the search first, then the inventory (both when both are open).
+    for (let i = 0; i < 3 && actions.escape(); i++);
+  };
 
   const dragging = drag.drag;
   const ownTile = (key: SlotKey, opts: { size?: "sm" | "md" | "lg"; hotkey?: string; caption?: string } = {}) => {
@@ -161,19 +267,21 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
         key={key}
         item={it}
         slotKey={key}
-        caption={opts.caption}
+        caption={opts.caption ?? EQUIP_CAPTION[key] ?? ""}
         size={opts.size ?? "md"}
-        hotkey={opts.hotkey}
+        hotkey={touch ? undefined : opts.hotkey}
         active={(key === "w1" || key === "w2") && snap.active === key && !!it}
+        selected={!!it && selected === key}
         dropId={`self:${key}`}
         pending={!!snap.pending[`self:${key}`]}
         dropOk={ok}
         dropBad={isOver && !ok}
         dragging={dragging?.source.from === "self" && dragging.source.key === key}
         onClick={it ? () => clickOwn(key) : () => undefined}
+        onHover={!touch && it ? () => setSelected(key) : undefined}
         // Right-click drops; never on touch, where Android fires contextmenu on the long press that
-        // starts a drag (drop there is dragging onto the dark area).
-        onContextMenu={it && !touch ? () => actions.drop(key) : undefined}
+        // starts a drag (touch drops with the item bar's Drop button or by dragging out).
+        onContextMenu={it && !touch ? () => dropKey(key) : undefined}
         {...drag.bind(src)}
       />
     );
@@ -181,116 +289,150 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
 
   const pockets = Array.from({ length: POCKET_SLOTS }, (_, i) => `p${i}` as SlotKey);
   const bag = bagKeys(snap.bpLevel);
+  const bagUsed = bag.filter((k) => snap.slots[k]).length;
   const groundOver = dragging?.over?.kind === "ground" && dragging.source.from === "self";
+  const full = snap.carry.used >= snap.carry.cap;
+
+  const itemBar =
+    snap.toast ? (
+      <ToastLine toast={snap.toast} onDismiss={actions.dismissToast} />
+    ) : selected && selItem ? (
+      <ItemBar
+        item={selItem}
+        actions={itemBarActions(snap, selected)}
+        pending={!!snap.pending[`self:${selected}`]}
+        onPrimary={() => quickAction(selected)}
+        onDrop={() => dropKey(selected)}
+        compact={short}
+        keyHint={!touch}
+      />
+    ) : null;
+
+  const closeBtn = (
+    <button
+      type="button"
+      onClick={closeAll}
+      className="toon-btn-ghost h-11 min-w-11 shrink-0 gap-1.5 px-3 text-sm"
+      aria-label={touch ? "Close inventory" : "Close inventory (Tab / Esc)"}
+      title={touch ? undefined : "Close (Tab, I or Esc)"}
+    >
+      <span className="optical-center">Close</span>
+      {!touch && <span className="toon-key h-5 min-w-5 text-[0.6rem]">Tab</span>}
+    </button>
+  );
+
+  const stats = (
+    <div className="font-body flex min-w-0 items-center gap-3 text-xs font-semibold text-white/70">
+      <span className={clsx("tabular-nums", full && "text-rose-300")} title="Storage slots used: pockets + backpack">
+        Slots {snap.carry.used}/{snap.carry.cap}
+      </span>
+      <span title={`Auto-sale value of carried junk if you extract (before ${SOL_ECONOMY ? "market" : "the junker"} multiplier)`}>
+        Junk <span className="toon-text-thin ml-0.5 font-sans text-sm text-amber-300">{fmtCr(snap.carry.junkCr)}</span>
+      </span>
+    </div>
+  );
+
+  const hint = touch
+    ? "Tap an item for its actions · tap again to use it · drag to move"
+    : "Click: equip / use · drag: move · G, Del or right-click: drop";
 
   return (
     <div
       ref={rootRef}
-      className="fixed inset-0 z-[70] flex items-start justify-center overflow-hidden p-3 pt-[8vh] sm:p-6 sm:pt-[10vh] [@media(max-height:500px)]:items-center [@media(max-height:500px)]:p-2"
+      className={clsx(
+        "fixed inset-0 z-[70] flex justify-center overflow-hidden",
+        short ? "items-stretch p-2" : "items-start p-4 pt-[8vh]",
+      )}
       onKeyDown={onKeyDown}
       onKeyUp={(e) => {
         if (e.code === "Space") e.preventDefault();
       }}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* Backdrop = the ground: release a dragged own item here to drop it; a plain click closes. */}
+      {/* Backdrop = the ground: release a dragged own item here to drop it; a plain click closes. It
+          is nearly opaque so the HUD and the touch buttons below never show through the panels. */}
       <div
         data-drop="ground"
         className={clsx(
-          "absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(6,8,12,0.35),rgba(6,8,12,0.78))] transition-colors",
-          groundOver && "bg-rose-950/40",
+          "absolute inset-0 transition-colors",
+          groundOver ? "bg-rose-950/90" : "bg-[#070a10]/[0.88] backdrop-blur-[3px]",
         )}
         onClick={() => actions.escape()}
         aria-hidden
       />
       {groundOver && (
-        <div className="toon-chip pointer-events-none fixed bottom-8 left-1/2 z-[2] -translate-x-1/2 px-4 py-2 text-base text-rose-300">
+        <div className="toon-chip pointer-events-none fixed bottom-3 left-1/2 z-[2] -translate-x-1/2 px-4 py-2 text-base text-rose-200">
           Release to drop on the ground
         </div>
       )}
 
-      {/* Landscape phones (≤ 500 px tall): the inventory (two columns: weapons and gear | pockets and
-          backpack) and the search panel (five columns of loot) side by side, smaller tiles; both fit
-          the height, nothing scrolls. */}
-      {/* The margins keep the panels out of a landscape phone's camera cutout (viewport-fit=cover). */}
-      <div className="relative ml-[env(safe-area-inset-left,0px)] mr-[env(safe-area-inset-right,0px)] flex flex-wrap items-start justify-center gap-4 [@media(max-height:500px)]:flex-nowrap [@media(max-height:500px)]:gap-3">
-        <section aria-label="Inventory" className="toon-panel w-[min(92vw,25rem)] bg-[#1d2333]/95 p-4 [@media(max-height:500px)]:w-auto [@media(max-height:500px)]:p-2.5">
-          <header className="flex items-center justify-between">
-            <h2 className="toon-text text-2xl tracking-wide text-white short:text-xl">Inventory</h2>
-            {touch ? (
-              <button
-                type="button"
-                onClick={() => {
-                  // Closes the search first, then the inventory (both when both are open).
-                  for (let i = 0; i < 3 && actions.escape(); i++);
-                }}
-                className="toon-btn-ghost h-11 min-w-11 shrink-0 px-3 text-sm short:h-9"
-                aria-label="Close inventory"
-              >
-                <span className="optical-center">Close</span>
-              </button>
+      {/* The side margins keep the panels out of a landscape phone's camera cutout (viewport-fit=cover). */}
+      <div
+        className={clsx(
+          "relative ml-[env(safe-area-inset-left,0px)] mr-[env(safe-area-inset-right,0px)] flex justify-center",
+          short ? clsx("h-full min-h-0 w-full gap-2", snap.search ? "items-stretch" : "items-center") : "max-h-[84vh] flex-wrap items-start gap-4",
+        )}
+      >
+        <section
+          aria-label="Inventory"
+          className={clsx(
+            "toon-panel flex min-h-0 flex-col bg-[#1a2030] text-white",
+            short ? clsx("min-w-0 shrink p-2", snap.search ? "h-full" : "max-h-full") : "max-h-[84vh] w-[min(94vw,34rem)] p-4",
+          )}
+        >
+          <header className={clsx("flex shrink-0 items-center gap-2", short ? "h-11" : "h-11")}>
+            {short && itemBar ? (
+              <div className="min-w-0 flex-1">{itemBar}</div>
             ) : (
-              <span className="flex items-center gap-1.5 text-xs text-white/60">
-                <span className="toon-key">Tab</span> close
-              </span>
+              <>
+                <h2 className={clsx("toon-text shrink-0 tracking-wide text-white", short ? "text-lg" : "text-2xl")}>Inventory</h2>
+                <div className="min-w-0 flex-1 pl-1">{stats}</div>
+              </>
             )}
+            {closeBtn}
           </header>
 
-          <div className="short:mt-2 short:flex short:gap-4">
-          <div className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 short:mt-0 short:grid-cols-1 short:content-start short:gap-y-2">
-            <div className="flex flex-col gap-2 short:gap-1.5">
-              <SectionLabel>Weapons</SectionLabel>
-              <div className="flex gap-2">
+          <div className={clsx("flex min-h-0 flex-1 gap-3 overflow-y-auto overscroll-contain", short ? "mt-1.5 gap-2.5 pr-0.5" : "mt-3 gap-5")}>
+            <div className="flex shrink-0 flex-col gap-1.5">
+              <SectionLabel>Equipped</SectionLabel>
+              <div className={clsx("grid grid-cols-2", short ? "gap-1.5" : "gap-2")}>
                 {ownTile("w1", { size: "lg", hotkey: "1" })}
                 {ownTile("w2", { size: "lg", hotkey: "2" })}
-              </div>
-            </div>
-            <div className="flex flex-col gap-2 short:gap-1.5">
-              <SectionLabel>Gear</SectionLabel>
-              <div className="flex gap-2">
                 {ownTile("armor", { size: "lg" })}
                 {ownTile("bp", { size: "lg" })}
               </div>
             </div>
+
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <SectionLabel>Pockets</SectionLabel>
+              <div className={clsx("grid w-fit grid-cols-4", short ? "gap-1.5" : "gap-2")}>{pockets.map((k) => ownTile(k))}</div>
+
+              <SectionLabel className={short ? "mt-1" : "mt-2"}>
+                <span className="truncate">{snap.slots.bp ? describeItem(snap.slots.bp).name : "Backpack"}</span>
+                {bag.length > 0 && (
+                  <span className={clsx("ml-2 tabular-nums", bagUsed >= bag.length ? "text-rose-300" : "text-white/45")}>
+                    {bagUsed}/{bag.length}
+                  </span>
+                )}
+              </SectionLabel>
+              {bag.length > 0 ? (
+                <div className={clsx("grid w-fit", short ? "grid-cols-6 gap-1.5 tiny:grid-cols-5" : "grid-cols-4 gap-2")}>
+                  {bag.map((k) => ownTile(k))}
+                </div>
+              ) : (
+                <p className="font-body max-w-[15rem] rounded-xl border-2 border-dashed border-white/20 px-3 py-2 text-xs text-white/60">
+                  No backpack — pick one up to carry more loot out.
+                </p>
+              )}
+            </div>
           </div>
 
-          <div className="short:flex short:flex-col">
-          <div className="mt-4 short:mt-0">
-            <SectionLabel>Pockets</SectionLabel>
-            <div className="mt-2 grid grid-cols-4 gap-2.5 short:mt-1.5 short:w-fit short:grid-cols-5 short:gap-1.5">{pockets.map((k) => ownTile(k))}</div>
-          </div>
-
-          <div className="mt-4 short:mt-2">
-            <SectionLabel>
-              {snap.slots.bp ? describeItem(snap.slots.bp).name : "Backpack"}
-              <span className="ml-2 tabular-nums text-white/40">
-                {bag.filter((k) => snap.slots[k]).length}/{bag.length}
-              </span>
-            </SectionLabel>
-            {bag.length > 0 ? (
-              <div className="mt-2 grid grid-cols-4 gap-2.5 short:mt-1.5 short:grid-cols-5 short:gap-1.5">{bag.map((k) => ownTile(k))}</div>
-            ) : (
-              <p className="font-body mt-2 rounded-xl border-2 border-dashed border-white/20 px-3 py-3 text-sm text-white/55 short:w-[15rem] short:py-2">
-                No backpack — find one to carry more loot out.
-              </p>
-            )}
-          </div>
-          </div>
-          </div>
-
-          <footer className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t-[3px] border-black/50 pt-3 short:mt-2 short:pt-1.5">
-            <span className="text-sm text-white/70" title={`Auto-sale value of carried junk if you extract (before ${SOL_ECONOMY ? "market" : "the junker"} multiplier)`}>
-              Junk value <span className="toon-text-thin ml-1 text-lg text-amber-300">{fmtCr(snap.carry.junkCr)}</span>
-            </span>
-            <span className="text-sm tabular-nums text-white/60">
-              Slots {snap.carry.used}/{snap.carry.cap}
-            </span>
-          </footer>
-          <p className="font-body mt-2 text-[0.7rem] leading-snug text-white/45 short:hidden">
-            {touch
-              ? "Tap to equip / use · drag to move · drag onto the dark area to drop"
-              : "Click to equip / use · drag to move · right-click or Del to drop"}
-          </p>
+          {!short && (
+            <footer className="mt-3 shrink-0 border-t-[3px] border-black/50 pt-3">
+              {itemBar ?? <p className="font-body flex min-h-11 items-center text-xs text-white/55">{hint}</p>}
+            </footer>
+          )}
+          {short && <p className={clsx("font-body mt-1 shrink-0 truncate text-[0.65rem] text-white/50", itemBar && "invisible")}>{hint}</p>}
         </section>
 
         {snap.search && (
@@ -303,28 +445,138 @@ export function InventoryView({ snap, clockMs, actions }: InventoryViewProps) {
             onTakeAll={() => actions.takeAll()}
             onClose={() => actions.closeSearch()}
             touch={touch}
+            fill={short}
           />
         )}
       </div>
-
-      {snap.toast && (
-        <div
-          key={snap.toast.id}
-          role="alert"
-          className="toon-chip fixed left-1/2 top-6 z-[3] -translate-x-1/2 animate-outcome-enter cursor-pointer px-5 py-2.5 text-base text-white"
-          onClick={() => actions.dismissToast()}
-        >
-          <span className={snap.toast.code === "info" ? "text-zooa-lime" : "text-rose-300"}>{snap.toast.text}</span>
-        </div>
-      )}
 
       {dragging && <DragGhost def={dragging.source.def} x={dragging.x} y={dragging.y} />}
     </div>
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <h3 className="text-xs uppercase tracking-[0.18em] text-white/55">{children}</h3>;
+function SectionLabel({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <h3 className={clsx("flex min-w-0 items-center text-[0.7rem] uppercase leading-none tracking-[0.16em] text-white/55", className)}>
+      {children}
+    </h3>
+  );
+}
+
+/** The selected item: icon, name, rarity / count / durability, and its actions (≥ 44 px buttons). */
+function ItemBar({
+  item,
+  actions,
+  pending,
+  onPrimary,
+  onDrop,
+  compact,
+  keyHint,
+}: {
+  item: InvItemView;
+  actions: ItemBarActions;
+  pending: boolean;
+  onPrimary: () => void;
+  onDrop: () => void;
+  compact: boolean;
+  /** Desktop: the G keycap on the Drop button (G / Del / right-click on a focused tile). */
+  keyHint: boolean;
+}) {
+  const d = describeItem(item);
+  const dur = item.dur > 0 || itemDef(item.def)?.cat === "weapon" ? durInfo({ def: item.def, dur: item.dur }) : null;
+  const broken = isBroken(item);
+  const meta = [
+    broken ? "Broken" : d.cat === "junk" || d.cat === "weapon" || d.cat === "armor" || d.cat === "backpack" ? d.rarityName : "",
+    item.qty > 1 ? `×${item.qty}` : "",
+    !broken && dur ? dur.text : "",
+    isFree(item) ? "Basic gear" : "",
+  ].filter(Boolean);
+  return (
+    <div className="flex h-11 min-w-0 items-center gap-2" aria-live="polite">
+      <span
+        className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border-2 border-black"
+        style={{ background: `radial-gradient(circle at 50% 35%, ${d.color}d9, ${d.color}4d 72%)` }}
+        aria-hidden
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element -- static sprite */}
+        <img src={d.icon} alt="" className="h-8 w-8 object-contain" draggable={false} />
+      </span>
+      <div className="min-w-0 flex-1 leading-tight">
+        <div className={clsx("toon-text-thin truncate tracking-wide text-white", compact ? "text-sm" : "text-base")}>{d.name}</div>
+        <div className="font-body truncate text-[0.68rem] font-semibold" style={{ color: broken ? "#9ca3af" : d.color }}>
+          {meta.join(" · ")}
+        </div>
+      </div>
+      {actions.primary && (
+        <button
+          type="button"
+          onClick={onPrimary}
+          disabled={pending}
+          className="toon-btn h-11 shrink-0 px-3 text-sm"
+        >
+          <span className="optical-center">{actions.primary}</span>
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onDrop}
+        disabled={pending || !actions.drop}
+        title={actions.dropBlocked ?? (actions.drop === "Discard" ? "Basic gear vanishes when dropped" : "Drop it on the ground — anyone can pick it up")}
+        className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-2xl border-[3px] border-black bg-rose-500 px-3 text-sm text-white shadow-[0_4px_0_#000] transition-[transform,box-shadow] hover:brightness-110 active:translate-y-[3px] active:shadow-[0_1px_0_#000] disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <span className="optical-center">{actions.drop ?? "Drop"}</span>
+        {keyHint && <span className="toon-key h-5 min-w-5 text-[0.6rem]">G</span>}
+      </button>
+    </div>
+  );
+}
+
+/** The toast inside the open panel (replaces the item bar for its few seconds; tap to dismiss). */
+function ToastLine({ toast, onDismiss }: { toast: InvToast; onDismiss: () => void }) {
+  return (
+    <button
+      type="button"
+      key={toast.id}
+      role="alert"
+      onClick={onDismiss}
+      className={clsx(
+        "font-body flex h-11 w-full min-w-0 animate-outcome-enter items-center gap-2 rounded-xl border-2 px-3 text-left text-sm font-bold",
+        toast.code === "info" ? "border-zooa-lime/60 bg-zooa-lime/10 text-zooa-lime" : "border-rose-400/70 bg-rose-500/15 text-rose-200",
+      )}
+    >
+      <span className="truncate">{toast.text}</span>
+    </button>
+  );
+}
+
+/**
+ * Toast while the panel is closed (a refused pickup): bottom centre, above the HUD's interact
+ * prompt and bottom bar; with a hint how to open the bag and make room.
+ */
+function FloatingToast({ toast, touch, onDismiss }: { toast: InvToast; touch: boolean; onDismiss: () => void }) {
+  return (
+    // Centred by the full-width row (the enter animation owns the chip's transform).
+    <div className={clsx("pointer-events-none fixed inset-x-0 z-[70] flex justify-center px-4", touch ? "bottom-[7.75rem] short:bottom-[7.25rem]" : "bottom-[12rem]")}>
+    <div
+      key={toast.id}
+      role="alert"
+      onClick={onDismiss}
+      className={clsx(
+        "toon-chip pointer-events-auto flex min-w-0 max-w-full animate-outcome-enter cursor-pointer items-center gap-2 border-rose-500 px-4 py-2 text-white",
+        touch ? "text-sm" : "text-base",
+      )}
+    >
+      <span className={clsx("truncate", toast.code === "info" ? "text-zooa-lime" : "text-rose-200")}>{toast.text}</span>
+      {toast.dropHint && (
+        <span className="font-body flex shrink-0 items-center gap-1.5 text-xs font-semibold text-white/80">
+          <span className="h-4 w-px bg-white/25" aria-hidden />
+          {touch ? <span className="toon-key px-1.5">Bag</span> : <span className="toon-key">Tab</span>}
+          drop something
+        </span>
+      )}
+    </div>
+    </div>
+  );
 }
 
 function DragGhost({ def, x, y }: { def: string; x: number; y: number }) {
@@ -340,4 +592,3 @@ function DragGhost({ def, x, y }: { def: string; x: number; y: number }) {
     </div>
   );
 }
-

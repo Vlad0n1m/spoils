@@ -618,4 +618,9 @@ export interface InvErrMsg {
   key?: string;
   /** Take-all: how many were taken before stopping. */
   taken?: number;
+  /**
+   * "full" on F at a ground item: the def of the item that did not fit (the client says "Bag full —
+   * no room for <name>"). Absent for every other refusal and from older servers.
+   */
+  item?: string;
 }
