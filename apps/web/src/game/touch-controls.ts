@@ -206,8 +206,18 @@ export function thumbZone(w: number, h: number): { w: number; h: number } {
 
 /** The touch HUD's transient top stack (wipe banner, boss toast) is drawn at this scale (hud.tsx). */
 export const TOUCH_TOP_SCALE = 0.8;
-/** The touch HUD's bottom bar (vitals, weapon cards, carry) is drawn at this scale (hud.tsx). */
+/** The touch HUD's hint and heal / reload progress above the strip are drawn at this scale (hud.tsx). */
 export const TOUCH_BAR_SCALE = 0.78;
+/**
+ * HUD v3 touch strip (hud.tsx TouchStrip): 19.75 rem × 2.5 rem panel; the other-slot chip's 44 px hit
+ * area stands 2 px out of it at both ends. Screens ≥ 600 px tall draw it at 115 %.
+ */
+export const TOUCH_STRIP_W = 316;
+export const TOUCH_STRIP_H = 44;
+export function touchStripSize(h: number): { w: number; h: number } {
+  const k = h >= 600 ? 1.15 : 1;
+  return { w: Math.round(TOUCH_STRIP_W * k), h: Math.round(TOUCH_STRIP_H * k) };
+}
 
 /**
  * Rest mark of each stick (mount px): the middle of its thumb corner, at least one stick radius plus
@@ -251,10 +261,10 @@ export function hudReservedRects(w: number, h: number): HudArea[] {
   // Top left row: the menu and audio chips (2 × 40 px from left-2 / top-2), the ping badge, the
   // wipe pill and the XP chip (≈ 380 px on a phone; never past the middle).
   r.push({ id: "chips", x: 0, y: 0, w: Math.min(Math.round(w / 2), 380), h: 54 });
-  // Bottom centre: the touch bar (12.5 rem vitals, two 5.5 rem weapon cards, the carry panel up to
-  // 5 rem, gap-2; 5.25 rem cards, the active one lifted 6 px) at bottom-1, drawn at 78 %.
-  const barW = Math.round((Math.min(w - 24, 480) + 12) * TOUCH_BAR_SCALE);
-  const barH = Math.round(4 + (84 + 6 + 4) * TOUCH_BAR_SCALE);
+  // Bottom centre: the HUD v3 strip (HP / armor, active weapon, other slot) at bottom-1.
+  const strip = touchStripSize(h);
+  const barW = strip.w + 8;
+  const barH = 4 + strip.h;
   r.push({ id: "bar", x: (w - barW) / 2, y: h - barH, w: barW, h: barH });
   // The left thumb's corner (move stick). The resting aim stick is kept clear by the layout itself
   // (a STICK_KEEP circle, so buttons may tuck in around it).

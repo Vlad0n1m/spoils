@@ -79,19 +79,22 @@ export const Hud = memo(function Hud({
   selfNickname,
   onLeave,
   earnsXp = true,
+  onSwap,
 }: {
   store: HudStore;
   selfNickname: string;
   onLeave: () => void;
-  /** Registered players earn XP (guests do not): the compass shows the 8-minute extract XP timer. */
+  /** Registered players earn XP (guests do not): the XP chip shows the 8-minute extract XP timer. */
   earnsXp?: boolean;
+  /** Touch: a tap on the second weapon chip of the bottom strip switches weapons. */
+  onSwap?: () => void;
 }) {
   const inPlay = useHud(store, isInPlay);
-  // Touch (game/touch-controls.ts mounts sticks + buttons): a compact bottom bar between the two
-  // thumb zones, the menu / audio chips top left instead of in the right thumb's corner, USE
-  // instead of the F keycap. The transient top stack, the bottom bar and the kill feed are drawn at
-  // 80 % / 78 % / 85 % so a landscape phone shows more of the world. hudReservedRects() in
-  // touch-controls.ts mirrors this layout.
+  // Touch (game/touch-controls.ts mounts sticks + buttons): one slim strip on the bottom edge
+  // between the two thumb zones (HP / armor, the active weapon, the other slot), the menu / audio
+  // chips top left instead of in the right thumb's corner, USE instead of the F keycap. The transient
+  // top stack, the hint and the kill feed are drawn at 80 % / 78 % / 85 % so a landscape phone shows
+  // more of the world. hudReservedRects() in touch-controls.ts mirrors this layout.
   const touch = useTouchMode();
   // Touch: the full map (minimap tap) fills a short screen; the bar and the extract pill would cover it.
   const mapOpen = useHud(store, mapOpenSlice) && touch;
@@ -130,19 +133,31 @@ export const Hud = memo(function Hud({
         <BossToast store={store} touch={touch} />
       </div>
 
-      {inPlay && (
-        <div
-          className={clsx(
-            "absolute left-1/2 flex w-max max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col items-center gap-2",
-            touch ? "bottom-1 origin-bottom scale-[0.78]" : "bottom-3",
-            mapOpen && "hidden",
-          )}
-        >
-          <InteractHint store={store} touch={touch} />
-          <ActionProgress store={store} />
-          <BottomBar store={store} touch={touch} />
-        </div>
-      )}
+      {inPlay &&
+        (touch ? (
+          // Touch: one slim strip on the bottom edge between the sticks (TOUCH_STRIP_*), the hint and
+          // the heal / reload progress above it at 78 %.
+          <div
+            className={clsx(
+              "absolute bottom-1 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5",
+              mapOpen && "hidden",
+            )}
+          >
+            <div className="flex w-max origin-bottom scale-[0.78] flex-col items-center gap-2">
+              <InteractHint store={store} touch />
+              <ActionProgress store={store} />
+            </div>
+            <div className="origin-bottom [@media(min-height:600px)]:scale-[1.15]">
+              <TouchStrip store={store} onSwap={onSwap} />
+            </div>
+          </div>
+        ) : (
+          <div className="absolute bottom-3 left-1/2 flex w-max max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col items-center gap-2">
+            <InteractHint store={store} touch={false} />
+            <ActionProgress store={store} />
+            <BottomBar store={store} />
+          </div>
+        ))}
 
       {!touch && (
         <>
@@ -781,22 +796,10 @@ function bottomBarSlice(s: HudSnapshot): HudSelf | null {
 
 const NO_ROLL: HudSelf["roll"] = { readyAtMs: 0, cdStartMs: 0, rolling: false };
 
-function BottomBar({ store, touch }: { store: HudStore; touch: boolean }) {
+/** Desktop bottom bar: roll pie, vitals, both weapon cards, meds and carry. */
+function BottomBar({ store }: { store: HudStore }) {
   const self = useHud(store, bottomBarSlice, deepEqual);
   if (!self) return null;
-  if (touch) {
-    // Touch: ~28 rem wide and 5.75 rem tall so it fits between the thumb zones. Roll and quiet walk
-    // are the ROLL button and a part-deflected move stick; bandage / medkit counts are on their
-    // buttons, so only the carry line of the meds panel stays.
-    return (
-      <div className="flex items-end gap-2">
-        <VitalsPanel self={self} compact />
-        <WeaponSlotCard slot={self.slots[0]} index={0} active={self.active === 0} reserve={reserveFor(self, self.slots[0])} compact />
-        <WeaponSlotCard slot={self.slots[1]} index={1} active={self.active === 1} reserve={reserveFor(self, self.slots[1])} compact />
-        <CarryPanel self={self} />
-      </div>
-    );
-  }
   return (
     <div className="flex items-end gap-2 md:gap-3">
       <MovePanel store={store} />
@@ -880,24 +883,24 @@ function reserveFor(self: HudSelf, slot: HudSlot): number {
   return self.ammo[WEAPONS[slot.weapon].ammo];
 }
 
-function VitalsPanel({ self, compact = false }: { self: HudSelf; compact?: boolean }) {
+function VitalsPanel({ self }: { self: HudSelf }) {
   const hpPct = clamp01(self.hp / Math.max(1, self.maxHp));
   const hpColor = hpPct > 0.6 ? "#4ade80" : hpPct > 0.3 ? "#facc15" : "#f43f5e";
   const armorPct = self.armor > 0 ? clamp01(self.armorDur / Math.max(1, self.armorMax)) : 0;
   return (
-    <div className={clsx("toon-panel flex flex-col", compact ? "w-[12.5rem] gap-1.5 p-2" : "w-[15.5rem] gap-2 p-2.5 md:w-[17rem]")}>
+    <div className="toon-panel flex w-[15.5rem] flex-col gap-2 p-2.5 md:w-[17rem]">
       <div className="flex items-center gap-2">
-        <span className={clsx("toon-text-thin text-sm text-rose-300", compact ? "w-7" : "w-9")}>HP</span>
-        <Bar pct={hpPct} color={hpColor} height={compact ? "h-5" : "h-6"} />
+        <span className="toon-text-thin w-9 text-sm text-rose-300">HP</span>
+        <Bar pct={hpPct} color={hpColor} height="h-6" />
         <span className="toon-text-thin w-10 text-right text-lg tabular-nums">{Math.ceil(self.hp)}</span>
       </div>
       <div className={clsx("flex items-center gap-2", self.armor === 0 && "opacity-50")}>
-        <span className={clsx("relative grid shrink-0 place-items-center", compact ? "h-7 w-7" : "h-9 w-9")}>
+        <span className="relative grid h-9 w-9 shrink-0 place-items-center">
           {self.armor > 0 ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={armorIcon(self.armor)} alt="" className={clsx("object-contain", compact ? "h-7 w-7" : "h-9 w-9")} draggable={false} />
+            <img src={armorIcon(self.armor)} alt="" className="h-9 w-9 object-contain" draggable={false} />
           ) : (
-            <span className={clsx("rounded-lg border-2 border-dashed border-white/40", compact ? "h-6 w-6" : "h-7 w-7")} />
+            <span className="h-7 w-7 rounded-lg border-2 border-dashed border-white/40" />
           )}
           {self.armor > 0 && (
             <span className="toon-key absolute -bottom-1 -right-1 h-4 min-w-4 bg-sky-300 px-0.5 text-[0.6rem]">
@@ -934,21 +937,18 @@ function WeaponSlotCard({
   index,
   active,
   reserve,
-  compact = false,
 }: {
   slot: HudSlot;
   index: 0 | 1;
   active: boolean;
   reserve: number;
-  /** Touch HUD: 5.25 × 5.5 rem instead of 6.5 × 6–7 rem. */
-  compact?: boolean;
 }) {
   const weapon = slot.weapon as WeaponId | "";
-  const box = compact ? "h-[5.25rem] w-[5.5rem]" : "h-[6.5rem] w-24 md:w-28";
+  const box = "h-[6.5rem] w-24 md:w-28";
   if (!weapon) {
     return (
       <div className={clsx("relative grid place-items-center rounded-2xl border-[3px] border-dashed border-black/80 bg-[#1d2333]/60", box)}>
-        {!compact && <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>}
+        <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>
         <span className="text-xs tracking-wide text-white/50">Empty</span>
       </div>
     );
@@ -960,7 +960,7 @@ function WeaponSlotCard({
       className={clsx(
         "relative flex flex-col items-center justify-between rounded-2xl border-[3px] border-black px-1.5 pb-1.5 pt-1 shadow-[0_4px_0_#000] transition-transform duration-150",
         box,
-        active ? (compact ? "-translate-y-1.5" : "-translate-y-2") : "opacity-80",
+        active ? "-translate-y-2" : "opacity-80",
       )}
       style={{
         background: `linear-gradient(180deg, ${color}66 0%, #1d2333f0 70%)`,
@@ -969,7 +969,7 @@ function WeaponSlotCard({
       }}
       title={`${def.name} — ${rarityName(slot.rarity)}${slot.free ? " (basic gear)" : ""}`}
     >
-      {!compact && <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>}
+      <span className="toon-key absolute left-1.5 top-1.5">{index + 1}</span>
       <span
         className="toon-text-thin absolute right-1.5 top-1.5 text-[0.6rem] uppercase tracking-wider"
         style={{ color: slot.broken ? "#f87171" : slot.free ? "#d4d4d8" : color }}
@@ -980,11 +980,11 @@ function WeaponSlotCard({
       <img
         src={weaponIcon(weapon)}
         alt={def.name}
-        className={clsx("object-contain drop-shadow-[0_2px_0_rgba(0,0,0,0.6)]", compact ? "mt-4 h-8 w-16" : "mt-5 h-11 w-20")}
+        className={clsx("object-contain drop-shadow-[0_2px_0_rgba(0,0,0,0.6)]", "mt-5 h-11 w-20")}
         draggable={false}
       />
       <div className="flex items-baseline gap-1 tabular-nums">
-        <span className={clsx("toon-text-thin", compact ? "text-lg leading-6" : "text-xl", slot.mag === 0 ? "text-rose-400" : "text-white")}>{slot.mag}</span>
+        <span className={clsx("toon-text-thin text-xl", slot.mag === 0 ? "text-rose-400" : "text-white")}>{slot.mag}</span>
         <span className="text-xs text-white/70">/ {reserve}</span>
       </div>
     </div>
@@ -1039,20 +1039,101 @@ function MedsPanel({ self }: { self: HudSelf }) {
   );
 }
 
-/** Touch HUD: the meds panel's carry line only (the counts are on the bandage / medkit buttons). */
-function CarryPanel({ self }: { self: HudSelf }) {
+/**
+ * Touch HUD v3 bottom strip: one slim panel on the bottom edge between the sticks, so an enemy
+ * coming from below stays visible. Left: thin HP bar with the number, a thinner armor bar under it
+ * (empty and dim without armor). Right: the active weapon (sprite, mag / reserve, rarity tint) and
+ * the other slot as a small chip (a tap switches weapons; an empty slot is a dashed chip). Bandage /
+ * medkit counts are on their buttons, the bag on the bag button. Size: TOUCH_STRIP_* in
+ * touch-controls.ts (hudReservedRects mirrors it).
+ */
+function TouchStrip({ store, onSwap }: { store: HudStore; onSwap?: () => void }) {
+  const self = useHud(store, bottomBarSlice, deepEqual);
+  if (!self) return null;
+  const hpPct = clamp01(self.hp / Math.max(1, self.maxHp));
+  const hpColor = hpPct > 0.6 ? "#4ade80" : hpPct > 0.3 ? "#facc15" : "#f43f5e";
+  const armorPct = self.armor > 0 ? clamp01(self.armorDur / Math.max(1, self.armorMax)) : 0;
+  const active = self.slots[self.active];
+  const other = self.slots[self.active === 0 ? 1 : 0];
   return (
-    <div
-      className="toon-panel flex h-[5.25rem] flex-col items-center justify-center gap-1 px-2 text-xs tabular-nums text-white/80"
-      aria-label={`Storage ${self.storageUsed} of ${self.storageCap}`}
+    <div className="toon-panel flex h-10 w-[19.75rem] items-center gap-2 py-1 pl-2.5 pr-1" data-touch-strip="">
+      <div
+        className="flex w-[8.25rem] shrink-0 flex-col justify-center gap-1"
+        aria-label={`HP ${Math.ceil(self.hp)} of ${self.maxHp}${self.armor > 0 ? `, armor ${Math.ceil(self.armorDur)}` : ", no armor"}`}
+      >
+        <div className="flex items-center gap-1.5">
+          <ThinBar pct={hpPct} color={hpColor} className="h-2.5" />
+          <span className="toon-text-thin w-7 text-right text-sm leading-none tabular-nums">{Math.ceil(self.hp)}</span>
+        </div>
+        <div className={clsx("pr-[2.125rem]", self.armor === 0 && "opacity-40")}>
+          <ThinBar pct={armorPct} color="#60a5fa" className="h-1.5" />
+        </div>
+      </div>
+      <span className="h-6 w-[2px] shrink-0 rounded bg-black/60" aria-hidden />
+      <StripWeapon slot={active} reserve={reserveFor(self, active)} />
+      <button
+        type="button"
+        onClick={onSwap}
+        disabled={!other.weapon || !onSwap}
+        aria-label={other.weapon ? `Switch to ${WEAPONS[other.weapon as WeaponId].name}` : "Second slot empty"}
+        // 44 px tall hit area around a 32 px chip.
+        className="pointer-events-auto -my-1.5 ml-auto grid h-11 w-12 shrink-0 place-items-center disabled:cursor-default"
+      >
+        <StripOtherChip slot={other} />
+      </button>
+    </div>
+  );
+}
+
+function ThinBar({ pct, color, className }: { pct: number; color: string; className: string }) {
+  return (
+    <div className={clsx("relative flex-1 overflow-hidden rounded-full border-2 border-black bg-black/60", className)}>
+      <div className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-150" style={{ width: `${pct * 100}%`, background: color }} />
+    </div>
+  );
+}
+
+/** The active weapon of the touch strip: rarity-tinted chip with the sprite, then mag / reserve. */
+function StripWeapon({ slot, reserve }: { slot: HudSlot; reserve: number }) {
+  const weapon = slot.weapon as WeaponId | "";
+  if (!weapon) {
+    return <span className="h-7 w-[6.5rem] rounded-lg border-2 border-dashed border-white/30" aria-label="No weapon" />;
+  }
+  const color = rarityHex(slot.rarity);
+  const def = WEAPONS[weapon];
+  return (
+    <div className="flex min-w-0 items-center gap-1.5" title={`${def.name} — ${rarityName(slot.rarity)}${slot.free ? " (basic gear)" : ""}`}>
+      <span
+        className="grid h-7 w-11 shrink-0 place-items-center rounded-lg border-2 border-black"
+        style={{ background: `linear-gradient(180deg, ${color}88 0%, #1d2333 85%)`, boxShadow: `inset 0 -2px 0 ${color}` }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={weaponIcon(weapon)} alt={def.name} className="h-5 w-9 object-contain drop-shadow-[0_1px_0_rgba(0,0,0,0.7)]" draggable={false} />
+      </span>
+      <span className="flex items-baseline gap-0.5 whitespace-nowrap tabular-nums">
+        <span className={clsx("toon-text-thin text-base leading-none", slot.broken || slot.mag === 0 ? "text-rose-400" : "text-white")}>
+          {slot.broken ? "—" : slot.mag}
+        </span>
+        <span className="font-body text-[0.65rem] font-bold text-white/65">/{reserve}</span>
+      </span>
+    </div>
+  );
+}
+
+/** The other slot of the touch strip: a small faded chip (dashed and empty without a weapon). */
+function StripOtherChip({ slot }: { slot: HudSlot }) {
+  const weapon = slot.weapon as WeaponId | "";
+  if (!weapon) return <span className="h-8 w-11 rounded-lg border-2 border-dashed border-white/30" aria-hidden />;
+  const color = rarityHex(slot.rarity);
+  return (
+    <span
+      className="grid h-8 w-11 place-items-center rounded-lg border-2 border-black opacity-90"
+      style={{ background: `linear-gradient(180deg, ${color}55 0%, #1d2333 85%)`, boxShadow: `inset 0 -2px 0 ${color}aa` }}
+      aria-hidden
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/sprites/backpack.png" alt="" className="h-6 w-6 object-contain" draggable={false} />
-      <span>
-        {self.storageUsed}/{self.storageCap}
-      </span>
-      {self.creditsEstimate > 0 && <span className="text-[0.65rem] text-amber-300">≈{fmtCr(self.creditsEstimate)}</span>}
-    </div>
+      <img src={weaponIcon(weapon)} alt="" className="h-6 w-10 object-contain drop-shadow-[0_1px_0_rgba(0,0,0,0.7)]" draggable={false} />
+    </span>
   );
 }
 

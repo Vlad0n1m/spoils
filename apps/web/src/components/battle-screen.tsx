@@ -450,6 +450,7 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
   const watchingNow = after.watching !== null || after.pending;
   const spectate = useCallback((key: string | null) => sessionRef.current?.renderer()?.spectate?.(key), []);
   const skipReplay = useCallback(() => sessionRef.current?.renderer()?.stopReplay?.(), []);
+  const swapWeapon = useCallback(() => sessionRef.current?.renderer()?.swapWeapon?.(), []);
   const watchReplay = useCallback(() => {
     sessionRef.current?.renderer()?.startReplay?.();
   }, []);
@@ -501,7 +502,7 @@ export function BattleScreen({ ticket, battleRoomId, nickname, onLeave, onRetry,
         </div>
       ) : (
         <>
-          <Hud store={hudStore} selfNickname={nickname} onLeave={onLeave} earnsXp={earnsXp} />
+          <Hud store={hudStore} selfNickname={nickname} onLeave={onLeave} earnsXp={earnsXp} onSwap={swapWeapon} />
           {/* Alpha first raid (JoinTicket.tutorial): step-by-step hints until the extract. */}
           {ticket.tutorial && hasSelf && !overlayVisible && <TutorialOverlay store={hudStore} touch={touch} />}
           {overlayNodes.map((o) => (
