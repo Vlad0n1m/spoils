@@ -48,7 +48,7 @@ test("T1 cycle config matches the decisions table", () => {
   assert.equal(WORLD.CAPACITY, 24);
   assert.equal(WORLD.MAX_SHARDS, 4);
   assert.equal(WORLD.SPARE_SEATS, 4);
-  assert.equal(WORLD.MAX_RUNTIMES_PER_SHARD - WORLD.RUNTIME_HEADROOM, 232);
+  assert.equal(WORLD.MAX_RUNTIMES_PER_SHARD - WORLD.RUNTIME_HEADROOM, 448);
   assert.equal(WORLD.EXTRACT_ARM_MS, 3 * MIN);
   assert.equal(WORLD.EXTRACT_EARLY_CLOSE_MS, 5 * MIN);
   // A6: ground items 10 min, corpses 15 min, last-minute blink.

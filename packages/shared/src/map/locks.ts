@@ -81,7 +81,8 @@ export function lockedRooms(map: MapData): readonly LockedRoom[] {
   const keyOf = new Map(ROOM_KEYS.map((k) => [k.zone, k]));
   const windows = map.rects.filter((r) => r.k === "window");
   const avoid: Array<{ x: number; y: number }> = [
-    ...map.spawns, ...map.extracts, ...(map.npcPosts ?? []),
+    // Building posts (POI garrison) stand at doors on purpose; they do not move the locked rooms.
+    ...map.spawns, ...map.extracts, ...(map.npcPosts ?? []).filter((p) => p.kind !== "bld"),
     ...map.bosses.flatMap((b) => [{ x: b.x, y: b.y }, ...b.guards]),
   ];
   for (const zone of map.zones) {

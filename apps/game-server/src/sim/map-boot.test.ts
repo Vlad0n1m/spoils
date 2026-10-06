@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   LEGACY_WORLD,
   NPC,
+  POI_GARRISON,
   SPAWN_RULES,
   WORLD,
   allowedExtracts,
@@ -141,9 +142,11 @@ test("humans-only spawns on the Steppe: farthest-point sampling, spread over sid
     assert.ok(s, `${rt.nickname} stands on a spawn spot`);
     assert.equal(rt.self.side, s.side);
   }
-  // Nobody spawns into a camp: every NPC post is ≥ NPC.SPAWN_CLEAR_PX from every spawn spot.
+  // Nobody spawns into a camp: every NPC post is ≥ NPC.SPAWN_CLEAR_PX from every spawn spot (building
+  // posts of the POI garrison: ≥ POI_GARRISON.SPAWN_CLEAR_PX, beyond the T4 chase radius).
   for (const p of npcPostsOf(map)) {
-    for (const s of map.spawns) assert.ok(Math.hypot(p.x - s.x, p.y - s.y) >= NPC.SPAWN_CLEAR_PX - 1, `post ${p.id} vs spawn`);
+    const clear = p.kind === "bld" ? POI_GARRISON.SPAWN_CLEAR_PX : NPC.SPAWN_CLEAR_PX;
+    for (const s of map.spawns) assert.ok(Math.hypot(p.x - s.x, p.y - s.y) >= clear - 1, `post ${p.id} vs spawn`);
   }
 });
 

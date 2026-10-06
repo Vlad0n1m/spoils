@@ -121,10 +121,15 @@ export const WORLD = {
    * whole party always finds one shard with room while the next one is starting).
    */
   SPARE_SEATS: 4,
-  /** Vision is allocated for this many runtimes (humans + NPCs, never reused) per shard. */
-  MAX_RUNTIMES_PER_SHARD: 256,
-  /** Admission refuses at MAX_RUNTIMES_PER_SHARD − this (kept for NPC respawns). */
-  RUNTIME_HEADROOM: 24,
+  /**
+   * Vision is allocated for this many runtimes (humans + NPCs, never reused) per shard.
+   * POI garrison v2 (2026-10): 256 → 512. A map now starts with up to NPC.MAX_PER_RAID (200) NPCs,
+   * which at 256 would leave ≈ 30 entries per cycle; 512 − 64 − 200 leaves ≈ 250 entries (was ≈ 180).
+   * Vision matrix 512² (lastSeen Float64 + published Uint8 ≈ 2.3 MB per shard, was ≈ 0.6 MB).
+   */
+  MAX_RUNTIMES_PER_SHARD: 512,
+  /** Admission refuses at MAX_RUNTIMES_PER_SHARD − this (kept for NPC respawns; 24 → 64 with ≈ 120 squads that may respawn once). */
+  RUNTIME_HEADROOM: 64,
   /** Entries of one user per cycle (web check). */
   MAX_ENTRIES_PER_CYCLE: 4,
   /** A player's extracts arm this long after their own entry. */

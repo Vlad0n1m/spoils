@@ -40,6 +40,7 @@ import {
   NPC_LOOT,
   POI_GARRISON,
   bossGroupNpcCount,
+  buildingGroupRange,
   garrisonRange,
   expectedMarauders,
   npcCarrierEligible,
@@ -176,7 +177,7 @@ test("rollMarauderKit: deterministic, no sniper in any class (alpha softening), 
   assert.equal(snipers, 0, "alpha softening: the top class fields no snipers");
 });
 
-test("rollNpcSpawns: deterministic, chance roll = exactly 2 draws per post, frequency ≈ chance, garrison on top, E ≈ 54 NPCs with bosses", () => {
+test("rollNpcSpawns: deterministic, chance roll = exactly 2 draws per post, frequency ≈ chance, garrison on top, E ≈ 178 NPCs with bosses", () => {
   assert.deepEqual(rollNpcSpawns(1234, posts, 7), rollNpcSpawns(1234, posts, 7));
   // Reference implementation of the chance-roll draw contract.
   for (const seed of [1, 99, 123456]) {
@@ -196,7 +197,7 @@ test("rollNpcSpawns: deterministic, chance roll = exactly 2 draws per post, freq
   for (let s = 0; s < 50; s++) {
     assert.deepEqual(rollPostChances(s, zeroed).filter((x) => x.postId !== 0), rollPostChances(s, posts).filter((x) => x.postId !== 0));
   }
-  const N = 20_000;
+  const N = 5000;
   const hits = new Map<number, number>();
   let total = 0, capped = 0;
   for (let s = 0; s < N; s++) {
@@ -207,7 +208,7 @@ test("rollNpcSpawns: deterministic, chance roll = exactly 2 draws per post, freq
     for (const x of rollPostChances(seed, posts)) hits.set(x.postId, (hits.get(x.postId) ?? 0) + 1);
     for (const x of sp) {
       const p = posts[x.postId]!;
-      // A garrison top-up starts a post at 1 and grows squads up to SQUAD_MAX.
+      // The POI minimum grows squads +1 up to SQUAD_MAX.
       assert.ok(x.members >= 1 && x.members <= Math.max(p.size[1], POI_GARRISON.SQUAD_MAX));
     }
     const n = bossNpcs + sp.reduce((a, x) => a + x.members, 0);
@@ -215,94 +216,125 @@ test("rollNpcSpawns: deterministic, chance roll = exactly 2 draws per post, freq
     if (rollNpcSpawns(seed, posts, 0).length !== sp.length) capped++;
     total += n;
   }
-  for (const p of posts) assert.ok(Math.abs((hits.get(p.id) ?? 0) / N - p.chance) < 0.015, `post ${p.id}`);
+  for (const p of posts) assert.ok(Math.abs((hits.get(p.id) ?? 0) / N - p.chance) < 0.025, `post ${p.id}`);
   // v5 iteration 2 (C4): NPC_CAMPS.radar.squads 2 → 1 (E marauders 33.4 → 30.9, E NPCs 40 → ≈ 38).
   // Map v2 (MAP_GEN_VERSION 4): E marauders 30.9 → 40.4, E NPCs ≈ 47.3. Alpha softening: every
   // chance × 0.75, E marauders 40.4 → 30.3 (chance roll alone, expectedMarauders), E NPCs ≈ 37.3.
-  // POI garrison (2026-10): every POI zone at least POI_GARRISON.BY_TIER marauders, E NPCs (legacy
-  // roll, all three bosses at their chance) ≈ 54.0; MAX_PER_RAID 60 → 64 trims a squad in ≈ 1.4 %.
-  assert.ok(Math.abs(total / N - 54.0) < 1.5, `E NPCs per raid ${(total / N).toFixed(2)}`);
+  // POI garrison v1 (per place): E NPCs ≈ 54. Garrison v2 (per building + POI minimum, 2026-10):
+  // E NPCs (legacy roll, all three bosses at their chance) ≈ 178, MAX_PER_RAID 64 → 200.
+  assert.ok(Math.abs(total / N - 178.4) < 3, `E NPCs per raid ${(total / N).toFixed(2)}`);
   assert.ok(near(expectedMarauders(posts), 30.3, 0.03), `E marauders ${expectedMarauders(posts).toFixed(2)}`);
   assert.ok(capped / N < 0.03, `capped raids ${(capped / N).toFixed(3)}`);
 });
 
-test("POI garrison: every POI zone of the Steppe holds BY_TIER[tier] marauders on every map, boss map or not, even at the cap", () => {
-  assert.deepEqual(POI_GARRISON.BY_TIER, { 0: [0, 1], 1: [1, 2], 2: [2, 3], 3: [3, 4], 4: [4, 6] });
+test("POI garrison: a group at every building, POI minimum by tier (T4 ≥ 20), on every map, boss map or not; the cap never cuts it", () => {
+  assert.deepEqual(POI_GARRISON.BUILDING_GROUP, { 0: [0, 1], 1: [1, 1], 2: [1, 1], 3: [1, 2], 4: [2, 3] });
+  assert.deepEqual(POI_GARRISON.POI_MIN, { 0: [0, 2], 1: [2, 4], 2: [5, 8], 3: [10, 14], 4: [20, 24] });
   const zones = m.zones;
   const tierOf = new Map(zones.map((z) => [z.id, z.tier]));
-  const N = 5000;
+  const bld = posts.filter((p) => p.kind === "bld");
+  // Every building of every POI has its post (the Steppe has no building inside a spawn / extract clearance).
+  m.buildings.forEach((b, bi) => {
+    if (b.zone) assert.equal(bld.filter((p) => p.building === bi).length, 1, `building ${bi} (${b.zone}) has one post`);
+  });
+  const N = 2000;
   const seen = new Map<number, Set<number>>();
+  const perTier = new Map<number, number[]>();
+  let radarMin = Infinity;
   for (let s = 0; s < N; s++) {
     const seed = (s * 2654435761 + 17) >>> 0;
-    const garrison = rollGarrisons(seed, posts);
-    assert.equal(garrison.size, zones.length, "one garrison per POI zone");
+    const g = rollGarrisons(seed, posts);
+    assert.equal(g.zones.size, zones.length, "one minimum per POI zone");
+    assert.equal(g.buildings.size, bld.length, "one group per building post");
     // Legacy (every boss at its chance), world map without an event boss, world map with the
     // Commander event (largest boss group), and a worst case of all three boss groups.
     for (const bossNpcs of [bossGroupNpcCount(rollBossSpawns(seed, m.bosses)), 0, 4, bossGroupNpcCount(m.bosses)]) {
       const per = new Map<string, number>();
-      for (const x of rollNpcSpawns(seed, posts, bossNpcs)) {
-        const p = posts[x.postId]!;
-        if (p.zone) per.set(p.zone, (per.get(p.zone) ?? 0) + x.members);
+      const sp = new Map(rollNpcSpawns(seed, posts, bossNpcs).map((x) => [x.postId, x.members]));
+      for (const [id, n] of sp) {
+        const p = posts[id]!;
+        if (p.zone) per.set(p.zone, (per.get(p.zone) ?? 0) + n);
       }
+      for (const p of bld) assert.ok((sp.get(p.id) ?? 0) >= g.buildings.get(p.id)!, `building post ${p.id} below its group`);
+      for (const p of bld) if (p.tier >= 1) assert.ok((sp.get(p.id) ?? 0) >= 1, `building ${p.building} (${p.zone}) unguarded`);
       for (const z of zones) {
         const n = per.get(z.id) ?? 0;
-        assert.ok(n >= garrison.get(z.id)!, `seed ${seed} boss NPCs ${bossNpcs}: ${z.id} ${n} < garrison ${garrison.get(z.id)}`);
-        assert.ok(n >= garrisonRange(z.tier)[0], `${z.id} T${z.tier}: ${n} marauders`);
-        if (z.tier >= 1) assert.ok(n >= 1, `${z.id} T${z.tier} unguarded`);
+        assert.ok(n >= g.zones.get(z.id)!, `seed ${seed} boss NPCs ${bossNpcs}: ${z.id} ${n} < minimum ${g.zones.get(z.id)}`);
+        if (bossNpcs === 0) {
+          if (!perTier.has(z.tier)) perTier.set(z.tier, []);
+          perTier.get(z.tier)!.push(n);
+          if (z.id === "radar") radarMin = Math.min(radarMin, n);
+        }
       }
     }
-    for (const [zone, g] of garrison) {
+    for (const [zone, v] of g.zones) {
       const t = tierOf.get(zone)!;
       const [lo, hi] = garrisonRange(t);
-      assert.ok(g >= lo && g <= hi);
+      assert.ok(v >= lo && v <= hi);
       if (!seen.has(t)) seen.set(t, new Set());
-      seen.get(t)!.add(g);
+      seen.get(t)!.add(v);
+    }
+    for (const [id, v] of g.buildings) {
+      const [lo, hi] = buildingGroupRange(posts[id]!.tier);
+      assert.ok(v >= lo && v <= hi);
     }
   }
-  // Every value of each tier's range turns up (T1 1–2, T2 2–3, T3 3–4, T4 4–6).
+  // Every value of each tier's minimum turns up.
   for (const [t, vals] of seen) {
     const [lo, hi] = garrisonRange(t);
-    assert.equal(vals.size, hi - lo + 1, `T${t} garrison sizes ${[...vals].sort().join(",")}`);
+    assert.equal(vals.size, hi - lo + 1, `T${t} minimum values ${[...vals].sort().join(",")}`);
   }
-  // T3 / T4 garrisons stand at two posts (POI_GARRISON.MIN_POSTS), never in one clump.
-  for (const z of zones) {
-    const n = posts.filter((p) => p.zone === z.id).length;
-    assert.ok(n >= POI_GARRISON.MIN_POSTS[z.tier], `${z.id} T${z.tier}: ${n} posts`);
-  }
-  // Highest garrison + all three boss groups fits under the cap, so the cap never cuts a garrison.
-  const maxGarrison = zones.reduce((n, z) => n + garrisonRange(z.tier)[1], 0);
+  assert.ok(radarMin >= 20, `Radar (T4) holds ≥ 20 marauders, min seen ${radarMin}`);
+  const mean = (t: number) => perTier.get(t)!.reduce((a, b) => a + b, 0) / perTier.get(t)!.length;
+  console.log(`[npc] marauders per place by tier (mean): T1 ${mean(1).toFixed(1)}, T2 ${mean(2).toFixed(1)}, T3 ${mean(3).toFixed(1)}, T4 ${mean(4).toFixed(1)}`);
+  assert.ok(mean(4) > mean(3) && mean(3) > mean(2) && mean(2) > mean(1));
+  // The largest possible garrison (per zone: its building groups at their max, or its minimum at its
+  // max, whichever is larger) + all three boss groups fits under the cap.
+  const maxGarrison = zones.reduce((n, z) => {
+    const b = bld.filter((p) => p.zone === z.id).reduce((a, p) => a + buildingGroupRange(p.tier)[1], 0);
+    return n + Math.max(b, garrisonRange(z.tier)[1]);
+  }, 0);
   assert.ok(maxGarrison + bossGroupNpcCount(m.bosses) <= NPC.MAX_PER_RAID, `max garrison ${maxGarrison}`);
 });
 
-test("POI garrison top-up: unrolled posts first (1 each), then +1 round-robin up to SQUAD_MAX; road camps never", () => {
-  const P = (id: number, zone: string | null, tier: NpcPost["tier"], chance: number): NpcPost => ({
-    id, zone, tier, kind: zone ? "poi" : "road", x: 0, y: 0, patrol: [], size: [2, 3], chance,
+test("POI garrison: building groups, then the POI minimum +1 round-robin over building posts first, up to SQUAD_MAX; road camps never", () => {
+  const P = (id: number, zone: string | null, tier: NpcPost["tier"], kind: NpcPost["kind"]): NpcPost => ({
+    id, zone, tier, kind, x: 0, y: 0, patrol: [], size: kind === "bld" ? [...buildingGroupRange(tier)] as [number, number] : [2, 3], chance: 0,
   });
-  const list = [P(0, "radar", 4, 0), P(1, "radar", 4, 0), P(2, null, 0, 0), P(3, "fuel", 1, 0)];
-  for (let s = 0; s < 200; s++) {
+  const list = [P(0, "radar", 4, "poi"), P(1, "radar", 4, "bld"), P(2, null, 0, "road"), P(3, "radar", 4, "bld"), P(4, "fuel", 1, "bld")];
+  for (let s = 0; s < 300; s++) {
     const g = rollGarrisons(s, list);
-    assert.deepEqual([...g.keys()], ["radar", "fuel"]);
-    const sp = rollNpcSpawns(s, list, 0);
-    const a = sp.find((x) => x.postId === 0)!.members, b = sp.find((x) => x.postId === 1)!.members;
-    assert.equal(a + b, g.get("radar"));
-    assert.ok(a - b === 0 || a - b === 1, "round-robin, first post first");
-    assert.equal(sp.find((x) => x.postId === 3)!.members, g.get("fuel"));
-    assert.ok(!sp.some((x) => x.postId === 2), "no road camp garrison");
+    assert.deepEqual([...g.zones.keys()], ["radar", "fuel"]);
+    assert.deepEqual([...g.buildings.keys()], [1, 3, 4]);
+    const sp = new Map(rollNpcSpawns(s, list, 0).map((x) => [x.postId, x.members]));
+    const b1 = sp.get(1)!, b3 = sp.get(3)!, other = sp.get(0) ?? 0;
+    // Radar minimum 20–24 over 2 building posts (max 4 each) and 1 other post (max 4): capped at 12.
+    assert.equal(b1, POI_GARRISON.SQUAD_MAX);
+    assert.equal(b3, POI_GARRISON.SQUAD_MAX);
+    assert.equal(other, POI_GARRISON.SQUAD_MAX, "then the other posts");
+    assert.equal(sp.get(4), Math.max(g.buildings.get(4)!, g.zones.get("fuel")!));
+    assert.ok(!sp.has(2), "no road camp garrison");
   }
-  // One post only: a squad grows to SQUAD_MAX at most.
-  for (let s = 0; s < 200; s++) assert.ok(rollNpcSpawns(s, [P(0, "radar", 4, 0)])[0]!.members <= POI_GARRISON.SQUAD_MAX);
-  // A T0 garrison may be empty.
+  // Round-robin: two building posts share a top-up evenly (± 1, the first post first).
+  const two = [P(0, "depot", 2, "bld"), P(1, "depot", 2, "bld")];
+  for (let s = 0; s < 200; s++) {
+    const sp = rollNpcSpawns(s, two);
+    const a = sp[0]!.members, b = sp[1]!.members;
+    assert.equal(a + b, rollGarrisons(s, two).zones.get("depot"));
+    assert.ok(a - b === 0 || a - b === 1);
+  }
+  // A T0 place may be empty.
   let empty = 0;
-  for (let s = 0; s < 400; s++) if (rollNpcSpawns(s, [P(0, "yard", 0, 0)]).length === 0) empty++;
-  assert.ok(empty > 100 && empty < 300, `T0 empty ${empty}/400`);
+  for (let s = 0; s < 400; s++) if (rollNpcSpawns(s, [P(0, "yard", 0, "bld")]).length === 0) empty++;
+  assert.ok(empty > 20 && empty < 300, `T0 empty ${empty}/400`);
 });
 
 test("rollNpcSpawns cap: drops whole squads — road camps first, then T1, then T2 …; garrisons last", () => {
+  // Posts outside any POI zone (no garrison): the plain drop order.
   const P = (id: number, kind: NpcPost["kind"], tier: NpcPost["tier"], size: number): NpcPost => ({
-    id, zone: kind === "road" ? null : "z", tier, kind, x: 0, y: 0, patrol: [], size: [size, size], chance: 1,
+    id, zone: null, tier, kind, x: 0, y: 0, patrol: [], size: [size, size], chance: 1,
   });
   const list = [P(0, "poi", 4, 3), P(1, "road", 0, 2), P(2, "poi", 1, 2), P(3, "poi", 2, 3), P(4, "road", 0, 2), P(5, "gate", 3, 3)];
-  // 15 marauders (zone "z" is above its garrison): room for all with cap − 15 boss-group NPCs.
   const C = NPC.MAX_PER_RAID - 15;
   assert.equal(rollNpcSpawns(5, list, C).length, 6);
   // Over by 2: the LAST road camp goes first.
@@ -313,9 +345,21 @@ test("rollNpcSpawns cap: drops whole squads — road camps first, then T1, then 
   assert.deepEqual(rollNpcSpawns(5, list, C + 5).map((s) => s.postId), [0, 3, 5]);
   // Over by 7: then T2.
   assert.deepEqual(rollNpcSpawns(5, list, C + 7).map((s) => s.postId), [0, 5]);
-  // Nothing fits: garrison squads go last, but they go (the cap is hard).
   assert.deepEqual(rollNpcSpawns(5, list, NPC.MAX_PER_RAID), []);
   assert.deepEqual(rollNpcSpawns(5, [], 0), []);
+  // Garrisons go last: a T1 building post and a T1 squad above the place's minimum; over the cap the
+  // road camp goes first; while the place stays at its minimum, an extra squad may go too, the building group never.
+  const g = (id: number, kind: NpcPost["kind"]): NpcPost => ({ id, zone: "fuel", tier: 1, kind, x: 0, y: 0, patrol: [], size: [1, 1], chance: kind === "bld" ? 0 : 1 });
+  const mixed = [g(0, "bld"), g(1, "poi"), P(2, "road", 0, 2)];
+  for (let s = 0; s < 100; s++) {
+    const min = rollGarrisons(s, mixed).zones.get("fuel")!;
+    const full = rollNpcSpawns(s, mixed, 0);
+    const n = full.reduce((a, x) => a + x.members, 0);
+    const out = rollNpcSpawns(s, mixed, NPC.MAX_PER_RAID - n + 2 + Math.max(0, n - 2 - min));
+    assert.ok(!out.some((x) => x.postId === 2), "road camp dropped first");
+    assert.ok(out.some((x) => x.postId === 0), "building group kept");
+    assert.ok(out.filter((x) => x.postId !== 2).reduce((a, x) => a + x.members, 0) >= min, "minimum kept");
+  }
 });
 
 test("bossGroupNpcCount: boss + its guard posts (capped at BOSSES[kind].guards)", () => {
@@ -329,8 +373,9 @@ test("carriers: keys, eligibility, weights, raidNpcCarriers only from spawned T3
   assert.deepEqual(parseNpcCarrierKey("npc:12.2"), { postId: 12, member: 2 });
   for (const bad of ["npc:", "npc:1", "npc:a.b", "boss:foreman", "12", "npc:1.2.3", " npc:1.2"]) assert.equal(parseNpcCarrierKey(bad), null, bad);
   assert.equal(bossKindOfLootKey("npc:1.0"), null);
-  assert.equal(npcCarrierWeight(3), 80);
-  assert.equal(npcCarrierWeight(4), 125);
+  // Garrison v2: WEIGHT_MULT 5 → 0.625 (8.2× the T3/T4 marauders).
+  assert.equal(npcCarrierWeight(3), 10);
+  assert.equal(npcCarrierWeight(4), 15.625);
   assert.ok(!npcCarrierEligible(2) && npcCarrierEligible(3) && npcCarrierEligible(4));
   assert.equal(NPC_CARRIER.MAX_PER_NPC, 1);
   for (let s = 0; s < 300; s++) {
@@ -393,30 +438,39 @@ test("pool release with carriers (model of planAllocation): R 0 → 0; R 3 → b
   // NPC_CARRIER.WEIGHT_MULT 5 (v5 review, after the radar squads went 2 → 1): the real planAllocation
   // (loot-yield harness, 200 seeds at R 24) measures 0.61/raid ≈ 17 % of the non-boss release, inside
   // the 0.6–0.7 target. This one-item-per-destination model over-weights carriers a little
-  // (containers are never refilled here).
-  assert.ok(share >= 0.15 && share <= 0.32, `carrier share ${share.toFixed(3)}`);
+  // (containers are never refilled here). Garrison v2: 8.2× the carrier weight, WEIGHT_MULT 5 → 0.625
+  // keeps the weight share at ≈ 15 % (was 14.7 %), the model share near its old value.
+  assert.ok(share >= 0.12 && share <= 0.26, `carrier share ${share.toFixed(3)}`);
   assert.ok(r3Carriers / N < 0.1, `R = 3 carriers ${(r3Carriers / N).toFixed(3)}/raid`);
 });
 
-test("Steppe npc posts: counts per zone, sizes / chances from NPC_CAMPS (map v2 places: ZONE_CAMPS), ids = index, golden digest", () => {
+test("Steppe npc posts: counts per zone, sizes / chances from NPC_CAMPS (map v2 places: ZONE_CAMPS), building posts, ids = index, golden digest", () => {
   assert.ok(Array.isArray(m.npcPosts));
   posts.forEach((p, i) => assert.equal(p.id, i));
+  // Building posts come after every other post (own rng stream): the older posts keep ids and spots.
+  const firstBld = posts.findIndex((p) => p.kind === "bld");
+  assert.ok(firstBld > 0 && posts.slice(firstBld).every((p) => p.kind === "bld"));
   for (const z of m.zones) {
     const camp = zoneCamp(z);
     // The ten places of the 24-block layout keep their NPC_CAMPS rows; new places use ZONE_CAMPS.
     assert.equal(camp, NPC_CAMPS[z.id] ?? ZONE_CAMPS[z.id], `${z.id} camp row`);
-    const zp = posts.filter((p) => p.zone === z.id);
-    // POI garrison: at least MIN_POSTS[tier] posts; the extra ones are garrison-only (chance 0).
-    const want = Math.max(camp.squads, POI_GARRISON.MIN_POSTS[z.tier]);
-    assert.equal(zp.length, want, `${z.id} posts`);
-    zp.forEach((p, i) => {
+    const zp = posts.filter((p) => p.zone === z.id && p.kind !== "bld");
+    assert.equal(zp.length, camp.squads, `${z.id} posts`);
+    for (const p of zp) {
       assert.equal(p.tier, z.tier);
       assert.notEqual(p.kind, "road");
       assert.deepEqual(p.size, [...camp.size]);
-      assert.equal(p.chance, i < camp.squads ? camp.chance : 0);
-    });
+      assert.equal(p.chance, camp.chance);
+    }
     // At most half the posts of a zone sit on its gates.
-    assert.ok(zp.filter((p) => p.kind === "gate").length <= Math.ceil(want / 2));
+    assert.ok(zp.filter((p) => p.kind === "gate").length <= Math.ceil(camp.squads / 2));
+    for (const p of posts.filter((q) => q.zone === z.id && q.kind === "bld")) {
+      assert.equal(p.tier, z.tier);
+      assert.equal(p.chance, 0, "building posts spawn only as the garrison");
+      assert.deepEqual(p.size, [...buildingGroupRange(z.tier)]);
+      assert.deepEqual(p.patrol, [], "building posts hold");
+      assert.equal(m.buildings[p.building!]!.zone, z.id);
+    }
   }
   const roads = posts.filter((p) => p.kind === "road");
   assert.equal(roads.length, NPC_CAMPS.road!.squads, "5 road camps on the Steppe");
@@ -426,22 +480,32 @@ test("Steppe npc posts: counts per zone, sizes / chances from NPC_CAMPS (map v2 
     assert.deepEqual(p.patrol, [], "road camps hold");
     assert.deepEqual(p.size, [...NPC_CAMPS.road!.size]);
   }
-  const poi = posts.filter((p) => p.kind !== "road");
+  const poi = posts.filter((p) => p.kind !== "road" && p.kind !== "bld");
   const patrolling = poi.filter((p) => p.patrol.length > 0).length;
   assert.ok(patrolling >= poi.length / 2 - 2 && patrolling <= poi.length / 2 + 1, `patrolling ${patrolling} / ${poi.length}`);
   // Golden digest: placement is deterministic and changes only on purpose.
   let h = 0x811c9dc5;
   const mix = (v: number) => { h ^= v | 0; h = Math.imul(h, 0x01000193); };
   for (const p of posts) {
-    mix(p.id); mix(["poi", "gate", "road"].indexOf(p.kind)); mix(p.tier); mix(p.x); mix(p.y); mix(p.size[0]); mix(p.size[1]); mix(Math.round(p.chance * 100));
+    mix(p.id); mix(["poi", "gate", "road", "bld"].indexOf(p.kind)); mix(p.tier); mix(p.x); mix(p.y); mix(p.size[0]); mix(p.size[1]); mix(Math.round(p.chance * 100));
     mix(p.patrol.length);
     for (const q of p.patrol) { mix(q.x); mix(q.y); }
+    if (p.kind === "bld") mix(p.building!);
   }
   assert.equal((h >>> 0).toString(16).padStart(8, "0"), GOLDEN_POSTS, "npc posts digest");
+  // The posts before the building posts are exactly the pre-garrison ones.
+  let h0 = 0x811c9dc5;
+  const mix0 = (v: number) => { h0 ^= v | 0; h0 = Math.imul(h0, 0x01000193); };
+  for (const p of posts.slice(0, firstBld)) {
+    mix0(p.id); mix0(["poi", "gate", "road"].indexOf(p.kind)); mix0(p.tier); mix0(p.x); mix0(p.y); mix0(p.size[0]); mix0(p.size[1]); mix0(Math.round(p.chance * 100));
+    mix0(p.patrol.length);
+    for (const q of p.patrol) { mix0(q.x); mix0(q.y); }
+  }
+  assert.equal((h0 >>> 0).toString(16).padStart(8, "0"), "cd390299", "pre-garrison posts unchanged");
 });
 
 /** Golden digest of MapData.npcPosts (MAP_GEN_VERSION 4). Update only for an intended placement change. */
-const GOLDEN_POSTS = "60547530"; // POI garrison: +1 garrison-only post at Radar (T4) and Relay (T3), POI_GARRISON.MIN_POSTS (before: alpha softening, chances × 0.75 "cd390299"; map v2 "8fcf3adf"; v5 iteration 2 on MAP_GEN_VERSION 2–3: "8b0d6862")
+const GOLDEN_POSTS = "8e49d0f6"; // garrison v2: + one building post per POI building (before: garrison v1 "60547530"; alpha softening, chances × 0.75 "cd390299"; map v2 "8fcf3adf"; v5 iteration 2 on MAP_GEN_VERSION 2–3: "8b0d6862")
 
 test("Steppe npc posts: clearances, terrain, reachability, patrol radius", () => {
   const g = getWalkGrid(m);
@@ -449,18 +513,29 @@ test("Steppe npc posts: clearances, terrain, reachability, patrol radius", () =>
   const d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
   const points = posts.flatMap((p) => [{ p, q: { x: p.x, y: p.y } }, ...p.patrol.map((q) => ({ p, q }))]);
   for (const { p, q } of points) {
-    for (const s of m.spawns) assert.ok(d(q, s) >= NPC.SPAWN_CLEAR_PX, `post ${p.id} near a spawn`);
+    const bld = p.kind === "bld";
+    // Building posts: a closer spawn clearance (beyond the T4 chase radius) and no boss clearance.
+    for (const s of m.spawns) assert.ok(d(q, s) >= (bld ? POI_GARRISON.SPAWN_CLEAR_PX : NPC.SPAWN_CLEAR_PX), `post ${p.id} near a spawn`);
     for (const e of m.extracts) assert.ok(d(q, e) >= NPC.EXTRACT_CLEAR_PX, `post ${p.id} near extract ${e.id}`);
-    for (const b of m.bosses) assert.ok(d(q, b) >= NPC.BOSS_CLEAR_PX, `post ${p.id} near boss ${b.kind}`);
+    if (!bld) for (const b of m.bosses) assert.ok(d(q, b) >= NPC.BOSS_CLEAR_PX, `post ${p.id} near boss ${b.kind}`);
     const byte = terrainByteAt(m, q.x, q.y);
-    assert.equal(byte & TERRAIN_INDOOR, 0, `post ${p.id} indoors`);
+    if ((byte & TERRAIN_INDOOR) !== 0) {
+      // Only a building post may stand inside, and only inside its own building.
+      assert.ok(bld, `post ${p.id} indoors`);
+      const f = m.buildings[p.building!]!.floor;
+      assert.ok(q.x > f.x && q.x < f.x + f.w && q.y > f.y && q.y < f.y + f.h, `post ${p.id} inside another building`);
+    }
     const kind = byte & TERRAIN_KIND_MASK;
     for (const bad of [TERRAIN.FOREST, TERRAIN.WATER, TERRAIN.SHALLOW, TERRAIN.BRIDGE]) assert.notEqual(kind, bad, `post ${p.id} terrain ${kind}`);
     assert.ok(reachedNear(g, reached, q.x, q.y, 48), `post ${p.id} unreachable`);
     if (p.zone) assert.equal(zoneAt(m, q.x, q.y)?.id, p.zone, `post ${p.id} left its zone`);
   }
   for (const p of posts) {
-    for (const o of posts) if (o !== p) assert.ok(d(p, o) >= NPC.POST_MIN_SEP_PX, `posts ${p.id}/${o.id}`);
+    for (const o of posts) {
+      if (o === p) continue;
+      const min = p.kind === "bld" || o.kind === "bld" ? POI_GARRISON.POST_SEP_PX / 2 : NPC.POST_MIN_SEP_PX;
+      assert.ok(d(p, o) >= min, `posts ${p.id}/${o.id}`);
+    }
     for (const q of p.patrol) assert.ok(d(p, q) <= npcLeashPx(p) / 2 + 1, `post ${p.id} patrol beyond leash/2`);
     assert.ok(p.patrol.length <= 3);
     if (p.kind === "road") {

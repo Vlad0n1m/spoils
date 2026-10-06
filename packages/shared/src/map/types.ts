@@ -198,7 +198,7 @@ export interface BossSpot {
 }
 
 /** NpcPost.kind: a yard in front of a POI building, a road entering a zone, or a wild road camp. */
-export type NpcPostKind = "poi" | "gate" | "road";
+export type NpcPostKind = "poi" | "gate" | "road" | "bld";
 
 /**
  * A marauder squad post (NPC MODEL v5, placeNpcPosts). Not part of mapHash: posts are generated
@@ -221,6 +221,8 @@ export interface NpcPost {
   size: [number, number];
   /** Spawn chance per match (one draw per post, rollNpcSpawns). */
   chance: number;
+  /** Building posts (kind "bld", POI garrison): index of the building it holds in MapData.buildings. */
+  building?: number;
 }
 
 export type AmbientKind = "river" | "sawmill" | "generator" | "forest" | "wind";

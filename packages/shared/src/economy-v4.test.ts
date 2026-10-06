@@ -32,6 +32,7 @@ import {
   GUARD_DROP,
   uniqueTierScore,
 } from "./economy.js";
+import { LOOT_TRIM } from "./alpha-loot.js";
 import { itemDef } from "./item-defs.js";
 import { generateMap } from "./map/generate.js";
 import { zoneAt } from "./map/query.js";
@@ -143,20 +144,23 @@ test("Steppe container EV per zone class matches the v4 model (±10 %), value co
   // v5 iteration 2: T3/T4 ammo × 0.15 / 0.1, med_case bandage 40 → 10 / medkit 8 → 2 / pills 50 → 100,
   // weapon_box heavy ammo 15 → 8, crate bandage 25 → 12, stash bandage 15 → 8 (consumables 1.9k → 0.69k;
   // the extra pills lift T4 junk 173 → 191 and the match 20.2k → 21.3k).
-  const want: Record<string, number> = { wild: 5.3, T1: 13.0, T2: 20.7, T3: 176, T4: 191 };
+  // LOOT_TRIM (2026-10): every container's fill chance × DROP_MULT 0.9, so every EV below × 0.9
+  // (the values are the pre-cut model) and the empty share 1 − 0.9 × (1 − empty).
+  const D = LOOT_TRIM.DROP_MULT;
+  const want: Record<string, number> = { wild: 5.3 * D, T1: 13.0 * D, T2: 20.7 * D, T3: 176 * D, T4: 191 * D };
   for (const [cls, w] of Object.entries(want)) {
     const a = acc[cls]!;
     assert.ok(near(a.junk / a.n, w, 0.1), `${cls} junk/container ${(a.junk / a.n).toFixed(1)} vs ${w}`);
   }
-  assert.ok(Math.abs(acc.wild!.empty / acc.wild!.n - 0.83) < 0.03, `wild empty ${(acc.wild!.empty / acc.wild!.n).toFixed(3)}`);
+  assert.ok(Math.abs(acc.wild!.empty / acc.wild!.n - (1 - D * 0.17)) < 0.03, `wild empty ${(acc.wild!.empty / acc.wild!.n).toFixed(3)}`);
   // Map v2: totals per 24-block area (AREA_K); the T3/T4 share was "elevator + radar" (now + Relay Hill).
-  assert.ok(near(junk / SEEDS / AREA_K, 21_300, 0.1), `junk per 24-block area ${(junk / SEEDS / AREA_K).toFixed(0)}`);
+  assert.ok(near(junk / SEEDS / AREA_K, 21_300 * D, 0.1), `junk per 24-block area ${(junk / SEEDS / AREA_K).toFixed(0)}`);
   assert.ok(junkHot / junk >= 0.75, `T3 + T4 share ${(junkHot / junk).toFixed(2)}`);
   // Weapons v2: grenades (180 CR-eq each, weapon_box T2+) and bolts replace light ammo / shell weights:
   // consumables 690 → ≈ 985 per area while the total value per container tier moves +0.2 … +2.1 %.
-  assert.ok(near(cons / SEEDS / AREA_K, 985, 0.15), `container consumables per 24-block area ${(cons / SEEDS / AREA_K).toFixed(0)}`);
+  assert.ok(near(cons / SEEDS / AREA_K, 985 * D, 0.15), `container consumables per 24-block area ${(cons / SEEDS / AREA_K).toFixed(0)}`);
   assert.equal(hvWild, 0, "no 650+ CR junk in the wilds");
-  assert.ok(near(hv / SEEDS / AREA_K, 7.1, 0.2), `high-value junk per 24-block area ${(hv / SEEDS / AREA_K).toFixed(1)}`);
+  assert.ok(near(hv / SEEDS / AREA_K, 7.1 * D, 0.2), `high-value junk per 24-block area ${(hv / SEEDS / AREA_K).toFixed(1)}`);
 });
 
 // ───────────────────────── floor loot
