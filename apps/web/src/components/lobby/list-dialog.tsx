@@ -78,7 +78,7 @@ export function ListDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby={`${id}-t`} onClick={onClose}>
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4 pl-[max(1rem,var(--safe-l))] pr-[max(1rem,var(--safe-r))]" role="dialog" aria-modal="true" aria-labelledby={`${id}-t`} onClick={onClose}>
       {/* Landscape phones: two columns (item and price | breakdown and buttons), so it fits the height;
           the faded scroll is only a fallback (e.g. under an on-screen keyboard). */}
       <form

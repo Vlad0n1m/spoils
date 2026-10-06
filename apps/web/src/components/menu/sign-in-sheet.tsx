@@ -20,7 +20,7 @@ export function SignInSheet({ onClose, onGuest }: { onClose: () => void; onGuest
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-end p-3 sm:place-items-center" role="dialog" aria-modal="true" aria-labelledby="signin-sheet-title">
+    <div className="fixed inset-0 z-50 grid place-items-end p-3 pl-[max(0.75rem,var(--safe-l))] pr-[max(0.75rem,var(--safe-r))] pb-[max(0.75rem,var(--safe-b))] sm:place-items-center" role="dialog" aria-modal="true" aria-labelledby="signin-sheet-title">
       <div className="absolute inset-0 bg-black/65" onClick={onClose} aria-hidden />
       <div className="toon-panel relative w-full max-w-md bg-[#161b28] p-6 text-center animate-sheet-up motion-reduce:animate-none md:p-8">
         {/* eslint-disable-next-line @next/next/no-img-element */}

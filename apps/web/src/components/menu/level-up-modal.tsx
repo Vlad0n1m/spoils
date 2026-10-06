@@ -46,7 +46,7 @@ export function LevelUpModal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-[70] grid place-items-center p-4 short:p-2" role="dialog" aria-modal="true" aria-labelledby="levelup-title">
+    <div className="fixed inset-0 z-[70] grid place-items-center p-4 short:p-2 pl-[max(1rem,var(--safe-l))] pr-[max(1rem,var(--safe-r))] short:pl-[max(0.5rem,var(--safe-l))] short:pr-[max(0.5rem,var(--safe-r))]" role="dialog" aria-modal="true" aria-labelledby="levelup-title">
       <div className="absolute inset-0 bg-black/75" onClick={onClose} aria-hidden />
       <div className="toon-panel relative max-h-[calc(100dvh-2rem)] w-full max-w-[56rem] overflow-hidden bg-[radial-gradient(circle_at_50%_18%,#2b3a1a,#161b28_60%)] px-5 pb-5 pt-6 text-center animate-pop-in motion-reduce:animate-none short:max-h-[calc(100dvh-1rem)] short:px-3 short:pb-3 short:pt-3">
         {/* Rays turning behind the shield, and a one-off burst. */}

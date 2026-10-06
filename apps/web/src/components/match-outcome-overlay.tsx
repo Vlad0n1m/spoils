@@ -112,7 +112,7 @@ export function MatchOutcomeOverlay({
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex flex-col">
+    <div className="fixed inset-0 z-[100] flex flex-col pl-[var(--safe-l)] pr-[var(--safe-r)]">
       <div
         className={clsx(
           "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(6,8,12,0.55),rgba(6,8,12,0.92))] transition-opacity duration-700 ease-out",

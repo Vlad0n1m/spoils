@@ -32,7 +32,7 @@ export function ReplayOverlay({ store, onSkip }: { store: HudStore; onSkip: () =
     return () => window.removeEventListener("keydown", onKey);
   }, [onSkip]);
   return (
-    <div className="pointer-events-none fixed inset-0 z-[90] select-none text-white" aria-live="polite">
+    <div className="pointer-events-none fixed inset-0 z-[90] select-none pl-[var(--safe-l)] pr-[var(--safe-r)] text-white" aria-live="polite">
       {/* Vignette and thin film bars: it reads as a recording, not the live raid. */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_52%,rgba(4,6,10,0.72))]" aria-hidden />
       <div className="absolute inset-x-0 top-0 h-[6vh] max-h-12 bg-black/85" aria-hidden />
@@ -94,7 +94,7 @@ export function SpectateBar({
   const hpPct = w.maxHp > 0 ? Math.max(0, Math.min(100, (w.hp / w.maxHp) * 100)) : 0;
   const arPct = w.armorMax > 0 ? Math.max(0, Math.min(100, (w.armorDur / w.armorMax) * 100)) : 0;
   return (
-    <div className="pointer-events-none fixed inset-0 z-[90] select-none text-white">
+    <div className="pointer-events-none fixed inset-0 z-[90] select-none pl-[var(--safe-l)] pr-[var(--safe-r)] text-white">
       <div className={clsx("absolute left-1/2 flex -translate-x-1/2 flex-col items-center", touch ? "top-12 origin-top scale-[0.85]" : "top-16")}>
         <div className="toon-panel flex min-w-[15rem] items-center gap-3 px-3 py-2" aria-live="polite">
           <span className="rounded-lg border-2 border-black bg-sky-400 px-2 py-0.5 text-xs font-bold tracking-[0.2em] text-black">

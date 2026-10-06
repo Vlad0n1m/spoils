@@ -47,7 +47,7 @@ export function GuestPlayDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 pl-[max(1rem,var(--safe-l))] pr-[max(1rem,var(--safe-r))]" role="dialog" aria-modal="true">
       <form onSubmit={submit} className="toon-panel w-full max-w-md space-y-5 bg-[#161b28] p-6 md:p-8">
         <div>
           <h2 className="toon-text text-3xl tracking-wide text-zooa-lime">Play as guest</h2>
