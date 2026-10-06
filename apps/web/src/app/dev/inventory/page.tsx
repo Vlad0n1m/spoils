@@ -154,11 +154,29 @@ function InventoryBench() {
     room.patch();
   };
 
+  // Screenshot params: ?bare=1 hides this bench bar; ?open=inv|body|safe|crate opens a panel at once;
+  // ?fill=1 fills the pockets and backpack (the "bag full" state); ?toast=pickup = a refused pickup.
+  const [bare, setBare] = useState(false);
+  useEffect(() => {
+    if (!client) return;
+    const q = new URLSearchParams(window.location.search);
+    setBare(q.get("bare") === "1");
+    if (q.get("fill") === "1") fill();
+    const open = q.get("open");
+    if (open === "body") corpse();
+    else if (open === "safe") chest();
+    else if (open === "crate") crate();
+    else if (open === "inv") client.setTabOpen(true);
+    // ?toast=pickup: the server's answer to F on a ground item that does not fit.
+    if (q.get("toast") === "pickup") window.setTimeout(() => room.pickupFull("junk_gpu"), 300);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per client
+  }, [client]);
+
   const outcome = outcomeKey ? OUTCOMES[outcomeKey]! : null;
 
   return (
     <main className="min-h-[100dvh] bg-[#0b0f0a] bg-[radial-gradient(circle_at_30%_20%,#1b2a17,transparent_60%)] p-4 text-white sm:p-6">
-      <div className="toon-panel fixed inset-x-3 bottom-3 z-[80] mx-auto flex max-w-5xl flex-wrap items-center gap-2 p-3">
+      <div className={`toon-panel fixed inset-x-3 bottom-3 z-[80] mx-auto max-w-5xl flex-wrap items-center gap-2 p-3 ${bare ? "hidden" : "flex"}`}>
         <h1 className="toon-text mr-2 text-2xl tracking-wide">Inventory bench</h1>
         <DevBtn onClick={() => client?.toggle()}>Inventory [Tab]</DevBtn>
         <DevBtn onClick={corpse}>Search body</DevBtn>
@@ -167,6 +185,7 @@ function InventoryBench() {
         <DevBtn onClick={crate}>Search crate</DevBtn>
         <DevBtn onClick={() => room.stealLoot(0)}>Someone takes #1</DevBtn>
         <DevBtn onClick={fill}>Fill bag</DevBtn>
+        <DevBtn onClick={() => room.pickupFull("junk_gpu")}>F: bag full</DevBtn>
         <DevBtn onClick={breakW1}>Wear W1</DevBtn>
         <DevBtn onClick={reset}>Reset</DevBtn>
         <span className="mx-2 h-6 w-px bg-white/20" />

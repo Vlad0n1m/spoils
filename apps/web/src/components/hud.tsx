@@ -6,7 +6,7 @@ import { touchIconSvg } from "@/game/touch-icons";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 import { BREAK_CHANCE_ON_DEATH, GRENADE, HEAL, WEAPONS, XP, itemDef, type WeaponId } from "@extract/shared";
-import { WIPE_URGENT_MS, bossToastText, deepEqual, extractXpLeftS, shallowEqual, wipeWarnText, type HudStore } from "@/game/hud";
+import { BAG_FULL_HINT, WIPE_URGENT_MS, bossToastText, deepEqual, extractXpLeftS, shallowEqual, wipeWarnText, type HudStore } from "@/game/hud";
 import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry, XpGain } from "@/game/types";
 import { NPC_TAG_COLOR, cssHex, killFeedNames, npcLabels, type FeedName } from "@/game/npc-labels";
 import { fmtClock, fmtCr, isKillWeapon, killWeaponIcon, killWeaponName, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
@@ -604,6 +604,18 @@ function InteractHint({ store, touch }: { store: HudStore; touch: boolean }) {
   // Renderer formats hints as "F — <action>"; show the key as a keycap (the hand button's icon on touch).
   // A status line without an action ("Locked — needs …", "Cracking…") gets no key.
   const m = /^F\s*[—–-]\s*(.+)$/.exec(hint);
+  // A ground item that does not fit (hud.ts BAG_FULL_HINT): say so, and how to make room.
+  if (hint.startsWith(BAG_FULL_HINT)) {
+    return (
+      <div className="toon-chip flex items-center gap-2 border-rose-500 px-3 py-1.5 text-sm tracking-wide md:text-base" role="status">
+        <span className="toon-text-thin text-rose-300">Bag full</span>
+        <span className="font-body text-xs font-semibold text-white/80 md:text-sm">no room for {hint.slice(BAG_FULL_HINT.length)}</span>
+        <span className="h-4 w-px bg-white/25" aria-hidden />
+        {touch ? <span className="toon-key px-1.5">Bag</span> : <span className="toon-key">Tab</span>}
+        <span className="font-body text-xs font-semibold text-white/80 md:text-sm">drop something</span>
+      </div>
+    );
+  }
   return (
     <div className="toon-chip flex items-center gap-2 px-3 py-1.5 text-sm tracking-wide md:text-base">
       {m &&
@@ -954,10 +966,15 @@ function MedsPanel({ self }: { self: HudSelf }) {
       {self.grenades > 0 && <MedRow icon="/sprites/grenade.png" count={self.grenades} keyHint="G" title={grenadeTooltip()} />}
       <div
         className="flex items-center justify-between gap-2 border-t-2 border-black/50 pt-1 text-[0.65rem] tabular-nums text-white/75"
-        title="Storage slots used (pockets + backpack) and the junk value you carry if you extract"
+        title="Inventory (Tab or I): storage slots used (pockets + backpack) and the junk value you carry if you extract"
       >
-        <span>
-          {self.storageUsed}/{self.storageCap}
+        <span className="flex items-center gap-1">
+          <span className="toon-key h-5 min-w-5 px-1 text-[0.6rem]">Tab</span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/sprites/backpack.png" alt="" className="h-4 w-4 object-contain" draggable={false} />
+          <span className={clsx(self.storageUsed >= self.storageCap && "text-rose-300")}>
+            {self.storageUsed}/{self.storageCap}
+          </span>
         </span>
         {self.creditsEstimate > 0 && <span className="text-amber-300">≈{fmtCr(self.creditsEstimate)}</span>}
       </div>
@@ -1024,7 +1041,7 @@ const CONTROLS: Array<[string, string]> = [
   ["F", "Search / pick up"],
   ["Space", "Dodge roll"],
   ["Shift", "Quiet walk"],
-  ["Tab", "Inventory"],
+  ["Tab / I", "Inventory · drop items"],
   ["T", "Take all"],
   ["M", "Map"],
   ["1 / 2", "Switch weapon"],

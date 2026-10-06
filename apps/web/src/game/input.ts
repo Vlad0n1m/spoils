@@ -432,8 +432,9 @@ export class InputController {
         if (this.gameHasFocus()) e.preventDefault();
         return;
       case "Tab":
+      case "KeyI":
         // Focus traversal is meaningless in a raid; Tab must also close the panel when focus sits
-        // inside it, so it is always taken.
+        // inside it, so it is always taken. I is the same toggle (the lobby's inventory key).
         this.actions.toggleInventory?.();
         break;
       case "KeyT":

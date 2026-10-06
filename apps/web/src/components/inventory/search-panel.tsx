@@ -25,6 +25,8 @@ export interface SearchPanelProps {
   onClose: () => void;
   /** Touch HUD: a 44 px "Close" instead of the Esc keycap, no T keycap on Take all. */
   touch?: boolean;
+  /** Landscape phones: fill the screen height next to the inventory; the loot grid scrolls. */
+  fill?: boolean;
 }
 
 /**
@@ -64,7 +66,7 @@ export function windowProgress(from: number, to: number, now: number): number {
   return Math.max(0, Math.min(1, (now - from) / (to - from)));
 }
 
-export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll, onClose, touch = false }: SearchPanelProps) {
+export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll, onClose, touch = false, fill = false }: SearchPanelProps) {
   const animating = search.revealed < search.total || !search.loaded;
   const now = useFrameClock(clockMs, animating);
   const opening = now < search.readyAt;
@@ -80,17 +82,20 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
     <section
       data-drop="loot"
       aria-label={`Searching ${search.title}`}
-      className="toon-panel flex w-[min(92vw,22rem)] flex-col bg-[#1d2333]/95 p-4 [@media(max-height:500px)]:w-auto [@media(max-height:500px)]:p-2.5"
+      className={clsx(
+        "toon-panel flex min-h-0 flex-col bg-[#1a2030] text-white",
+        fill ? "h-full w-auto shrink-0 p-2" : "max-h-[84vh] w-[min(92vw,22rem)] p-4",
+      )}
     >
-      <header className="flex items-center gap-3">
-        <div className="relative grid h-14 w-14 shrink-0 place-items-center rounded-xl border-[3px] border-black bg-[#2b3142] short:h-11 short:w-11">
+      <header className={clsx("flex shrink-0 items-center", fill ? "h-11 gap-2" : "gap-3")}>
+        <div className={clsx("relative grid shrink-0 place-items-center rounded-xl border-[3px] border-black bg-[#2b3142]", fill ? "h-10 w-10" : "h-14 w-14")}>
           {/* eslint-disable-next-line @next/next/no-img-element -- static sprite */}
-          <img src={searchIcon(search, empty)} alt="" className="h-11 w-11 object-contain short:h-8 short:w-8" draggable={false} />
+          <img src={searchIcon(search, empty)} alt="" className={clsx("object-contain", fill ? "h-7 w-7" : "h-11 w-11")} draggable={false} />
           {opening && <OpenRing progress={openP} />}
         </div>
         <div className="min-w-0 flex-1">
-          <h2 className="toon-text-thin truncate text-xl tracking-wide text-white [@media(max-height:500px)]:text-lg">{search.title}</h2>
-          <p className="font-body mt-0.5 text-xs font-semibold text-white/60">
+          <h2 className={clsx("toon-text-thin truncate tracking-wide text-white", fill ? "text-base leading-tight" : "text-xl")}>{search.title}</h2>
+          <p className={clsx("font-body truncate font-semibold text-white/60", fill ? "text-[0.68rem]" : "mt-0.5 text-xs")}>
             {opening
               ? `Opening… ${Math.max(0, (search.readyAt - now) / 1000).toFixed(1)} s`
               : !search.loaded
@@ -108,7 +113,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
         <button
           type="button"
           onClick={onClose}
-          className={clsx("toon-btn-ghost shrink-0 gap-1.5 text-sm", touch ? "h-11 min-w-11 px-3" : "h-9 px-2.5")}
+          className={clsx("toon-btn-ghost shrink-0 gap-1.5 text-sm", touch || fill ? "h-11 min-w-11 px-3" : "h-9 px-2.5")}
           aria-label={touch ? "Close search" : "Close search (Esc)"}
         >
           {touch ? <span className="optical-center">Close</span> : <span className="toon-key">Esc</span>}
@@ -116,7 +121,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
       </header>
 
       {/* Reveal progress: one bar for the whole container. */}
-      <div className="mt-3 h-2.5 shrink-0 overflow-hidden rounded-full border-2 border-black bg-black/50 short:mt-2" aria-hidden>
+      <div className={clsx("h-2.5 shrink-0 overflow-hidden rounded-full border-2 border-black bg-black/50", fill ? "mt-1.5" : "mt-3")} aria-hidden>
         <div
           className="h-full bg-zooa-lime transition-[width] duration-150"
           style={{
@@ -125,7 +130,13 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
         />
       </div>
 
-      <div className="mt-4 grid grid-cols-4 gap-2.5 short:mt-2 short:grid-cols-5 short:gap-1.5" role="list">
+      <div
+        className={clsx(
+          "grid min-h-0 content-start overflow-y-auto overscroll-contain",
+          fill ? "mt-2 flex-1 grid-cols-5 gap-1.5 pr-0.5" : "mt-4 grid-cols-4 gap-2.5",
+        )}
+        role="list"
+      >
         {search.cells.map((c, i) => {
           if (c.kind === "item") {
             const it = c.item;
@@ -153,7 +164,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
           );
         })}
         {search.loaded && search.total === 0 && (
-          <p className="font-body col-span-4 py-4 text-center text-sm text-white/55 short:col-span-5">Empty.</p>
+          <p className={clsx("font-body py-4 text-center text-sm text-white/55", fill ? "col-span-5" : "col-span-4")}>Empty.</p>
         )}
         {!search.loaded &&
           Array.from({ length: 4 }, (_, i) => (
@@ -167,7 +178,7 @@ export function SearchPanel({ search, pending, clockMs, drag, onTake, onTakeAll,
         type="button"
         onClick={onTakeAll}
         disabled={opening || search.takeable === 0 || allPending}
-        className="toon-btn mt-4 min-h-12 w-full gap-2 text-lg tracking-wide short:mt-2 short:min-h-11 short:text-base"
+        className={clsx("toon-btn w-full shrink-0 gap-2 tracking-wide", fill ? "mt-2 min-h-11 text-base" : "mt-4 min-h-12 text-lg")}
       >
         <span className="optical-center">Take all</span>
         {!touch && <span className="toon-key">T</span>}

@@ -99,6 +99,8 @@ export interface InvToast {
   text: string;
   /** Wall clock (ms) when it was raised. */
   at: number;
+  /** A refused pickup: the toast also says how to open the bag and drop something. */
+  dropHint?: boolean;
 }
 
 export interface InvSnapshot {
@@ -282,6 +284,12 @@ const EMPTY_SNAPSHOT: InvSnapshot = Object.freeze({
   tabOpen: false, visible: false, search: null, pending: Object.freeze({}), toast: null,
   carry: Object.freeze({ junkCr: 0, used: 0, cap: 4 }),
 }) as InvSnapshot;
+
+/** Toast for a refused pickup (InvErrMsg.item): "Bag full — no room for Assault rifle". */
+export function pickupFullText(def: string): string {
+  const name = itemDef(def)?.name;
+  return name ? `Bag full — no room for ${name}` : "Bag full — no room";
+}
 
 // ------------------------------------------------------------------------------------ the client
 
@@ -503,8 +511,9 @@ export function createInventoryClient(opts: InventoryClientOptions): InventoryCl
     };
   }
 
-  function raise(code: InvErrCode | "info", text?: string) {
+  function raise(code: InvErrCode | "info", text?: string, dropHint = false) {
     toast = { id: ++toastSeq, code, text: text ?? (code === "info" ? "" : INV_ERR_TEXT[code]), at: now() };
+    if (dropHint) toast.dropHint = true;
     if (toastTimer !== null) clearTimer(toastTimer);
     const id = toast.id;
     toastTimer = setTimer(() => {
@@ -644,6 +653,9 @@ export function createInventoryClient(opts: InventoryClientOptions): InventoryCl
     pending.clear();
     if (m.code === "full" && typeof m.taken === "number" && m.taken > 0) {
       raise("full", `Took ${m.taken} — no room for the rest`);
+    } else if (m.code === "full" && typeof m.item === "string") {
+      // F on a ground item that does not fit (the overlay may be closed: InventoryView shows it anyway).
+      raise("full", pickupFullText(m.item), true);
     } else if (m.code in INV_ERR_TEXT) {
       raise(m.code);
     } else {
@@ -732,13 +744,13 @@ function isTypingTarget(t: EventTarget | null): boolean {
 }
 
 /**
- * Tab (toggle), Esc (close search, then inventory), T (take all while searching). Optional: the
+ * Tab / I (toggle), Esc (close search, then inventory), T (take all while searching). Optional: the
  * input owner may route these keys itself instead. Returns the unbind function.
  */
 export function bindInventoryHotkeys(client: InventoryClient, target: Pick<Window, "addEventListener" | "removeEventListener"> = window): () => void {
   const onKey = (e: KeyboardEvent) => {
     if (e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
-    if (e.code === "Tab") {
+    if (e.code === "Tab" || e.code === "KeyI") {
       // Keep focus in the game: Tab would otherwise walk the page's focus ring.
       e.preventDefault();
       if (!e.repeat) client.toggle();

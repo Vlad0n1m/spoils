@@ -84,6 +84,7 @@ import {
   type HealKind,
   type InvDropMsg,
   type InvErrCode,
+  type InvErrMsg,
   type InvMoveMsg,
   type ItemLike,
   type LoadoutSnapshot,
@@ -924,7 +925,8 @@ export class Match {
       return false;
     }
     if (pickupGround(this, rt, g)) return true;
-    this.invErr(rt, "full");
+    // No room: say so, with the item, so the client can show "Bag full — no room for <name>".
+    this.invErr(rt, "full", undefined, g.item.def);
     return false;
   }
 
@@ -1036,13 +1038,18 @@ export class Match {
     return null;
   }
 
-  private invErr(rt: PlayerRuntime, code: InvErrCode, key?: string): InvErrCode {
+  /** `item`: the ground item's def of a refused pickup (InvErrMsg.item). */
+  private invErr(rt: PlayerRuntime, code: InvErrCode, key?: string, item?: string): InvErrCode {
     // A flood of INV_* past the op bucket gets one "rate" reply per second, not one per message.
     if (code === "rate") {
       if (this.clock - rt.rateErrAt < 1000) return code;
       rt.rateErrAt = this.clock;
     }
-    if (!rt.isNpc) this.emit({ type: "invErr", to: rt.rosterIndex, msg: key === undefined ? { code } : { code, key } });
+    if (rt.isNpc) return code;
+    const msg: InvErrMsg = { code };
+    if (key !== undefined) msg.key = key;
+    if (item !== undefined) msg.item = item;
+    this.emit({ type: "invErr", to: rt.rosterIndex, msg });
     return code;
   }
 

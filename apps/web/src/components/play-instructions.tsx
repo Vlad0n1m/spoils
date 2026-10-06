@@ -43,7 +43,7 @@ const STEPS: { title: string; body: string; icon: string }[] = [
   {
     title: "Search",
     icon: "/sprites/crate.png",
-    body: "Walk up to a crate, safe or body and press F. It takes a moment to open, then items reveal one by one — rarer ones take longer. Click an item to take it or press T to take all; Tab opens your inventory.",
+    body: "Walk up to a crate, safe or body and press F. It takes a moment to open, then items reveal one by one — rarer ones take longer. Click an item to take it or press T to take all; Tab or I opens your inventory, where you can also drop items for a friend.",
   },
   {
     title: "Move quietly",
@@ -199,7 +199,7 @@ const KEYS: Array<[string[], string]> = [
   [["R"], "Reload"],
   [["F"], "Search / interact"],
   [["T"], "Take all"],
-  [["Tab"], "Inventory"],
+  [["Tab", "I"], "Inventory · drop items (G / right-click)"],
   [["Space"], `Roll (${ROLL_CD_S} s cooldown)`],
   [["Shift"], "Walk quietly"],
   [["1", "2"], "Switch weapon"],

@@ -38,6 +38,7 @@ import {
   WEAPONS,
   XP,
   bpLevelOf,
+  pickupFits,
   containerOpenMs,
   extractOpenAtFor,
   countOf,
@@ -308,7 +309,15 @@ export interface InteractInput {
    * crackSafes) and what the player carries (a gate's key).
    */
   objectives?: { map: MapData; carries: (def: string) => boolean } | null;
+  /**
+   * The player's own slots (SelfState.slots): a ground item that would not fit (pickupFits, the
+   * server's pickupGround rule) gets the "Bag full" prompt instead of "F — pick up". Null = unknown.
+   */
+  bag?: Pick<SlotStore, "get"> | null;
 }
+
+/** Prefix of the interact hint for a ground item that does not fit (InteractHint styles it). */
+export const BAG_FULL_HINT = "Bag full — no room for ";
 
 /** Display name of an item def ("Radar office key"). */
 function defName(def: string): string {
@@ -321,7 +330,7 @@ function defName(def: string): string {
  * item within PLAYER.INTERACT_RADIUS. Only targets in line of sight (MOVE mask, as the server)
  * count when the collision index is known. Ties go to the later entry, like the server's scan.
  */
-export function interactHint({ state, map, x, y, idx = null, known = null, objectives = null }: InteractInput): string | null {
+export function interactHint({ state, map, x, y, idx = null, known = null, objectives = null, bag = null }: InteractInput): string | null {
   const visible = (tx: number, ty: number) => !idx || hasLineOfSight(idx, x, y, tx, ty, SOLID.MOVE);
   const R = SEARCH.OPEN_RANGE;
   let bestD = R * R;
@@ -368,7 +377,9 @@ export function interactHint({ state, map, x, y, idx = null, known = null, objec
     const d = (it.x - x) ** 2 + (it.y - y) ** 2;
     if (d > bestD || !itemDef(it.def) || !visible(it.x, it.y)) return;
     bestD = d;
-    hint = `F — pick up ${itemLabel(it.def, it.rarity, it.qty)}`;
+    const label = itemLabel(it.def, it.rarity, it.qty);
+    const fits = !bag || pickupFits({ get: bag.get.bind(bag), set: () => undefined, delete: () => undefined }, it);
+    hint = fits ? `F — pick up ${label}` : `${BAG_FULL_HINT}${label}`;
   });
   return hint;
 }
@@ -485,7 +496,7 @@ export function buildHud({
     totalPlayers,
     nearestExtract: onMap ? nearestExtract : null,
     extracts: onMap ? extracts : [],
-    interactHint: canInteract && channel ? channelHint(channel) : canInteract ? interactHint({ state, map, x: selfPos!.x, y: selfPos!.y, idx, known, objectives: objectivesOf(state, map, priv) }) : null,
+    interactHint: canInteract && channel ? channelHint(channel) : canInteract ? interactHint({ state, map, x: selfPos!.x, y: selfPos!.y, idx, known, objectives: objectivesOf(state, map, priv), bag: priv?.slots ?? null }) : null,
     killFeed,
     ...(killTally ? { killTally } : {}),
     pingMs,

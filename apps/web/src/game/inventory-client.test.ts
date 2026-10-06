@@ -195,6 +195,15 @@ describe("ops", () => {
     assert.equal(s.toast, null);
   });
 
+  it("a refused pickup (INV_ERR full + item) names the item and asks to drop something", () => {
+    const { room, client } = setup();
+    (room as unknown as { err: (c: string, x?: object) => void }).err("full", { item: "junk_gpu" });
+    const t = client.getSnapshot().toast!;
+    assert.match(t.text, /^Bag full — no room for /);
+    assert.equal(t.dropHint, true);
+    assert.equal(client.getSnapshot().visible, false, "the toast does not open the panel");
+  });
+
   it("pending expires when the server ignores the op", () => {
     const { room, client, advance } = setup();
     room.me.slots.set("p0", fakeItem("junk_apple"));
