@@ -1105,8 +1105,8 @@ export const MARKET = {
   MAX_ACTIVE_LISTINGS: 20,
   MAX_BUYS_PER_HOUR: 10,
   MAX_BUYS_PER_TEMPLATE_PER_DAY: 30,
-  /** Demo: 1. */
-  SELL_UNLOCK_LEVEL: 5,
+  /** Alpha (06.10, Vlad): selling opens at level 1. Was 5. */
+  SELL_UNLOCK_LEVEL: 1,
   BAND_MIN: 0.5,
   BAND_MAX: 4,
   INDEX_WINDOW_DAYS: 7,

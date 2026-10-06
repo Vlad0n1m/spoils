@@ -133,14 +133,14 @@ describe("levels", () => {
   });
   it("unlocks: market selling at the sell level, each new bound-trader tier with offers", () => {
     assert.ok(levelUnlocks(MARKET.SELL_UNLOCK_LEVEL).includes("Market selling unlocked"));
-    assert.ok(levelUnlocks(MARKET.SELL_UNLOCK_LEVEL, 1).every((s) => s !== "Market selling unlocked"));
+    assert.ok(levelUnlocks(MARKET.SELL_UNLOCK_LEVEL, MARKET.SELL_UNLOCK_LEVEL + 1).every((s) => s !== "Market selling unlocked"));
     // Follows boundTraderLevel exactly: a line on the first level of every tier that has offers.
     for (let l = 2; l <= 30; l++) {
       const tier = boundTraderLevel(l);
       const fresh = tier > boundTraderLevel(l - 1) && BOUND_OFFERS.some((o) => o.traderLevel === tier);
       assert.equal(levelUnlocks(l).some((s) => s.startsWith(`Traders tier ${tier}: `)), fresh, `level ${l}`);
     }
-    assert.deepEqual(levelUnlocks(1), []);
+    assert.deepEqual(levelUnlocks(1, 5), []);
     const tier2 = Array.from({ length: 30 }, (_, i) => i + 2).find((l) => boundTraderLevel(l) === 2)!;
     assert.match(levelUnlocks(tier2).join(" | "), /Traders tier 2: Assault rifle/);
     assert.deepEqual(unlocksBetween(1, 30), Array.from({ length: 29 }, (_, i) => levelUnlocks(i + 2)).flat());

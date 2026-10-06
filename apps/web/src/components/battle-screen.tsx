@@ -34,6 +34,7 @@ import { RECONNECT, fetchRejoinTicket, reconnectDelayMs, shouldAutoReconnect } f
 import { TutorialOverlay } from "./tutorial-overlay";
 import { useTouchMode } from "./use-touch-mode";
 import { RotateOverlay, usePortrait } from "./rotate-overlay";
+import { reloadOnChunkError } from "@/lib/chunk-reload";
 import { keepLandscape } from "@/game/orientation";
 
 interface Props {
@@ -250,6 +251,8 @@ function startBattle(mountEl: HTMLElement, ticket: JoinTicket, battleRoomId: str
       await renderer.start();
     } catch (e) {
       if (disposed) return;
+      // A page opened before a deploy asks for chunks that no longer exist: reload into the new build.
+      if (reloadOnChunkError(e)) return;
       const { code, reason } = errorCodeAndReason(e);
       cb.onError(
         describeRoomExit(code, reason) ?? {

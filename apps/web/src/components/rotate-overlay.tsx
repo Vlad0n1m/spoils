@@ -24,10 +24,10 @@ export function usePortrait(): boolean {
  * the panels and swallows every touch, while the renderer hides the sticks and blocks input
  * (renderer.ts `portrait`); turning back to landscape removes it and the controls re-lay.
  */
-export function RotateOverlay() {
+export function RotateOverlay({ fixed = false }: { fixed?: boolean }) {
   return (
     <div
-      className="absolute inset-0 z-[70] grid touch-none select-none place-items-center bg-[#0b0f0a]/95 p-6 text-center text-white"
+      className={`${fixed ? "fixed z-[1000]" : "absolute z-[70]"} inset-0 grid touch-none select-none place-items-center bg-[#0b0f0a]/95 p-6 text-center text-white`}
       role="alertdialog"
       aria-label="Rotate your phone"
       data-rotate-overlay=""
@@ -42,7 +42,7 @@ export function RotateOverlay() {
         </svg>
         <div>
           <p className="toon-text text-3xl tracking-wide text-zooa-lime">Rotate your phone</p>
-          <p className="font-body mt-2 text-base text-white/75">SPOILS plays in landscape. The raid goes on — turn your phone sideways.</p>
+          <p className="font-body mt-2 text-base text-white/75">SPOILS plays in landscape only — turn your phone sideways.</p>
         </div>
       </div>
     </div>
