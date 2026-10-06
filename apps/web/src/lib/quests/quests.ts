@@ -37,6 +37,7 @@ import {
 } from "@extract/shared";
 import type { Db, Tx } from "../inventory/db";
 import { grantedOf } from "../pass/pass";
+import { SEEKER_BADGE_SQL } from "../seeker/seeker";
 
 type SlotRow = {
   slot: number;
@@ -313,29 +314,32 @@ export async function advanceQuestsForExit(
 
 /**
  * Equipped cosmetics of up to 100 registered players by nickname (leaderboard rows), plus the
- * Founder badge (Alpha Pass tier 10, owned = shown). Players with nothing to show are left out;
+ * Founder badge (Alpha Pass tier 10, owned = shown) and the Seeker badge (lib/seeker: the linked
+ * wallet holds a Seeker Genesis Token). Players with nothing to show are left out;
  * ids are checked against the tables, not re-checked for unlocks (equipCosmetic did that, and
  * unlocks never go away).
  */
 export async function cosmeticBadges(
   db: Db,
   nicknames: readonly string[],
-): Promise<Record<string, Partial<EquippedCosmetics> & { badge?: string }>> {
+): Promise<Record<string, Partial<EquippedCosmetics> & { badge?: string; seeker?: boolean }>> {
   const names = [...new Set(nicknames)].slice(0, 100);
   if (names.length === 0) return {};
-  const r = await db.execute<{ nickname: string; title: string | null; name_color: string | null; badge_frame: string | null; founder: boolean }>(sql`
+  const r = await db.execute<{ nickname: string; title: string | null; name_color: string | null; badge_frame: string | null; founder: boolean; seeker: boolean }>(sql`
     select u.nickname, u.title, u.name_color, u.badge_frame,
-      exists (select 1 from pass_unlocks p where p.user_id = u.id and p.reward_id = ${FOUNDER_BADGE}) as founder
+      exists (select 1 from pass_unlocks p where p.user_id = u.id and p.reward_id = ${FOUNDER_BADGE}) as founder,
+      ${SEEKER_BADGE_SQL} as seeker
     from users u
     where u.nickname in (${sql.join(names.map((n) => sql`${n}`), sql`, `)})`);
-  const out: Record<string, Partial<EquippedCosmetics> & { badge?: string }> = {};
+  const out: Record<string, Partial<EquippedCosmetics> & { badge?: string; seeker?: boolean }> = {};
   for (const u of r.rows) {
-    const b: Partial<EquippedCosmetics> & { badge?: string } = {};
+    const b: Partial<EquippedCosmetics> & { badge?: string; seeker?: boolean } = {};
     if (u.title && cosmeticDef(u.title)?.kind === "title") b.title = u.title;
     if (u.name_color && cosmeticDef(u.name_color)?.kind === "color") b.color = u.name_color;
     if (u.badge_frame && cosmeticDef(u.badge_frame)?.kind === "frame") b.frame = u.badge_frame;
     if (u.founder) b.badge = FOUNDER_BADGE;
-    if (b.title || b.color || b.frame || b.badge) out[u.nickname] = b;
+    if (u.seeker) b.seeker = true;
+    if (b.title || b.color || b.frame || b.badge || b.seeker) out[u.nickname] = b;
   }
   return out;
 }

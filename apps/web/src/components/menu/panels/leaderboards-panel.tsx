@@ -9,6 +9,7 @@ import { nameColorHex, titleName } from "@/lib/lobby/levels";
 import { LB_PERIODS, type LbPeriod } from "@/lib/lobby/panels";
 import { LevelBadge } from "../level-badge";
 import { FounderBadge } from "../pass-tab";
+import { SeekerBadge } from "@/components/seeker/seeker-badge";
 import { fmtInt } from "../xp-bar";
 import { Paged } from "@/components/paged";
 
@@ -183,6 +184,7 @@ export function LeaderboardsPanel({ board, period, onPeriod }: { board: Leaderbo
                       {r.nickname}
                     </span>
                     {worn?.badge && <FounderBadge className="!h-5 !w-5 !text-[0.7rem]" />}
+                    {worn?.seeker && <SeekerBadge compact />}
                   </span>
                   {title && (
                     <span className={clsx("font-body block truncate text-xs lg:text-[0.8125rem] font-bold uppercase tracking-wider", mine ? "text-black/65" : "text-white/70")}>

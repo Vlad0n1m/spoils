@@ -1461,11 +1461,15 @@ export interface CosmeticDef {
   animated?: boolean;
   /**
    * Granted, not reached: Alpha Pass tiers, the alpha top-10 trophy and the invite reward (pass.ts),
-   * and the iDos edition's donation titles (apps/web lib/idos/shop.ts, "donation").
+   * the iDos edition's donation titles (apps/web lib/idos/shop.ts, "donation") and the Seeker
+   * Genesis Token frame (apps/web lib/seeker, "seeker": once per Seeker device).
    * Owned only through a pass_unlocks row (migration 011), which the alpha wipe never touches.
    */
-  grant?: "pass" | "trophy" | "invite" | "donation";
+  grant?: "pass" | "trophy" | "invite" | "donation" | "seeker";
 }
+
+/** The Seeker perk's one-time cosmetic (grant "seeker"). */
+export const SEEKER_FRAME = "f-seeker";
 
 const COSMETIC_LIST: readonly CosmeticDef[] = [
   { id: "t-scavenger", kind: "title", name: "Scavenger" },
@@ -1519,6 +1523,9 @@ const COSMETIC_LIST: readonly CosmeticDef[] = [
   // power and nothing tradable, so "no power for money" above still holds.
   { id: "supporter", kind: "title", name: "Supporter", grant: "donation" },
   { id: "patron", kind: "title", name: "Patron", grant: "donation" },
+  // Seeker perk (apps/web lib/seeker, GAME_DESIGN §18g): a wallet holding a Seeker Genesis Token claims
+  // this frame once (one claim per SGT mint, so one per Seeker phone). A look only: no power, no currency.
+  { id: SEEKER_FRAME, kind: "frame", name: "Seeker Genesis", hex: "#19fb9b", style: "glow", grant: "seeker" },
 ];
 
 /** Every cosmetic by id. */

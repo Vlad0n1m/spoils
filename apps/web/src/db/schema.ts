@@ -201,6 +201,37 @@ export const walletLinkNonces = pgTable(
   }),
 );
 
+/**
+ * Seeker Genesis Token checks (lib/seeker, migration 018): the last mainnet answer per wallet, a cache
+ * of SEEKER.CACHE_MS. sgt_mint = the SGT the wallet held at checked_at, NULL = none. A mint is held by
+ * one wallet at a time: a positive check clears it on every other wallet (the SGT moved). Keyed by the
+ * wallet, not the user: unlinking hides the badge at once, relinking reuses the answer.
+ */
+export const seekerChecks = pgTable(
+  "seeker_checks",
+  {
+    wallet: text("wallet").primaryKey(),
+    sgtMint: text("sgt_mint"),
+    checkedAt: timestamp("checked_at", { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    mintIdx: index("seeker_checks_mint_idx").on(t.sgtMint),
+  }),
+);
+
+/**
+ * The Seeker perk's one-time cosmetic (SEEKER_FRAME): one claim per SGT mint (= per Seeker phone,
+ * the docs' anti-sybil rule) and one per account (pass_unlocks primary key). Never removed.
+ */
+export const seekerClaims = pgTable("seeker_claims", {
+  sgtMint: text("sgt_mint").primaryKey(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  wallet: text("wallet").notNull(),
+  at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 /*
  * `matches`, `match_instant_payouts` and `match_participants` belong to the old buy-in money flow.
  * Nothing writes them any more; they stay declared so `db:push` does not drop existing data.
@@ -1101,7 +1132,8 @@ export const passUnlocks = pgTable(
   (t) => ({
     pk: primaryKey({ columns: [t.userId, t.rewardId] }),
     // 'donation': the iDos edition's Supporter / Patron titles (lib/idos/shop.ts, migration 017).
-    source: check("pass_unlocks_source", sql`${t.source} in ('pass', 'trophy', 'invite', 'donation')`),
+    // 'seeker': the Seeker Genesis Token frame (lib/seeker, migration 018).
+    source: check("pass_unlocks_source", sql`${t.source} in ('pass', 'trophy', 'invite', 'donation', 'seeker')`),
   }),
 );
 

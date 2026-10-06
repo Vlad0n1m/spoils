@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import clsx from "clsx";
 import { BRAND } from "@/lib/brand";
@@ -14,13 +15,16 @@ import { LevelBadge } from "./level-badge";
 import { useQuests } from "./quests-context";
 import { XpBar } from "./xp-bar";
 import { EDITION_UI } from "@/lib/edition";
+import { SeekerBadge } from "@/components/seeker/seeker-badge";
+import { loadSeeker, useSeekerVerified } from "@/components/seeker/seeker-store";
 
 /**
  * Main-menu top bar (Brawl Stars layout): no strip, just chunky pieces over the art. Left: the
  * profile plate (level shield bulging out of it, nick in the equipped name colour, the equipped
  * title on wide screens, a chunky XP bar); it opens the rewards sheet. Right: CR and SOL pills with
  * "+", audio and the account menu (☰). Guests see "Guest · loot isn't kept" + Register instead of
- * the money; signed-out viewers get Sign in. The SPOILS logo only shows on wide screens.
+ * the money; signed-out viewers get Sign in. The SPOILS logo only shows on wide screens. A linked
+ * wallet holding a Seeker Genesis Token adds the Seeker badge after the nick (lib/seeker).
  */
 export function MenuTopBar({ onCredits, onRewards }: { onCredits: () => void; onRewards: () => void }) {
   const { user, sessionLoading, sessionKind, stash } = useLobby();
@@ -30,6 +34,11 @@ export function MenuTopBar({ onCredits, onRewards }: { onCredits: () => void; on
   const worn = sessionKind === "user" ? (quests?.equipped ?? null) : null;
   const nickColor = nameColorHex(worn?.color);
   const title = titleName(worn?.title);
+  const userId = sessionKind === "user" ? (user?.id ?? null) : null;
+  useEffect(() => {
+    if (userId) void loadSeeker(userId);
+  }, [userId]);
+  const seeker = useSeekerVerified() && userId !== null;
 
   const plate = "menu-chip min-w-0 bg-[#141a29]/95 py-1 pr-4 text-left";
   const nick = (
@@ -40,6 +49,7 @@ export function MenuTopBar({ onCredits, onRewards }: { onCredits: () => void; on
       >
         {user?.nickname}
       </span>
+      {seeker && <SeekerBadge compact className="self-center" />}
       {title && (
         <span className="font-body hidden max-w-[10rem] truncate text-xs lg:text-[0.8125rem] font-bold uppercase tracking-wider text-white/75 xl:inline">{title}</span>
       )}

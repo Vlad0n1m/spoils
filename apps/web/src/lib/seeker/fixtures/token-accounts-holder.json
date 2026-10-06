@@ -1,0 +1,89 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "context": {
+      "slot": 453868063,
+      "apiVersion": "4.3.0-beta.2"
+    },
+    "value": [
+      {
+        "pubkey": "ET6wDsadbqsdZ8KzYrqyqKNA9q9VG1TGDTmVKAvabL1D",
+        "account": {
+          "lamports": 2136720,
+          "data": {
+            "program": "spl-token-2022",
+            "parsed": {
+              "info": {
+                "extensions": [
+                  {
+                    "extension": "immutableOwner"
+                  },
+                  {
+                    "extension": "pausableAccount"
+                  },
+                  {
+                    "extension": "transferHookAccount",
+                    "state": {
+                      "transferring": false
+                    }
+                  }
+                ],
+                "isNative": false,
+                "mint": "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
+                "owner": "57AoY689EJ8rhaHWG8Rpfn6UmGrRRrBnbzHeVJAgDVLL",
+                "state": "initialized",
+                "tokenAmount": {
+                  "amount": "0",
+                  "decimals": 8,
+                  "uiAmount": 0.0,
+                  "uiAmountString": "0"
+                }
+              },
+              "type": "account"
+            },
+            "space": 179
+          },
+          "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+          "executable": false,
+          "rentEpoch": 18446744073709551615,
+          "space": 179
+        }
+      },
+      {
+        "pubkey": "9nT6XVHFphXSo7NEk91jmMKoShSzunhYpFjhjNEcKEvC",
+        "account": {
+          "lamports": 2074080,
+          "data": {
+            "program": "spl-token-2022",
+            "parsed": {
+              "info": {
+                "extensions": [
+                  {
+                    "extension": "immutableOwner"
+                  }
+                ],
+                "isNative": false,
+                "mint": "5mXbkqKz883aufhAsx3p5Z1NcvD2ppZbdTTznM6oUKLj",
+                "owner": "57AoY689EJ8rhaHWG8Rpfn6UmGrRRrBnbzHeVJAgDVLL",
+                "state": "frozen",
+                "tokenAmount": {
+                  "amount": "1",
+                  "decimals": 0,
+                  "uiAmount": 1.0,
+                  "uiAmountString": "1"
+                }
+              },
+              "type": "account"
+            },
+            "space": 170
+          },
+          "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+          "executable": false,
+          "rentEpoch": 18446744073709551615,
+          "space": 170
+        }
+      }
+    ]
+  },
+  "id": 1
+}
