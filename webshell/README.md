@@ -13,7 +13,7 @@ https://docs.solanamobile.com/cli/webshell.md, CLI `solana-mobile@0.5.0`.
 | File | Purpose |
 | - | - |
 | `web-manifest.json` | Seeds `init`: name SPOILS, colors `#08070B`, the launcher icon from `../apps/web/public/icon-512.png` (read locally, no fetch), start URL `https://SPOILS_DOMAIN/play` (overridden by `--url`). |
-| `patch-android.sh` | Run after every `init`: locks landscape (`sensorLandscape`), turns off pull-to-refresh (otherwise any downward swipe reloads the page mid-raid) and hides the system bars. Idempotent. |
+| `patch-android.sh` | Run after every `init`: locks landscape (`sensorLandscape`), turns off pull-to-refresh (otherwise any downward swipe reloads the page mid-raid) and hides the system bars, adds the `VIBRATE` permission (haptics). Idempotent. |
 | `.gitignore` | The generated `android/` project and any keystore stay out of git. |
 
 ## Web side
@@ -56,6 +56,30 @@ npx solana-mobile@0.5.0 webshell build android
 apksigner verify --print-certs android/app/build/outputs/apk/release/app-release.apk
 npx solana-mobile@0.5.0 device install android/app/build/outputs/apk/release/app-release.apk
 ```
+
+## Debug build (no release key)
+
+For testing and hackathon demos, a debug-signed APK needs no release keystore and no passwords. `init` always
+asks for a keystore path, so point it at the standard Android debug keystore (`~/.android/debug.keystore`, alias
+`androiddebugkey`; Android Studio and Gradle create it on first debug build, or create it with
+`keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -keypass android -alias androiddebugkey
+-keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"`). An existing keystore is
+reused without a password prompt. Then build with Gradle directly instead of `webshell build`:
+
+```bash
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+cd webshell
+npx solana-mobile@0.5.0 webshell init android --manifest web-manifest.json --url https://spoils.gg/play \
+  --application-id app.spoils.twa --app-name SPOILS --version-code 2 --version-name 0.2.0 \
+  --keystore-path ~/.android/debug.keystore --keystore-alias androiddebugkey
+./patch-android.sh android
+(cd android && ./gradlew assembleDebug)   # -> android/app/build/outputs/apk/debug/app-debug.apk
+mkdir -p ../dist-mobile && cp android/app/build/outputs/apk/debug/app-debug.apk ../dist-mobile/spoils-0.2.0.apk
+```
+
+`dist-mobile/` is git-ignored. A debug APK is `debuggable` and signed with a key every Android developer has, so
+it is not for the dApp Store and cannot be updated by a release-signed APK with the same id (uninstall first).
 
 Notes:
 

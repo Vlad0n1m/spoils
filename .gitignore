@@ -27,3 +27,5 @@ id.json
 *.keystore
 *.jks
 programs/*.json
+# Built Android APKs (webshell debug/release builds)
+dist-mobile/

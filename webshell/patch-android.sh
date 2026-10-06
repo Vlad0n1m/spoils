@@ -7,6 +7,7 @@
 #      scroll up, which for a full-screen canvas game is every swipe down (a reload mid-raid).
 #   3. Immersive full screen: hides the status and navigation bars and hides them again whenever the
 #      app gets focus back (for example after the wallet app returns).
+#   4. VIBRATE permission, so the game can use haptics (navigator.vibrate in the WebView).
 #
 # Usage: ./patch-android.sh [project-dir]   (default: android)
 set -eu
@@ -34,10 +35,16 @@ if ! grep -q 'SPOILS: immersive' "$activity"; then
   perl -0pi -e 's/(class MainActivity : ComponentActivity\(\) \{\n)/$1    \/\/ SPOILS: immersive full screen, bars come back only on an edge swipe.\n    override fun onWindowFocusChanged(hasFocus: Boolean) {\n        super.onWindowFocusChanged(hasFocus)\n        if (hasFocus) {\n            WindowCompat.getInsetsController(window, window.decorView).apply {\n                hide(WindowInsetsCompat.Type.systemBars())\n                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE\n            }\n        }\n    }\n\n/' "$activity"
 fi
 
+# 4. Vibration permission (haptics).
+if ! grep -q 'android.permission.VIBRATE' "$manifest"; then
+  perl -0pi -e 's/(<uses-permission android:name="android\.permission\.INTERNET" \/>\n)/$1    <uses-permission android:name="android.permission.VIBRATE" \/>\n/' "$manifest"
+fi
+
 fail=0
 grep -q 'android:screenOrientation="sensorLandscape"' "$manifest" || { echo "patch-android: landscape patch did not apply" >&2; fail=1; }
 grep -q 'setOnChildScrollUpCallback { _, _ -> true }' "$activity" || { echo "patch-android: pull-to-refresh patch did not apply (template changed?)" >&2; fail=1; }
 grep -q 'override fun onWindowFocusChanged' "$activity" && grep -q 'import androidx.core.view.WindowCompat' "$activity" \
   || { echo "patch-android: immersive patch did not apply (template changed?)" >&2; fail=1; }
-[ "$fail" -eq 0 ] && echo "patch-android: landscape, no pull-to-refresh, immersive -> $dir"
+grep -q 'android.permission.VIBRATE' "$manifest" || { echo "patch-android: VIBRATE permission patch did not apply" >&2; fail=1; }
+[ "$fail" -eq 0 ] && echo "patch-android: landscape, no pull-to-refresh, immersive, vibrate -> $dir"
 exit "$fail"
