@@ -3,10 +3,11 @@
 import { AudioSettingsButton } from "./audio-settings";
 import { useTouchMode } from "./use-touch-mode";
 import { touchIconSvg } from "@/game/touch-icons";
+import { EXTRACT_PILL_MAX_W, EXTRACT_PILL_MAX_W_DESKTOP, MINIMAP_MARGIN, minimapSize } from "@/game/hud-layout";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 import { BREAK_CHANCE_ON_DEATH, GRENADE, HEAL, WEAPONS, XP, itemDef, type WeaponId } from "@extract/shared";
-import { BAG_FULL_HINT, WIPE_URGENT_MS, bossToastText, deepEqual, extractXpLeftS, shallowEqual, wipeWarnText, type HudStore } from "@/game/hud";
+import { BAG_FULL_HINT, PX_PER_METER, WIPE_URGENT_MS, bossToastText, deepEqual, extractPillSlice, extractXpLeftS, shallowEqual, wipeWarnText, type HudStore } from "@/game/hud";
 import type { HudSelf, HudSlot, HudSnapshot, KillFeedEntry, XpGain } from "@/game/types";
 import { NPC_TAG_COLOR, cssHex, killFeedNames, npcLabels, type FeedName } from "@/game/npc-labels";
 import { fmtClock, fmtCr, isKillWeapon, killWeaponIcon, killWeaponName, rarityHex, rarityName, armorIcon, weaponIcon } from "@/lib/items-ui";
@@ -16,8 +17,6 @@ const KILL_FEED_TTL_MS = 7_000;
 const KILL_FEED_MAX = 5;
 /** Boss toast ("BOSS EVENT · Foreman holds the Grain Elevator") stays this long. */
 const BOSS_TOAST_MS = 6_000;
-/** Rough px → meters for the compass; only has to feel consistent. */
-const PX_PER_METER = 40;
 /** New key: the panel is collapsed by default now, so an old stored "open" must not reopen it. */
 const HELP_STORAGE_KEY = "extract:hud-controls-open";
 
@@ -90,56 +89,64 @@ export const Hud = memo(function Hud({
   const inPlay = useHud(store, isInPlay);
   // Touch (game/touch-controls.ts mounts sticks + buttons): a compact bottom bar between the two
   // thumb zones, the menu / audio chips top left instead of in the right thumb's corner, USE
-  // instead of the F keycap. The top stack, the bottom bar and the kill feed are drawn at TOUCH_HUD_SCALE
-  // (80 % / 78 % / 85 %) so a landscape phone shows more of the world. hudReservedRects() in
+  // instead of the F keycap. The transient top stack, the bottom bar and the kill feed are drawn at
+  // 80 % / 78 % / 85 % so a landscape phone shows more of the world. hudReservedRects() in
   // touch-controls.ts mirrors this layout.
   const touch = useTouchMode();
-  // Touch: the full map (map button / minimap tap) fills a short screen; the bar and compass would cover it.
+  // Touch: the full map (minimap tap) fills a short screen; the bar and the extract pill would cover it.
   const mapOpen = useHud(store, mapOpenSlice) && touch;
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const box = useBoxSize(rootRef);
 
   return (
     // Same safe-area box as the game mount (battle-screen.tsx), so hudReservedRects() in
     // touch-controls.ts, which measures from the mount, still mirrors this layout.
-    <div className="pointer-events-none absolute inset-y-0 left-[env(safe-area-inset-left,0px)] right-[env(safe-area-inset-right,0px)] select-none text-white">
+    <div ref={rootRef} className="pointer-events-none absolute inset-y-0 left-[env(safe-area-inset-left,0px)] right-[env(safe-area-inset-right,0px)] select-none text-white">
       {inPlay && <LowHpVignette store={store} />}
 
       <KillFeed store={store} selfNickname={selfNickname} touch={touch} />
 
+      {/*
+        HUD v3: one row along the top edge, nothing over the player in the middle. Left: (touch) the
+        menu / audio chips and the ping, then the wipe pill and the XP chip. Right: the extract pill,
+        left of the minimap. hudReservedRects() in touch-controls.ts mirrors this.
+      */}
+      <div className={clsx("absolute flex items-center", touch ? "left-2 top-2 gap-1.5" : "left-3 top-3 gap-2")}>
+        {touch && <TouchMenu onLeave={onLeave} />}
+        {touch && <PingBadge store={store} touch />}
+        <PhaseTimer store={store} touch={touch} />
+        {inPlay && earnsXp && <XpTicker store={store} touch={touch} earnsXp={earnsXp} />}
+      </div>
+      {inPlay && !mapOpen && box && <ExtractPill store={store} touch={touch} box={box} />}
+
+      {/* Transient warnings (wipe threshold, boss event) under the top row, centred. */}
       <div
         className={clsx(
           "absolute left-1/2 flex -translate-x-1/2 flex-col items-center gap-2",
-          touch ? "top-1.5 origin-top scale-[0.8]" : "top-3",
+          touch ? "top-12 origin-top scale-[0.8]" : "top-16",
         )}
       >
-        <PhaseTimer store={store} touch={touch} />
-        {inPlay && !mapOpen && <ExtractCompass store={store} earnsXp={earnsXp} />}
-        {inPlay && earnsXp && <XpTicker store={store} touch={touch} />}
         {inPlay && <WipeBanner store={store} touch={touch} />}
         <BossToast store={store} touch={touch} />
       </div>
 
       {inPlay && (
-        <>
-          <ExtractRing store={store} />
-          <div
-            className={clsx(
-              "absolute left-1/2 flex w-max max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col items-center gap-2",
-              touch ? "bottom-1 origin-bottom scale-[0.78]" : "bottom-3",
-              mapOpen && "hidden",
-            )}
-          >
-            <InteractHint store={store} touch={touch} />
-            <ActionProgress store={store} />
-            <BottomBar store={store} touch={touch} />
-          </div>
-        </>
+        <div
+          className={clsx(
+            "absolute left-1/2 flex w-max max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col items-center gap-2",
+            touch ? "bottom-1 origin-bottom scale-[0.78]" : "bottom-3",
+            mapOpen && "hidden",
+          )}
+        >
+          <InteractHint store={store} touch={touch} />
+          <ActionProgress store={store} />
+          <BottomBar store={store} touch={touch} />
+        </div>
       )}
 
-      <PingBadge store={store} touch={touch} />
-      {touch ? (
-        <TouchMenu onLeave={onLeave} />
-      ) : (
+      {!touch && (
         <>
+          <PingBadge store={store} touch={false} />
           {/* Volume / mute / sound-ring toggle; sits right above the controls chip. */}
           <div className="absolute bottom-14 right-3 hidden md:block">
             <AudioSettingsButton direction="up" align="right" />
@@ -153,70 +160,74 @@ export const Hud = memo(function Hud({
 
 /* ------------------------------------------------------------------ top */
 
+/** Width × height of an element (the HUD box), null until measured. */
+function useBoxSize(ref: React.RefObject<HTMLElement | null>): { w: number; h: number } | null {
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => {
+      const r = el.getBoundingClientRect();
+      const w = Math.round(r.width);
+      const h = Math.round(r.height);
+      setBox((b) => (b && b.w === w && b.h === h ? b : w > 0 && h > 0 ? { w, h } : b));
+    };
+    read();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", read);
+      return () => window.removeEventListener("resize", read);
+    }
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return box;
+}
+
 /**
- * What the top bar shows; the countdown is whole seconds, so this changes about once a second.
- * WORLD v6: "Extraction opens in m:ss" counts down to THIS player's arm (extractOpenAtMs), then
- * "Wipe in m:ss" to the end of the map (urgent in the last 5 minutes).
+ * The wipe pill of the top-left row; the countdown is whole seconds, so this changes about once a
+ * second. WORLD v6: "Wipe in m:ss" to the end of the map (urgent in the last 5 minutes). When THIS
+ * player's extracts open is the extract pill's business (top right).
  */
 function phaseTimerSlice(s: HudSnapshot) {
   const left = s.durationMs - s.clockMs;
   return {
-    phase: s.phase,
-    countdown: s.phase === "drop" ? fmtClock(s.extractOpenAtMs - s.clockMs) : s.phase === "open" ? fmtClock(left) : "",
-    urgent: s.phase === "open" && left <= WIPE_URGENT_MS,
+    ended: s.phase === "ended",
+    countdown: s.phase === "ended" ? "" : fmtClock(left),
+    urgent: s.phase !== "ended" && left <= WIPE_URGENT_MS,
     aliveCount: s.aliveCount,
   };
 }
 
 function PhaseTimer({ store, touch }: { store: HudStore; touch: boolean }) {
-  const { phase, countdown, urgent, aliveCount } = useHud(store, phaseTimerSlice, shallowEqual);
-
-  let label: React.ReactNode;
-  if (phase === "drop") {
-    label = (
-      <>
-        Extraction opens in <span className="tabular-nums text-amber-300">{countdown}</span>
-      </>
-    );
-  } else if (phase === "open") {
-    label = (
-      <>
-        Wipe in <span className={clsx("tabular-nums", urgent ? "text-rose-400" : "text-zooa-lime")}>{countdown}</span>
-      </>
-    );
-  } else {
-    label = "Map wiped";
-  }
-
+  const { ended, countdown, urgent, aliveCount } = useHud(store, phaseTimerSlice, shallowEqual);
   return (
     <div
       className={clsx(
-        // Touch: ~17 rem wide so the right-hand buttons fit beside it on a 740 px phone.
-        "toon-panel flex items-center tracking-wide",
-        touch ? "gap-2 px-3 py-1.5 text-sm" : "gap-3 px-4 py-2 text-base md:text-lg",
+        "toon-chip flex shrink-0 items-center whitespace-nowrap tracking-wide",
+        touch ? "h-8 gap-1.5 px-2.5 text-xs" : "h-10 gap-2 px-3.5 text-sm",
         urgent && "animate-pulse bg-[#3a1620]/95",
       )}
+      title="Time until this map is wiped: extract before it, or lose what you carry"
     >
-      <span
-        className={clsx(
-          "h-3 w-3 shrink-0 rounded-full border-2 border-black",
-          phase === "open" ? "bg-zooa-lime" : phase === "drop" ? "bg-amber-400" : "bg-zinc-500",
+      <span className="toon-text-thin">
+        {ended ? (
+          "Map wiped"
+        ) : (
+          <>
+            Wipe in <span className={clsx("tabular-nums", urgent ? "text-rose-400" : "text-zooa-lime")}>{countdown}</span>
+          </>
         )}
-        aria-hidden
-      />
-      <span className="toon-text-thin whitespace-nowrap">{label}</span>
-      <span className="h-6 w-[3px] rounded bg-black/60" aria-hidden />
+      </span>
+      <span className={clsx("w-[2px] rounded bg-black/60", touch ? "h-4" : "h-5")} aria-hidden />
       <span
-        className="flex items-center gap-1.5 whitespace-nowrap"
+        className="flex items-center gap-1"
         title="Raiders on the map right now (NPCs are not counted)"
         aria-label={`On map: ${aliveCount}`}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/sprites/player.png" alt="" className="h-6 w-6" draggable={false} />
-        <span className="toon-text-thin tabular-nums">
-          {!touch && <span className="text-white/60">On map </span>}
-          {aliveCount}
-        </span>
+        <img src="/sprites/player.png" alt="" className={touch ? "h-5 w-5" : "h-6 w-6"} draggable={false} />
+        <span className="toon-text-thin tabular-nums">{aliveCount}</span>
       </span>
     </div>
   );
@@ -283,61 +294,142 @@ function BossToast({ store, touch }: { store: HudStore; touch: boolean }) {
   );
 }
 
-/** Compass, quantized to what is visible (1° of arrow, 1 m of distance). */
-function compassSlice(s: HudSnapshot) {
-  const t = s.nearestExtract;
-  if (!t) return null;
-  return {
-    deg: Math.round((Math.atan2(t.dy, t.dx) * 180) / Math.PI),
-    meters: Math.max(0, Math.round(t.dist / PX_PER_METER)),
-    open: t.open,
-    // Before the extract phase the top timer already counts down: "(closed)" would read as broken.
-    early: !t.open && s.phase === "drop",
-    name: s.extracts[0]?.name ?? "",
-    xpLeftS: extractXpLeftS(s.enteredAtMs, s.clockMs),
-  };
-}
+/** The extract pill sits this far left of the minimap (px). */
+const EXTRACT_PILL_GAP = 8;
 
-function ExtractCompass({ store, earnsXp }: { store: HudStore; earnsXp: boolean }) {
-  const target = useHud(store, compassSlice, shallowEqual);
-  if (!target) return null;
-  const { deg, meters } = target;
-  const xpLeft = earnsXp ? target.xpLeftS : 0;
+/**
+ * HUD v3 extract pill, top edge, left of the minimap: an exit icon, a short status and a value on
+ * the right. Closed: "Extract closed" + the countdown to this player's arm. Open: "Extract open"
+ * over the nearest extract's name, then an arrow toward it and the distance. Extracting:
+ * "Extracting" + the seconds left over a thin progress fill (replaces the big centred ring, so the
+ * player and the ground around them stay visible).
+ */
+function ExtractPill({ store, touch, box }: { store: HudStore; touch: boolean; box: { w: number; h: number } }) {
+  const p = useHud(store, extractPillSlice, shallowEqual);
+  if (p.kind === "none") return null;
+  const mm = minimapSize(box.w, box.h);
+  const style = {
+    right: MINIMAP_MARGIN + mm + EXTRACT_PILL_GAP,
+    // Touch: centred on the menu chips' row (top-2, 40 px); desktop: level with the minimap's top.
+    top: touch ? 12 : MINIMAP_MARGIN,
+    maxWidth: touch ? EXTRACT_PILL_MAX_W : EXTRACT_PILL_MAX_W_DESKTOP,
+  };
+  const shell = clsx(
+    "toon-chip absolute flex items-center overflow-hidden whitespace-nowrap tracking-wide",
+    touch ? "h-8 gap-1.5 pl-1 pr-2.5 text-xs" : "h-10 gap-2 pl-1.5 pr-3.5 text-sm",
+  );
+  const icon = (tone: "closed" | "open" | "busy") => (
+    <span
+      className={clsx(
+        "relative z-[1] grid shrink-0 place-items-center rounded-full border-2 border-black",
+        touch ? "h-6 w-6" : "h-7 w-7",
+        tone === "closed" ? "bg-zinc-400" : "bg-zooa-lime",
+      )}
+      aria-hidden
+    >
+      {/* Exit: a door frame with an arrow leaving it. */}
+      <svg viewBox="0 0 24 24" className={touch ? "h-4 w-4" : "h-5 w-5"}>
+        <path d="M10 4H5v16h5M13 8l4 4-4 4M17 12H8" fill="none" stroke="#000" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+  );
+
+  if (p.kind === "extracting") {
+    return <ExtractingPill store={store} className={shell} style={style} icon={icon("busy")} startedAtMs={p.startedAtMs} channelMs={p.channelMs} touch={touch} />;
+  }
+  if (p.kind === "closed") {
+    return (
+      <div className={shell} style={style} role="status" title="Your extraction points open when this countdown ends">
+        {icon("closed")}
+        <span className="toon-text-thin text-white/80">Extract closed</span>
+        <span className="toon-text-thin ml-auto pl-1 tabular-nums text-amber-300">{p.countdown}</span>
+      </div>
+    );
+  }
+  // Open: the route to the nearest allowed extract (an extract with its own later opening shows grey).
   return (
     <div
-      className={clsx(
-        "toon-chip flex items-center gap-2 py-1 pl-1.5 pr-3 text-sm tracking-wide",
-        target.open ? "text-zooa-lime" : "text-white/70",
-      )}
-      title={target.open ? "Nearest open extraction point" : "Nearest extraction point (not open yet)"}
+      className={shell}
+      style={style}
+      role="status"
+      title={p.targetOpen ? "Nearest open extraction point: stand in its circle to leave" : "Nearest extraction point (not open yet)"}
     >
-      <span
-        className={clsx(
-          "grid h-7 w-7 place-items-center rounded-full border-2 border-black",
-          target.open ? "bg-zooa-lime" : "bg-zinc-400",
-        )}
-      >
-        <svg
-          viewBox="0 0 24 24"
-          className="h-5 w-5 transition-transform duration-100"
-          style={{ transform: `rotate(${deg}deg)` }}
-          aria-hidden
-        >
-          <path d="M3 12h13M12 6l7 6-7 6" fill="none" stroke="#000" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+      {icon(p.targetOpen ? "open" : "closed")}
+      <span className="flex min-w-0 flex-col justify-center gap-[3px] leading-none">
+        <span className={clsx("toon-text-thin uppercase", touch ? "text-[0.55rem]" : "text-[0.65rem]", p.targetOpen ? "text-zooa-lime" : "text-white/60")}>
+          {p.targetOpen ? "Extract open" : "Extract closed"}
+        </span>
+        <span className="toon-text-thin truncate">{p.hasTarget ? p.name || "Extract" : "No extract in reach"}</span>
       </span>
-      <span className="toon-text-thin whitespace-nowrap">
-        {target.name || "Extract"}
-        {target.open ? "" : target.early ? "" : " (closed)"} <span className="tabular-nums text-white">{meters} m</span>
-      </span>
-      {xpLeft > 0 && (
-        <span
-          className="font-body whitespace-nowrap text-xs font-semibold text-amber-300"
-          title={`An extract earns XP after ${Math.round(XP.MIN_ONMAP_MS / 60_000)} minutes on the map`}
-        >
-          · Extract XP in <span className="tabular-nums">{fmtClock(xpLeft * 1000)}</span>
+      {p.hasTarget && (
+        <span className="ml-auto flex shrink-0 items-center gap-1 pl-1">
+          <svg
+            viewBox="0 0 24 24"
+            className={clsx("transition-transform duration-100", touch ? "h-4 w-4" : "h-5 w-5", p.targetOpen ? "text-zooa-lime" : "text-white/70")}
+            style={{ transform: `rotate(${p.deg}deg)` }}
+            aria-label="Direction"
+          >
+            <path d="M3 12h13M12 6l7 6-7 6" fill="none" stroke="#000" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M3 12h13M12 6l7 6-7 6" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="toon-text-thin tabular-nums">{p.meters} m</span>
         </span>
       )}
+    </div>
+  );
+}
+
+/** Extracting: seconds left and the fill animate on rAF through refs (no React render per frame). */
+function ExtractingPill({
+  store,
+  className,
+  style,
+  icon,
+  startedAtMs,
+  channelMs,
+  touch,
+}: {
+  store: HudStore;
+  className: string;
+  style: React.CSSProperties;
+  icon: React.ReactNode;
+  startedAtMs: number;
+  channelMs: number;
+  touch: boolean;
+}) {
+  const fillRef = useRef<HTMLSpanElement | null>(null);
+  const textRef = useRef<HTMLSpanElement | null>(null);
+  const progress = (clockMs: number) => ({
+    pct: clamp01((clockMs - startedAtMs) / Math.max(1, channelMs)),
+    secsLeft: Math.max(0, (channelMs - (clockMs - startedAtMs)) / 1000),
+  });
+  useClockFrames(store, (clockMs) => {
+    const { pct, secsLeft } = progress(clockMs);
+    if (fillRef.current) fillRef.current.style.transform = `scaleX(${pct})`;
+    if (textRef.current) textRef.current.textContent = secsLeft.toFixed(1);
+  });
+  const initial = progress(store.clockNow());
+  return (
+    <div className={clsx(className, "border-zooa-lime")} style={style} role="status" title="Extracting: stay in the circle, damage restarts it">
+      {/* Progress: a faint fill behind the content and a thin bright line along the bottom edge. */}
+      <span
+        ref={fillRef}
+        className="absolute inset-0 origin-left bg-zooa-lime/20"
+        style={{ transform: `scaleX(${initial.pct})` }}
+        aria-hidden
+      >
+        <span className="absolute inset-x-0 bottom-0 h-[3px] bg-zooa-lime" />
+      </span>
+      {icon}
+      <span className="toon-text-thin relative text-zooa-lime">Extracting</span>
+      {!touch && <span className="font-body relative text-xs font-semibold text-white/75">stay in the circle</span>}
+      {/* "s" in the body font: Luckiest Guy's s reads as a 5 next to the digits. */}
+      <span className="relative ml-auto flex items-baseline gap-px pl-1">
+        <span ref={textRef} className="toon-text-thin tabular-nums text-white">
+          {initial.secsLeft.toFixed(1)}
+        </span>
+        <span className="font-body text-[0.7em] font-bold text-white/70">s</span>
+      </span>
     </div>
   );
 }
@@ -378,33 +470,61 @@ function xpTickerSlice(s: HudSnapshot) {
     lastXp: last?.xp ?? 0,
     lastK: last?.k ?? "containers",
     lastN: last?.n ?? 0,
+    xpLeftS: extractXpLeftS(s.enteredAtMs, s.clockMs),
   };
 }
 
 /**
- * In-raid XP: the running estimate of this raid (SelfState.raidXp) and the latest gain as a
- * "+N XP · Marauder" bubble (EventsMsg.xp). A container past the per-entry cap shows "Container XP
- * cap reached" instead. The settled XP (daily cap, extract and haul lines) comes on the outcome screen.
+ * HUD v3 XP chip in the top-left row: the running estimate of this raid (SelfState.raidXp) and,
+ * until an extract earns XP (XP.MIN_ONMAP_MS on the map), a small clock with the time left. The
+ * latest gain pops as a "+N XP · Marauder" bubble under the chip (EventsMsg.xp), so the row never
+ * grows; a container past the per-entry cap shows "Container XP cap reached" instead. The settled
+ * XP (daily cap, extract and haul lines) comes on the outcome screen.
  */
-function XpTicker({ store, touch }: { store: HudStore; touch: boolean }) {
-  const { total, lastId, lastXp, lastK, lastN } = useHud(store, xpTickerSlice, shallowEqual);
-  if (total === 0 && lastId === 0) return null;
+function XpTicker({ store, touch, earnsXp }: { store: HudStore; touch: boolean; earnsXp: boolean }) {
+  const { total, lastId, lastXp, lastK, lastN, xpLeftS } = useHud(store, xpTickerSlice, shallowEqual);
+  const xpLeft = earnsXp ? xpLeftS : 0;
+  if (total === 0 && lastId === 0 && xpLeft <= 0) return null;
   const capped = lastId > 0 && lastXp === 0 && lastK === "containers";
   return (
-    <div className={clsx("flex items-center gap-2", touch ? "text-xs" : "text-sm")}>
-      <span
-        className="toon-chip flex items-center gap-1.5 py-0.5 pl-1 pr-2.5 tracking-wide text-amber-200"
+    <div className="relative shrink-0">
+      <div
+        className={clsx(
+          "toon-chip flex items-center whitespace-nowrap tracking-wide",
+          touch ? "h-8 gap-1 pl-1 pr-2 text-xs" : "h-10 gap-1.5 pl-1.5 pr-3 text-sm",
+        )}
         title="XP earned this raid so far (estimate: the daily limit and the extract XP are settled when you leave)"
       >
-        <span className="grid h-6 w-6 place-items-center rounded-full border-2 border-black bg-amber-300 text-[0.6rem] text-black">XP</span>
+        <span
+          className={clsx(
+            "grid place-items-center rounded-full border-2 border-black bg-amber-300 text-black",
+            touch ? "h-6 w-6 text-[0.55rem]" : "h-7 w-7 text-[0.6rem]",
+          )}
+        >
+          XP
+        </span>
         <span className="toon-text-thin tabular-nums text-white">{total}</span>
-      </span>
+        {xpLeft > 0 && (
+          <span
+            className="flex items-center gap-0.5 pl-0.5 text-amber-300"
+            title={`An extract earns XP after ${Math.round(XP.MIN_ONMAP_MS / 60_000)} minutes on the map`}
+            aria-label={`Extract XP in ${fmtClock(xpLeft * 1000)}`}
+          >
+            <svg viewBox="0 0 16 16" className={touch ? "h-3 w-3" : "h-3.5 w-3.5"} aria-hidden>
+              <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="2" />
+              <path d="M8 4.5V8l2.5 1.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <span className="toon-text-thin tabular-nums">{fmtClock(xpLeft * 1000)}</span>
+          </span>
+        )}
+      </div>
       {lastId > 0 && (
         <span
           key={lastId}
           ref={xpPopIn}
           className={clsx(
-            "toon-text-thin whitespace-nowrap",
+            "toon-text-thin absolute left-1 top-full mt-1 whitespace-nowrap",
+            touch ? "text-xs" : "text-sm",
             capped ? "text-white/60" : "text-amber-300",
           )}
         >
@@ -436,7 +556,7 @@ function KillFeed({ store, selfNickname, touch }: { store: HudStore; selfNicknam
     <ol
       className={clsx(
         "absolute left-3 flex max-w-[min(22rem,40vw)] flex-col gap-1.5",
-        touch ? "left-2 top-[3.25rem] origin-top-left scale-[0.85]" : "top-3",
+        touch ? "left-2 top-[3.25rem] origin-top-left scale-[0.85]" : "top-16",
       )}
       aria-label="Kill feed"
     >
@@ -532,69 +652,6 @@ function NpcBadge({ role }: { role: NonNullable<FeedName["npc"]> }) {
 }
 
 /* --------------------------------------------------------------- center */
-
-const RING_R = 52;
-const RING_C = 2 * Math.PI * RING_R;
-
-const extractingSlice = (s: HudSnapshot) => s.self?.extracting ?? null;
-
-function ExtractRing({ store }: { store: HudStore }) {
-  const ex = useHud(store, extractingSlice, shallowEqual);
-  if (!ex) return null;
-  return <ExtractRingView store={store} startedAtMs={ex.startedAtMs} channelMs={ex.channelMs} />;
-}
-
-/** Ring and countdown animate on rAF through refs: no React render per frame or per publish. */
-function ExtractRingView({ store, startedAtMs, channelMs }: { store: HudStore; startedAtMs: number; channelMs: number }) {
-  const arcRef = useRef<SVGCircleElement | null>(null);
-  const textRef = useRef<HTMLSpanElement | null>(null);
-  const progress = (clockMs: number) => ({
-    pct: clamp01((clockMs - startedAtMs) / Math.max(1, channelMs)),
-    secsLeft: Math.max(0, (channelMs - (clockMs - startedAtMs)) / 1000),
-  });
-  useClockFrames(store, (clockMs) => {
-    const { pct, secsLeft } = progress(clockMs);
-    arcRef.current?.setAttribute("stroke-dashoffset", String(RING_C * (1 - pct)));
-    if (textRef.current) textRef.current.textContent = secsLeft.toFixed(1);
-  });
-  const initial = progress(store.clockNow());
-  return (
-    // Short (landscape phone) screens: smaller and anchored under the timer + compass (~100 px), so
-    // it sits between the top stack and the bottom bar at any height up to 500 px.
-    <div className="absolute bottom-[clamp(13rem,30vh,17rem)] left-1/2 flex -translate-x-1/2 flex-col items-center gap-2 [@media(max-height:500px)]:bottom-auto [@media(max-height:500px)]:top-[6.75rem]">
-      <div className="relative h-32 w-32 [@media(max-height:500px)]:h-24 [@media(max-height:500px)]:w-24">
-        <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90" aria-hidden>
-          <circle cx="64" cy="64" r={RING_R} fill="rgba(13,17,26,0.85)" stroke="#000" strokeWidth="18" />
-          <circle cx="64" cy="64" r={RING_R} fill="none" stroke="#2a3346" strokeWidth="11" />
-          <circle
-            ref={arcRef}
-            cx="64"
-            cy="64"
-            r={RING_R}
-            fill="none"
-            stroke="#CCFF00"
-            strokeWidth="11"
-            strokeLinecap="round"
-            strokeDasharray={RING_C}
-            strokeDashoffset={RING_C * (1 - initial.pct)}
-          />
-        </svg>
-        <div className="absolute inset-0 grid place-items-center">
-          <span ref={textRef} className="toon-text text-3xl tabular-nums text-zooa-lime">
-            {initial.secsLeft.toFixed(1)}
-          </span>
-        </div>
-      </div>
-      <div className="toon-chip px-4 py-1.5 text-center text-sm tracking-wide">
-        <span className="toon-text-thin text-zooa-lime">Extracting</span>
-        <span className="font-body text-white/80">
-          {" "}
-          — stay in the circle<span className="[@media(max-height:500px)]:hidden">, damage restarts it</span>
-        </span>
-      </div>
-    </div>
-  );
-}
 
 const hintSlice = (s: HudSnapshot) => s.interactHint;
 
@@ -1021,9 +1078,9 @@ function PingBadge({ store, touch }: { store: HudStore; touch: boolean }) {
   return (
     <div
       className={clsx(
-        "absolute flex items-center gap-1.5 rounded-full bg-black/55 px-2 py-1 text-[0.65rem] tabular-nums text-white/75",
+        "flex shrink-0 items-center gap-1.5 rounded-full bg-black/55 px-2 py-1 text-[0.65rem] tabular-nums text-white/75",
         // Touch: next to the menu / audio chips (the bottom-left corner is the move stick's).
-        touch ? "left-[6.25rem] top-[1.125rem] bg-black/40 px-1.5 py-0.5" : "bottom-3 left-3",
+        touch ? "bg-black/40 px-1.5 py-0.5" : "absolute bottom-3 left-3",
       )}
       title="Round-trip time to the game server"
     >
@@ -1139,9 +1196,9 @@ const TOUCH_CONTROLS: Array<[string, string]> = [
   ["Roll · hand", "Dodge roll · search / pick up"],
   ["Reload · swap", "Reload · switch weapon"],
   ["Grenade", "Tap: throw ahead · drag: aim and range"],
-  ["Row under the minimap", "Bandage · medkit · bag · map"],
+  ["Row under the minimap", "Bandage · medkit · bag"],
   ["Minimap", "Tap: full map · tap again to close"],
-  ["Extract", "Stand in an open extraction circle"],
+  ["Extract", "Pill by the minimap: when it opens, the way · stand in the circle"],
 ];
 
 /**
@@ -1153,7 +1210,7 @@ function TouchMenu({ onLeave }: { onLeave: () => void }) {
   const [open, setOpen] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
   return (
-    <div className="pointer-events-none absolute left-2 top-2 flex items-start gap-2">
+    <div className="pointer-events-none flex shrink-0 items-start gap-2">
       <div className="relative">
         <button
           type="button"

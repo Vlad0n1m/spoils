@@ -4,8 +4,11 @@
  * the aim is on an enemy: auto-fire.ts), and round icon buttons in two groups: the combat cluster
  * around the aim stick (roll, use = search / pick up, reload, grenade — Weapons v2: tap throws
  * ahead, a drag off the button aims the throw and sets its range — and weapon swap) and the
- * utility row under the minimap (bandage, medkit, inventory, full map). Tapping the minimap also
- * opens the full map; while it is open the sticks and the cluster are gone and a tap anywhere (or
+ * utility row under the minimap (bandage, medkit, inventory). Bandage, medkit and grenade show the
+ * item's own sprite with a count badge (dimmed at 0). Roll and grenade have a cooldown: while it
+ * runs the button is dimmed, ignores taps and its rim fills like a clock (cooldownSweep).
+ * Tapping the minimap opens the full map (a small "MAP" mark on the minimap says so; HUD v3 has no
+ * separate map button); while it is open the sticks and the cluster are gone and a tap anywhere (or
  * the × button) closes it, so no finger moves or aims through the map.
  *
  * Both sticks are always marked: at rest a faint ring + knob labelled MOVE / AIM sits in each
@@ -22,8 +25,9 @@
  * samples as usual.
  */
 
+import { GRENADE, INPUT_DT_MS, ROLL } from "@extract/shared";
 import type { InputController, TouchAction } from "./input";
-import { MINIMAP_MARGIN, minimapSize } from "./minimap";
+import { EXTRACT_PILL_BOTTOM_TOUCH, EXTRACT_PILL_MAX_W, MINIMAP_MARGIN, minimapSize } from "./hud-layout";
 import { zoneToastY } from "./fullmap";
 import { bossBarY } from "./boss-hud";
 import { touchIconSvg } from "./touch-icons";
@@ -131,6 +135,8 @@ export interface TouchButtonSpec {
   /** Preferred diameter (px); shrinks down to TOUCH_MIN_SIZE when the screen is tight. */
   size: number;
   icon: TouchIconId;
+  /** Consumables: the item's own sprite instead of the glyph (public/sprites). */
+  sprite?: string;
   aria: string;
 }
 
@@ -139,19 +145,42 @@ export interface TouchButtonSpec {
  * placed in this order, each on the free spot nearest the aim stick, so the first ones sit closest
  * to the thumb; the top row runs left → right in this order and ends under the minimap's right
  * edge. Take all and close are buttons of the search / inventory panels themselves; extraction is
- * standing in the circle.
+ * standing in the circle; the full map is a tap on the minimap (no button of its own).
  */
 export const TOUCH_BUTTONS: readonly TouchButtonSpec[] = [
   { id: "roll", group: "cluster", angle: 225, size: 56, icon: "roll", aria: "Dodge roll" },
   { id: "interact", group: "cluster", angle: 180, size: 52, icon: "use", aria: "Search / pick up" },
   { id: "reload", group: "cluster", angle: 270, size: 48, icon: "reload", aria: "Reload" },
-  { id: "grenade", group: "cluster", angle: 200, size: 48, icon: "grenade", aria: "Throw grenade (drag to aim)" },
+  { id: "grenade", group: "cluster", angle: 200, size: 48, icon: "grenade", sprite: "/sprites/grenade.png", aria: "Throw grenade (drag to aim)" },
   { id: "swap", group: "cluster", angle: 250, size: 48, icon: "swap", aria: "Switch weapon" },
-  { id: "bandage", group: "top", size: 44, icon: "bandage", aria: "Bandage" },
-  { id: "medkit", group: "top", size: 44, icon: "medkit", aria: "Medkit" },
+  { id: "bandage", group: "top", size: 44, icon: "bandage", sprite: "/sprites/bandage.png", aria: "Bandage" },
+  { id: "medkit", group: "top", size: 44, icon: "medkit", sprite: "/sprites/medkit.png", aria: "Medkit" },
   { id: "inventory", group: "top", size: 44, icon: "bag", aria: "Inventory" },
-  { id: "map", group: "top", size: 44, icon: "map", aria: "Full map" },
 ];
+
+/** Full cooldowns (ms) of the buttons that have one, from the shared tuning. */
+export const BUTTON_COOLDOWN_MS: Readonly<Partial<Record<TouchButtonId, number>>> = {
+  // Inputs from roll START until the next roll may start (ROLL.COOLDOWN_TICKS, 5 s).
+  roll: ROLL.COOLDOWN_TICKS * INPUT_DT_MS,
+  grenade: GRENADE.COOLDOWN_MS,
+};
+
+/**
+ * A press this close to the end of the roll cooldown still rolls (the client repeats roll:true for
+ * ROLL.BUFFER_SAMPLES inputs), so the button takes taps again from here on.
+ */
+export const ROLL_TAP_BUFFER_MS = ROLL.BUFFER_SAMPLES * INPUT_DT_MS;
+
+/**
+ * Cooldown look of a button with `leftMs` of a `totalMs` cooldown to go: null when ready, else the
+ * swept share of the rim (0 just pressed → 1 ready, the clock fills clockwise) and whether a tap is
+ * still swallowed (`tapFromMs`: taps count again once this little is left).
+ */
+export function cooldownSweep(leftMs: number, totalMs: number, tapFromMs = 0): { swept: number; blocksTap: boolean } | null {
+  if (!(leftMs > 0) || !(totalMs > 0)) return null;
+  const swept = Math.max(0, Math.min(1, 1 - leftMs / totalMs));
+  return { swept, blocksTap: leftMs > tapFromMs };
+}
 
 /** Smallest hit area (px) a button shrinks to on a tight screen (the Apple / Material minimum). */
 export const TOUCH_MIN_SIZE = 44;
@@ -175,7 +204,7 @@ export function thumbZone(w: number, h: number): { w: number; h: number } {
   return { w: Math.round(Math.max(136, Math.min(200, 0.19 * w))), h: Math.round(Math.max(140, Math.min(210, 0.4 * h))) };
 }
 
-/** The touch HUD's top stack (timer, compass, wipe banner, boss toast) is drawn at this scale (hud.tsx). */
+/** The touch HUD's transient top stack (wipe banner, boss toast) is drawn at this scale (hud.tsx). */
 export const TOUCH_TOP_SCALE = 0.8;
 /** The touch HUD's bottom bar (vitals, weapon cards, carry) is drawn at this scale (hud.tsx). */
 export const TOUCH_BAR_SCALE = 0.78;
@@ -208,17 +237,20 @@ export function minimapRect(w: number, h: number): Rect {
  */
 export function hudReservedRects(w: number, h: number): HudArea[] {
   const r: HudArea[] = [];
-  // Top centre: phase timer / wipe countdown, extract compass, wipe warning, boss toast (the
-  // top-1.5 stack, ≤ 21.5 rem wide and ~190 px tall unscaled, drawn at 80 %) and the boss bar
+  // Top centre: the wipe warning and the boss toast (the top-12 stack, ≤ 21.5 rem wide, drawn at
+  // 80 %; kept as tall as the old timer + compass stack, ~190 px unscaled) and the boss bar
   // (bossBarY + 12 px bar, ≤ 340 px; 260 px on short screens).
   const topW = Math.round(Math.max(Math.min(w - 24, 352) * TOUCH_TOP_SCALE, Math.min(w - 24, h < 480 ? 268 : 348)));
   const topH = Math.round(Math.max(6 + 190 * TOUCH_TOP_SCALE, bossBarY(h) + 20));
   r.push({ id: "top", x: (w - topW) / 2, y: 0, w: topW, h: topH });
-  // Top right: minimap.
+  // Top right: minimap, and the extract pill left of it (HUD v3: top 12 px, 32 px tall).
   const mm = minimapSize(w, h);
   r.push({ id: "minimap", x: w - mm - MINIMAP_MARGIN - 6, y: 0, w: mm + MINIMAP_MARGIN + 6, h: MINIMAP_MARGIN + mm + 6 });
-  // Top left: the menu and audio chips (2 × 40 px from left-2 / top-2) and the ping badge.
-  r.push({ id: "chips", x: 0, y: 0, w: 164, h: 54 });
+  const pillRight = w - MINIMAP_MARGIN - mm - 8;
+  r.push({ id: "extract", x: pillRight - EXTRACT_PILL_MAX_W, y: 0, w: EXTRACT_PILL_MAX_W, h: EXTRACT_PILL_BOTTOM_TOUCH + 4 });
+  // Top left row: the menu and audio chips (2 × 40 px from left-2 / top-2), the ping badge, the
+  // wipe pill and the XP chip (≈ 380 px on a phone; never past the middle).
+  r.push({ id: "chips", x: 0, y: 0, w: Math.min(Math.round(w / 2), 380), h: 54 });
   // Bottom centre: the touch bar (12.5 rem vitals, two 5.5 rem weapon cards, the carry panel up to
   // 5 rem, gap-2; 5.25 rem cards, the active one lifted 6 px) at bottom-1, drawn at 78 %.
   const barW = Math.round((Math.min(w - 24, 480) + 12) * TOUCH_BAR_SCALE);
@@ -235,14 +267,7 @@ export function hudReservedRects(w: number, h: number): HudArea[] {
   r.push({ id: "zone", soft: true, x: (w - topW) / 2, y: zoneToastY(h) - 8, w: topW, h: h < 480 ? 92 : 112 });
   // Interact hint + heal / reload progress (w-64 at 78 %) stacked above the bar.
   r.push({ id: "hint", soft: true, x: w / 2 - 120, y: h - barH - 76, w: 240, h: 76 });
-  // Extract ring + caption: bottom clamp(13rem, 30vh, 17rem); a 6 rem ring from top-[6.75rem] when
-  // ≤ 500 px tall.
-  if (h <= 500) {
-    r.push({ id: "ring", soft: true, x: w / 2 - 170, y: 104, w: 340, h: 140 });
-  } else {
-    const ringBottom = Math.max(208, Math.min(272, 0.3 * h));
-    r.push({ id: "ring", soft: true, x: w / 2 - 200, y: h - ringBottom - 176, w: 400, h: 176 });
-  }
+  // (HUD v3: no centred extract ring any more: extracting shows in the extract pill.)
   return r;
 }
 
@@ -381,6 +406,10 @@ export interface TouchHudState {
   grenades: number;
   /** The full map is open: the controls step aside for it (tap anywhere closes it). */
   mapOpen?: boolean;
+  /** Roll cooldown still to run (ms, the Predictor's): the roll button sweeps and ignores taps. */
+  rollCdMs?: number;
+  /** Grenade throw cooldown still to run (ms, GRENADE.COOLDOWN_MS after a throw). */
+  grenadeCdMs?: number;
 }
 
 interface Stick {
@@ -402,13 +431,27 @@ const BTN_BORDER = "2px solid rgba(0,0,0,0.6)";
 /** Stick look at rest (faint mark) and while held. */
 const STICK_REST = { base: "0.5", knob: "rgba(255,255,255,0.32)", text: "rgba(0,0,0,0.75)" };
 const STICK_HELD = { base: "1", knob: "rgba(255,255,255,0.85)", text: "rgba(0,0,0,0.85)" };
+/** Cooldown rim: the swept part of the clock, the rest, and the disc's opacity while it runs. */
+const CD_RIM = "rgba(204,255,0,0.95)";
+const CD_REST = "rgba(255,255,255,0.18)";
+const CD_DIM = "0.4";
+
+interface TouchButtonEls {
+  el: HTMLDivElement;
+  disc: HTMLDivElement;
+  badge: HTMLSpanElement | null;
+  /** Cooldown clock around the disc (roll, grenade); hidden while ready. */
+  rim: HTMLDivElement | null;
+}
 
 
 export class TouchControls {
   private root: HTMLDivElement | null = null;
   private move: Stick | null = null;
   private aim: Stick | null = null;
-  private readonly buttons = new Map<TouchButtonId, { el: HTMLDivElement; disc: HTMLDivElement; badge: HTMLSpanElement | null }>();
+  private readonly buttons = new Map<TouchButtonId, TouchButtonEls>();
+  /** Taps on these buttons are swallowed while their cooldown runs (cooldownSweep). */
+  private readonly coolingDown = new Set<TouchButtonId>();
   private resizeObs: ResizeObserver | null = null;
   private laidOut = "";
   private shown: TouchHudState = { active: true, canUse: false, bandages: -1, medkits: -1, grenades: -1, mapOpen: false };
@@ -459,6 +502,32 @@ export class TouchControls {
     hit.setAttribute("role", "button");
     hit.setAttribute("aria-label", "Open full map");
     hit.setAttribute("data-minimap-hit", "");
+    // Not a button of its own: a small "expand · MAP" mark on the minimap's bottom edge says the
+    // whole minimap opens the full map.
+    const mark = el("div", {
+      position: "absolute",
+      left: "50%",
+      bottom: "6px",
+      transform: "translateX(-50%)",
+      display: "flex",
+      alignItems: "center",
+      gap: "3px",
+      height: "15px",
+      padding: "0 5px 0 4px",
+      borderRadius: "8px",
+      background: "rgba(10,13,20,0.6)",
+      color: "rgba(255,255,255,0.88)",
+      fontFamily: "var(--font-luckiest-guy), sans-serif",
+      fontSize: "9px",
+      letterSpacing: "0.08em",
+      lineHeight: "1",
+      pointerEvents: "none",
+      whiteSpace: "nowrap",
+    });
+    mark.setAttribute("data-minimap-mark", "");
+    mark.setAttribute("aria-hidden", "true");
+    mark.innerHTML = `<span style="display:grid;width:9px;height:9px">${touchIconSvg("expand", 100)}</span><span>MAP</span>`;
+    hit.appendChild(mark);
     hit.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -525,6 +594,7 @@ export class TouchControls {
     this.move = null;
     this.aim = null;
     this.buttons.clear();
+    this.coolingDown.clear();
     this.minimapHit = null;
     this.mapShield = null;
     this.mapClose = null;
@@ -554,7 +624,33 @@ export class TouchControls {
     if (s.bandages !== prev.bandages) this.setCount("bandage", s.bandages);
     if (s.medkits !== prev.medkits) this.setCount("medkit", s.medkits);
     if (s.grenades !== prev.grenades) this.setCount("grenade", s.grenades);
+    // Called at the HUD rate (~30 Hz), so the clock sweeps smoothly without a loop of its own.
+    this.setCooldown("roll", s.rollCdMs ?? 0, ROLL_TAP_BUFFER_MS);
+    this.setCooldown("grenade", s.grenadeCdMs ?? 0, 0);
     this.shown = { ...s };
+  }
+
+  /** Cooldown look of a button: dimmed disc, a rim filling like a clock, taps swallowed. */
+  private setCooldown(id: TouchButtonId, leftMs: number, tapFromMs: number) {
+    const b = this.buttons.get(id);
+    const total = BUTTON_COOLDOWN_MS[id] ?? 0;
+    if (!b?.rim) return;
+    const cd = cooldownSweep(leftMs, total, tapFromMs);
+    if (!cd) {
+      if (!this.coolingDown.has(id) && b.rim.style.display === "none") return;
+      this.coolingDown.delete(id);
+      b.rim.style.display = "none";
+      b.disc.style.opacity = "";
+      b.el.setAttribute("aria-disabled", "false");
+      return;
+    }
+    const deg = Math.round(cd.swept * 360);
+    b.rim.style.display = "block";
+    b.rim.style.background = `conic-gradient(${CD_RIM} ${deg}deg, ${CD_REST} ${deg}deg)`;
+    b.disc.style.opacity = CD_DIM;
+    if (cd.blocksTap) this.coolingDown.add(id);
+    else this.coolingDown.delete(id);
+    b.el.setAttribute("aria-disabled", cd.blocksTap ? "true" : "false");
   }
 
   /**
@@ -585,11 +681,8 @@ export class TouchControls {
     if (this.minimapHit) this.minimapHit.style.visibility = open ? "hidden" : "";
     if (this.mapShield) this.mapShield.style.display = open ? "block" : "none";
     if (this.mapClose) this.mapClose.style.display = open ? "grid" : "none";
-    for (const [id, b] of this.buttons) {
-      // Hidden buttons keep their laid-out display; visibility only.
-      b.el.style.visibility = open ? "hidden" : "";
-      if (id === "map") b.disc.style.background = BTN_BG;
-    }
+    // Hidden buttons keep their laid-out display; visibility only.
+    for (const b of this.buttons.values()) b.el.style.visibility = open ? "hidden" : "";
   }
 
   private setCount(id: TouchButtonId, n: number) {
@@ -623,6 +716,8 @@ export class TouchControls {
         height: `${rc.h}px`,
       });
       Object.assign(b.disc.style, { width: `${d}px`, height: `${d}px` });
+      // The cooldown clock hugs the disc: a 3 px ring just outside it, still inside the hit area.
+      if (b.rim) Object.assign(b.rim.style, { width: `${d + 6}px`, height: `${d + 6}px`, marginLeft: `${-(d + 6) / 2}px`, marginTop: `${-(d + 6) / 2}px` });
     }
     const mm = minimapRect(w, h);
     if (this.minimapHit) {
@@ -750,7 +845,7 @@ export class TouchControls {
    * A button: a transparent hit area (laid out by layoutTouchButtons) with a smaller round disc
    * (BUTTON_DISC of it) that carries the look, so the button hides less of the map than it catches.
    */
-  private makeButton(spec: TouchButtonSpec): { el: HTMLDivElement; disc: HTMLDivElement; badge: HTMLSpanElement | null } {
+  private makeButton(spec: TouchButtonSpec): TouchButtonEls {
     const b = el("div", {
       position: "absolute",
       display: "none",
@@ -777,25 +872,62 @@ export class TouchControls {
       textShadow: "0 1px 0 #000",
       pointerEvents: "none",
     });
+    let rim: HTMLDivElement | null = null;
+    if (BUTTON_COOLDOWN_MS[spec.id]) {
+      // Cooldown clock: a conic fill masked to a thin ring around the disc (sized in layout()).
+      rim = el("div", {
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        display: "none",
+        borderRadius: "50%",
+        pointerEvents: "none",
+      });
+      const ring = "radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px))";
+      rim.style.setProperty("mask", ring);
+      rim.style.setProperty("-webkit-mask", ring);
+      rim.setAttribute("data-cooldown", "");
+      b.appendChild(rim);
+    }
     b.appendChild(disc);
     let badge: HTMLSpanElement | null = null;
-    disc.innerHTML = touchIconSvg(spec.icon, 68);
+    if (spec.sprite) {
+      // The item's own picture (the inventory's sprite), a little inset so the badge stays clear.
+      const img = document.createElement("img");
+      img.src = spec.sprite;
+      img.alt = "";
+      img.draggable = false;
+      Object.assign(img.style, {
+        width: "74%",
+        height: "74%",
+        objectFit: "contain",
+        filter: "drop-shadow(0 1px 0 rgba(0,0,0,0.8))",
+        pointerEvents: "none",
+      });
+      disc.appendChild(img);
+    } else {
+      disc.innerHTML = touchIconSvg(spec.icon, 68);
+    }
     if (spec.id === "bandage" || spec.id === "medkit" || spec.id === "grenade") {
       badge = document.createElement("span");
       Object.assign(badge.style, {
         position: "absolute",
         right: "-5px",
         bottom: "-5px",
-        minWidth: "15px",
-        height: "15px",
-        padding: "0 2px",
+        minWidth: "16px",
+        height: "16px",
+        padding: "0 3px",
         borderRadius: "8px",
         border: "1.5px solid #000",
-        background: "rgba(255,255,255,0.92)",
+        background: "rgba(255,255,255,0.95)",
         color: "#000",
-        fontSize: "9px",
-        lineHeight: "12px",
-        textAlign: "center",
+        fontSize: "10px",
+        // Centred by the grid, not by line-height: the global text-box-trim (cap / alphabetic)
+        // trims the line box to the digit, which a fixed line-height then pinned to the top.
+        display: "grid",
+        placeItems: "center",
+        lineHeight: "1",
+        fontVariantNumeric: "tabular-nums",
         textShadow: "none",
         boxSizing: "border-box",
         pointerEvents: "none",
@@ -804,11 +936,13 @@ export class TouchControls {
     }
     if (spec.id === "grenade") {
       this.bindGrenadeButton(b, disc);
-      return { el: b, disc, badge };
+      return { el: b, disc, badge, rim };
     }
     b.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      // Cooling down (roll): the tap is swallowed, the button stays dim.
+      if (this.coolingDown.has(spec.id)) return;
       disc.style.background = BTN_BG_LIT;
       disc.style.color = "#000";
       this.onPress?.(e.timeStamp);
@@ -821,7 +955,7 @@ export class TouchControls {
     b.addEventListener("pointerup", up);
     b.addEventListener("pointercancel", up);
     b.addEventListener("pointerleave", up);
-    return { el: b, disc, badge };
+    return { el: b, disc, badge, rim };
   }
 
   /**
@@ -841,7 +975,7 @@ export class TouchControls {
     b.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (pid !== null) return;
+      if (pid !== null || this.coolingDown.has("grenade")) return;
       pid = e.pointerId;
       try {
         b.setPointerCapture(e.pointerId);

@@ -7,7 +7,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   AIM_FROM,
+  BUTTON_COOLDOWN_MS,
   BUTTON_DISC,
+  ROLL_TAP_BUFFER_MS,
+  cooldownSweep,
   GRENADE_DRAG_EDGE_PX,
   GRENADE_DRAG_FROM,
   GRENADE_DRAG_MIN_SPAN,
@@ -29,6 +32,7 @@ import {
   stickVector,
   thumbZone,
 } from "./touch-controls";
+import { GRENADE, INPUT_DT_MS, ROLL } from "@extract/shared";
 import { bossBarY } from "./boss-hud";
 import { zoneToastY } from "./fullmap";
 
@@ -109,6 +113,27 @@ describe("touch grenade button (Weapons v2)", () => {
   });
 });
 
+describe("button cooldowns", () => {
+  it("take the shared tuning: roll 5 s from the roll start, grenade GRENADE.COOLDOWN_MS", () => {
+    assert.equal(BUTTON_COOLDOWN_MS.roll, ROLL.COOLDOWN_TICKS * INPUT_DT_MS);
+    assert.equal(BUTTON_COOLDOWN_MS.grenade, GRENADE.COOLDOWN_MS);
+    assert.equal(ROLL_TAP_BUFFER_MS, ROLL.BUFFER_SAMPLES * INPUT_DT_MS);
+  });
+
+  it("the rim sweeps like a clock from the press to ready and swallows taps until then", () => {
+    const total = BUTTON_COOLDOWN_MS.roll!;
+    assert.equal(cooldownSweep(0, total), null, "ready: no rim");
+    assert.equal(cooldownSweep(-5, total), null);
+    assert.equal(cooldownSweep(NaN, total), null);
+    assert.deepEqual(cooldownSweep(total, total), { swept: 0, blocksTap: true });
+    assert.deepEqual(cooldownSweep(total / 4, total), { swept: 0.75, blocksTap: true });
+    // Inside the roll's input buffer the tap counts again (it still rolls the moment the cooldown ends).
+    assert.equal(cooldownSweep(ROLL_TAP_BUFFER_MS - 1, total, ROLL_TAP_BUFFER_MS)!.blocksTap, false);
+    assert.equal(cooldownSweep(ROLL_TAP_BUFFER_MS + 1, total, ROLL_TAP_BUFFER_MS)!.blocksTap, true);
+    assert.equal(cooldownSweep(total * 2, total)!.swept, 0, "clamped");
+  });
+});
+
 describe("touch button layout", () => {
   for (const [w, h] of SCREENS) {
     it(`${w}×${h}: every button placed, on its side, clear of the HUD and of each other`, () => {
@@ -145,7 +170,7 @@ describe("touch button layout", () => {
     });
   }
 
-  it("Seeker-class screens: full size, and the kill feed, hint and extract ring stay clear too", () => {
+  it("Seeker-class screens: full size, and the kill feed and hint stay clear too", () => {
     for (const [w, h] of [[915, 412], [872, 392], [851, 393], [1024, 600]] as const) {
       const rects = layoutTouchButtons(w, h);
       const hud = hudReservedRects(w, h);
@@ -193,7 +218,7 @@ describe("touch button layout", () => {
       assert.ok(ang("interact") < ang("roll") && ang("roll") < ang("reload"), `${w}×${h}: arc order`);
       assert.ok(ang("interact") >= 160 && ang("interact") <= 215, `${w}×${h}: use ${ang("interact")}`);
       assert.ok(ang("reload") >= 240 && ang("reload") <= 300, `${w}×${h}: reload ${ang("reload")}`);
-      const top = (["bandage", "medkit", "inventory", "map"] as const).map((id) => rects.get(id)!);
+      const top = (["bandage", "medkit", "inventory"] as const).map((id) => rects.get(id)!);
       for (let i = 1; i < top.length; i++) assert.ok(top[i]!.x > top[i - 1]!.x && top[i]!.y === top[0]!.y, `${w}×${h}: top row order`);
     }
   });
@@ -203,6 +228,28 @@ describe("touch button layout", () => {
       // top-1.5 + 80 % of (timer 36 + gap 8 + compass 36) ≈ 70 px; the bar's name label is ~22 px above it.
       assert.ok(bossBarY(h) - 22 >= 6 + 0.8 * 80, `boss bar ${bossBarY(h)}`);
       assert.ok(zoneToastY(h) >= bossBarY(h) + 20, `zone toast ${zoneToastY(h)}`);
+    }
+  });
+
+  it("HUD v3: no map button (the minimap is the tap target), sprites on the consumables", () => {
+    assert.equal(TOUCH_BUTTONS.some((b) => (b.id as string) === "map"), false);
+    for (const id of ["bandage", "medkit", "grenade"] as const) {
+      assert.match(TOUCH_BUTTONS.find((b) => b.id === id)!.sprite ?? "", /^\/sprites\/\w+\.png$/, `${id} sprite`);
+    }
+  });
+
+  it("HUD v3: the extract pill left of the minimap and the top-left row are kept clear", () => {
+    for (const [w, h] of SCREENS) {
+      const hud = hudReservedRects(w, h);
+      const pill = hud.find((a) => a.id === "extract")!;
+      const row = hud.find((a) => a.id === "chips")!;
+      const mm = minimapRect(w, h);
+      assert.ok(pill && !pill.soft && pill.x + pill.w <= mm.x, `${w}×${h}: pill left of the minimap`);
+      assert.ok(row.x + row.w <= pill.x, `${w}×${h}: top-left row (${row.w}) and pill (${pill.x}) do not meet`);
+      for (const [id, r] of layoutTouchButtons(w, h)) {
+        assert.ok(!rectsOverlap(r, pill) && !rectsOverlap(r, row), `${w}×${h}: ${id} under the top row`);
+      }
+      assert.equal(hud.some((a) => a.id === "ring"), false, "no centred extract ring any more");
     }
   });
 

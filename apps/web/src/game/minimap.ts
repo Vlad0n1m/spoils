@@ -22,6 +22,7 @@ import { TERRAIN_COLOR, groundKinds } from "./terrain-tiles";
 import { MinimapWorldMarks } from "./world-events-marks";
 import { MAP_ART_PX, acquireMapArt, releaseMapArt } from "./map-art";
 import { uiFonts, whenUiFontsReady } from "./ui-fonts";
+import { MINIMAP_BASE, MINIMAP_MARGIN, minimapSize } from "./hud-layout";
 
 /** Overview canvas size (px). 24,576 / 1024 = 24 world px per texel. */
 export const OVERVIEW_PX = 1024;
@@ -29,17 +30,9 @@ export const OVERVIEW_PX = 1024;
 export const MINIMAP_WINDOW = 4096;
 
 /** Minimap is drawn at this size and scaled to the layout size. */
-const BASE = 200;
-/** Gap between the minimap and the top-right corner (px). */
-export const MINIMAP_MARGIN = 16;
-
-/**
- * Laid-out minimap side (px) for a screen; it sits MINIMAP_MARGIN from the top-right corner. Short
- * screens (landscape phones, < 480 px tall) go down to 100 px so more of the world stays visible.
- */
-export function minimapSize(screenW: number, screenH: number): number {
-  return Math.max(screenH < 480 ? 100 : 120, Math.min(BASE, Math.min(screenW, screenH) * 0.24));
-}
+const BASE = MINIMAP_BASE;
+// Geometry lives in hud-layout.ts (pure, shared with the React HUD); re-exported for the callers here.
+export { MINIMAP_MARGIN, minimapSize };
 
 function rgb(c: number): [number, number, number] {
   return [(c >> 16) & 255, (c >> 8) & 255, c & 255];
