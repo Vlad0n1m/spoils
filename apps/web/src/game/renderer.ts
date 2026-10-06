@@ -1941,7 +1941,7 @@ export class GameRenderer implements GameRendererApi {
     const dist = touchCrosshairDistance(rangeWorld, this.zoom, sx, sy, this.aim, w, h);
     // Red while the aim line is on an enemy (what auto-fire shoots at).
     ch.update(dt, aiming, sx, sy, this.aim, dist, aiming && this.autoFireLock(this.aim) !== null);
-    if (facing) feedAimPointer(sx + Math.cos(this.aim) * dist, sy + Math.sin(this.aim) * dist);
+    if (facing) feedAimPointer(sx + Math.cos(this.aim) * dist, sy + Math.sin(this.aim) * dist, aiming);
   }
 
   /**

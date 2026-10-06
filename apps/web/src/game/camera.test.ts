@@ -213,3 +213,17 @@ describe("camera system", () => {
     s.dispose();
   });
 });
+
+describe("touch aim look-ahead", () => {
+  it("leans further toward the reticle while the aim stick is held, still bounded", () => {
+    const out = { x: 0, y: 0 };
+    // 844x390 phone, zoom 1, reticle 180 px below the centre (aiming down to the screen edge).
+    lookAheadTarget(422, 375, 844, 390, 1, out);
+    const walk = out.y;
+    lookAheadTarget(422, 375, 844, 390, 1, out, LOOK.TOUCH_AIM_FRACTION, LOOK.TOUCH_AIM_MAX_PX);
+    assert.ok(out.y > walk * 2, `aim ${out.y} vs walk ${walk}`);
+    assert.ok(out.y < 180, "the player stays on screen");
+    lookAheadTarget(422 + 5000, 195, 844, 390, 1, out, LOOK.TOUCH_AIM_FRACTION, LOOK.TOUCH_AIM_MAX_PX);
+    assert.equal(Math.round(out.x), LOOK.TOUCH_AIM_MAX_PX);
+  });
+});
