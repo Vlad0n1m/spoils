@@ -93,6 +93,7 @@ import { EXPIRE_FADE_TAU_MS, expiryBlink, expiryFading } from "./expiry";
 import { InputController, sampleAim, type GrenadeAim } from "./input";
 import { GRENADE_TAP_FRAC, grenadeFracFor } from "./grenades";
 import { PerfOverlay, TouchControls, hudReservedRects, shouldUseTouch } from "./touch-controls";
+import { setHudCommands } from "./hud-commands";
 import { TouchCrosshair, releaseCanvasCursor, setCanvasCrosshair, touchAimLean, touchCrosshairDistance } from "./crosshair";
 import { Minimap, type MinimapExtract } from "./minimap";
 import { safeInsets } from "./safe-area";
@@ -490,6 +491,7 @@ export class GameRenderer implements GameRendererApi {
       // The aim stick only aims; the trigger pulls itself while the aim line is on an enemy.
       this.input.setTouchAutoFire((angle) => this.autoFireLock(angle) !== null);
       setTouchSticksActive(true);
+      setHudCommands({ selectSlot: (slot) => this.switchSlot(slot === 1 ? "w2" : "w1") });
       // Screen layer, above the fog; added before the systems so the full map covers it.
       this.touchCrosshair = new TouchCrosshair();
       this.layers.screen.addChild(this.touchCrosshair.root);
@@ -539,6 +541,7 @@ export class GameRenderer implements GameRendererApi {
     if (this.touch) {
       setTouchSticksActive(false);
       clearTouchLook();
+      setHudCommands(null);
     }
     this.touch?.detach();
     this.touch = null;

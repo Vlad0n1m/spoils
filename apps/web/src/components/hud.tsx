@@ -3,6 +3,7 @@
 import { AudioSettingsButton } from "./audio-settings";
 import { useTouchMode } from "./use-touch-mode";
 import { touchIconSvg } from "@/game/touch-icons";
+import { hudSelectSlot } from "@/game/hud-commands";
 import { EXTRACT_PILL_MAX_W, EXTRACT_PILL_MAX_W_DESKTOP, MINIMAP_MARGIN, minimapSize } from "@/game/hud-layout";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
@@ -962,7 +963,20 @@ function WeaponSlotCard({
         "relative flex flex-col items-center justify-between rounded-2xl border-[3px] border-black px-1.5 pb-1.5 pt-1 shadow-[0_4px_0_#000] transition-transform duration-150",
         box,
         active ? (compact ? "-translate-y-1.5" : "-translate-y-2") : "opacity-80",
+        // Phones: the cards are the weapon switch (no swap button) — a tap draws that weapon.
+        compact && "pointer-events-auto touch-none",
       )}
+      {...(compact
+        ? {
+            role: "button",
+            "aria-label": active ? `${def.name} (in hand)` : `Draw ${def.name}`,
+            "aria-pressed": active,
+            onPointerDown: (e: React.PointerEvent) => {
+              e.stopPropagation();
+              if (!active) hudSelectSlot(index);
+            },
+          }
+        : {})}
       style={{
         background: `linear-gradient(180deg, ${color}66 0%, #1d2333f0 70%)`,
         // Inline because Tailwind rings are box-shadows too and would be overwritten by the glow.
@@ -1195,7 +1209,8 @@ const TOUCH_CONTROLS: Array<[string, string]> = [
   ["Left stick", "Move · push less to walk quietly"],
   ["Right stick", "Aim · fires by itself while the aim is on an enemy (red reticle)"],
   ["Roll · hand", "Dodge roll · search / pick up"],
-  ["Reload · swap", "Reload · switch weapon"],
+  ["Reload", "Reload"],
+  ["Weapon cards (bottom)", "Tap a weapon to draw it"],
   ["Grenade", "Tap: throw ahead · drag: aim and range"],
   ["Row under the minimap", "Bandage · medkit · bag"],
   ["Minimap", "Tap: full map · tap again to close"],

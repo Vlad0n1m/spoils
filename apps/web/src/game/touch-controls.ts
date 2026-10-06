@@ -145,14 +145,14 @@ export interface TouchButtonSpec {
  * placed in this order, each on the free spot nearest the aim stick, so the first ones sit closest
  * to the thumb; the top row runs left → right in this order and ends under the minimap's right
  * edge. Take all and close are buttons of the search / inventory panels themselves; extraction is
- * standing in the circle; the full map is a tap on the minimap (no button of its own).
+ * standing in the circle; the full map is a tap on the minimap and switching weapons a tap on a weapon
+ * card in the HUD's bottom bar (no buttons of their own).
  */
 export const TOUCH_BUTTONS: readonly TouchButtonSpec[] = [
   { id: "roll", group: "cluster", angle: 225, size: 56, icon: "roll", aria: "Dodge roll" },
   { id: "interact", group: "cluster", angle: 180, size: 52, icon: "use", aria: "Search / pick up" },
   { id: "reload", group: "cluster", angle: 270, size: 48, icon: "reload", aria: "Reload" },
   { id: "grenade", group: "cluster", angle: 200, size: 48, icon: "grenade", sprite: "/sprites/grenade.png", aria: "Throw grenade (drag to aim)" },
-  { id: "swap", group: "cluster", angle: 250, size: 48, icon: "swap", aria: "Switch weapon" },
   { id: "bandage", group: "top", size: 44, icon: "bandage", sprite: "/sprites/bandage.png", aria: "Bandage" },
   { id: "medkit", group: "top", size: 44, icon: "medkit", sprite: "/sprites/medkit.png", aria: "Medkit" },
   { id: "inventory", group: "top", size: 44, icon: "bag", aria: "Inventory" },
